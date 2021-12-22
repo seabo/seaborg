@@ -10,7 +10,7 @@ pub struct FenError {
 pub enum FenErrorType {
     IncorrectNumberOfFields,
     SideToMoveInvalid,
-    MoveNumberFieldNotInteger,
+    MoveNumberFieldNotPositiveInteger,
     HalfMoveCounterNotNonNegInteger,
     EnPassantSquareInvalid,
     CastlingRightsInvalid,
@@ -435,7 +435,7 @@ impl Position {
             Ok(i) => {
                 if i < 1 {
                     Err(FenError {
-                        ty: FenErrorType::HalfMoveCounterNotNonNegInteger,
+                        ty: FenErrorType::MoveNumberFieldNotPositiveInteger,
                         msg: format!("move number should be a positive integer; found {}", mn),
                     })
                 } else {
