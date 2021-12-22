@@ -3,7 +3,19 @@ name = "rchess"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
 
 [dependencies]
 bitintr = "0.2"
+num_enum = "0.5"
+
+[dev-dependencies]
+criterion = "0.3"
+
+[[bench]]
+name = "move"
+harness = false
+
+[[bench]]
+name = "square"
+harness = false

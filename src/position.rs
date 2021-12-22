@@ -1,4 +1,6 @@
-use crate::Bitboard;
+use crate::bb::Bitboard;
+use num_enum::TryFromPrimitive;
+use std::convert::TryFrom;
 use std::fmt;
 
 #[derive(Copy, Clone)]
@@ -16,7 +18,8 @@ impl fmt::Display for Color {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Eq, PartialEq, TryFromPrimitive)]
+#[repr(u8)]
 pub enum Square {
     A1 = 0,
     B1,
@@ -173,6 +176,13 @@ impl Square {
             None => None,
         }
     }
+
+    pub fn from_idx(idx: u16) -> Self {
+        Self::try_from(idx as u8).expect(&format!(
+            "can only create a Square from an index in 0-63; found {}",
+            idx
+        ))
+    }
 }
 
 pub struct Board {
@@ -217,6 +227,46 @@ pub enum PieceType {
     Rook,
     Queen,
     King,
+}
+
+impl PieceType {
+    fn long_name(&self) -> &str {
+        match self {
+            PieceType::None => "none",
+            PieceType::Pawn => "pawn",
+            PieceType::Knight => "knight",
+            PieceType::Bishop => "bishop",
+            PieceType::Rook => "rook",
+            PieceType::Queen => "queen",
+            PieceType::King => "king",
+        }
+    }
+
+    fn short_name(&self) -> &str {
+        match self {
+            PieceType::None => "-",
+            PieceType::Pawn => "p",
+            PieceType::Knight => "n",
+            PieceType::Bishop => "b",
+            PieceType::Rook => "r",
+            PieceType::Queen => "q",
+            PieceType::King => "k",
+        }
+    }
+}
+
+impl fmt::Display for PieceType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(width) = f.width() {
+            if width == 1 {
+                write!(f, "{}", self.short_name())
+            } else {
+                write!(f, "{}", self.long_name())
+            }
+        } else {
+            write!(f, "{}", self.long_name())
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
