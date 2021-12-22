@@ -16,6 +16,165 @@ impl fmt::Display for Color {
     }
 }
 
+#[derive(Copy, Clone)]
+pub enum Square {
+    A1 = 0,
+    B1,
+    C1,
+    D1,
+    E1,
+    F1,
+    G1,
+    H1,
+    A2,
+    B2,
+    C2,
+    D2,
+    E2,
+    F2,
+    G2,
+    H2,
+    A3,
+    B3,
+    C3,
+    D3,
+    E3,
+    F3,
+    G3,
+    H3,
+    A4,
+    B4,
+    C4,
+    D4,
+    E4,
+    F4,
+    G4,
+    H4,
+    A5,
+    B5,
+    C5,
+    D5,
+    E5,
+    F5,
+    G5,
+    H5,
+    A6,
+    B6,
+    C6,
+    D6,
+    E6,
+    F6,
+    G6,
+    H6,
+    A7,
+    B7,
+    C7,
+    D7,
+    E7,
+    F7,
+    G7,
+    H7,
+    A8,
+    B8,
+    C8,
+    D8,
+    E8,
+    F8,
+    G8,
+    H8,
+}
+
+impl fmt::Display for Square {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Square::A1 => write!(f, "a1"),
+            Square::B1 => write!(f, "b1"),
+            Square::C1 => write!(f, "c1"),
+            Square::D1 => write!(f, "d1"),
+            Square::E1 => write!(f, "e1"),
+            Square::F1 => write!(f, "f1"),
+            Square::G1 => write!(f, "g1"),
+            Square::H1 => write!(f, "h1"),
+
+            Square::A2 => write!(f, "a2"),
+            Square::B2 => write!(f, "b2"),
+            Square::C2 => write!(f, "c2"),
+            Square::D2 => write!(f, "d2"),
+            Square::E2 => write!(f, "e2"),
+            Square::F2 => write!(f, "f2"),
+            Square::G2 => write!(f, "g2"),
+            Square::H2 => write!(f, "h2"),
+
+            Square::A3 => write!(f, "a3"),
+            Square::B3 => write!(f, "b3"),
+            Square::C3 => write!(f, "c3"),
+            Square::D3 => write!(f, "d3"),
+            Square::E3 => write!(f, "e3"),
+            Square::F3 => write!(f, "f3"),
+            Square::G3 => write!(f, "g3"),
+            Square::H3 => write!(f, "h3"),
+
+            Square::A4 => write!(f, "a4"),
+            Square::B4 => write!(f, "b4"),
+            Square::C4 => write!(f, "c4"),
+            Square::D4 => write!(f, "d4"),
+            Square::E4 => write!(f, "e4"),
+            Square::F4 => write!(f, "f4"),
+            Square::G4 => write!(f, "g4"),
+            Square::H4 => write!(f, "h4"),
+
+            Square::A5 => write!(f, "a5"),
+            Square::B5 => write!(f, "b5"),
+            Square::C5 => write!(f, "c5"),
+            Square::D5 => write!(f, "d5"),
+            Square::E5 => write!(f, "e5"),
+            Square::F5 => write!(f, "f5"),
+            Square::G5 => write!(f, "g5"),
+            Square::H5 => write!(f, "h5"),
+
+            Square::A6 => write!(f, "a6"),
+            Square::B6 => write!(f, "b6"),
+            Square::C6 => write!(f, "c6"),
+            Square::D6 => write!(f, "d6"),
+            Square::E6 => write!(f, "e6"),
+            Square::F6 => write!(f, "f6"),
+            Square::G6 => write!(f, "g6"),
+            Square::H6 => write!(f, "h6"),
+
+            Square::A7 => write!(f, "a7"),
+            Square::B7 => write!(f, "b7"),
+            Square::C7 => write!(f, "c7"),
+            Square::D7 => write!(f, "d7"),
+            Square::E7 => write!(f, "e7"),
+            Square::F7 => write!(f, "f7"),
+            Square::G7 => write!(f, "g7"),
+            Square::H7 => write!(f, "h7"),
+
+            Square::A8 => write!(f, "a8"),
+            Square::B8 => write!(f, "b8"),
+            Square::C8 => write!(f, "c8"),
+            Square::D8 => write!(f, "d8"),
+            Square::E8 => write!(f, "e8"),
+            Square::F8 => write!(f, "f8"),
+            Square::G8 => write!(f, "g8"),
+            Square::H8 => write!(f, "h8"),
+        }
+    }
+}
+
+impl Square {
+    pub fn to_idx(&self) -> Option<u32> {
+        Some(*self as u32)
+    }
+
+    pub fn to_bb(&self) -> Option<Bitboard> {
+        match self.to_idx() {
+            Some(idx) => Some(Bitboard::from_sq_idx(idx as u8)),
+            None => None,
+        }
+    }
+}
+
 pub struct Board {
     arr: [Piece; 64],
 }
@@ -93,7 +252,7 @@ impl fmt::Display for CastlingRights {
         let white_string = white.join(" + ");
         let black_string = black.join(" + ");
 
-        writeln!(f, "White: {}, Black: {}", white_string, black_string)
+        write!(f, "White: {}, Black: {}", white_string, black_string)
     }
 }
 
@@ -134,11 +293,12 @@ pub struct Position {
     white_piece_count: u8,
     black_piece_count: u8,
 
-    // Side to move
+    // Other state
     turn: Color,
     castling_rights: CastlingRights,
-    // TODO: more data to add the position struct
-    // en passant square
+    ep_square: Option<Square>,
+    half_move_clock: u32,
+    move_number: u32,
 }
 
 pub struct FenError {
@@ -165,6 +325,10 @@ impl Position {
         Self {
             board: Board::new(),
             turn: Color::White,
+            castling_rights: CastlingRights::none(),
+            ep_square: None,
+            half_move_clock: 0,
+            move_number: 0,
             no_piece: Bitboard::new(0xFFFFFFFFFFFFFFFF),
             white_pawns: Bitboard::new(0x0),
             white_knights: Bitboard::new(0x0),
@@ -182,7 +346,6 @@ impl Position {
             black_pieces: Bitboard::new(0x0),
             white_piece_count: 0,
             black_piece_count: 0,
-            castling_rights: CastlingRights::none(),
         }
     }
 
@@ -193,11 +356,17 @@ impl Position {
         let (bbs, board) = Self::parse_piece_position_string(piece_positions)?;
         let turn = Self::parse_side_to_move(side_to_move)?;
         let castling_rights = Self::parse_castling_rights(castling_rights)?;
+        let ep_square = Self::parse_ep_square(ep_square)?;
+        let half_move_clock = Self::parse_half_move_clock(half_move_clock)?;
+        let move_number = Self::parse_move_number(move_number)?;
 
         Ok(Self {
             board,
             turn,
             castling_rights,
+            ep_square,
+            half_move_clock,
+            move_number,
             no_piece: bbs[0],
             white_pawns: bbs[1],
             white_knights: bbs[2],
@@ -498,6 +667,86 @@ impl Position {
             black_queenside,
         })
     }
+
+    fn parse_ep_square(ep_square: &str) -> Result<Option<Square>, FenError> {
+        if ep_square == "-" {
+            return Ok(None);
+        }
+
+        if ep_square.len() != 2 {
+            return Err(FenError {
+                ty: FenErrorType::EnPassantSquareInvalid,
+                msg: format!(
+                    "`{}` not a valid square name for the en passant square",
+                    ep_square
+                ),
+            });
+        }
+
+        match ep_square {
+            "a3" => Ok(Some(Square::A3)),
+            "b3" => Ok(Some(Square::B3)),
+            "c3" => Ok(Some(Square::C3)),
+            "d3" => Ok(Some(Square::D3)),
+            "e3" => Ok(Some(Square::E3)),
+            "f3" => Ok(Some(Square::F3)),
+            "g3" => Ok(Some(Square::G3)),
+            "h3" => Ok(Some(Square::H3)),
+            "a6" => Ok(Some(Square::A6)),
+            "b6" => Ok(Some(Square::B6)),
+            "c6" => Ok(Some(Square::C6)),
+            "d6" => Ok(Some(Square::D6)),
+            "e6" => Ok(Some(Square::E6)),
+            "f6" => Ok(Some(Square::F6)),
+            "g6" => Ok(Some(Square::G6)),
+            "h6" => Ok(Some(Square::H6)),
+            _ => Err(FenError {
+                ty: FenErrorType::EnPassantSquareInvalid,
+                msg: format!("invalid en passant square `{}`; must be a valid algebraic notation square on the 3rd or 6th rank", ep_square),
+            })
+        }
+    }
+
+    fn parse_half_move_clock(hmc: &str) -> Result<u32, FenError> {
+        match hmc.to_string().parse::<i32>() {
+            Ok(i) => {
+                if i < 0 {
+                    Err(FenError {
+                        ty: FenErrorType::HalfMoveCounterNotNonNegInteger,
+                        msg: format!(
+                            "half move clock should be a non-negative integer; found {}",
+                            hmc
+                        ),
+                    })
+                } else {
+                    Ok(i as u32)
+                }
+            }
+            Err(err) => Err(FenError {
+                ty: FenErrorType::HalfMoveCounterNotNonNegInteger,
+                msg: format!("half move clock value of `{}` is invalid; {}", hmc, err),
+            }),
+        }
+    }
+
+    fn parse_move_number(mn: &str) -> Result<u32, FenError> {
+        match mn.to_string().parse::<i32>() {
+            Ok(i) => {
+                if i < 1 {
+                    Err(FenError {
+                        ty: FenErrorType::HalfMoveCounterNotNonNegInteger,
+                        msg: format!("move number should be a positive integer; found {}", mn),
+                    })
+                } else {
+                    Ok(i as u32)
+                }
+            }
+            Err(err) => Err(FenError {
+                ty: FenErrorType::HalfMoveCounterNotNonNegInteger,
+                msg: format!("move number value of `{}` is invalid; {}", mn, err),
+            }),
+        }
+    }
 }
 
 impl fmt::Debug for Position {
@@ -526,10 +775,21 @@ impl fmt::Debug for Position {
         writeln!(f, "PIECE COUNTS\n============\n")?;
         writeln!(f, "White: {}", self.white_piece_count)?;
         writeln!(f, "Black: {}", self.black_piece_count)?;
+        writeln!(f)?;
 
-        writeln!(f, "MOVE DATA\n=========\n")?;
+        writeln!(f, "STATE DATA\n==========\n")?;
         writeln!(f, "Turn: {}", self.turn)?;
-        writeln!(f, "Castling Rights: {}", self.castling_rights)
+        writeln!(f, "Castling Rights: {}", self.castling_rights)?;
+        writeln!(
+            f,
+            "En Passant Square: {}",
+            match self.ep_square {
+                Some(sq) => sq.to_string(),
+                None => "none".to_string(),
+            }
+        )?;
+        writeln!(f, "Half move clock: {}", self.half_move_clock)?;
+        writeln!(f, "Move number: {}", self.move_number)
 
         // TODO: display all the other Position struct data
     }

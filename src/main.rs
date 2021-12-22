@@ -3,6 +3,7 @@ mod position;
 
 use bb::Bitboard;
 use position::Position;
+use position::Square;
 use std::time::Instant;
 
 fn main() {
