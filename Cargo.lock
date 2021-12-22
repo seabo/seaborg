@@ -3,5 +3,14 @@
 version = 3
 
 [[package]]
+name = "bitintr"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f80c754495ef07b4554134bbfb23fc1e31a775113b49acccbe35076d57cba145"
+
+[[package]]
 name = "rchess"
 version = "0.1.0"
+dependencies = [
+ "bitintr",
+]
