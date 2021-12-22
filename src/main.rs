@@ -1,4 +1,5 @@
 mod bb;
+mod fen;
 mod position;
 
 use bb::Bitboard;
