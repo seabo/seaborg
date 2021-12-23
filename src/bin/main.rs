@@ -1,6 +1,5 @@
-use rchess::mov::{Move, MoveStruct};
+use rchess::mov::Move;
 use rchess::position::{Position, Square};
-use std::mem::size_of;
 use std::time::Instant;
 
 fn main() {
@@ -19,6 +18,4 @@ fn main() {
         }
     }
     println!("FEN string took {}μs to parse", elapsed);
-
-    println!("Move struct is {} bytes", size_of::<MoveStruct>());
 }

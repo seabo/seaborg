@@ -18,7 +18,7 @@ impl fmt::Display for Color {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, TryFromPrimitive)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, TryFromPrimitive)]
 #[repr(u8)]
 pub enum Square {
     A1 = 0,
@@ -201,7 +201,7 @@ impl Board {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum Piece {
     None,
     WhitePawn,
@@ -218,7 +218,7 @@ pub enum Piece {
     BlackKing,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum PieceType {
     None,
     Pawn,
