@@ -4,14 +4,17 @@ use crate::bb::{
     WHITE_SINGLE_PAWN_MOVE_MASK,
 };
 use crate::mov::Move;
-use crate::position::{Color, Position, Square, PROMO_PIECES};
+use crate::position::{Player, Position, Square, PROMO_PIECES};
+use crate::precalc::boards::{king_moves, knight_moves};
 
 impl Position {
     pub fn generate_moves(&self) -> Vec<Move> {
         let mut move_list = Vec::new();
 
-        if self.turn == Color::White {
+        if self.turn == Player::White {
             self.generate_white_pawn_moves(&mut move_list);
+            self.generate_white_king_moves(&mut move_list);
+            self.generate_white_knight_moves(&mut move_list);
         }
 
         move_list
@@ -130,5 +133,21 @@ impl Position {
         }
     }
 
-    fn generate_white_king_moves(&self, move_list: &mut Vec<Move>) {}
+    fn generate_white_king_moves(&self, move_list: &mut Vec<Move>) {
+        let sq = Square(self.white_king.bsf() as u8);
+        let king_moves = king_moves(sq) & !self.white_pieces;
+
+        for dest in king_moves {
+            move_list.push(Move::build(sq, Square(dest), None, false, false));
+        }
+    }
+
+    fn generate_white_knight_moves(&self, move_list: &mut Vec<Move>) {
+        for orig in self.white_knights {
+            let knight_moves = knight_moves(Square(orig)) & !self.white_pieces;
+            for dest in knight_moves {
+                move_list.push(Move::build(Square(orig), Square(dest), None, false, false));
+            }
+        }
+    }
 }

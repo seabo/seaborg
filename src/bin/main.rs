@@ -20,31 +20,32 @@ fn init_globals() {
 
 fn main() {
     init_globals();
-    println!("{}", knight_moves(Square(29)));
+    // println!("{}", knight_moves(Square(29)));
 
-    // let start_position = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
-    // let other_position = "rn3rk1/1bq2ppp/p3p3/1pnp2B1/3N1P2/2b3Q1/PPP3PP/2KRRB2 w - - 0 17";
-    // let position3 = "2r1b2k/3P4/8/8/8/8/8/7K w - - 0 1";
-    // let position4 = "7k/8/8/1PpP4/8/8/8/7K w - c6 0 2";
+    let start_position = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+    let other_position = "rn3rk1/1bq2ppp/p3p3/1pnp2B1/3N1P2/2b3Q1/PPP3PP/2KRRB2 w - - 0 17";
+    let position3 = "2r1b2k/3P4/8/8/8/8/8/7K w - - 0 1";
+    let position4 = "7k/8/8/1PpP4/8/8/8/7K w - c6 0 2";
+    let position5 = "7k/8/8/3Rnr2/3pKb2/3rpp2/8/8 w - - 0 1";
 
-    // let now = Instant::now();
-    // let pos = Position::from_fen(other_position);
-    // let elapsed = now.elapsed().as_micros();
+    let now = Instant::now();
+    let pos = Position::from_fen(other_position);
+    let elapsed = now.elapsed().as_micros();
 
-    // println!("{}", WHITE_LEFTWARD_PROMOTION_MASK);
+    println!("{}", WHITE_LEFTWARD_PROMOTION_MASK);
 
-    // match pos {
-    //     Ok(pos) => {
-    //         println!("{:?}", pos);
+    match pos {
+        Ok(pos) => {
+            println!("{:?}", pos);
 
-    //         for mov in pos.generate_moves() {
-    //             println!("{}", mov);
-    //         }
-    //     }
-    //     Err(fen_error) => {
-    //         println!("{}", fen_error.msg);
-    //     }
-    // }
+            for mov in pos.generate_moves() {
+                println!("{}", mov);
+            }
+        }
+        Err(fen_error) => {
+            println!("{}", fen_error.msg);
+        }
+    }
 
     // println!("FEN string took {}μs to parse", elapsed);
 }

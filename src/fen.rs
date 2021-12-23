@@ -1,5 +1,5 @@
 use crate::bb::Bitboard;
-use crate::position::{Board, CastlingRights, Color, Piece, Position, Square};
+use crate::position::{Board, CastlingRights, Piece, Player, Position, Square};
 use std::fmt;
 
 #[derive(Debug)]
@@ -29,7 +29,7 @@ impl Position {
     pub fn new() -> Self {
         Self {
             board: Board::new(),
-            turn: Color::White,
+            turn: Player::White,
             castling_rights: CastlingRights::none(),
             ep_square: None,
             half_move_clock: 0,
@@ -305,10 +305,10 @@ impl Position {
         ))
     }
 
-    fn parse_side_to_move(side_to_move: &str) -> Result<Color, FenError> {
+    fn parse_side_to_move(side_to_move: &str) -> Result<Player, FenError> {
         match side_to_move {
-            "w" => Ok(Color::White),
-            "b" => Ok(Color::Black),
+            "w" => Ok(Player::White),
+            "b" => Ok(Player::Black),
             _ => Err(FenError {
                 ty: FenErrorType::SideToMoveInvalid,
                 msg: format!(

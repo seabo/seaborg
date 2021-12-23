@@ -10,7 +10,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(|| black_box(Move::build(Square(18), Square(11), None, false, false)))
     });
 
-    c.bench_function("generate pawn moves", |b| {
+    c.bench_function("generate moves", |b| {
         b.iter(|| black_box(position.generate_moves()))
     });
 }

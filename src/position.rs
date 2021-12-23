@@ -4,16 +4,16 @@ use std::convert::TryFrom;
 use std::fmt;
 
 #[derive(Copy, Clone, Eq, PartialEq)]
-pub enum Color {
+pub enum Player {
     White,
     Black,
 }
 
-impl fmt::Display for Color {
+impl fmt::Display for Player {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Color::White => write!(f, "White"),
-            Color::Black => write!(f, "Black"),
+            Player::White => write!(f, "White"),
+            Player::Black => write!(f, "Black"),
         }
     }
 }
@@ -218,7 +218,7 @@ pub struct Position {
     pub(crate) black_piece_count: u8,
 
     // Other state
-    pub(crate) turn: Color,
+    pub(crate) turn: Player,
     pub(crate) castling_rights: CastlingRights,
     pub(crate) ep_square: Option<Square>,
     pub(crate) half_move_clock: u32,
