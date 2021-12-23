@@ -3,7 +3,7 @@ use num_enum::TryFromPrimitive;
 use std::convert::TryFrom;
 use std::fmt;
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 pub enum Color {
     White,
     Black,
@@ -177,6 +177,8 @@ impl Square {
         }
     }
 
+    // TODO: This is very slow currently. Either avoid using or
+    // find a faster way to implement Squares
     pub fn from_idx(idx: u16) -> Self {
         Self::try_from(idx as u8).expect(&format!(
             "can only create a Square from an index in 0-63; found {}",
