@@ -1,3 +1,5 @@
+mod fen;
+
 use crate::bb::Bitboard;
 use num_enum::TryFromPrimitive;
 use std::convert::TryFrom;
@@ -65,6 +67,36 @@ impl Board {
 
     pub fn from_array(board: [Piece; 64]) -> Self {
         Self { arr: board }
+    }
+
+    pub fn pretty_string(&self) -> String {
+        let mut s = String::new();
+        let mut squares: [[Piece; 8]; 8] = [[Piece::None; 8]; 8];
+
+        for i in 0..64 {
+            let rank = i / 8;
+            let file = i % 8;
+            squares[rank][file] = self.arr[i]
+        }
+
+        s.push_str("   ┌────────────────────────┐\n");
+        for (i, row) in squares.iter().rev().enumerate() {
+            s.push_str(&format!(" {} │", 8 - i));
+            for square in row {
+                s.push_str(&format!(" {} ", square));
+            }
+            s.push_str("│\n");
+        }
+        s.push_str("   └────────────────────────┘\n");
+        s.push_str("     a  b  c  d  e  f  g  h \n");
+
+        s
+    }
+}
+
+impl fmt::Display for Board {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.pretty_string())
     }
 }
 
@@ -218,11 +250,18 @@ pub struct Position {
     pub(crate) black_piece_count: u8,
 
     // Other state
-    pub(crate) turn: Player,
+    turn: Player,
     pub(crate) castling_rights: CastlingRights,
     pub(crate) ep_square: Option<Square>,
     pub(crate) half_move_clock: u32,
     pub(crate) move_number: u32,
+}
+
+impl Position {
+    #[inline]
+    pub fn turn(&self) -> Player {
+        self.turn
+    }
 }
 
 impl fmt::Display for Piece {

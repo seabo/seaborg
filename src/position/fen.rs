@@ -25,35 +25,6 @@ pub enum FenErrorType {
 }
 
 impl Position {
-    // TODO: remove this function once FEN parsing works properly
-    pub fn new() -> Self {
-        Self {
-            board: Board::new(),
-            turn: Player::White,
-            castling_rights: CastlingRights::none(),
-            ep_square: None,
-            half_move_clock: 0,
-            move_number: 0,
-            no_piece: Bitboard::new(0xFFFFFFFFFFFFFFFF),
-            white_pawns: Bitboard::new(0x0),
-            white_knights: Bitboard::new(0x0),
-            white_bishops: Bitboard::new(0x0),
-            white_rooks: Bitboard::new(0x0),
-            white_queens: Bitboard::new(0x0),
-            white_king: Bitboard::new(0x0),
-            black_pawns: Bitboard::new(0x0),
-            black_knights: Bitboard::new(0x0),
-            black_bishops: Bitboard::new(0x0),
-            black_rooks: Bitboard::new(0x0),
-            black_queens: Bitboard::new(0x0),
-            black_king: Bitboard::new(0x0),
-            white_pieces: Bitboard::new(0x0),
-            black_pieces: Bitboard::new(0x0),
-            white_piece_count: 0,
-            black_piece_count: 0,
-        }
-    }
-
     pub fn from_fen(fen: &str) -> Result<Self, FenError> {
         let [piece_positions, side_to_move, castling_rights, ep_square, half_move_clock, move_number] =
             Self::split_fen_fields(fen)?;
@@ -511,7 +482,7 @@ impl fmt::Debug for Position {
         writeln!(f)?;
 
         writeln!(f, "STATE DATA\n==========\n")?;
-        writeln!(f, "Turn: {}", self.turn)?;
+        writeln!(f, "Turn: {}", self.turn())?;
         writeln!(f, "Castling Rights: {}", self.castling_rights)?;
         writeln!(
             f,
@@ -523,8 +494,6 @@ impl fmt::Debug for Position {
         )?;
         writeln!(f, "Half move clock: {}", self.half_move_clock)?;
         writeln!(f, "Move number: {}", self.move_number)
-
-        // TODO: display all the other Position struct data
     }
 }
 
@@ -533,27 +502,4 @@ fn rank_file_to_idx(rank: u32, file: u8) -> u8 {
     // fen string, so `rank` = 0 means the rank usually labelled as 8 in
     // algebraic chess notation
     (7 - rank as u8) * 8 + file
-}
-
-impl fmt::Display for Board {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut squares: [[Piece; 8]; 8] = [[Piece::None; 8]; 8];
-
-        for i in 0..64 {
-            let rank = i / 8;
-            let file = i % 8;
-            squares[rank][file] = self.arr[i]
-        }
-
-        writeln!(f, "   ┌────────────────────────┐")?;
-        for (i, row) in squares.iter().rev().enumerate() {
-            write!(f, " {} │", 8 - i)?;
-            for square in row {
-                write!(f, " {} ", square)?;
-            }
-            write!(f, "│\n")?;
-        }
-        writeln!(f, "   └────────────────────────┘")?;
-        writeln!(f, "     a  b  c  d  e  f  g  h ")
-    }
 }

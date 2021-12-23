@@ -11,7 +11,7 @@ impl Position {
     pub fn generate_moves(&self) -> Vec<Move> {
         let mut move_list = Vec::new();
 
-        if self.turn == Player::White {
+        if self.turn() == Player::White {
             self.generate_white_pawn_moves(&mut move_list);
             self.generate_white_king_moves(&mut move_list);
             self.generate_white_knight_moves(&mut move_list);
