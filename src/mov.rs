@@ -68,6 +68,7 @@ pub struct MoveStruct {
     orig: Square,
     dest: Square,
     promo_piece_type: Option<PieceType>,
+    // Todo: use an enum again
     special_move_flag: u8,
 }
 
