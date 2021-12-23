@@ -2,11 +2,13 @@ use crate::bb::Bitboard;
 use crate::position::{Board, CastlingRights, Color, Piece, Position, Square};
 use std::fmt;
 
+#[derive(Debug)]
 pub struct FenError {
     ty: FenErrorType,
     pub msg: String,
 }
 
+#[derive(Debug)]
 pub enum FenErrorType {
     IncorrectNumberOfFields,
     SideToMoveInvalid,
@@ -17,7 +19,9 @@ pub enum FenErrorType {
     PiecePositionsNotEightRows,
     PiecePositionsConsecutiveNumbers,
     PiecePositionsInvalidPiece,
-    PiecePositionsRowTooLarge,
+    PiecePositionsInvalidNumber,
+    PiecePositionsRowTooLong,
+    PiecePositionsRowTooShort,
 }
 
 impl Position {
@@ -135,6 +139,26 @@ impl Position {
         let mut last_was_number = false;
 
         for c in piece_positions.chars() {
+            if file_counter == 8 {
+                match c {
+                    '/' => {
+                        last_was_number = false;
+                        file_counter = 0;
+                        rank_counter += 1;
+                        continue;
+                    }
+                    _ => {
+                        return Err(FenError {
+                            ty: FenErrorType::PiecePositionsRowTooLong,
+                            msg: format!(
+                                "row {} ({}) too long",
+                                rank_counter, rows[rank_counter as usize]
+                            ),
+                        });
+                    }
+                }
+            }
+
             let idx = rank_file_to_idx(rank_counter, file_counter);
             match c {
                 'P' => {
@@ -210,10 +234,17 @@ impl Position {
                     file_counter += 1;
                 }
                 '/' => {
-                    last_was_number = false;
-                    file_counter = 0;
-                    rank_counter += 1;
+                    // `/` should only appear when expected at the end of row, and is dealt
+                    // with separately above. PiecePositionsRowTooLongan error.
+                    return Err(FenError {
+                        ty: FenErrorType::PiecePositionsRowTooShort,
+                        msg: format!(
+                            "row {} ({}) too short; represents {} files - expected 8",
+                            rank_counter, rows[rank_counter as usize], file_counter
+                        ),
+                    });
                 }
+
                 '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' => {
                     if last_was_number {
                         return Err(FenError {
@@ -225,18 +256,16 @@ impl Position {
                             "{} matched as a number char ('1' to '8'), but didn't parse to a number",
                             c
                         ));
-                        last_was_number = true;
-                        file_counter += (skip - 1) as u8;
 
-                        if file_counter > 7 {
+                        if skip < 1 || skip > 8 {
                             return Err(FenError {
-                                ty: FenErrorType::PiecePositionsRowTooLarge,
-                                msg: format!(
-                                    "row {} ({}) represents {} files; expected 8",
-                                    rank_counter, rows[rank_counter as usize], file_counter
-                                ),
+                                ty: FenErrorType::PiecePositionsInvalidNumber,
+                                msg: format!("invalid number {} found in piece position string; should be between 1-8", skip),
                             });
                         }
+
+                        last_was_number = true;
+                        file_counter += skip as u8;
                     }
                 }
                 _ => {
