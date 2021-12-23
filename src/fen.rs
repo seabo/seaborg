@@ -413,23 +413,26 @@ impl Position {
             });
         }
 
+        // TODO: can also run a check to ensure that the en passant square reconciles with the
+        // side to move
+
         match ep_square {
-            "a3" => Ok(Some(Square::A3)),
-            "b3" => Ok(Some(Square::B3)),
-            "c3" => Ok(Some(Square::C3)),
-            "d3" => Ok(Some(Square::D3)),
-            "e3" => Ok(Some(Square::E3)),
-            "f3" => Ok(Some(Square::F3)),
-            "g3" => Ok(Some(Square::G3)),
-            "h3" => Ok(Some(Square::H3)),
-            "a6" => Ok(Some(Square::A6)),
-            "b6" => Ok(Some(Square::B6)),
-            "c6" => Ok(Some(Square::C6)),
-            "d6" => Ok(Some(Square::D6)),
-            "e6" => Ok(Some(Square::E6)),
-            "f6" => Ok(Some(Square::F6)),
-            "g6" => Ok(Some(Square::G6)),
-            "h6" => Ok(Some(Square::H6)),
+            "a3" => Ok(Some(Square(16))),
+            "b3" => Ok(Some(Square(17))),
+            "c3" => Ok(Some(Square(18))),
+            "d3" => Ok(Some(Square(19))),
+            "e3" => Ok(Some(Square(20))),
+            "f3" => Ok(Some(Square(21))),
+            "g3" => Ok(Some(Square(22))),
+            "h3" => Ok(Some(Square(23))),
+            "a6" => Ok(Some(Square(40))),
+            "b6" => Ok(Some(Square(41))),
+            "c6" => Ok(Some(Square(42))),
+            "d6" => Ok(Some(Square(43))),
+            "e6" => Ok(Some(Square(44))),
+            "f6" => Ok(Some(Square(45))),
+            "g6" => Ok(Some(Square(46))),
+            "h6" => Ok(Some(Square(47))),
             _ => Err(FenError {
                 ty: FenErrorType::EnPassantSquareInvalid,
                 msg: format!("invalid en passant square `{}`; must be a valid algebraic notation square on the 3rd or 6th rank", ep_square),

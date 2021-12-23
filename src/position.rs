@@ -18,172 +18,37 @@ impl fmt::Display for Color {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, TryFromPrimitive)]
-#[repr(u8)]
-pub enum Square {
-    A1 = 0,
-    B1,
-    C1,
-    D1,
-    E1,
-    F1,
-    G1,
-    H1,
-    A2,
-    B2,
-    C2,
-    D2,
-    E2,
-    F2,
-    G2,
-    H2,
-    A3,
-    B3,
-    C3,
-    D3,
-    E3,
-    F3,
-    G3,
-    H3,
-    A4,
-    B4,
-    C4,
-    D4,
-    E4,
-    F4,
-    G4,
-    H4,
-    A5,
-    B5,
-    C5,
-    D5,
-    E5,
-    F5,
-    G5,
-    H5,
-    A6,
-    B6,
-    C6,
-    D6,
-    E6,
-    F6,
-    G6,
-    H6,
-    A7,
-    B7,
-    C7,
-    D7,
-    E7,
-    F7,
-    G7,
-    H7,
-    A8,
-    B8,
-    C8,
-    D8,
-    E8,
-    F8,
-    G8,
-    H8,
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct Square(pub u8);
+
+impl Square {
+    pub const fn is_okay(&self) -> bool {
+        self.0 < 64
+    }
 }
 
 impl fmt::Display for Square {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Square::A1 => write!(f, "a1"),
-            Square::B1 => write!(f, "b1"),
-            Square::C1 => write!(f, "c1"),
-            Square::D1 => write!(f, "d1"),
-            Square::E1 => write!(f, "e1"),
-            Square::F1 => write!(f, "f1"),
-            Square::G1 => write!(f, "g1"),
-            Square::H1 => write!(f, "h1"),
+        let Square(idx) = self;
+        let rank = idx / 8 + 1;
+        let file = idx % 8;
 
-            Square::A2 => write!(f, "a2"),
-            Square::B2 => write!(f, "b2"),
-            Square::C2 => write!(f, "c2"),
-            Square::D2 => write!(f, "d2"),
-            Square::E2 => write!(f, "e2"),
-            Square::F2 => write!(f, "f2"),
-            Square::G2 => write!(f, "g2"),
-            Square::H2 => write!(f, "h2"),
+        let file_name = match file {
+            0 => "a",
+            1 => "b",
+            2 => "c",
+            3 => "d",
+            4 => "e",
+            5 => "f",
+            6 => "g",
+            7 => "h",
+            _ => panic!(
+                "error: square struct has idx {} and file index {}",
+                idx, file
+            ),
+        };
 
-            Square::A3 => write!(f, "a3"),
-            Square::B3 => write!(f, "b3"),
-            Square::C3 => write!(f, "c3"),
-            Square::D3 => write!(f, "d3"),
-            Square::E3 => write!(f, "e3"),
-            Square::F3 => write!(f, "f3"),
-            Square::G3 => write!(f, "g3"),
-            Square::H3 => write!(f, "h3"),
-
-            Square::A4 => write!(f, "a4"),
-            Square::B4 => write!(f, "b4"),
-            Square::C4 => write!(f, "c4"),
-            Square::D4 => write!(f, "d4"),
-            Square::E4 => write!(f, "e4"),
-            Square::F4 => write!(f, "f4"),
-            Square::G4 => write!(f, "g4"),
-            Square::H4 => write!(f, "h4"),
-
-            Square::A5 => write!(f, "a5"),
-            Square::B5 => write!(f, "b5"),
-            Square::C5 => write!(f, "c5"),
-            Square::D5 => write!(f, "d5"),
-            Square::E5 => write!(f, "e5"),
-            Square::F5 => write!(f, "f5"),
-            Square::G5 => write!(f, "g5"),
-            Square::H5 => write!(f, "h5"),
-
-            Square::A6 => write!(f, "a6"),
-            Square::B6 => write!(f, "b6"),
-            Square::C6 => write!(f, "c6"),
-            Square::D6 => write!(f, "d6"),
-            Square::E6 => write!(f, "e6"),
-            Square::F6 => write!(f, "f6"),
-            Square::G6 => write!(f, "g6"),
-            Square::H6 => write!(f, "h6"),
-
-            Square::A7 => write!(f, "a7"),
-            Square::B7 => write!(f, "b7"),
-            Square::C7 => write!(f, "c7"),
-            Square::D7 => write!(f, "d7"),
-            Square::E7 => write!(f, "e7"),
-            Square::F7 => write!(f, "f7"),
-            Square::G7 => write!(f, "g7"),
-            Square::H7 => write!(f, "h7"),
-
-            Square::A8 => write!(f, "a8"),
-            Square::B8 => write!(f, "b8"),
-            Square::C8 => write!(f, "c8"),
-            Square::D8 => write!(f, "d8"),
-            Square::E8 => write!(f, "e8"),
-            Square::F8 => write!(f, "f8"),
-            Square::G8 => write!(f, "g8"),
-            Square::H8 => write!(f, "h8"),
-        }
-    }
-}
-
-impl Square {
-    pub fn to_idx(&self) -> Option<u32> {
-        Some(*self as u32)
-    }
-
-    pub fn to_bb(&self) -> Option<Bitboard> {
-        match self.to_idx() {
-            Some(idx) => Some(Bitboard::from_sq_idx(idx as u8)),
-            None => None,
-        }
-    }
-
-    // TODO: This is very slow currently. Either avoid using or
-    // find a faster way to implement Squares
-    pub fn from_idx(idx: u16) -> Self {
-        Self::try_from(idx as u8).expect(&format!(
-            "can only create a Square from an index in 0-63; found {}",
-            idx
-        ))
+        write!(f, "{}{}", file_name, rank.to_string())
     }
 }
 
@@ -230,6 +95,13 @@ pub enum PieceType {
     Queen,
     King,
 }
+
+pub const PROMO_PIECES: [PieceType; 4] = [
+    PieceType::Knight,
+    PieceType::Bishop,
+    PieceType::Rook,
+    PieceType::Queen,
+];
 
 impl PieceType {
     fn long_name(&self) -> &str {

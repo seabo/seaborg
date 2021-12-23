@@ -13,8 +13,11 @@ pub const SIXTH_RANK: Bitboard = Bitboard(0x0000FF0000000000);
 pub const SEVENTH_RANK: Bitboard = Bitboard(0x00FF000000000000);
 pub const EIGHTH_RANK: Bitboard = Bitboard(0xFF00000000000000);
 
-pub const WHITE_LEFT_PAWN_CAPTURE_MASK: Bitboard = Bitboard(0xFEFEFEFEFEFE0000);
-pub const WHITE_RIGHT_PAWN_CAPTURE_MASK: Bitboard = Bitboard(0xEFEFEFEFEFEF0000);
+pub const WHITE_SINGLE_PAWN_MOVE_MASK: Bitboard = Bitboard(0x0000FFFFFFFFFF00);
+pub const WHITE_LEFT_PAWN_CAPTURE_MASK: Bitboard = Bitboard(0x007F7F7F7F7F0000);
+pub const WHITE_RIGHT_PAWN_CAPTURE_MASK: Bitboard = Bitboard(0x00FEFEFEFEFE0000);
+pub const WHITE_LEFTWARD_PROMOTION_MASK: Bitboard = Bitboard(0x00FE000000000000);
+pub const WHITE_RIGHTWARD_PROMOTION_MASK: Bitboard = Bitboard(0x007F000000000000);
 
 impl Bitboard {
     pub fn new(bb: u64) -> Self {
@@ -167,24 +170,15 @@ impl std::ops::Shr<usize> for Bitboard {
     }
 }
 
-// impl std::iter::IntoIterator for Bitboard {
-//     type Item = u32;
-//     type IntoIter = Bitboard;
-
-//     fn into_iter(&self) -> Self::IntoIter {
-//         self.clone()
-//     }
-// }
-
 impl std::iter::Iterator for Bitboard {
-    type Item = u32;
+    type Item = u8;
 
-    fn next(&mut self) -> Option<u32> {
+    fn next(&mut self) -> Option<u8> {
         match self.bsf() {
             64 => None,
             x => {
                 self.toggle_lsb();
-                Some(x)
+                Some(x as u8)
             }
         }
     }

@@ -7,7 +7,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let position = Position::from_fen(fen).unwrap();
 
     c.bench_function("build move u16", |b| {
-        b.iter(|| black_box(Move::build(Square::C3, Square::D2, None, false, false)))
+        b.iter(|| black_box(Move::build(Square(18), Square(11), None, false, false)))
     });
 
     c.bench_function("generate pawn moves", |b| {

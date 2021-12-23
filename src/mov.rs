@@ -1,4 +1,5 @@
 use crate::position::{PieceType, Square};
+use std::fmt;
 
 #[derive(Copy, Clone, Debug)]
 pub enum SpecialMove {
@@ -56,5 +57,15 @@ impl Move {
 
     pub fn orig(&self) -> Square {
         self.orig
+    }
+}
+
+impl fmt::Display for Move {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(promo_piece) = self.promo_piece_type {
+            write!(f, "{}{}={:1}", self.orig, self.dest, promo_piece)
+        } else {
+            write!(f, "{}{}", self.orig, self.dest)
+        }
     }
 }
