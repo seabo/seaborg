@@ -1,5 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rchess::mov::Move;
+use rchess::movegen::MoveGen;
 use rchess::position::{Position, Square};
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -11,7 +12,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("generate moves", |b| {
-        b.iter(|| black_box(position.generate_moves()))
+        b.iter(|| black_box(MoveGen::generate(&position)))
     });
 }
 

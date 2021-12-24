@@ -1,9 +1,11 @@
 mod fen;
 
 use crate::bb::Bitboard;
+
 use num_enum::TryFromPrimitive;
 use std::convert::TryFrom;
 use std::fmt;
+use std::ops::*;
 
 #[derive(Copy, Clone, Eq, PartialEq)]
 pub enum Player {
@@ -29,8 +31,12 @@ impl fmt::Display for Player {
     }
 }
 
+/// Represents a single square of a chess board.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(transparent)]
 pub struct Square(pub u8);
+
+impl_bit_ops!(Square, u8);
 
 impl Square {
     pub const fn is_okay(&self) -> bool {
@@ -126,7 +132,7 @@ pub enum Piece {
     BlackKing,
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum PieceType {
     None,
     Pawn,
@@ -270,6 +276,43 @@ impl Position {
     #[inline]
     pub fn turn(&self) -> Player {
         self.turn
+    }
+
+    #[inline]
+    pub fn occupied(&self) -> Bitboard {
+        !self.no_piece
+    }
+
+    #[inline]
+    pub fn get_occupied_player(&self, player: Player) -> Bitboard {
+        match player {
+            Player::White => self.white_pieces,
+            Player::Black => self.black_pieces,
+        }
+    }
+
+    #[inline]
+    pub fn piece_bb(&self, player: Player, piece_type: PieceType) -> Bitboard {
+        match player {
+            Player::White => match piece_type {
+                PieceType::None => Bitboard::ALL,
+                PieceType::Pawn => self.white_pawns,
+                PieceType::Knight => self.white_knights,
+                PieceType::Bishop => self.white_bishops,
+                PieceType::Rook => self.white_rooks,
+                PieceType::Queen => self.white_queens,
+                PieceType::King => self.white_king,
+            },
+            Player::Black => match piece_type {
+                PieceType::None => Bitboard::ALL,
+                PieceType::Pawn => self.black_pawns,
+                PieceType::Knight => self.black_knights,
+                PieceType::Bishop => self.black_bishops,
+                PieceType::Rook => self.black_rooks,
+                PieceType::Queen => self.black_queens,
+                PieceType::King => self.black_king,
+            },
+        }
     }
 }
 

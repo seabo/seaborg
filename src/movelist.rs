@@ -22,6 +22,10 @@ pub const MAX_MOVES: usize = 254;
 
 /// Trait to generalize operations on structures containing a collection of `Move`s.
 pub trait MVPushable: Sized + IndexMut<usize> + Index<usize> + DerefMut {
+    /// Add a `Move` to the end of the list. Wraps `push_mv` and `unchecked_push_mv`
+    /// and use `cfg(debug_assertions)` to choose which to use at compile-time.
+    fn push(&mut self, mv: Move);
+
     /// Add a `Move` to the end of the list.
     fn push_mv(&mut self, mv: Move);
 
@@ -69,16 +73,6 @@ impl Into<Vec<Move>> for MoveList {
 }
 
 impl MoveList {
-    /// Adds a `Move` to the end of the list.
-    ///
-    /// # Safety
-    ///
-    /// If pushing to the list when at capacity, does nothing.
-    #[inline(always)]
-    pub fn push(&mut self, mv: Move) {
-        self.push_mv(mv);
-    }
-
     /// Returns true if empty.
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
@@ -146,6 +140,19 @@ impl IndexMut<usize> for MoveList {
 }
 
 impl MVPushable for MoveList {
+    #[cfg(debug_assertions)]
+    #[inline(always)]
+    fn push(&mut self, mv: Move) {
+        println!("checking");
+        self.push_mv(mv);
+    }
+    #[cfg(not(debug_assertions))]
+    #[inline(always)]
+    fn push(&mut self, mv: Move) {
+        unsafe {
+            self.unchecked_push_mv(mv);
+        }
+    }
     #[inline(always)]
     fn push_mv(&mut self, mv: Move) {
         if self.len() < MAX_MOVES {

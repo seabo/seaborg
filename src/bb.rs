@@ -1,7 +1,9 @@
+use crate::masks::*;
+use crate::position::Square;
 use std::fmt;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
-// TODO: internal u64 field should not be pub
+#[repr(transparent)]
 pub struct Bitboard(u64);
 
 pub const FIRST_RANK: Bitboard = Bitboard(0x00000000000000FF);
@@ -20,6 +22,41 @@ pub const WHITE_LEFTWARD_PROMOTION_MASK: Bitboard = Bitboard(0x00FE000000000000)
 pub const WHITE_RIGHTWARD_PROMOTION_MASK: Bitboard = Bitboard(0x007F000000000000);
 
 impl Bitboard {
+    /// Bitboard of all squares
+    pub const ALL: Bitboard = Bitboard(ALL);
+    /// Bitboard of File A.
+    pub const FILE_A: Bitboard = Bitboard(FILE_A);
+    /// Bitboard of File A.
+    pub const FILE_B: Bitboard = Bitboard(FILE_B);
+    /// Bitboard of File A.
+    pub const FILE_C: Bitboard = Bitboard(FILE_C);
+    /// Bitboard of File A.
+    pub const FILE_D: Bitboard = Bitboard(FILE_D);
+    /// Bitboard of File A.
+    pub const FILE_E: Bitboard = Bitboard(FILE_E);
+    /// Bitboard of File A.
+    pub const FILE_F: Bitboard = Bitboard(FILE_F);
+    /// Bitboard of File A.
+    pub const FILE_G: Bitboard = Bitboard(FILE_G);
+    /// Bitboard of File A.
+    pub const FILE_H: Bitboard = Bitboard(FILE_H);
+    /// Bitboard Rank 1.
+    pub const RANK_1: Bitboard = Bitboard(RANK_1);
+    /// Bitboard Rank 1.
+    pub const RANK_2: Bitboard = Bitboard(RANK_2);
+    /// Bitboard Rank 1.
+    pub const RANK_3: Bitboard = Bitboard(RANK_3);
+    /// Bitboard Rank 1.
+    pub const RANK_4: Bitboard = Bitboard(RANK_4);
+    /// Bitboard Rank 1.
+    pub const RANK_5: Bitboard = Bitboard(RANK_5);
+    /// Bitboard Rank 1.
+    pub const RANK_6: Bitboard = Bitboard(RANK_6);
+    /// Bitboard Rank 1.
+    pub const RANK_7: Bitboard = Bitboard(RANK_7);
+    /// Bitboard Rank 1.
+    pub const RANK_8: Bitboard = Bitboard(RANK_8);
+
     pub fn new(bb: u64) -> Self {
         Bitboard(bb)
     }
@@ -171,14 +208,14 @@ impl std::ops::Shr<usize> for Bitboard {
 }
 
 impl std::iter::Iterator for Bitboard {
-    type Item = u8;
+    type Item = Square;
 
-    fn next(&mut self) -> Option<u8> {
+    fn next(&mut self) -> Option<Square> {
         match self.bsf() {
             64 => None,
             x => {
                 self.toggle_lsb();
-                Some(x as u8)
+                Some(Square(x as u8))
             }
         }
     }

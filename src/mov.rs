@@ -7,6 +7,8 @@ pub enum SpecialMove {
     Promotion,
     EnPassant,
     Castling,
+    Capture,
+    Quiet,
     Null,
 }
 

@@ -1,153 +1,105 @@
-use crate::bb::{
-    Bitboard, FIFTH_RANK, SECOND_RANK, SEVENTH_RANK, THIRD_RANK, WHITE_LEFTWARD_PROMOTION_MASK,
-    WHITE_LEFT_PAWN_CAPTURE_MASK, WHITE_RIGHTWARD_PROMOTION_MASK, WHITE_RIGHT_PAWN_CAPTURE_MASK,
-    WHITE_SINGLE_PAWN_MOVE_MASK,
+use crate::bb::Bitboard;
+use crate::mono_traits::{
+    BishopType, BlackType, KingType, KnightType, PawnType, PieceTrait, PlayerTrait, QueenType,
+    RookType, WhiteType,
 };
-use crate::mov::Move;
-use crate::position::{Player, Position, Square, PROMO_PIECES};
+use crate::mov::{Move, SpecialMove};
+use crate::movelist::{MVPushable, MoveList};
+use crate::position::{PieceType, Player, Position, Square};
 use crate::precalc::boards::{king_moves, knight_moves};
 
-impl Position {
-    pub fn generate_moves(&self) -> Vec<Move> {
-        let mut move_list = Vec::new();
+use std::mem;
+use std::ops::Index;
 
-        if self.turn() == Player::White {
-            self.generate_white_pawn_moves(&mut move_list);
-            self.generate_white_king_moves(&mut move_list);
-            self.generate_white_knight_moves(&mut move_list);
-        }
+pub struct MoveGen {}
 
-        move_list
+impl MoveGen {
+    #[inline]
+    pub fn generate(position: &Position) -> MoveList {
+        let mut movelist = MoveList::default();
+        InnerMoveGen::<MoveList>::generate(position, &mut movelist);
+        movelist
     }
+}
 
-    fn generate_white_pawn_moves(&self, move_list: &mut Vec<Move>) {
-        let white_single_pawn_moves =
-            (self.white_pawns & WHITE_SINGLE_PAWN_MOVE_MASK) << 8 & self.no_piece;
+pub struct InnerMoveGen<'a, MP: MVPushable + 'a> {
+    movelist: &'a mut MP,
+    position: &'a Position,
+    /// All occupied squares on the board
+    occ: Bitboard,
+    /// Squares occupied by the player to move
+    us_occ: Bitboard,
+    /// Square occupied by the opponent
+    them_occ: Bitboard,
+}
 
-        for dest in white_single_pawn_moves {
-            move_list.push(Move::build(
-                Square(dest - 8),
-                Square(dest),
-                None,
-                false,
-                false,
-            ));
-        }
-
-        let white_double_pawn_moves = (white_single_pawn_moves & THIRD_RANK) << 8 & self.no_piece;
-
-        for dest in white_double_pawn_moves {
-            move_list.push(Move::build(
-                Square(dest - 16),
-                Square(dest),
-                None,
-                false,
-                false,
-            ));
-        }
-
-        let white_left_pawn_captures =
-            (self.white_pawns << 7) & self.black_pieces & WHITE_LEFT_PAWN_CAPTURE_MASK;
-
-        for dest in white_left_pawn_captures {
-            move_list.push(Move::build(
-                Square(dest - 7),
-                Square(dest),
-                None,
-                false,
-                false,
-            ));
-        }
-
-        let white_right_pawn_captures =
-            (self.white_pawns << 9) & self.black_pieces & WHITE_RIGHT_PAWN_CAPTURE_MASK;
-
-        for dest in white_right_pawn_captures {
-            move_list.push(Move::build(
-                Square(dest - 9),
-                Square(dest),
-                None,
-                false,
-                false,
-            ));
-        }
-
-        let white_forward_promotions = (self.white_pawns & SEVENTH_RANK) << 8 & self.no_piece;
-
-        for dest in white_forward_promotions {
-            for promo_piece in PROMO_PIECES {
-                move_list.push(Move::build(
-                    Square(dest - 8),
-                    Square(dest),
-                    Some(promo_piece),
-                    false,
-                    false,
-                ));
-            }
-        }
-
-        let white_leftward_promotions =
-            (self.white_pawns & WHITE_LEFTWARD_PROMOTION_MASK) << 7 & self.black_pieces;
-
-        for dest in white_leftward_promotions {
-            for promo_piece in PROMO_PIECES {
-                move_list.push(Move::build(
-                    Square(dest - 7),
-                    Square(dest),
-                    Some(promo_piece),
-                    false,
-                    false,
-                ));
-            }
-        }
-
-        let white_rightward_promotions =
-            (self.white_pawns & WHITE_RIGHTWARD_PROMOTION_MASK) << 9 & self.black_pieces;
-
-        for dest in white_rightward_promotions {
-            for promo_piece in PROMO_PIECES {
-                move_list.push(Move::build(
-                    Square(dest - 9),
-                    Square(dest),
-                    Some(promo_piece),
-                    false,
-                    false,
-                ));
-            }
-        }
-
-        if let Some(Square(ep_square)) = self.ep_square {
-            let ep = Bitboard::from_sq_idx(ep_square);
-            let white_fifth_rank_pawns = self.white_pawns & FIFTH_RANK;
-            let white_captures =
-                ((ep >> 7) & white_fifth_rank_pawns) | ((ep >> 9) & white_fifth_rank_pawns);
-            for orig in white_captures {
-                move_list.push(Move::build(
-                    Square(orig),
-                    Square(ep_square),
-                    None,
-                    true,
-                    false,
-                ))
-            }
+impl<'a, MP: MVPushable> InnerMoveGen<'a, MP>
+where
+    <MP as Index<usize>>::Output: Sized,
+{
+    fn generate(position: &'a Position, movelist: &'a mut MP) -> &'a mut MP {
+        match position.turn() {
+            Player::White => InnerMoveGen::<MP>::generate_helper::<WhiteType>(position, movelist),
+            Player::Black => InnerMoveGen::<MP>::generate_helper::<BlackType>(position, movelist),
         }
     }
 
-    fn generate_white_king_moves(&self, move_list: &mut Vec<Move>) {
-        let sq = Square(self.white_king.bsf() as u8);
-        let king_moves = king_moves(sq) & !self.white_pieces;
-
-        for dest in king_moves {
-            move_list.push(Move::build(sq, Square(dest), None, false, false));
+    #[inline(always)]
+    fn get_self(position: &'a Position, movelist: &'a mut MP) -> Self {
+        InnerMoveGen {
+            movelist,
+            position,
+            occ: position.occupied(),
+            us_occ: position.get_occupied_player(position.turn()),
+            them_occ: position.get_occupied_player(position.turn().other_player()),
         }
     }
 
-    fn generate_white_knight_moves(&self, move_list: &mut Vec<Move>) {
-        for orig in self.white_knights {
-            let knight_moves = knight_moves(Square(orig)) & !self.white_pieces;
-            for dest in knight_moves {
-                move_list.push(Move::build(Square(orig), Square(dest), None, false, false));
-            }
+    fn generate_helper<P: PlayerTrait>(position: &'a Position, movelist: &'a mut MP) -> &'a mut MP {
+        let mut movegen = InnerMoveGen::<MP>::get_self(position, movelist);
+        movegen.generate_all::<P>();
+        movegen.movelist
+    }
+
+    fn generate_all<P: PlayerTrait>(&mut self) {
+        self.moves_per_piece::<P, KnightType>(Bitboard::ALL);
+        self.moves_per_piece::<P, KingType>(Bitboard::ALL);
+    }
+
+    fn moves_per_piece<PL: PlayerTrait, P: PieceTrait>(&mut self, target: Bitboard) {
+        let piece_bb: Bitboard = self.position.piece_bb(PL::player(), P::piece_type());
+        for orig in piece_bb {
+            let moves_bb: Bitboard = self.moves_bb::<P>(orig) & !self.us_occ & target;
+            let mut captures_bb: Bitboard = moves_bb & self.them_occ;
+            let mut non_captures_bb: Bitboard = moves_bb & !self.them_occ;
+            self.move_append_from_bb_flag(&mut captures_bb, orig, SpecialMove::Capture);
+            self.move_append_from_bb_flag(&mut non_captures_bb, orig, SpecialMove::Quiet);
         }
+    }
+
+    fn moves_bb<P: PieceTrait>(&mut self, sq: Square) -> Bitboard {
+        debug_assert!(sq.is_okay());
+        debug_assert_ne!(P::piece_type(), PieceType::Pawn);
+        match P::piece_type() {
+            PieceType::None => panic!(), // TODO
+            PieceType::Pawn => panic!(),
+            PieceType::Knight => knight_moves(sq),
+            PieceType::Bishop => panic!(), // TODO
+            PieceType::Rook => panic!(),   // TODO
+            PieceType::Queen => panic!(),  // TODO
+            PieceType::King => king_moves(sq),
+        }
+    }
+
+    #[inline]
+    fn move_append_from_bb_flag(&mut self, bb: &mut Bitboard, orig: Square, flag: SpecialMove) {
+        for dest in bb {
+            let mov = Move::build(orig, dest, None, false, false);
+            self.add_move(mov);
+        }
+    }
+
+    fn add_move(&mut self, mv: Move) {
+        self.movelist.push(mv);
     }
 }

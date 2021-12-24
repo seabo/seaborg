@@ -4,7 +4,9 @@ use rchess::bb::{
 };
 
 use rchess::mov::Move;
+use rchess::movegen::MoveGen;
 use rchess::position::{Position, Square};
+
 use std::sync::{Once, ONCE_INIT};
 use std::time::Instant;
 
@@ -36,7 +38,7 @@ fn main() {
         Ok(pos) => {
             println!("{:?}", pos);
 
-            for mov in pos.generate_moves() {
+            for mov in MoveGen::generate(&pos).vec() {
                 println!("{}", mov);
             }
         }

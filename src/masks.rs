@@ -1,0 +1,36 @@
+/// Bit representation of all squares.
+pub const ALL: u64 = 0b11111111_11111111_11111111_11111111_11111111_11111111_11111111_11111111;
+
+/// Bit representation of file A.
+pub const FILE_A: u64 = 0b00000001_00000001_00000001_00000001_00000001_00000001_00000001_00000001;
+/// Bit representation of file B.
+pub const FILE_B: u64 = 0b00000010_00000010_00000010_00000010_00000010_00000010_00000010_00000010;
+/// Bit representation of file C.
+pub const FILE_C: u64 = 0b00000100_00000100_00000100_00000100_00000100_00000100_00000100_00000100;
+/// Bit representation of file D.
+pub const FILE_D: u64 = 0b00001000_00001000_00001000_00001000_00001000_00001000_00001000_00001000;
+/// Bit representation of file E.
+pub const FILE_E: u64 = 0b00010000_00010000_00010000_00010000_00010000_00010000_00010000_00010000;
+/// Bit representation of file F.
+pub const FILE_F: u64 = 0b00100000_00100000_00100000_00100000_00100000_00100000_00100000_00100000;
+/// Bit representation of file H.
+pub const FILE_G: u64 = 0b01000000_01000000_01000000_01000000_01000000_01000000_01000000_01000000;
+/// Bit representation of file G.
+pub const FILE_H: u64 = 0b10000000_10000000_10000000_10000000_10000000_10000000_10000000_10000000;
+
+/// Bit representation of rank 1.
+pub const RANK_1: u64 = 0x0000_0000_0000_00FF;
+/// Bit representation of rank 2.
+pub const RANK_2: u64 = 0x0000_0000_0000_FF00;
+/// Bit representation of rank 3.
+pub const RANK_3: u64 = 0x0000_0000_00FF_0000;
+/// Bit representation of rank 4.
+pub const RANK_4: u64 = 0x0000_0000_FF00_0000;
+/// Bit representation of rank 5.
+pub const RANK_5: u64 = 0x0000_00FF_0000_0000;
+/// Bit representation of rank 6.
+pub const RANK_6: u64 = 0x0000_FF00_0000_0000;
+/// Bit representation of rank 7.
+pub const RANK_7: u64 = 0x00FF_0000_0000_0000;
+/// Bit representation of rank 8.
+pub const RANK_8: u64 = 0xFF00_0000_0000_0000;
