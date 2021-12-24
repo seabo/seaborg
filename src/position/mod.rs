@@ -1,6 +1,7 @@
 mod fen;
 
 use crate::bb::Bitboard;
+use crate::bit_twiddles::diff;
 
 use num_enum::TryFromPrimitive;
 use std::convert::TryFrom;
@@ -39,8 +40,32 @@ pub struct Square(pub u8);
 impl_bit_ops!(Square, u8);
 
 impl Square {
+    #[inline]
     pub const fn is_okay(&self) -> bool {
         self.0 < 64
+    }
+
+    #[inline]
+    pub fn distance(&self, other: Self) -> u8 {
+        let x = diff(self.rank_idx_of_sq(), other.rank_idx_of_sq());
+        let y = diff(self.file_idx_of_sq(), other.file_idx_of_sq());
+        if x > y {
+            x
+        } else {
+            y
+        }
+    }
+
+    /// Returns the rank index (number) of a `SQ`.
+    #[inline(always)]
+    pub const fn rank_idx_of_sq(self) -> u8 {
+        (self.0 >> 3) as u8
+    }
+
+    /// Returns the file index (number) of a `SQ`.
+    #[inline(always)]
+    pub const fn file_idx_of_sq(self) -> u8 {
+        (self.0 & 0b0000_0111) as u8
     }
 }
 

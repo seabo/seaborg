@@ -37,10 +37,10 @@ fn main() {
     match pos {
         Ok(pos) => {
             println!("{:?}", pos);
-
-            for mov in MoveGen::generate(&pos).vec() {
-                println!("{}", mov);
-            }
+            let Bitboard(x) = pos.occupied();
+            let attacks = sliding_attack(&[-7, 7, -9, 9], 50, x);
+            let bb = Bitboard::new(attacks);
+            println!("{}", bb);
         }
         Err(fen_error) => {
             println!("{}", fen_error.msg);
@@ -48,4 +48,28 @@ fn main() {
     }
 
     // println!("FEN string took {}μs to parse", elapsed);
+}
+
+/// Returns a bitboards of sliding attacks given an array of 4 deltas.
+/// Does not include the origin square.
+/// Includes occupied bits if it runs into them, but stops before going further.
+// TODO: move this to a magic bitboards module, and use it to generate the magic
+// tables.
+fn sliding_attack(deltas: &[i8; 4], sq: u8, occupied: u64) -> u64 {
+    assert!(sq < 64);
+    let mut attack: u64 = 0;
+    let square: i16 = sq as i16;
+    for delta in deltas.iter().take(4 as usize) {
+        let mut s: u8 = ((square as i16) + (*delta as i16)) as u8;
+        'inner: while s < 64
+            && Square(s as u8).distance(Square(((s as i16) - (*delta as i16)) as u8)) == 1
+        {
+            attack |= (1 as u64).wrapping_shl(s as u32);
+            if occupied & (1 as u64).wrapping_shl(s as u32) != 0 {
+                break 'inner;
+            }
+            s = ((s as i16) + (*delta as i16)) as u8;
+        }
+    }
+    attack
 }

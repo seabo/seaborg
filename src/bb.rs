@@ -4,7 +4,8 @@ use std::fmt;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[repr(transparent)]
-pub struct Bitboard(u64);
+// TODO: the u64 shouldn't be pub
+pub struct Bitboard(pub u64);
 
 pub const FIRST_RANK: Bitboard = Bitboard(0x00000000000000FF);
 pub const SECOND_RANK: Bitboard = Bitboard(0x000000000000FF00);
@@ -57,6 +58,7 @@ impl Bitboard {
     /// Bitboard Rank 1.
     pub const RANK_8: Bitboard = Bitboard(RANK_8);
 
+    // TODO: rename this to `from()`
     pub fn new(bb: u64) -> Self {
         Bitboard(bb)
     }
