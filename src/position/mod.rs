@@ -11,6 +11,15 @@ pub enum Player {
     Black,
 }
 
+impl Player {
+    pub fn other_player(&self) -> Self {
+        match self {
+            Player::White => Player::Black,
+            Player::Black => Player::White,
+        }
+    }
+}
+
 impl fmt::Display for Player {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

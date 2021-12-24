@@ -1,12 +1,13 @@
 use crate::position::{PieceType, Square};
 use std::fmt;
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum SpecialMove {
     None,
     Promotion,
     EnPassant,
     Castling,
+    Null,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -18,6 +19,20 @@ pub struct Move {
 }
 
 impl Move {
+    /// Build a null move. Used for initialising MoveList arrays
+    pub fn null() -> Self {
+        Self {
+            orig: Square(64),
+            dest: Square(64),
+            promo_piece_type: None,
+            special_move: SpecialMove::Null,
+        }
+    }
+
+    pub fn is_null(&self) -> bool {
+        self.special_move == SpecialMove::Null
+    }
+
     /// Builds a move from an origin square, destination square
     /// and information about special moves like promotion, en
     /// passant and castling.
@@ -67,5 +82,18 @@ impl fmt::Display for Move {
         } else {
             write!(f, "{}{}", self.orig, self.dest)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::mem;
+
+    /// Ensure that the Move storage struct doesn't accidentally get bigger
+    /// than 4 bytes.
+    #[test]
+    fn move_is_four_bytes() {
+        assert_eq!(mem::size_of::<Move>(), 4);
     }
 }

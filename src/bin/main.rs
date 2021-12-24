@@ -20,8 +20,6 @@ fn init_globals() {
 
 fn main() {
     init_globals();
-    // println!("{}", knight_moves(Square(29)));
-
     let start_position = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
     let other_position = "rn3rk1/1bq2ppp/p3p3/1pnp2B1/3N1P2/2b3Q1/PPP3PP/2KRRB2 w - - 0 17";
     let position3 = "2r1b2k/3P4/8/8/8/8/8/7K w - - 0 1";
