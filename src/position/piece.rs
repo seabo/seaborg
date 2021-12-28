@@ -1,3 +1,4 @@
+use super::Player;
 use std::fmt;
 
 #[derive(Copy, Clone, Debug)]
@@ -18,8 +19,7 @@ pub enum Piece {
 }
 
 impl Piece {
-    /// Returns the type of the given piece, without information about
-    /// its colour.
+    /// Returns the type of the given piece.
     pub fn type_of(&self) -> PieceType {
         match *self {
             Piece::None => PieceType::None,
@@ -35,6 +35,31 @@ impl Piece {
             Piece::BlackRook => PieceType::Rook,
             Piece::BlackQueen => PieceType::Queen,
             Piece::BlackKing => PieceType::King,
+        }
+    }
+
+    /// Returns the player of the given piece.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the given `Piece` is `Piece::None`. This function
+    /// should only be used when the `Piece` is guaranteed to not be
+    /// `Piece::None`.
+    pub fn player(&self) -> Player {
+        match *self {
+            Piece::None => panic!(),
+            Piece::WhitePawn => Player::White,
+            Piece::WhiteKnight => Player::White,
+            Piece::WhiteBishop => Player::White,
+            Piece::WhiteRook => Player::White,
+            Piece::WhiteQueen => Player::White,
+            Piece::WhiteKing => Player::White,
+            Piece::BlackPawn => Player::Black,
+            Piece::BlackKnight => Player::Black,
+            Piece::BlackBishop => Player::Black,
+            Piece::BlackRook => Player::Black,
+            Piece::BlackQueen => Player::Black,
+            Piece::BlackKing => Player::Black,
         }
     }
 }

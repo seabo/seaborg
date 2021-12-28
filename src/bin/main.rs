@@ -17,8 +17,8 @@ static INITALIZED: Once = ONCE_INIT;
 
 fn init_globals() {
     INITALIZED.call_once(|| {
-        init_boards();
         init_magics();
+        init_boards();
     })
 }
 
@@ -30,12 +30,12 @@ fn main() {
     let position4 = "7k/8/8/1PpP4/8/8/8/7K w - c6 0 2";
     let position5 = "7k/8/8/3Rnr2/3pKb2/3rpp2/8/8 w - - 0 1";
     let position6 = "rnb1kb1r/1pqp1ppp/p3pn2/8/3NP3/2PB4/PP3PPP/RNBQK2R w KQkq - 3 7";
+    let position7 = "8/4k3/4b3/8/4Q3/8/6K1/8 w - - 0 1";
+    let position8 = "8/p7/4k3/1p5p/1P1r1K1P/P4P2/8/8 w - - 0 40";
+    let position9 = "r1bqkb1r/ppp2ppp/2n5/4p3/2p5/5NN1/PPPPQPPP/R1B1K2R b KQkq - 1 7";
 
     let now = Instant::now();
     let pos = Position::from_fen(start_position);
-    let elapsed = now.elapsed().as_micros();
-
-    println!("{}", WHITE_LEFTWARD_PROMOTION_MASK);
 
     match pos {
         Ok(pos) => {

@@ -23,7 +23,7 @@ const SEEDS: [[u64; 8]; 2] = [
 /// Structure inside a `MagicTable` for a specific hash. For a certain square,
 /// contains a mask,  magic number, number to shift by, and a pointer into the array slice
 /// where the position is held.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 struct SMagic {
     ptr: usize,
     mask: u64,

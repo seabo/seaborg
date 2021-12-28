@@ -1,5 +1,7 @@
+use super::{Board, CastlingRights, Piece, Player, Position, Square, State};
+
 use crate::bb::Bitboard;
-use crate::position::{Board, CastlingRights, Piece, Player, Position, Square};
+
 use std::fmt;
 
 #[derive(Debug)]
@@ -36,7 +38,7 @@ impl Position {
         let half_move_clock = Self::parse_half_move_clock(half_move_clock)?;
         let move_number = Self::parse_move_number(move_number)?;
 
-        Ok(Self {
+        let mut pos = Self {
             board,
             turn,
             castling_rights,
@@ -60,7 +62,12 @@ impl Position {
             black_pieces: bbs[14],
             white_piece_count: bbs[13].popcnt() as u8,
             black_piece_count: bbs[14].popcnt() as u8,
-        })
+            state: None,
+        };
+
+        pos.set_state();
+
+        Ok(pos)
     }
 
     pub fn split_fen_fields(fen: &str) -> Result<[&str; 6], FenError> {
@@ -450,50 +457,6 @@ impl Position {
                 msg: format!("move number value of `{}` is invalid; {}", mn, err),
             }),
         }
-    }
-}
-
-impl fmt::Debug for Position {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "")?;
-        writeln!(f, "BITBOARDS\n=========\n")?;
-        writeln!(f, "No Pieces:\n {}", self.no_piece)?;
-        writeln!(f, "White Pawns:\n {}", self.white_pawns)?;
-        writeln!(f, "White Knights:\n {}", self.white_knights)?;
-        writeln!(f, "White Bishops:\n {}", self.white_bishops)?;
-        writeln!(f, "White Rooks:\n {}", self.white_rooks)?;
-        writeln!(f, "White Queens:\n {}", self.white_queens)?;
-        writeln!(f, "White King:\n {}", self.white_king)?;
-        writeln!(f, "Black Pawns:\n {}", self.black_pawns)?;
-        writeln!(f, "Black Knights:\n {}", self.black_knights)?;
-        writeln!(f, "Black Bishops:\n {}", self.black_bishops)?;
-        writeln!(f, "Black Rooks:\n {}", self.black_rooks)?;
-        writeln!(f, "Black Queens:\n {}", self.black_queens)?;
-        writeln!(f, "Black King:\n {}", self.black_king)?;
-        writeln!(f, "White Pieces:\n {}", self.white_pieces)?;
-        writeln!(f, "Black Pieces:\n {}", self.black_pieces)?;
-
-        writeln!(f, "BOARD ARRAY\n===========\n")?;
-        writeln!(f, "{}", self.board)?;
-
-        writeln!(f, "PIECE COUNTS\n============\n")?;
-        writeln!(f, "White: {}", self.white_piece_count)?;
-        writeln!(f, "Black: {}", self.black_piece_count)?;
-        writeln!(f)?;
-
-        writeln!(f, "STATE DATA\n==========\n")?;
-        writeln!(f, "Turn: {}", self.turn())?;
-        writeln!(f, "Castling Rights: {}", self.castling_rights)?;
-        writeln!(
-            f,
-            "En Passant Square: {}",
-            match self.ep_square {
-                Some(sq) => sq.to_string(),
-                None => "none".to_string(),
-            }
-        )?;
-        writeln!(f, "Half move clock: {}", self.half_move_clock)?;
-        writeln!(f, "Move number: {}", self.move_number)
     }
 }
 

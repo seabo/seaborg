@@ -3,18 +3,21 @@ mod castling;
 mod fen;
 mod piece;
 mod square;
+mod state;
 
 use crate::bb::Bitboard;
 use crate::masks::{CASTLING_PATH, CASTLING_ROOK_START, FILE_BB, RANK_BB};
 use crate::movegen::{bishop_moves, rook_moves};
-use crate::precalc::boards::{king_moves, knight_moves, pawn_attacks_from};
+use crate::precalc::boards::{between_bb, king_moves, knight_moves, pawn_attacks_from};
 
 pub use board::Board;
 pub use castling::{CastleType, CastlingRights};
 pub use piece::{Piece, PieceType, PROMO_PIECES};
 pub use square::Square;
+pub use state::State;
 
 use std::fmt;
+use std::ops::Not;
 
 #[derive(Copy, Clone, Eq, PartialEq)]
 pub enum Player {
@@ -39,6 +42,13 @@ impl Player {
     }
 }
 
+impl Not for Player {
+    type Output = Self;
+    fn not(self) -> Self::Output {
+        self.other_player()
+    }
+}
+
 impl fmt::Display for Player {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -48,6 +58,7 @@ impl fmt::Display for Player {
     }
 }
 
+#[derive(Clone)]
 pub struct Position {
     // Array of pieces
     pub(crate) board: Board,
@@ -78,15 +89,24 @@ pub struct Position {
     pub(crate) white_piece_count: u8,
     pub(crate) black_piece_count: u8,
 
-    // Other state
+    // "Invisible" state
     turn: Player,
     pub(crate) castling_rights: CastlingRights,
     pub(crate) ep_square: Option<Square>,
     pub(crate) half_move_clock: u32,
     pub(crate) move_number: u32,
+
+    // `State` struct stores other useful information for fast access
+    pub(crate) state: Option<State>,
 }
 
 impl Position {
+    /// Sets the `State` struct for the current position. Should only be called
+    /// when initialising a new `Position`.
+    pub fn set_state(&mut self) {
+        self.state = Some(State::from_position(&self));
+    }
+
     // CHECKING
 
     /// Returns a `Bitboard` of possible attacks to a square with a given occupancy.
@@ -102,20 +122,6 @@ impl Position {
             | (bishop_moves(occupied, sq)
                 & (self.white_bishops | self.black_bishops | self.white_queens | self.black_queens))
             | (king_moves(sq) & (self.white_king | self.black_king))
-    }
-
-    /// Returns the combined Bitboard of both players for a given piece.
-    #[inline(always)]
-    pub fn piece_bb_both_players(&self, piece: PieceType) -> Bitboard {
-        match piece {
-            PieceType::None => Bitboard(0),
-            PieceType::Pawn => self.white_pawns & self.black_pawns,
-            PieceType::Knight => self.white_knights & self.black_knights,
-            PieceType::Bishop => self.white_bishops & self.black_bishops,
-            PieceType::Rook => self.white_rooks & self.black_rooks,
-            PieceType::Queen => self.white_queens & self.black_queens,
-            PieceType::King => self.white_king & self.black_king,
-        }
     }
 
     #[inline]
@@ -134,6 +140,43 @@ impl Position {
             Player::White => self.white_pieces,
             Player::Black => self.black_pieces,
         }
+    }
+
+    #[inline]
+    pub fn occupied_white(&self) -> Bitboard {
+        self.white_pieces
+    }
+
+    #[inline]
+    pub fn occupied_black(&self) -> Bitboard {
+        self.black_pieces
+    }
+
+    /// Outputs the blockers and pinners of a given square in a tuple `(blockers, pinners)`.
+    pub fn slider_blockers(&self, sliders: Bitboard, sq: Square) -> (Bitboard, Bitboard) {
+        let mut blockers = Bitboard(0);
+        let mut pinners = Bitboard(0);
+        let occupied = self.occupied();
+
+        let attackers = sliders
+            & ((rook_moves(Bitboard(0), sq)
+                & (self.piece_two_bb_both_players(PieceType::Rook, PieceType::Queen)))
+                | (bishop_moves(Bitboard(0), sq)
+                    & (self.piece_two_bb_both_players(PieceType::Bishop, PieceType::Queen))));
+
+        let player_at = self.board.piece_at_sq(sq).player();
+        let other_occ = self.get_occupied_player(player_at);
+        for attacker_sq in attackers {
+            let bb = Bitboard(between_bb(sq, attacker_sq)) & occupied;
+            if bb.is_not_empty() && !bb.more_than_one() {
+                blockers |= bb;
+                if (bb & other_occ).is_not_empty() {
+                    pinners |= attacker_sq.to_bb();
+                }
+            }
+        }
+
+        (blockers, pinners)
     }
 
     #[inline]
@@ -157,6 +200,29 @@ impl Position {
                 PieceType::Queen => self.black_queens,
                 PieceType::King => self.black_king,
             },
+        }
+    }
+
+    #[inline]
+    pub fn piece_two_bb_both_players(
+        &self,
+        piece_type_1: PieceType,
+        piece_type_2: PieceType,
+    ) -> Bitboard {
+        self.piece_bb_both_players(piece_type_1) | self.piece_bb_both_players(piece_type_2)
+    }
+
+    /// Returns the combined Bitboard of both players for a given piece.
+    #[inline(always)]
+    pub fn piece_bb_both_players(&self, piece: PieceType) -> Bitboard {
+        match piece {
+            PieceType::None => Bitboard(0),
+            PieceType::Pawn => self.white_pawns | self.black_pawns,
+            PieceType::Knight => self.white_knights | self.black_knights,
+            PieceType::Bishop => self.white_bishops | self.black_bishops,
+            PieceType::Rook => self.white_rooks | self.black_rooks,
+            PieceType::Queen => self.white_queens | self.black_queens,
+            PieceType::King => self.white_king | self.black_king,
         }
     }
 
@@ -210,6 +276,58 @@ impl Position {
     #[inline]
     pub fn king_sq(&self, player: Player) -> Square {
         self.piece_bb(player, PieceType::King).to_square()
+    }
+}
+
+impl fmt::Debug for Position {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "")?;
+        writeln!(f, "BITBOARDS\n=========\n")?;
+        writeln!(f, "No Pieces:\n {}", self.no_piece)?;
+        writeln!(f, "White Pawns:\n {}", self.white_pawns)?;
+        writeln!(f, "White Knights:\n {}", self.white_knights)?;
+        writeln!(f, "White Bishops:\n {}", self.white_bishops)?;
+        writeln!(f, "White Rooks:\n {}", self.white_rooks)?;
+        writeln!(f, "White Queens:\n {}", self.white_queens)?;
+        writeln!(f, "White King:\n {}", self.white_king)?;
+        writeln!(f, "Black Pawns:\n {}", self.black_pawns)?;
+        writeln!(f, "Black Knights:\n {}", self.black_knights)?;
+        writeln!(f, "Black Bishops:\n {}", self.black_bishops)?;
+        writeln!(f, "Black Rooks:\n {}", self.black_rooks)?;
+        writeln!(f, "Black Queens:\n {}", self.black_queens)?;
+        writeln!(f, "Black King:\n {}", self.black_king)?;
+        writeln!(f, "White Pieces:\n {}", self.white_pieces)?;
+        writeln!(f, "Black Pieces:\n {}", self.black_pieces)?;
+
+        writeln!(f, "BOARD ARRAY\n===========\n")?;
+        writeln!(f, "{}", self.board)?;
+
+        writeln!(f, "PIECE COUNTS\n============\n")?;
+        writeln!(f, "White: {}", self.white_piece_count)?;
+        writeln!(f, "Black: {}", self.black_piece_count)?;
+        writeln!(f)?;
+
+        writeln!(f, "INVISIBLE STATE\n===============\n")?;
+        writeln!(f, "Turn: {}", self.turn())?;
+        writeln!(f, "Castling Rights: {}", self.castling_rights)?;
+        writeln!(
+            f,
+            "En Passant Square: {}",
+            match self.ep_square {
+                Some(sq) => sq.to_string(),
+                None => "none".to_string(),
+            }
+        )?;
+        writeln!(f, "Half move clock: {}", self.half_move_clock)?;
+        writeln!(f, "Move number: {}", self.move_number)?;
+        writeln!(f)?;
+        writeln!(f, "STATE\n=====\n")?;
+
+        if let Some(state) = &self.state {
+            writeln!(f, "{}", state)
+        } else {
+            writeln!(f, "None")
+        }
     }
 }
 

@@ -1,6 +1,7 @@
 use super::{Piece, Square};
 use std::fmt;
 
+#[derive(Clone)]
 pub struct Board {
     pub arr: [Piece; 64],
 }
@@ -16,8 +17,12 @@ impl Board {
         Self { arr: board }
     }
 
+    /// Returns the Piece at a `Square`, Or None if the square is empty.
+    ///
+    /// Uses unchecked access to the array. Only checks that the `Square` is
+    /// legitimate in debug mode.
     pub fn piece_at_sq(&self, sq: Square) -> Piece {
-        assert!(sq.is_okay());
+        debug_assert!(sq.is_okay());
         unsafe { *self.arr.get_unchecked(sq.0 as usize) }
     }
 

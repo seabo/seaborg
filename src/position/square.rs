@@ -1,3 +1,4 @@
+use crate::bb::Bitboard;
 use crate::bit_twiddles::diff;
 use std::fmt;
 use std::ops::*;
@@ -46,6 +47,11 @@ impl Square {
     /// Returns the file that the square lies on.
     pub fn file(self) -> u8 {
         self.0 & 0b0000_0111
+    }
+
+    /// Converts the given `Square` to its equivalent `Bitboard`.
+    pub fn to_bb(self) -> Bitboard {
+        Bitboard((1 as u64).wrapping_shl(self.0 as u32))
     }
 }
 

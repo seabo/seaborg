@@ -1,5 +1,9 @@
+use crate::bit_twiddles::more_than_one;
 use crate::masks::*;
 use crate::position::Square;
+
+use colored::*;
+
 use std::fmt;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -75,6 +79,12 @@ impl Bitboard {
     #[inline]
     pub fn is_not_empty(&self) -> bool {
         self.0 != 0
+    }
+
+    /// Returns if there are more than 1 bits inside.
+    #[inline(always)]
+    pub fn more_than_one(self) -> bool {
+        more_than_one(self.0)
     }
 
     /// Returns the square for a given bitboard. Panics if more than one
@@ -244,7 +254,11 @@ impl fmt::Display for Bitboard {
         for (i, row) in squares.iter().rev().enumerate() {
             write!(f, " {} │", 8 - i)?;
             for square in row {
-                write!(f, " {} ", square)?;
+                if *square == 1 {
+                    write!(f, " 1 ")?;
+                } else {
+                    write!(f, " . ")?;
+                }
             }
             write!(f, "│\n")?;
         }
