@@ -143,7 +143,6 @@ impl MVPushable for MoveList {
     #[cfg(debug_assertions)]
     #[inline(always)]
     fn push(&mut self, mv: Move) {
-        println!("checking");
         self.push_mv(mv);
     }
     #[cfg(not(debug_assertions))]

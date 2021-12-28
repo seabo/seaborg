@@ -6,17 +6,19 @@ use rchess::bb::{
 use rchess::mov::Move;
 use rchess::movegen::MoveGen;
 use rchess::position::{Position, Square};
+use rchess::precalc::magic::{bishop_attacks, init_magics};
 
 use std::sync::{Once, ONCE_INIT};
 use std::time::Instant;
 
-use rchess::precalc::boards::{init_boards, king_moves, knight_moves};
+use rchess::precalc::boards::init_boards;
 
 static INITALIZED: Once = ONCE_INIT;
 
 fn init_globals() {
     INITALIZED.call_once(|| {
         init_boards();
+        init_magics();
     })
 }
 
@@ -27,9 +29,10 @@ fn main() {
     let position3 = "2r1b2k/3P4/8/8/8/8/8/7K w - - 0 1";
     let position4 = "7k/8/8/1PpP4/8/8/8/7K w - c6 0 2";
     let position5 = "7k/8/8/3Rnr2/3pKb2/3rpp2/8/8 w - - 0 1";
+    let position6 = "rnb1kb1r/1pqp1ppp/p3pn2/8/3NP3/2PB4/PP3PPP/RNBQK2R w KQkq - 3 7";
 
     let now = Instant::now();
-    let pos = Position::from_fen(other_position);
+    let pos = Position::from_fen(start_position);
     let elapsed = now.elapsed().as_micros();
 
     println!("{}", WHITE_LEFTWARD_PROMOTION_MASK);
@@ -37,10 +40,17 @@ fn main() {
     match pos {
         Ok(pos) => {
             println!("{:?}", pos);
-            let Bitboard(x) = pos.occupied();
-            let attacks = sliding_attack(&[-7, 7, -9, 9], 50, x);
-            let bb = Bitboard::new(attacks);
-            println!("{}", bb);
+
+            let now = Instant::now();
+            let movelist = MoveGen::generate(&pos);
+            let elapsed = now.elapsed().as_micros();
+
+            for mov in movelist.iter() {
+                println!("{}", mov);
+            }
+
+            println!("# of moves: {}", movelist.len());
+            println!("Took {}us to gen moves", elapsed);
         }
         Err(fen_error) => {
             println!("{}", fen_error.msg);
@@ -48,28 +58,4 @@ fn main() {
     }
 
     // println!("FEN string took {}μs to parse", elapsed);
-}
-
-/// Returns a bitboards of sliding attacks given an array of 4 deltas.
-/// Does not include the origin square.
-/// Includes occupied bits if it runs into them, but stops before going further.
-// TODO: move this to a magic bitboards module, and use it to generate the magic
-// tables.
-fn sliding_attack(deltas: &[i8; 4], sq: u8, occupied: u64) -> u64 {
-    assert!(sq < 64);
-    let mut attack: u64 = 0;
-    let square: i16 = sq as i16;
-    for delta in deltas.iter().take(4 as usize) {
-        let mut s: u8 = ((square as i16) + (*delta as i16)) as u8;
-        'inner: while s < 64
-            && Square(s as u8).distance(Square(((s as i16) - (*delta as i16)) as u8)) == 1
-        {
-            attack |= (1 as u64).wrapping_shl(s as u32);
-            if occupied & (1 as u64).wrapping_shl(s as u32) != 0 {
-                break 'inner;
-            }
-            s = ((s as i16) + (*delta as i16)) as u8;
-        }
-    }
-    attack
 }

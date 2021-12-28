@@ -1,16 +1,19 @@
 use crate::bb::Bitboard;
-use crate::position::Square;
+use crate::position::{file_of_sq, u8_to_u64, Player, Square};
 
 /// Fast lookup table for Knight moves
 static mut KING_TABLE: [u64; 64] = [0; 64];
 /// Fast lookup table for King moves
 static mut KNIGHT_TABLE: [u64; 64] = [0; 64];
+/// Fast lookup table for Pawn attacks
+static mut PAWN_ATTACKS_FROM: [[u64; 64]; 2] = [[0; 64]; 2];
 
 #[cold]
 pub fn init_boards() {
     unsafe {
         gen_knight_moves();
         gen_king_moves();
+        gen_pawn_attacks();
     }
 }
 
@@ -108,5 +111,45 @@ unsafe fn gen_king_moves() {
             mask |= 1 << (index + 9);
         }
         KING_TABLE[index] = mask;
+    }
+}
+
+#[cold]
+unsafe fn gen_pawn_attacks() {
+    // White pawn attacks
+    for i in 0..56 as u8 {
+        let mut bb: u64 = 0;
+        if file_of_sq(i) != 1 {
+            bb |= u8_to_u64(i + 7)
+        }
+        if file_of_sq(i) != 8 {
+            bb |= u8_to_u64(i + 9)
+        }
+        PAWN_ATTACKS_FROM[0][i as usize] = bb;
+    }
+
+    // Black pawn attacks
+    for i in 8..64 as u8 {
+        let mut bb: u64 = 0;
+        if file_of_sq(i) != 1 {
+            bb |= u8_to_u64(i - 9)
+        }
+        if file_of_sq(i) != 8 {
+            bb |= u8_to_u64(i - 7)
+        }
+        PAWN_ATTACKS_FROM[1][i as usize] = bb;
+    }
+}
+
+/// Pawn attacks `Bitboard` from a given square and player.
+/// E.g. given square e6 and player Black, returns the
+/// Bitboard of squares d5 and f5.
+#[inline(always)]
+pub fn pawn_attacks_from(sq: Square, player: Player) -> u64 {
+    debug_assert!(sq.is_okay());
+    unsafe {
+        *PAWN_ATTACKS_FROM
+            .get_unchecked(player as usize)
+            .get_unchecked(sq.0 as usize)
     }
 }

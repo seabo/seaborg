@@ -5,10 +5,10 @@ use crate::mono_traits::{
 };
 use crate::mov::{Move, SpecialMove};
 use crate::movelist::{MVPushable, MoveList};
-use crate::position::{PieceType, Player, Position, Square};
-use crate::precalc::boards::{king_moves, knight_moves};
+use crate::position::{CastleType, PieceType, Player, Position, Square, PROMO_PIECES};
+use crate::precalc::boards::{king_moves, knight_moves, pawn_attacks_from};
+use crate::precalc::magic;
 
-use std::mem;
 use std::ops::Index;
 
 pub struct MoveGen {}
@@ -62,8 +62,13 @@ where
     }
 
     fn generate_all<P: PlayerTrait>(&mut self) {
+        self.generate_pawn_moves::<P>(Bitboard::ALL);
+        self.generate_castling::<P>();
         self.moves_per_piece::<P, KnightType>(Bitboard::ALL);
         self.moves_per_piece::<P, KingType>(Bitboard::ALL);
+        self.moves_per_piece::<P, RookType>(Bitboard::ALL);
+        self.moves_per_piece::<P, BishopType>(Bitboard::ALL);
+        self.moves_per_piece::<P, QueenType>(Bitboard::ALL);
     }
 
     fn moves_per_piece<PL: PlayerTrait, P: PieceTrait>(&mut self, target: Bitboard) {
@@ -77,6 +82,136 @@ where
         }
     }
 
+    fn generate_pawn_moves<PL: PlayerTrait>(&mut self, target: Bitboard) {
+        let (rank_8, rank_7, rank_3): (Bitboard, Bitboard, Bitboard) =
+            if PL::player() == Player::White {
+                (Bitboard::RANK_8, Bitboard::RANK_7, Bitboard::RANK_3)
+            } else {
+                (Bitboard::RANK_1, Bitboard::RANK_2, Bitboard::RANK_6)
+            };
+
+        let all_pawns = self.position.piece_bb(PL::player(), PieceType::Pawn);
+
+        // Separated out for promotion moves
+        let pawns_rank_7: Bitboard = all_pawns & rank_7;
+
+        // Separated out for non promotion moves
+        let pawns_not_rank_7: Bitboard = all_pawns & !rank_7;
+
+        let enemies = self.them_occ;
+
+        // Single and double pawn moves
+        // TODO: rename this variable
+        let empty_squares = !self.position.occupied();
+
+        let push_one = empty_squares & PL::shift_up(pawns_not_rank_7);
+        let push_two = PL::shift_up(push_one & rank_3) & empty_squares;
+
+        for dest in push_one {
+            let orig = PL::down(dest);
+            self.add_move(Move::build(orig, dest, None, false, false));
+        }
+
+        for dest in push_two {
+            let orig = PL::down(PL::down(dest));
+            self.add_move(Move::build(orig, dest, None, false, false));
+        }
+
+        // Promotions
+        if pawns_rank_7.is_not_empty() {
+            let no_cap_promo = PL::shift_up(pawns_rank_7) & empty_squares;
+            let left_cap_promo = PL::shift_up_left(pawns_rank_7) & enemies;
+            let right_cap_promo = PL::shift_up_right(pawns_rank_7) & enemies;
+
+            for dest in no_cap_promo {
+                let orig = PL::down(dest);
+                self.add_all_promo_moves(orig, dest);
+            }
+
+            for dest in left_cap_promo {
+                let orig = PL::down_right(dest);
+                self.add_all_promo_moves(orig, dest);
+            }
+
+            for dest in right_cap_promo {
+                let orig = PL::down_left(dest);
+                self.add_all_promo_moves(orig, dest);
+            }
+        }
+
+        // Captures
+        let left_cap = PL::shift_up_left(pawns_not_rank_7) & enemies;
+        let right_cap = PL::shift_up_right(pawns_not_rank_7) & enemies;
+
+        for dest in left_cap {
+            let orig = PL::down_right(dest);
+            self.add_move(Move::build(orig, dest, None, false, false));
+        }
+
+        for dest in right_cap {
+            let orig = PL::down_left(dest);
+            self.add_move(Move::build(orig, dest, None, false, false));
+        }
+
+        if let Some(ep_square) = self.position.ep_square() {
+            // TODO: add an `assert_eq` to check that the rank of ep_square is 6th
+            // rank from the moving player's perspective
+
+            let ep_cap =
+                pawns_not_rank_7 & Bitboard(pawn_attacks_from(ep_square, PL::opp_player()));
+
+            for orig in ep_cap {
+                self.add_move(Move::build(orig, ep_square, None, true, false));
+            }
+        }
+    }
+
+    // Generates castling for both sides
+    fn generate_castling<PL: PlayerTrait>(&mut self) {
+        self.castling_side::<PL>(CastleType::Queenside);
+        self.castling_side::<PL>(CastleType::Kingside);
+    }
+
+    // Generates castling for a single side
+    fn castling_side<PL: PlayerTrait>(&mut self, side: CastleType) {
+        if self.position.can_castle(PL::player(), side)
+            && !self.position.castle_impeded(side)
+            && self
+                .position
+                .piece_at_sq(self.position.castling_rook_square(side))
+                .type_of()
+                == PieceType::Rook
+        {
+            let king_side = side == CastleType::Kingside;
+            let ksq = self.position.king_sq(PL::player());
+            // let rook_from = self.position.castling_rook_square(side);
+            let k_to =
+                PL::player().relative_square(if king_side { Square::G1 } else { Square::C1 });
+            let enemies = self.them_occ;
+            let direction: fn(Square) -> Square = if king_side {
+                |x: Square| x - Square(1)
+            } else {
+                |x: Square| x + Square(1)
+            };
+
+            let mut s: Square = k_to;
+            let mut can_castle = true;
+            // Loop through all the squares the king goes through
+            // If any enemies attack that square, cannot castle
+            'outer: while s != ksq {
+                let attackers = self.position.attackers_to(s, self.occ) & enemies;
+                if attackers.is_not_empty() {
+                    can_castle = false;
+                    break 'outer;
+                }
+                s = direction(s);
+            }
+            if can_castle {
+                self.add_move(Move::build(ksq, k_to, None, false, true));
+            }
+        }
+    }
+
     fn moves_bb<P: PieceTrait>(&mut self, sq: Square) -> Bitboard {
         debug_assert!(sq.is_okay());
         debug_assert_ne!(P::piece_type(), PieceType::Pawn);
@@ -84,13 +219,15 @@ where
             PieceType::None => panic!(), // TODO
             PieceType::Pawn => panic!(),
             PieceType::Knight => knight_moves(sq),
-            PieceType::Bishop => panic!(), // TODO
-            PieceType::Rook => panic!(),   // TODO
-            PieceType::Queen => panic!(),  // TODO
+            PieceType::Bishop => bishop_moves(self.occ, sq),
+            PieceType::Rook => rook_moves(self.occ, sq),
+            PieceType::Queen => queen_moves(self.occ, sq),
             PieceType::King => king_moves(sq),
         }
     }
 
+    // TODO: make `Move` struct have a dedicated `SpecialMove` field, and introduce new enum
+    // variants for 'capturing', 'quiet' etc.
     #[inline]
     fn move_append_from_bb_flag(&mut self, bb: &mut Bitboard, orig: Square, flag: SpecialMove) {
         for dest in bb {
@@ -99,7 +236,43 @@ where
         }
     }
 
+    #[inline]
+    fn add_all_promo_moves(&mut self, orig: Square, dest: Square) {
+        for piece in PROMO_PIECES {
+            self.add_move(Move::build(orig, dest, Some(piece), false, false));
+        }
+    }
+
+    #[inline(always)]
     fn add_move(&mut self, mv: Move) {
         self.movelist.push(mv);
     }
+}
+
+// MAGIC FUNCTIONS
+
+/// Generate bishop moves `Bitboard` from a square and an occupancy bitboard.
+/// This function will return captures to pieces on both sides. The resulting `Bitboard` must be
+/// AND'd with the inverse of the moving player's pieces.
+#[inline(always)]
+pub fn bishop_moves(occupied: Bitboard, sq: Square) -> Bitboard {
+    debug_assert!(sq.is_okay());
+    Bitboard(magic::bishop_attacks(occupied.0, sq.0))
+}
+
+/// Generate rook moves `Bitboard` from a square and an occupancy bitboard.
+/// This function will return captures to pieces on both sides. The resulting `Bitboard` must be
+/// AND'd with the inverse of the moving player's pieces.#[inline(always)]
+pub fn rook_moves(occupied: Bitboard, sq: Square) -> Bitboard {
+    debug_assert!(sq.is_okay());
+    Bitboard(magic::rook_attacks(occupied.0, sq.0))
+}
+
+/// Generate queen moves `Bitboard` from a square and an occupancy bitboard.
+/// This function will return captures to pieces on both sides. The resulting `Bitboard` must be
+/// AND'd with the inverse of the moving player's pieces.
+#[inline(always)]
+pub fn queen_moves(occupied: Bitboard, sq: Square) -> Bitboard {
+    debug_assert!(sq.is_okay());
+    Bitboard(magic::rook_attacks(occupied.0, sq.0) | magic::bishop_attacks(occupied.0, sq.0))
 }
