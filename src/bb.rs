@@ -2,8 +2,6 @@ use crate::bit_twiddles::more_than_one;
 use crate::masks::*;
 use crate::position::Square;
 
-use colored::*;
-
 use std::fmt;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
