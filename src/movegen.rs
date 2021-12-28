@@ -1,7 +1,7 @@
 use crate::bb::Bitboard;
 use crate::mono_traits::{
-    BishopType, BlackType, KingType, KnightType, PawnType, PieceTrait, PlayerTrait, QueenType,
-    RookType, WhiteType,
+    BishopType, BlackType, KingType, KnightType, PieceTrait, PlayerTrait, QueenType, RookType,
+    WhiteType,
 };
 use crate::mov::{Move, SpecialMove};
 use crate::movelist::{MVPushable, MoveList};
