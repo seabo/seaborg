@@ -3,6 +3,7 @@ use crate::masks::*;
 use crate::position::Square;
 
 use std::fmt;
+use std::ops::*;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[repr(transparent)]
@@ -55,25 +56,38 @@ impl Bitboard {
         Bitboard(bb)
     }
 
+    /// Produces a `Bitboard` with a single bit set at the index provided.
     pub fn from_sq_idx(sq: u8) -> Self {
         Bitboard(1 << sq)
     }
 
+    /// Returns the count of set bits in the `Bitboard`.
     #[inline(always)]
     pub fn popcnt(&self) -> u32 {
         self.0.count_ones()
     }
 
+    /// Returns the number of trailing zeros in the `Bitboard`. In the case where
+    /// this is not 64 (ie the `Bitboard` is not empty), the return value of this
+    /// function represents the index of the lowest set bit.
     #[inline(always)]
     pub fn bsf(&self) -> u32 {
         self.0.trailing_zeros()
     }
 
+    /// Toggles off the current lowest significant bit which is set.
     #[inline(always)]
     pub fn toggle_lsb(&mut self) {
         *self &= *self - (1 as u64)
     }
 
+    /// Returns true iff the `Bitboard` has no bits set.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.0 == 0
+    }
+
+    /// Returns true iff the `Bitboard` has at least one bit set.
     #[inline]
     pub fn is_not_empty(&self) -> bool {
         self.0 != 0
@@ -94,131 +108,133 @@ impl Bitboard {
     }
 }
 
-impl std::ops::Add for Bitboard {
-    type Output = Self;
+impl_bit_ops!(Bitboard, u64);
 
-    fn add(self, other: Self) -> Self::Output {
-        match (self, other) {
-            (Bitboard(left), Bitboard(right)) => Bitboard(left + right),
-        }
-    }
-}
+// impl std::ops::Add for Bitboard {
+//     type Output = Self;
 
-impl std::ops::AddAssign for Bitboard {
-    fn add_assign(&mut self, other: Self) {
-        *self = *self + other
-    }
-}
+//     fn add(self, other: Self) -> Self::Output {
+//         match (self, other) {
+//             (Bitboard(left), Bitboard(right)) => Bitboard(left + right),
+//         }
+//     }
+// }
 
-impl std::ops::Sub for Bitboard {
-    type Output = Self;
+// impl std::ops::AddAssign for Bitboard {
+//     fn add_assign(&mut self, other: Self) {
+//         *self = *self + other
+//     }
+// }
 
-    fn sub(self, other: Self) -> Self::Output {
-        match (self, other) {
-            (Bitboard(left), Bitboard(right)) => Bitboard(left - right),
-        }
-    }
-}
+// impl std::ops::Sub for Bitboard {
+//     type Output = Self;
 
-impl std::ops::SubAssign for Bitboard {
-    fn sub_assign(&mut self, other: Self) {
-        *self = *self - other
-    }
-}
+//     fn sub(self, other: Self) -> Self::Output {
+//         match (self, other) {
+//             (Bitboard(left), Bitboard(right)) => Bitboard(left - right),
+//         }
+//     }
+// }
 
-impl std::ops::Add<u64> for Bitboard {
-    type Output = Self;
+// impl std::ops::SubAssign for Bitboard {
+//     fn sub_assign(&mut self, other: Self) {
+//         *self = *self - other
+//     }
+// }
 
-    fn add(self, other: u64) -> Self::Output {
-        match self {
-            Bitboard(left) => Bitboard(left + other),
-        }
-    }
-}
+// impl std::ops::Add<u64> for Bitboard {
+//     type Output = Self;
 
-impl std::ops::AddAssign<u64> for Bitboard {
-    fn add_assign(&mut self, other: u64) {
-        *self = *self + other
-    }
-}
+//     fn add(self, other: u64) -> Self::Output {
+//         match self {
+//             Bitboard(left) => Bitboard(left + other),
+//         }
+//     }
+// }
 
-impl std::ops::Sub<u64> for Bitboard {
-    type Output = Self;
+// impl std::ops::AddAssign<u64> for Bitboard {
+//     fn add_assign(&mut self, other: u64) {
+//         *self = *self + other
+//     }
+// }
 
-    fn sub(self, other: u64) -> Self::Output {
-        match self {
-            Bitboard(left) => Bitboard(left - other),
-        }
-    }
-}
+// impl std::ops::Sub<u64> for Bitboard {
+//     type Output = Self;
 
-impl std::ops::SubAssign<u64> for Bitboard {
-    fn sub_assign(&mut self, other: u64) {
-        *self = *self - other
-    }
-}
+//     fn sub(self, other: u64) -> Self::Output {
+//         match self {
+//             Bitboard(left) => Bitboard(left - other),
+//         }
+//     }
+// }
 
-impl std::ops::BitAnd for Bitboard {
-    type Output = Self;
+// impl std::ops::SubAssign<u64> for Bitboard {
+//     fn sub_assign(&mut self, other: u64) {
+//         *self = *self - other
+//     }
+// }
 
-    fn bitand(self, other: Self) -> Self::Output {
-        match (self, other) {
-            (Bitboard(left), Bitboard(right)) => Bitboard(left & right),
-        }
-    }
-}
+// impl std::ops::BitAnd for Bitboard {
+//     type Output = Self;
 
-impl std::ops::BitAndAssign for Bitboard {
-    fn bitand_assign(&mut self, other: Self) {
-        *self = *self & other;
-    }
-}
+//     fn bitand(self, other: Self) -> Self::Output {
+//         match (self, other) {
+//             (Bitboard(left), Bitboard(right)) => Bitboard(left & right),
+//         }
+//     }
+// }
 
-impl std::ops::BitOr for Bitboard {
-    type Output = Self;
+// impl std::ops::BitAndAssign for Bitboard {
+//     fn bitand_assign(&mut self, other: Self) {
+//         *self = *self & other;
+//     }
+// }
 
-    fn bitor(self, other: Self) -> Self::Output {
-        match (self, other) {
-            (Bitboard(left), Bitboard(right)) => Bitboard(left | right),
-        }
-    }
-}
+// impl std::ops::BitOr for Bitboard {
+//     type Output = Self;
 
-impl std::ops::BitOrAssign for Bitboard {
-    fn bitor_assign(&mut self, other: Self) {
-        *self = *self | other;
-    }
-}
+//     fn bitor(self, other: Self) -> Self::Output {
+//         match (self, other) {
+//             (Bitboard(left), Bitboard(right)) => Bitboard(left | right),
+//         }
+//     }
+// }
 
-impl std::ops::Not for Bitboard {
-    type Output = Self;
+// impl std::ops::BitOrAssign for Bitboard {
+//     fn bitor_assign(&mut self, other: Self) {
+//         *self = *self | other;
+//     }
+// }
 
-    fn not(self) -> Bitboard {
-        match self {
-            Bitboard(bb) => Bitboard(!bb),
-        }
-    }
-}
+// impl std::ops::Not for Bitboard {
+//     type Output = Self;
 
-impl std::ops::Shl<usize> for Bitboard {
-    type Output = Self;
+//     fn not(self) -> Bitboard {
+//         match self {
+//             Bitboard(bb) => Bitboard(!bb),
+//         }
+//     }
+// }
 
-    fn shl(self, shift: usize) -> Bitboard {
-        match self {
-            Bitboard(bb) => Bitboard(bb << shift),
-        }
-    }
-}
+// impl std::ops::Shl<usize> for Bitboard {
+//     type Output = Self;
 
-impl std::ops::Shr<usize> for Bitboard {
-    type Output = Self;
+//     fn shl(self, shift: usize) -> Bitboard {
+//         match self {
+//             Bitboard(bb) => Bitboard(bb << shift),
+//         }
+//     }
+// }
 
-    fn shr(self, shift: usize) -> Self::Output {
-        match self {
-            Bitboard(bb) => Bitboard(bb >> shift),
-        }
-    }
-}
+// impl std::ops::Shr<usize> for Bitboard {
+//     type Output = Self;
+
+//     fn shr(self, shift: usize) -> Self::Output {
+//         match self {
+//             Bitboard(bb) => Bitboard(bb >> shift),
+//         }
+//     }
+// }
 
 impl std::iter::Iterator for Bitboard {
     type Item = Square;

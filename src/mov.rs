@@ -1,4 +1,5 @@
 use crate::position::{PieceType, Square};
+use crate::precalc::boards;
 use std::fmt;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -35,6 +36,15 @@ impl Move {
         self.special_move == SpecialMove::Null
     }
 
+    pub fn is_none(&self) -> bool {
+        self.special_move == SpecialMove::None
+    }
+
+    /// Returns the type of move, according to the `SpecialMove` field.
+    pub fn move_type(&self) -> SpecialMove {
+        self.special_move
+    }
+
     /// Builds a move from an origin square, destination square
     /// and information about special moves like promotion, en
     /// passant and castling.
@@ -50,7 +60,7 @@ impl Move {
         is_ep: bool,
         is_castling: bool,
     ) -> Self {
-        let mut special_move = SpecialMove::None;
+        let mut special_move = SpecialMove::Quiet;
 
         if let Some(_) = promo_piece_type {
             special_move = SpecialMove::Promotion;

@@ -1,8 +1,3 @@
-use rchess::bb::{
-    Bitboard, WHITE_LEFTWARD_PROMOTION_MASK, WHITE_LEFT_PAWN_CAPTURE_MASK,
-    WHITE_RIGHT_PAWN_CAPTURE_MASK,
-};
-
 use rchess::mov::Move;
 use rchess::movegen::MoveGen;
 use rchess::position::{Position, Square};
@@ -33,16 +28,16 @@ fn main() {
     let position7 = "8/4k3/4b3/8/4Q3/8/6K1/8 w - - 0 1";
     let position8 = "8/p7/4k3/1p5p/1P1r1K1P/P4P2/8/8 w - - 0 40";
     let position9 = "r1bqkb1r/ppp2ppp/2n5/4p3/2p5/5NN1/PPPPQPPP/R1B1K2R b KQkq - 1 7";
+    let position10 = "8/3k4/3q4/8/3B4/3K4/8/8 w - - 0 1";
 
-    let now = Instant::now();
-    let pos = Position::from_fen(start_position);
+    let pos = Position::from_fen(position5);
 
     match pos {
         Ok(pos) => {
             println!("{:?}", pos);
 
             let now = Instant::now();
-            let movelist = MoveGen::generate(&pos);
+            let movelist = MoveGen::generate_legal(&pos);
             let elapsed = now.elapsed().as_micros();
 
             for mov in movelist.iter() {

@@ -201,3 +201,9 @@ pub fn between_bb(sq_one: Square, sq_two: Square) -> u64 {
         *(BETWEEN_SQUARES_BB.get_unchecked(sq_one.0 as usize)).get_unchecked(sq_two.0 as usize)
     }
 }
+
+/// Returns if three Squares are in the same diagonal, file, or rank.
+#[inline(always)]
+pub fn aligned(s1: Square, s2: Square, s3: Square) -> bool {
+    (line_bb(s1, s2) & u8_to_u64(s3.0)) != 0
+}

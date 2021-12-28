@@ -20,6 +20,18 @@ impl MoveGen {
         InnerMoveGen::<MoveList>::generate(position, &mut movelist);
         movelist
     }
+
+    pub fn generate_legal(position: &Position) -> Vec<Move> {
+        let pseudo_legal = Self::generate(position);
+        let pseudo_legal_vec = pseudo_legal.vec();
+        let mut legal_vec: Vec<Move> = Vec::new();
+        for pseudo_mov in pseudo_legal_vec {
+            if position.legal_move(pseudo_mov) {
+                legal_vec.push(pseudo_mov);
+            }
+        }
+        legal_vec
+    }
 }
 
 pub struct InnerMoveGen<'a, MP: MVPushable + 'a> {
@@ -37,6 +49,9 @@ impl<'a, MP: MVPushable> InnerMoveGen<'a, MP>
 where
     <MP as Index<usize>>::Output: Sized,
 {
+    /// Generate all pseudo-legal moves in the given position
+    // TODO: use the monorphization technique to generalise this over desired legality status
+    // of the moves. So you can ask for only totally legal, or pseudo-legal.
     fn generate(position: &'a Position, movelist: &'a mut MP) -> &'a mut MP {
         match position.turn() {
             Player::White => InnerMoveGen::<MP>::generate_helper::<WhiteType>(position, movelist),

@@ -7,8 +7,9 @@ mod state;
 
 use crate::bb::Bitboard;
 use crate::masks::{CASTLING_PATH, CASTLING_ROOK_START, FILE_BB, RANK_BB};
+use crate::mov::{Move, SpecialMove};
 use crate::movegen::{bishop_moves, rook_moves};
-use crate::precalc::boards::{between_bb, king_moves, knight_moves, pawn_attacks_from};
+use crate::precalc::boards::{aligned, between_bb, king_moves, knight_moves, pawn_attacks_from};
 
 pub use board::Board;
 pub use castling::{CastleType, CastlingRights};
@@ -39,6 +40,15 @@ impl Player {
     pub fn relative_square(self, sq: Square) -> Square {
         assert!(sq.is_okay());
         sq ^ Square((self) as u8 * 56)
+    }
+
+    /// Returns the offset for a single move pawn push.
+    #[inline(always)]
+    pub fn pawn_push(self) -> i8 {
+        match self {
+            Player::White => 8,
+            Player::Black => -8,
+        }
     }
 }
 
@@ -111,6 +121,7 @@ impl Position {
 
     /// Returns a `Bitboard` of possible attacks to a square with a given occupancy.
     /// Includes pieces from both players.
+    // TODO: is there any need to pass `occupied` here? Isn't it already available on `self`?
     pub fn attackers_to(&self, sq: Square, occupied: Bitboard) -> Bitboard {
         (Bitboard(pawn_attacks_from(sq, Player::Black))
             & self.piece_bb(Player::White, PieceType::Pawn))
@@ -202,16 +213,27 @@ impl Position {
             },
         }
     }
-
-    #[inline]
-    pub fn piece_two_bb_both_players(
-        &self,
-        piece_type_1: PieceType,
-        piece_type_2: PieceType,
-    ) -> Bitboard {
-        self.piece_bb_both_players(piece_type_1) | self.piece_bb_both_players(piece_type_2)
+    /// Returns the Bitboard of the Queens and Rooks for a given player.
+    #[inline(always)]
+    pub fn sliding_piece_bb(&self, player: Player) -> Bitboard {
+        self.piece_two_bb(PieceType::Queen, PieceType::Rook, player)
+    }
+    /// Returns the Bitboard of the Queens and Bishops for a given player.
+    #[inline(always)]
+    pub fn diagonal_piece_bb(&self, player: Player) -> Bitboard {
+        self.piece_two_bb(PieceType::Queen, PieceType::Bishop, player)
     }
 
+    /// Returns the combined BitBoard of both players for a given piece.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pleco::{Board,PieceType};
+    ///
+    /// let chessboard = Board::start_pos();
+    /// assert_eq!(chessboard.piece_bb_both_players(PieceType::P).0, 0x00FF00000000FF00);
+    /// ```
     /// Returns the combined Bitboard of both players for a given piece.
     #[inline(always)]
     pub fn piece_bb_both_players(&self, piece: PieceType) -> Bitboard {
@@ -226,6 +248,24 @@ impl Position {
         }
     }
 
+    #[inline]
+    pub fn piece_two_bb(
+        &self,
+        piece_type_1: PieceType,
+        piece_type_2: PieceType,
+        player: Player,
+    ) -> Bitboard {
+        self.piece_bb(player, piece_type_1) | self.piece_bb(player, piece_type_2)
+    }
+
+    #[inline]
+    pub fn piece_two_bb_both_players(
+        &self,
+        piece_type_1: PieceType,
+        piece_type_2: PieceType,
+    ) -> Bitboard {
+        self.piece_bb_both_players(piece_type_1) | self.piece_bb_both_players(piece_type_2)
+    }
     /// Returns the `Piece` at the given `Square`
     #[inline]
     pub fn piece_at_sq(&self, sq: Square) -> Piece {
@@ -276,6 +316,63 @@ impl Position {
     #[inline]
     pub fn king_sq(&self, player: Player) -> Square {
         self.piece_bb(player, PieceType::King).to_square()
+    }
+
+    /// Returns the pinned pieces of the given player.
+    ///
+    /// Pinned is defined as pinned to the same players king
+    #[inline(always)]
+    pub fn pinned_pieces(&self, player: Player) -> Bitboard {
+        self.state
+            .as_ref()
+            .expect("tried to check state when it was not set")
+            .blockers[player as usize]
+            & self.get_occupied_player(player)
+    }
+
+    // MOVE TESTING
+    /// Tests if a given pseudo-legal move is legal. Used for checking the legality
+    /// of moves that are generated as pseudo-legal in movegen. Pseudo-legal moves
+    /// can create a discovered check, or the moving side can move into check. The case
+    /// of castling through check is already dealt with in movegen.
+    pub fn legal_move(&self, mov: Move) -> bool {
+        if mov.is_none() || mov.is_null() {
+            println!("here");
+            return false;
+        }
+
+        let us = self.turn();
+        let them = !us;
+        let orig = mov.orig();
+        let orig_bb = orig.to_bb();
+        let dest = mov.dest();
+
+        // En passant
+        if mov.move_type() == SpecialMove::EnPassant {
+            let ksq = self.king_sq(us);
+            let dest_bb = dest.to_bb();
+            let captured_sq = Square((dest.0 as i8).wrapping_sub(us.pawn_push()) as u8);
+            // Work out the occupancy bb resulting from the en passant move
+            let occupied = (self.occupied() ^ orig_bb ^ captured_sq.to_bb()) | dest_bb;
+
+            return (rook_moves(occupied, ksq) & self.sliding_piece_bb(them)).is_empty()
+                && (bishop_moves(occupied, ksq) & self.diagonal_piece_bb(them)).is_empty();
+        }
+
+        let piece = self.piece_at_sq(orig);
+        if piece == Piece::None {
+            return false;
+        }
+
+        // If moving the king, check if the destination square is not being attacked
+        // Note: castling moves are already checked in movegen.
+        if piece.type_of() == PieceType::King {
+            return mov.move_type() == SpecialMove::Castling
+                || (self.attackers_to(dest, self.occupied()) & self.get_occupied_player(them))
+                    .is_empty();
+        }
+        // Ensure we are not moving a pinned piece
+        (self.pinned_pieces(us) & orig_bb).is_empty() || aligned(orig, dest, self.king_sq(us))
     }
 }
 
