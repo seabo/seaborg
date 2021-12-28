@@ -6,16 +6,6 @@ use std::fmt;
 #[repr(transparent)]
 pub struct Bitboard(pub u64);
 
-// TODO: can these be deleted?
-// pub const FIRST_RANK: Bitboard = Bitboard(0x00000000000000FF);
-// pub const SECOND_RANK: Bitboard = Bitboard(0x000000000000FF00);
-// pub const THIRD_RANK: Bitboard = Bitboard(0x0000000000FF0000);
-// pub const FOURTH_RANK: Bitboard = Bitboard(0x00000000FF000000);
-// pub const FIFTH_RANK: Bitboard = Bitboard(0x000000FF00000000);
-// pub const SIXTH_RANK: Bitboard = Bitboard(0x0000FF0000000000);
-// pub const SEVENTH_RANK: Bitboard = Bitboard(0x00FF000000000000);
-// pub const EIGHTH_RANK: Bitboard = Bitboard(0xFF00000000000000);
-
 pub const WHITE_SINGLE_PAWN_MOVE_MASK: Bitboard = Bitboard(0x0000FFFFFFFFFF00);
 pub const WHITE_LEFT_PAWN_CAPTURE_MASK: Bitboard = Bitboard(0x007F7F7F7F7F0000);
 pub const WHITE_RIGHT_PAWN_CAPTURE_MASK: Bitboard = Bitboard(0x00FEFEFEFEFE0000);
