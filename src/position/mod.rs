@@ -68,6 +68,7 @@ impl fmt::Display for Player {
     }
 }
 
+// TODO: turn off pub for all the `Position` fields and provide getters
 #[derive(Clone)]
 pub struct Position {
     // Array of pieces
