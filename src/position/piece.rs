@@ -96,3 +96,23 @@ impl fmt::Display for PieceType {
         }
     }
 }
+
+impl fmt::Display for Piece {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Piece::None => write!(f, "."),
+            Piece::WhitePawn => write!(f, "P"),
+            Piece::WhiteKnight => write!(f, "N"),
+            Piece::WhiteBishop => write!(f, "B"),
+            Piece::WhiteRook => write!(f, "R"),
+            Piece::WhiteQueen => write!(f, "Q"),
+            Piece::WhiteKing => write!(f, "K"),
+            Piece::BlackPawn => write!(f, "p"),
+            Piece::BlackKnight => write!(f, "n"),
+            Piece::BlackBishop => write!(f, "b"),
+            Piece::BlackRook => write!(f, "r"),
+            Piece::BlackQueen => write!(f, "q"),
+            Piece::BlackKing => write!(f, "k"),
+        }
+    }
+}
