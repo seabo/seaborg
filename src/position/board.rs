@@ -1,4 +1,4 @@
-use super::{Piece, Square};
+use super::{Piece, PieceType, Player, Square};
 use std::fmt;
 
 #[derive(Clone)]
@@ -24,6 +24,28 @@ impl Board {
     pub fn piece_at_sq(&self, sq: Square) -> Piece {
         debug_assert!(sq.is_okay());
         unsafe { *self.arr.get_unchecked(sq.0 as usize) }
+    }
+
+    /// Remove the piece at the passed `Square`.
+    ///
+    /// # Panics
+    ///
+    /// In debug mode, panics if the passed `Square` is not valid.
+    pub fn remove(&mut self, sq: Square) {
+        debug_assert!(sq.is_okay());
+        self.arr[sq.0 as usize] = Piece::None;
+    }
+
+    /// Place a piece of type `PieceType` and color `Player` at the passed `Sqaure`.
+    ///
+    /// # Panics
+    ///
+    /// In debug mode, panics if the passed `Square` is not valid or `PieceType`
+    /// is `PieceType::None`.
+    pub fn place(&mut self, sq: Square, player: Player, piece_ty: PieceType) {
+        debug_assert!(sq.is_okay());
+        debug_assert_ne!(piece_ty, PieceType::None);
+        self.arr[sq.0 as usize] = Piece::make(player, piece_ty);
     }
 
     pub fn pretty_string(&self) -> String {

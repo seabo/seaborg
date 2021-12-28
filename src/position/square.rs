@@ -4,7 +4,7 @@ use std::fmt;
 use std::ops::*;
 
 /// Represents a single square of a chess board.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd)]
 #[repr(transparent)]
 pub struct Square(pub u8);
 

@@ -3,6 +3,7 @@ use crate::precalc::boards;
 use std::fmt;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u8)]
 pub enum SpecialMove {
     None,
     Promotion,
@@ -38,6 +39,27 @@ impl Move {
 
     pub fn is_none(&self) -> bool {
         self.special_move == SpecialMove::None
+    }
+
+    pub fn is_en_passant(&self) -> bool {
+        self.special_move == SpecialMove::EnPassant
+    }
+
+    pub fn is_castle(&self) -> bool {
+        self.special_move == SpecialMove::Castling
+    }
+
+    pub fn is_promo(&self) -> bool {
+        debug_assert!(if self.special_move == SpecialMove::Promotion {
+            self.promo_piece_type.is_some()
+        } else {
+            self.promo_piece_type.is_none()
+        });
+        self.special_move == SpecialMove::Promotion
+    }
+
+    pub fn promo_piece_type(&self) -> Option<PieceType> {
+        self.promo_piece_type
     }
 
     /// Returns the type of move, according to the `SpecialMove` field.

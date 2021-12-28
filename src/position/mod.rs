@@ -20,7 +20,7 @@ pub use state::State;
 use std::fmt;
 use std::ops::Not;
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Player {
     White = 0,
     Black = 1,
@@ -48,6 +48,17 @@ impl Player {
         match self {
             Player::White => 8,
             Player::Black => -8,
+        }
+    }
+
+    /// Returns the actual algebraic notation board rank for
+    /// a given rank as seen from the `Player`s perspective.
+    #[inline(always)]
+    pub fn relative_rank(&self, rank: u8) -> u8 {
+        debug_assert!(rank >= 0 && rank <= 7);
+        match self {
+            Player::White => rank,
+            Player::Black => 7 - rank,
         }
     }
 }
@@ -79,6 +90,7 @@ pub struct Position {
     // (i.e. white pawns and black pawns are all on one bitboard), and then we have a
     // white_pieces bb and black_pieces bb maintained separately? To get white_pawns, you would
     // do (pawns & white_pieces)
+    // TODO: rename `no_piece` to `no_pieces` for consistency
     pub(crate) no_piece: Bitboard,
     pub(crate) white_pawns: Bitboard,
     pub(crate) white_knights: Bitboard,
@@ -108,6 +120,8 @@ pub struct Position {
     pub(crate) move_number: u32,
 
     // `State` struct stores other useful information for fast access
+    // TODO: Pleco wraps this in an Arc for quick copying of states without
+    // copying memory. Do we need that?
     pub(crate) state: Option<State>,
 }
 
@@ -116,6 +130,327 @@ impl Position {
     /// when initialising a new `Position`.
     pub fn set_state(&mut self) {
         self.state = Some(State::from_position(&self));
+    }
+
+    /// Make a move on the Board and update the `Position`.
+    ///
+    /// # Panics
+    ///
+    /// The supplied `Move` must be legal in the current position, otherwise a
+    /// panic will occur. Legal moves can be generated with `MoveGen::generate_all()`
+    pub fn make_move(&mut self, mov: Move) {
+        // In debug mode, check the move isn't somehow null
+        debug_assert_ne!(mov.orig(), mov.dest());
+
+        // let gives_check = self.gives_check(mov);
+        let us = self.turn();
+        let them = !us;
+        let from = mov.orig();
+        let to = mov.dest();
+        let moving_piece = self.piece_at_sq(from);
+        let captured_piece = if mov.is_en_passant() {
+            Piece::make(them, PieceType::Pawn)
+        } else {
+            self.piece_at_sq(to)
+        };
+
+        // Sanity check
+        debug_assert_eq!(moving_piece.player(), us);
+
+        // Increment clocks
+        self.half_move_clock += 1;
+        if us == Player::Black {
+            // Black is moving, so the full-move counter will increment
+            self.move_number += 1;
+        }
+
+        // Castling rights
+        let new_castling_rights = self.castling_rights.update(from);
+        self.castling_rights = new_castling_rights;
+
+        // Castling move
+        if mov.is_castle() {
+            // Sanity checks
+            debug_assert_eq!(moving_piece.type_of(), PieceType::King);
+            debug_assert_eq!(captured_piece.type_of(), PieceType::None);
+
+            let mut r_orig = Square(0);
+            let mut r_dest = Square(0);
+            self.apply_castling(us, from, to, &mut r_orig, &mut r_dest);
+        } else if captured_piece != Piece::None {
+            let mut cap_sq = to;
+            if captured_piece.type_of() == PieceType::Pawn {
+                if mov.is_en_passant() {
+                    debug_assert_eq!(to, self.ep_square.unwrap());
+                    match us {
+                        Player::White => cap_sq -= Square(8),
+                        Player::Black => cap_sq += Square(8),
+                    };
+
+                    debug_assert_eq!(moving_piece.type_of(), PieceType::Pawn);
+                    debug_assert_eq!(us.relative_rank(5), to.rank()); // `to` square is on "6th" rank from player's perspective
+                    debug_assert_eq!(self.piece_at_sq(to), Piece::None);
+                    debug_assert_eq!(
+                        self.piece_at_sq(cap_sq).player_piece(),
+                        (them, PieceType::Pawn)
+                    );
+                }
+            }
+
+            // Update the `Bitboard`s and `Piece` array
+            self.remove_piece_c(captured_piece, cap_sq);
+
+            // Reset the 50-move clock
+            self.half_move_clock = 0;
+        }
+
+        if !mov.is_castle() {
+            self.move_piece_c(moving_piece, from, to);
+        }
+
+        // Extra book-keeping for pawn moves
+        if moving_piece.type_of() == PieceType::Pawn {
+            if to.0 ^ from.0 == 16 {
+                // Double push
+                let poss_ep: u8 = (to.0 as i8 - us.pawn_push()) as u8;
+
+                // Set en passant square if the moved pawn can be captured
+                if (Bitboard(pawn_attacks_from(Square(poss_ep), us))
+                    & self.piece_bb(them, PieceType::Pawn))
+                .is_not_empty()
+                {
+                    self.ep_square = Some(Square(poss_ep));
+                }
+            } else if let Some(promo_piece_type) = mov.promo_piece_type() {
+                let us_promo = Piece::make(us, promo_piece_type);
+                self.remove_piece_c(moving_piece, to);
+                self.put_piece_c(us_promo, to);
+            }
+
+            self.half_move_clock = 0;
+        }
+
+        // Update "invisible" state
+        self.turn = them;
+        self.state = Some(State::from_position(&self));
+    }
+
+    /// Helper function to apply a castling move for a given player.
+    ///
+    /// Takes in the player to castle, the original king square and the original rook square.
+    /// The k_dst and r_dst squares are pointers to values, modifying them to have the correct king and
+    /// rook destination squares.
+    ///
+    /// # Safety
+    ///
+    /// Assumes that k_orig and r_orig are legal squares, and the player can legally castle.
+    fn apply_castling(
+        &mut self,
+        player: Player,
+        k_orig: Square,      // Starting square of the King
+        k_dest: Square,      // King destination square
+        r_orig: &mut Square, // Origin square of the Rook. Passed in as `Square(0)` and modified by the function
+        r_dest: &mut Square, // Destination square of Rook. Passed in as `Square(0)` and modified by the function
+    ) {
+        *r_orig = player.relative_square(Square(7));
+        *r_dest = player.relative_square(Square(5));
+        self.move_piece_c(Piece::make(player, PieceType::King), k_orig, k_dest);
+        self.move_piece_c(Piece::make(player, PieceType::Rook), *r_orig, *r_dest);
+    }
+
+    /// Moves a piece on the board for a given player from square `from`
+    /// to square `to`. Updates all relevant `Bitboard` and the `Piece` array.
+    ///
+    /// # Panics
+    ///
+    /// Panics in debug mode if the two and from square are equal
+    fn move_piece_c(&mut self, piece: Piece, from: Square, to: Square) {
+        debug_assert_ne!(from, to);
+        let comb_bb: Bitboard = from.to_bb() | to.to_bb();
+        let (player, piece_ty) = piece.player_piece();
+        self.no_piece ^= comb_bb;
+
+        match piece {
+            Piece::None => {}
+            Piece::WhitePawn => {
+                self.white_pawns ^= comb_bb;
+            }
+            Piece::WhiteKnight => {
+                self.white_knights ^= comb_bb;
+            }
+            Piece::WhiteBishop => {
+                self.white_bishops ^= comb_bb;
+            }
+            Piece::WhiteRook => {
+                self.white_rooks ^= comb_bb;
+            }
+            Piece::WhiteQueen => {
+                self.white_queens ^= comb_bb;
+            }
+            Piece::WhiteKing => {
+                self.white_king ^= comb_bb;
+            }
+            Piece::BlackPawn => {
+                self.black_pawns ^= comb_bb;
+            }
+            Piece::BlackKnight => {
+                self.black_knights ^= comb_bb;
+            }
+            Piece::BlackBishop => {
+                self.black_bishops ^= comb_bb;
+            }
+            Piece::BlackRook => {
+                self.black_rooks ^= comb_bb;
+            }
+            Piece::BlackQueen => {
+                self.black_queens ^= comb_bb;
+            }
+            Piece::BlackKing => {
+                self.black_king ^= comb_bb;
+            }
+        }
+
+        match player {
+            Player::White => self.white_pieces ^= comb_bb,
+            Player::Black => self.black_pieces ^= comb_bb,
+        }
+
+        self.board.remove(from);
+        self.board.place(to, player, piece_ty);
+    }
+
+    /// Removes a `Piece` from the board for a given player.
+    ///
+    /// # Panics
+    ///
+    /// In debug mode, panics if there is not a `piece` at the given square.
+    fn remove_piece_c(&mut self, piece: Piece, square: Square) {
+        debug_assert_eq!(self.piece_at_sq(square), piece);
+        let (player, piece_ty) = piece.player_piece();
+        let bb = square.to_bb();
+        self.no_piece ^= bb;
+
+        // TODO: factor this out into a function. The same thing is being done in `move_piece_c`
+        match piece {
+            Piece::None => {}
+            Piece::WhitePawn => {
+                self.white_pawns ^= bb;
+            }
+            Piece::WhiteKnight => {
+                self.white_knights ^= bb;
+            }
+            Piece::WhiteBishop => {
+                self.white_bishops ^= bb;
+            }
+            Piece::WhiteRook => {
+                self.white_rooks ^= bb;
+            }
+            Piece::WhiteQueen => {
+                self.white_queens ^= bb;
+            }
+            Piece::WhiteKing => {
+                self.white_king ^= bb;
+            }
+            Piece::BlackPawn => {
+                self.black_pawns ^= bb;
+            }
+            Piece::BlackKnight => {
+                self.black_knights ^= bb;
+            }
+            Piece::BlackBishop => {
+                self.black_bishops ^= bb;
+            }
+            Piece::BlackRook => {
+                self.black_rooks ^= bb;
+            }
+            Piece::BlackQueen => {
+                self.black_queens ^= bb;
+            }
+            Piece::BlackKing => {
+                self.black_king ^= bb;
+            }
+        }
+
+        match player {
+            Player::White => {
+                self.white_pieces ^= bb;
+                self.white_piece_count -= 1;
+            }
+
+            Player::Black => {
+                self.black_pieces ^= bb;
+                self.black_piece_count -= 1;
+            }
+        }
+
+        self.board.remove(square);
+    }
+
+    /// Places a `Piece` on the board at a given `Square`.
+    ///
+    /// # Safety
+    ///
+    /// In debug mode, panics if there is already a piece at that `Square`.
+    fn put_piece_c(&mut self, piece: Piece, square: Square) {
+        debug_assert_eq!(self.piece_at_sq(square), Piece::None);
+
+        let bb = square.to_bb();
+        let (player, piece_ty) = piece.player_piece();
+        self.no_piece ^= bb;
+
+        // TODO: factor this out into a function. The same thing is being done in `move_piece_c`
+        match piece {
+            Piece::None => {}
+            Piece::WhitePawn => {
+                self.white_pawns ^= bb;
+            }
+            Piece::WhiteKnight => {
+                self.white_knights ^= bb;
+            }
+            Piece::WhiteBishop => {
+                self.white_bishops ^= bb;
+            }
+            Piece::WhiteRook => {
+                self.white_rooks ^= bb;
+            }
+            Piece::WhiteQueen => {
+                self.white_queens ^= bb;
+            }
+            Piece::WhiteKing => {
+                self.white_king ^= bb;
+            }
+            Piece::BlackPawn => {
+                self.black_pawns ^= bb;
+            }
+            Piece::BlackKnight => {
+                self.black_knights ^= bb;
+            }
+            Piece::BlackBishop => {
+                self.black_bishops ^= bb;
+            }
+            Piece::BlackRook => {
+                self.black_rooks ^= bb;
+            }
+            Piece::BlackQueen => {
+                self.black_queens ^= bb;
+            }
+            Piece::BlackKing => {
+                self.black_king ^= bb;
+            }
+        }
+
+        match player {
+            Player::White => {
+                self.white_pieces ^= bb;
+                self.white_piece_count += 1;
+            }
+
+            Player::Black => {
+                self.black_pieces ^= bb;
+                self.black_piece_count += 1;
+            }
+        }
+        self.board.place(square, player, piece_ty);
     }
 
     // CHECKING
@@ -226,16 +561,6 @@ impl Position {
     }
 
     /// Returns the combined BitBoard of both players for a given piece.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use pleco::{Board,PieceType};
-    ///
-    /// let chessboard = Board::start_pos();
-    /// assert_eq!(chessboard.piece_bb_both_players(PieceType::P).0, 0x00FF00000000FF00);
-    /// ```
-    /// Returns the combined Bitboard of both players for a given piece.
     #[inline(always)]
     pub fn piece_bb_both_players(&self, piece: PieceType) -> Bitboard {
         match piece {

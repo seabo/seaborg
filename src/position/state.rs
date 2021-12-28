@@ -1,6 +1,5 @@
-//! Stores additional state about a position, usually which can be computed more
-//! expensively from the `Position` struct or which is often reused across many
-//! methods on `Position`. We keep track of here incrementally in a `State` struct.
+//! Stores additional state about a position which is often reused across many
+//! methods on `Position`. We keep track of here in a dedicated struct.
 //!
 //! Contains things like `checkers` (which pieces are currently checking the moving
 //! player's king), `zobrist` (the efficiently updateable hash key for the transposition

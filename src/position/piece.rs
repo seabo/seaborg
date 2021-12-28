@@ -62,6 +62,35 @@ impl Piece {
             Piece::BlackKing => Player::Black,
         }
     }
+
+    /// Return a `Piece` from a `Player` and a `PieceType`.
+    pub fn make(player: Player, piece_type: PieceType) -> Self {
+        match player {
+            Player::White => match piece_type {
+                PieceType::None => Piece::None,
+                PieceType::Pawn => Piece::WhitePawn,
+                PieceType::Knight => Piece::WhiteKnight,
+                PieceType::Bishop => Piece::WhiteBishop,
+                PieceType::Rook => Piece::WhiteRook,
+                PieceType::Queen => Piece::WhiteQueen,
+                PieceType::King => Piece::WhiteKing,
+            },
+            Player::Black => match piece_type {
+                PieceType::None => Piece::None,
+                PieceType::Pawn => Piece::BlackPawn,
+                PieceType::Knight => Piece::BlackKnight,
+                PieceType::Bishop => Piece::BlackBishop,
+                PieceType::Rook => Piece::BlackRook,
+                PieceType::Queen => Piece::BlackQueen,
+                PieceType::King => Piece::BlackKing,
+            },
+        }
+    }
+
+    /// Returns a tuple containing the `Player` and `PieceType` of the `Piece`.
+    pub fn player_piece(&self) -> (Player, PieceType) {
+        (self.player(), self.type_of())
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

@@ -1,3 +1,4 @@
+use crate::position::Square;
 use std::fmt;
 
 #[derive(Copy, Clone, Debug)]
@@ -38,6 +39,8 @@ impl fmt::Display for CastlingRights {
 }
 
 impl CastlingRights {
+    /// Return a `CastlingRights` struct representing no castling rights
+    /// for either player.
     pub fn none() -> Self {
         Self {
             white_kingside: false,
@@ -45,6 +48,26 @@ impl CastlingRights {
             black_kingside: false,
             black_queenside: false,
         }
+    }
+
+    /// Return a new `CastlingRights` struct based on the current one, and
+    /// a `Square` representing the origin an arbitrary move. This is the only
+    /// information needed assuming it is a legal move, because loss of castling
+    /// rights only occurs when either the King or Rook is moved from its starting
+    /// square.
+    pub fn update(&self, from: Square) -> Self {
+        let mut new_castling_rights = self.clone();
+
+        new_castling_rights.white_queenside =
+            self.white_queenside && (from != Square::E1) && (from != Square::A1);
+        new_castling_rights.white_kingside =
+            self.white_kingside && (from != Square::E1) && (from != Square::H1);
+        new_castling_rights.black_queenside =
+            self.black_queenside && (from != Square::E8) && (from != Square::A1);
+        new_castling_rights.black_kingside =
+            self.black_kingside && (from != Square::E8) && (from != Square::H1);
+
+        new_castling_rights
     }
 }
 

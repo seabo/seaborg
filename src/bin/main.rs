@@ -29,17 +29,21 @@ fn main() {
     let position8 = "8/p7/4k3/1p5p/1P1r1K1P/P4P2/8/8 w - - 0 40";
     let position9 = "r1bqkb1r/ppp2ppp/2n5/4p3/2p5/5NN1/PPPPQPPP/R1B1K2R b KQkq - 1 7";
     let position10 = "8/3k4/3q4/8/3B4/3K4/8/8 w - - 0 1";
+    let position11 = "3r1rk1/pp3ppp/1qb1pn2/8/1PPb1B2/2N2B2/P1Q2PPP/3R1RK1 w - - 1 16";
 
-    let pos = Position::from_fen(position5);
+    let mut pos = Position::from_fen(position11);
 
     match pos {
-        Ok(pos) => {
-            println!("{:?}", pos);
-
+        Ok(mut pos) => {
             let now = Instant::now();
             let movelist = MoveGen::generate_legal(&pos);
             let elapsed = now.elapsed().as_micros();
-
+            // Make the first move on the board
+            if let Some(mov) = movelist.iter().next() {
+                println!("making move {}", mov);
+                pos.make_move(*mov);
+            }
+            println!("{:?}", pos);
             for mov in movelist.iter() {
                 println!("{}", mov);
             }
