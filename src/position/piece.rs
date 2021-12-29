@@ -112,6 +112,10 @@ pub const PROMO_PIECES: [PieceType; 4] = [
 ];
 
 impl PieceType {
+    pub fn is_none(&self) -> bool {
+        *self == PieceType::None
+    }
+
     fn long_name(&self) -> &str {
         match self {
             PieceType::None => "none",

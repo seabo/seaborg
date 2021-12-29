@@ -7,7 +7,7 @@ mod state;
 
 use crate::bb::Bitboard;
 use crate::masks::{CASTLING_PATH, CASTLING_ROOK_START, FILE_BB, RANK_BB};
-use crate::mov::{Move, SpecialMove};
+use crate::mov::{Move, SpecialMove, UndoableMove};
 use crate::movegen::{bishop_moves, rook_moves};
 use crate::precalc::boards::{aligned, between_bb, king_moves, knight_moves, pawn_attacks_from};
 
@@ -116,6 +116,11 @@ pub struct Position {
     turn: Player,
     pub(crate) castling_rights: CastlingRights,
     pub(crate) ep_square: Option<Square>,
+    // TODO: use a 'half-move' counter to track the game move number,
+    // and make the 50-move rule counter a separate thing. That way the
+    // logic for the current concept called `move_number` will be more elegant
+    // (i.e. not checking for a white move before incrementing, and not dealing)
+    // with 0.5 move increments.
     pub(crate) half_move_clock: u32,
     pub(crate) move_number: u32,
 
@@ -123,6 +128,10 @@ pub struct Position {
     // TODO: Pleco wraps this in an Arc for quick copying of states without
     // copying memory. Do we need that?
     pub(crate) state: Option<State>,
+
+    /// History stores a `Vec` of `UndoableMove`s, allowing the `Position` to
+    /// be rolled back with `unmake_move()`.
+    pub(crate) history: Vec<UndoableMove>,
 }
 
 impl Position {
@@ -142,7 +151,10 @@ impl Position {
         // In debug mode, check the move isn't somehow null
         debug_assert_ne!(mov.orig(), mov.dest());
 
-        // let gives_check = self.gives_check(mov);
+        // Add an undoable move to the position history
+        let undoable_move = mov.to_undoable(&self);
+        self.history.push(undoable_move);
+
         let us = self.turn();
         let them = !us;
         let from = mov.orig();
@@ -235,6 +247,53 @@ impl Position {
         self.state = Some(State::from_position(&self));
     }
 
+    /// Unmake the most recent move, returning the `Position` to the previous state.
+    pub fn unmake_move(&mut self) -> Option<UndoableMove> {
+        if let Some(undoable_move) = self.history.pop() {
+            self.turn = !self.turn();
+            let us = self.turn();
+            let orig = undoable_move.orig;
+            let dest = undoable_move.dest;
+            let mut piece_on = self.piece_at_sq(dest);
+
+            // Sanity check (only in debug mode) that the move makes sense.
+            debug_assert!(self.piece_at_sq(orig) == Piece::None || undoable_move.is_castle());
+
+            if undoable_move.is_promo() {
+                debug_assert_eq!(piece_on.type_of(), undoable_move.promo_piece_type.unwrap());
+
+                self.remove_piece_c(piece_on, dest);
+                self.put_piece_c(Piece::make(us, PieceType::Pawn), dest);
+                piece_on = Piece::make(us, PieceType::Pawn);
+            }
+
+            if undoable_move.is_castle() {
+                self.undo_castling(us, orig, dest);
+                self.castling_rights = undoable_move.prev_castling_rights;
+            } else {
+                self.move_piece_c(piece_on, dest, orig);
+                let captured_piece = undoable_move.captured;
+                if !captured_piece.is_none() {
+                    let mut cap_sq = dest;
+                    if undoable_move.is_en_passant() {
+                        match us {
+                            Player::White => cap_sq -= Square(8),
+                            Player::Black => cap_sq += Square(8),
+                        };
+                    }
+                    self.put_piece_c(Piece::make(!us, captured_piece), cap_sq);
+                }
+            }
+
+            self.half_move_clock = undoable_move.prev_half_move_clock;
+            self.ep_square = undoable_move.prev_ep_square;
+
+            Some(undoable_move)
+        } else {
+            None
+        }
+    }
+
     /// Helper function to apply a castling move for a given player.
     ///
     /// Takes in the player to castle, the original king square and the original rook square.
@@ -252,10 +311,49 @@ impl Position {
         r_orig: &mut Square, // Origin square of the Rook. Passed in as `Square(0)` and modified by the function
         r_dest: &mut Square, // Destination square of Rook. Passed in as `Square(0)` and modified by the function
     ) {
-        *r_orig = player.relative_square(Square(7));
-        *r_dest = player.relative_square(Square(5));
+        if k_orig < k_dest {
+            // Kingside castling
+            *r_orig = player.relative_square(Square::H1);
+            *r_dest = player.relative_square(Square::F1);
+        } else {
+            // Queenside castling
+            *r_orig = player.relative_square(Square::A1);
+            *r_dest = player.relative_square(Square::D1);
+        }
         self.move_piece_c(Piece::make(player, PieceType::King), k_orig, k_dest);
         self.move_piece_c(Piece::make(player, PieceType::Rook), *r_orig, *r_dest);
+    }
+
+    /// Helper function to undo a castling move for a given player.
+    ///
+    /// # Safety
+    ///
+    /// Undefined behaviour will result if calling this function when not unmaking an actual
+    /// castling move.
+    fn undo_castling(&mut self, player: Player, k_orig: Square, k_dest: Square) {
+        let r_orig: Square;
+        let r_dest: Square;
+        if k_orig < k_dest {
+            // Kingside castling
+            r_orig = player.relative_square(Square::H1);
+            r_dest = player.relative_square(Square::F1);
+        } else {
+            // Queenside castling
+            r_orig = player.relative_square(Square::A1);
+            r_dest = player.relative_square(Square::D1);
+        }
+
+        debug_assert_eq!(
+            self.piece_at_sq(r_dest),
+            Piece::make(player, PieceType::Rook)
+        );
+        debug_assert_eq!(
+            self.piece_at_sq(k_dest),
+            Piece::make(player, PieceType::King)
+        );
+
+        self.move_piece_c(Piece::make(player, PieceType::King), k_dest, k_orig);
+        self.move_piece_c(Piece::make(player, PieceType::Rook), r_dest, r_orig);
     }
 
     /// Moves a piece on the board for a given player from square `from`

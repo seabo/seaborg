@@ -63,6 +63,7 @@ impl Position {
             white_piece_count: bbs[13].popcnt() as u8,
             black_piece_count: bbs[14].popcnt() as u8,
             state: None,
+            history: Vec::new(),
         };
 
         pos.set_state();

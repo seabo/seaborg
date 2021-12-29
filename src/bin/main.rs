@@ -31,7 +31,7 @@ fn main() {
     let position10 = "8/3k4/3q4/8/3B4/3K4/8/8 w - - 0 1";
     let position11 = "3r1rk1/pp3ppp/1qb1pn2/8/1PPb1B2/2N2B2/P1Q2PPP/3R1RK1 w - - 1 16";
 
-    let mut pos = Position::from_fen(position11);
+    let mut pos = Position::from_fen(start_position);
 
     match pos {
         Ok(mut pos) => {
@@ -42,6 +42,7 @@ fn main() {
             if let Some(mov) = movelist.iter().next() {
                 println!("making move {}", mov);
                 pos.make_move(*mov);
+                pos.unmake_move();
             }
             println!("{:?}", pos);
             for mov in movelist.iter() {

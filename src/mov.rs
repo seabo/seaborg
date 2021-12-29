@@ -1,4 +1,4 @@
-use crate::position::{PieceType, Square};
+use crate::position::{CastlingRights, PieceType, Position, Square};
 use crate::precalc::boards;
 use std::fmt;
 
@@ -14,6 +14,13 @@ pub enum SpecialMove {
     Null,
 }
 
+/// Struct used to store moves which are generated in movegen.
+///
+/// This struct is always 4 bytes, and is deliberately kept relatively small.
+///
+/// There is not enough information in a `Move` to allow undoing. When a move
+/// is actually made on the board, a `MoveHistory` struct is built which contains
+/// more information allowing for efficient an `unmake_move()`.
 #[derive(Copy, Clone, Debug)]
 pub struct Move {
     orig: Square,
@@ -107,6 +114,19 @@ impl Move {
     pub fn orig(&self) -> Square {
         self.orig
     }
+
+    pub fn to_undoable(&self, position: &Position) -> UndoableMove {
+        UndoableMove {
+            orig: self.orig,
+            dest: self.dest,
+            promo_piece_type: self.promo_piece_type,
+            captured: position.piece_at_sq(self.dest).type_of(),
+            special_move: self.special_move,
+            prev_castling_rights: position.castling_rights,
+            prev_ep_square: position.ep_square,
+            prev_half_move_clock: position.half_move_clock,
+        }
+    }
 }
 
 impl fmt::Display for Move {
@@ -119,6 +139,53 @@ impl fmt::Display for Move {
     }
 }
 
+/// A struct containing enough information to allow undoing a move on a
+/// `Position`. This struct contains more data (like captured piece and
+/// previous castling rights) than a basic `Move` struct. This is 16 bytes
+/// in size, and is only used for undoing moves to save space.
+#[derive(Copy, Clone, Debug)]
+pub struct UndoableMove {
+    pub orig: Square,
+    pub dest: Square,
+    pub promo_piece_type: Option<PieceType>,
+    pub captured: PieceType,
+    pub special_move: SpecialMove,
+    pub prev_castling_rights: CastlingRights,
+    pub prev_ep_square: Option<Square>,
+    pub prev_half_move_clock: u32,
+}
+
+impl UndoableMove {
+    #[inline(always)]
+    pub fn is_null(&self) -> bool {
+        self.special_move == SpecialMove::Null
+    }
+
+    #[inline(always)]
+    pub fn is_none(&self) -> bool {
+        self.special_move == SpecialMove::None
+    }
+
+    #[inline(always)]
+    pub fn is_en_passant(&self) -> bool {
+        self.special_move == SpecialMove::EnPassant
+    }
+
+    #[inline(always)]
+    pub fn is_castle(&self) -> bool {
+        self.special_move == SpecialMove::Castling
+    }
+
+    pub fn is_promo(&self) -> bool {
+        debug_assert!(if self.special_move == SpecialMove::Promotion {
+            self.promo_piece_type.is_some()
+        } else {
+            self.promo_piece_type.is_none()
+        });
+        self.special_move == SpecialMove::Promotion
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,7 +194,12 @@ mod tests {
     /// Ensure that the Move storage struct doesn't accidentally get bigger
     /// than 4 bytes.
     #[test]
-    fn move_is_four_bytes() {
+    fn move_is_4_bytes() {
         assert_eq!(mem::size_of::<Move>(), 4);
+    }
+
+    #[test]
+    fn undoable_move_is_16_bytes() {
+        assert_eq!(mem::size_of::<UndoableMove>(), 16);
     }
 }
