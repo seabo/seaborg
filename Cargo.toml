@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 bitintr = "0.2"
 num_enum = "0.5"
+separator = "0.4"
 
 [dev-dependencies]
 criterion = "0.3"

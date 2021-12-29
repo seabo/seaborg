@@ -1,13 +1,14 @@
 use rchess::mov::Move;
 use rchess::movegen::MoveGen;
 use rchess::position::{Position, Square};
+use rchess::precalc::boards::init_boards;
 use rchess::precalc::magic::{bishop_attacks, init_magics};
 use rchess::search::perft::divide;
 
+use separator::Separatable;
+
 use std::sync::{Once, ONCE_INIT};
 use std::time::Instant;
-
-use rchess::precalc::boards::init_boards;
 
 static INITALIZED: Once = ONCE_INIT;
 
@@ -32,8 +33,10 @@ fn main() {
     let position10 = "8/3k4/3q4/8/3B4/3K4/8/8 w - - 0 1";
     let position11 = "3r1rk1/pp3ppp/1qb1pn2/8/1PPb1B2/2N2B2/P1Q2PPP/3R1RK1 w - - 1 16";
     let kiwipete = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1";
+    let cpw_position5 = "rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8";
+    let cpw_position6 = "r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10";
 
-    let mut pos = Position::from_fen(kiwipete);
+    let mut pos = Position::from_fen(start_position);
     match pos {
         Ok(ref mut pos) => {
             // pos.make_uci_move("a2a4");
@@ -54,7 +57,15 @@ fn main() {
             // }
             //============
             let depth = 6;
-            divide(pos, depth);
+
+            let now = Instant::now();
+            let nodes = divide(pos, depth);
+            let elapsed = now.elapsed().as_micros();
+            println!("{}us to calculate perft {}", elapsed, depth);
+            println!(
+                "{} nodes/sec",
+                ((nodes * 1000000) / (elapsed as usize)).separated_string()
+            );
 
             // let now = Instant::now();
             // let movelist = MoveGen::generate_legal(&pos);
