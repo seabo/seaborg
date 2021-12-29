@@ -6,7 +6,7 @@ use crate::mono_traits::{
 use crate::mov::{Move, SpecialMove};
 use crate::movelist::{MVPushable, MoveList};
 use crate::position::{CastleType, PieceType, Player, Position, Square, PROMO_PIECES};
-use crate::precalc::boards::{king_moves, knight_moves, pawn_attacks_from};
+use crate::precalc::boards::{between_bb, king_moves, knight_moves, line_bb, pawn_attacks_from};
 use crate::precalc::magic;
 
 use std::ops::Index;
@@ -72,7 +72,11 @@ where
 
     fn generate_helper<P: PlayerTrait>(position: &'a Position, movelist: &'a mut MP) -> &'a mut MP {
         let mut movegen = InnerMoveGen::<MP>::get_self(position, movelist);
-        movegen.generate_all::<P>();
+        if movegen.position.in_check() {
+            movegen.generate_evasions::<P>();
+        } else {
+            movegen.generate_all::<P>();
+        }
         movegen.movelist
     }
 
@@ -84,6 +88,46 @@ where
         self.moves_per_piece::<P, RookType>(Bitboard::ALL);
         self.moves_per_piece::<P, BishopType>(Bitboard::ALL);
         self.moves_per_piece::<P, QueenType>(Bitboard::ALL);
+    }
+
+    fn generate_evasions<P: PlayerTrait>(&mut self) {
+        debug_assert!(self.position.in_check());
+
+        let ksq = self.position.king_sq(P::player());
+        let mut slider_attacks = Bitboard(0);
+
+        // Pieces that could possibly attack the king with sliding attacks
+        let mut sliders = self.position.checkers()
+            & !self
+                .position
+                .piece_two_bb_both_players(PieceType::Pawn, PieceType::Knight);
+
+        // All the squares that are attacked by sliders
+        while let Some((check_sq, check_sq_bb)) = sliders.pop_some_lsb_and_bit() {
+            slider_attacks |= Bitboard(line_bb(check_sq, ksq)) ^ check_sq_bb;
+        }
+
+        // Possible king moves, where the king cannot move into a slider / own pieces
+        let k_moves = king_moves(ksq) & !slider_attacks & !self.us_occ;
+
+        // Separate captures and non-captures
+        let mut captures_bb = k_moves & self.them_occ;
+        let mut non_captures_bb = k_moves & !self.them_occ;
+        self.move_append_from_bb_flag(&mut captures_bb, ksq, SpecialMove::Capture);
+        self.move_append_from_bb_flag(&mut non_captures_bb, ksq, SpecialMove::Quiet);
+
+        // If there is only one checking square, we can block or capture the piece
+        if !(self.position.checkers().more_than_one()) {
+            let checking_sq = Square(self.position.checkers().bsf() as u8);
+
+            // Squares that allow a block or captures of the sliding piece
+            let target = Bitboard(between_bb(checking_sq, ksq)) | checking_sq.to_bb();
+            self.generate_pawn_moves::<P>(target);
+            self.moves_per_piece::<P, KnightType>(target);
+            self.moves_per_piece::<P, BishopType>(target);
+            self.moves_per_piece::<P, RookType>(target);
+            self.moves_per_piece::<P, QueenType>(target);
+        }
     }
 
     fn moves_per_piece<PL: PlayerTrait, P: PieceTrait>(&mut self, target: Bitboard) {
@@ -116,11 +160,13 @@ where
         let enemies = self.them_occ;
 
         // Single and double pawn moves
-        // TODO: rename this variable
         let empty_squares = !self.position.occupied();
 
-        let push_one = empty_squares & PL::shift_up(pawns_not_rank_7);
-        let push_two = PL::shift_up(push_one & rank_3) & empty_squares;
+        let mut push_one = empty_squares & PL::shift_up(pawns_not_rank_7);
+        let mut push_two = PL::shift_up(push_one & rank_3) & empty_squares;
+
+        push_one &= target;
+        push_two &= target;
 
         for dest in push_one {
             let orig = PL::down(dest);
@@ -134,9 +180,9 @@ where
 
         // Promotions
         if pawns_rank_7.is_not_empty() {
-            let no_cap_promo = PL::shift_up(pawns_rank_7) & empty_squares;
-            let left_cap_promo = PL::shift_up_left(pawns_rank_7) & enemies;
-            let right_cap_promo = PL::shift_up_right(pawns_rank_7) & enemies;
+            let no_cap_promo = target & PL::shift_up(pawns_rank_7) & empty_squares;
+            let left_cap_promo = target & PL::shift_up_left(pawns_rank_7) & enemies;
+            let right_cap_promo = target & PL::shift_up_right(pawns_rank_7) & enemies;
 
             for dest in no_cap_promo {
                 let orig = PL::down(dest);
@@ -155,8 +201,8 @@ where
         }
 
         // Captures
-        let left_cap = PL::shift_up_left(pawns_not_rank_7) & enemies;
-        let right_cap = PL::shift_up_right(pawns_not_rank_7) & enemies;
+        let left_cap = target & PL::shift_up_left(pawns_not_rank_7) & enemies;
+        let right_cap = target & PL::shift_up_right(pawns_not_rank_7) & enemies;
 
         for dest in left_cap {
             let orig = PL::down_right(dest);

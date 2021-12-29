@@ -194,7 +194,7 @@ impl PlayerTrait for BlackType {
 
     #[inline(always)]
     fn down_left(sq: Square) -> Square {
-        sq + Square(7)
+        sq + Square(9)
     }
 
     #[inline(always)]

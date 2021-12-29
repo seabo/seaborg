@@ -2,6 +2,7 @@ use rchess::mov::Move;
 use rchess::movegen::MoveGen;
 use rchess::position::{Position, Square};
 use rchess::precalc::magic::{bishop_attacks, init_magics};
+use rchess::search::perft::divide;
 
 use std::sync::{Once, ONCE_INIT};
 use std::time::Instant;
@@ -30,27 +31,47 @@ fn main() {
     let position9 = "r1bqkb1r/ppp2ppp/2n5/4p3/2p5/5NN1/PPPPQPPP/R1B1K2R b KQkq - 1 7";
     let position10 = "8/3k4/3q4/8/3B4/3K4/8/8 w - - 0 1";
     let position11 = "3r1rk1/pp3ppp/1qb1pn2/8/1PPb1B2/2N2B2/P1Q2PPP/3R1RK1 w - - 1 16";
+    let kiwipete = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1";
 
-    let mut pos = Position::from_fen(start_position);
-
+    let mut pos = Position::from_fen(kiwipete);
     match pos {
-        Ok(mut pos) => {
-            let now = Instant::now();
-            let movelist = MoveGen::generate_legal(&pos);
-            let elapsed = now.elapsed().as_micros();
-            // Make the first move on the board
-            if let Some(mov) = movelist.iter().next() {
-                println!("making move {}", mov);
-                pos.make_move(*mov);
-                pos.unmake_move();
-            }
-            println!("{:?}", pos);
-            for mov in movelist.iter() {
-                println!("{}", mov);
-            }
+        Ok(ref mut pos) => {
+            // pos.make_uci_move("a2a4");
+            // pos.make_uci_move("a7a6");
+            // pos.make_uci_move("a4a5");
+            // pos.make_uci_move("b7b5");
+            // pos.make_uci_move("b2b3");
+            // println!("{:?}", pos);
+            // let pre_move = pos.clone();
+            // let ep_move = pos.make_uci_move("a5b6");
+            // pos.unmake_move();
+            // let post_move = pos.clone();
+            // if pre_move != post_move {
+            //     // println!("PRE======================\n{:?}", pre_move);
+            //     // println!("POST=====================\n{:?}", post_move);
+            //     println!("ep_mov: {:?}", ep_move);
+            //     panic!();
+            // }
+            //============
+            let depth = 6;
+            divide(pos, depth);
 
-            println!("# of moves: {}", movelist.len());
-            println!("Took {}us to gen moves", elapsed);
+            // let now = Instant::now();
+            // let movelist = MoveGen::generate_legal(&pos);
+            // let elapsed = now.elapsed().as_micros();
+            // // Make the first move on the board
+            // if let Some(mov) = movelist.iter().next() {
+            //     println!("making move {}", mov);
+            //     pos.make_move(*mov);
+            //     pos.unmake_move();
+            // }
+            // println!("{:?}", pos);
+            // for mov in movelist.iter() {
+            //     println!("{}", mov);
+            // }
+
+            // println!("# of moves: {}", movelist.len());
+            // println!("Took {}us to gen moves", elapsed);
         }
         Err(fen_error) => {
             println!("{}", fen_error.msg);

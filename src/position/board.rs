@@ -1,7 +1,7 @@
 use super::{Piece, PieceType, Player, Square};
 use std::fmt;
 
-#[derive(Clone)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct Board {
     pub arr: [Piece; 64],
 }

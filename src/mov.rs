@@ -1,4 +1,4 @@
-use crate::position::{CastlingRights, PieceType, Position, Square};
+use crate::position::{CastlingRights, PieceType, Player, Position, Square, State};
 use crate::precalc::boards;
 use std::fmt;
 
@@ -116,26 +116,47 @@ impl Move {
     }
 
     pub fn to_undoable(&self, position: &Position) -> UndoableMove {
+        debug_assert!(position.ep_square().is_some());
+        let captured = if self.is_en_passant() {
+            let us = position.turn();
+            let cap_sq = match us {
+                Player::White => self.dest - Square(8),
+                Player::Black => self.dest + Square(8),
+            };
+            position.piece_at_sq(cap_sq).type_of()
+        } else {
+            position.piece_at_sq(self.dest).type_of()
+        };
+
         UndoableMove {
             orig: self.orig,
             dest: self.dest,
             promo_piece_type: self.promo_piece_type,
-            captured: position.piece_at_sq(self.dest).type_of(),
+            captured: captured,
             special_move: self.special_move,
             prev_castling_rights: position.castling_rights,
             prev_ep_square: position.ep_square,
             prev_half_move_clock: position.half_move_clock,
+            // TODO: deal with this unwrap(). Maybe we just need to stop making `state` be an `Option` in `Position`
+            state: position.state.unwrap(),
+        }
+    }
+
+    /// Returns a string containing the uci encoding of this move.
+    ///
+    /// E.g. 'e2e4'
+    pub fn to_uci_string(&self) -> String {
+        if let Some(promo_piece) = self.promo_piece_type {
+            format!("{}{}{:1}", self.orig, self.dest, promo_piece)
+        } else {
+            format!("{}{}", self.orig, self.dest)
         }
     }
 }
 
 impl fmt::Display for Move {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(promo_piece) = self.promo_piece_type {
-            write!(f, "{}{}{:1}", self.orig, self.dest, promo_piece)
-        } else {
-            write!(f, "{}{}", self.orig, self.dest)
-        }
+        write!(f, "{}", self.to_uci_string())
     }
 }
 
@@ -143,7 +164,7 @@ impl fmt::Display for Move {
 /// `Position`. This struct contains more data (like captured piece and
 /// previous castling rights) than a basic `Move` struct. This is 16 bytes
 /// in size, and is only used for undoing moves to save space.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct UndoableMove {
     pub orig: Square,
     pub dest: Square,
@@ -153,6 +174,7 @@ pub struct UndoableMove {
     pub prev_castling_rights: CastlingRights,
     pub prev_ep_square: Option<Square>,
     pub prev_half_move_clock: u32,
+    pub state: State,
 }
 
 impl UndoableMove {
@@ -183,6 +205,23 @@ impl UndoableMove {
             self.promo_piece_type.is_none()
         });
         self.special_move == SpecialMove::Promotion
+    }
+
+    /// Returns a string containing the uci encoding of this move.
+    ///
+    /// E.g. 'e2e4'
+    pub fn to_uci_string(&self) -> String {
+        if let Some(promo_piece) = self.promo_piece_type {
+            format!("{}{}{:1}", self.orig, self.dest, promo_piece)
+        } else {
+            format!("{}{}", self.orig, self.dest)
+        }
+    }
+}
+
+impl fmt::Display for UndoableMove {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.to_uci_string())
     }
 }
 

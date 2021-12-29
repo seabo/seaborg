@@ -11,7 +11,7 @@ use crate::masks::PLAYER_CNT;
 
 use std::fmt;
 
-#[derive(Clone)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct State {
     /// A `Bitboard` containing the pieces which are currently checking
     /// the player to move.

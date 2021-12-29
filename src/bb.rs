@@ -5,7 +5,7 @@ use crate::position::Square;
 use std::fmt;
 use std::ops::*;
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(transparent)]
 pub struct Bitboard(pub u64);
 
@@ -70,6 +70,8 @@ impl Bitboard {
     /// Returns the number of trailing zeros in the `Bitboard`. In the case where
     /// this is not 64 (ie the `Bitboard` is not empty), the return value of this
     /// function represents the index of the lowest set bit.
+    // TODO: change this to return a `Square`. May need to be a panicking and
+    // non-panicking version.
     #[inline(always)]
     pub fn bsf(&self) -> u32 {
         self.0.trailing_zeros()
@@ -105,6 +107,32 @@ impl Bitboard {
     pub fn to_square(&self) -> Square {
         assert!(self.popcnt() == 1);
         Square(self.bsf() as u8)
+    }
+
+    /// Returns the `Square` and `Bitboard` of the least significant bit and removes
+    /// that bit from the `Bitboard`.
+    ///
+    /// # Safety
+    ///
+    /// Panics if the `Bitboard` is empty. See [`Bitboard::pop_some_lsb_and_bit`] for a
+    /// non-panicking version of the method.
+    #[inline(always)]
+    pub fn pop_lsb_and_bit(&mut self) -> (Square, Bitboard) {
+        let sq: Square = Square(self.bsf() as u8);
+        *self &= *self - 1;
+        (sq, sq.to_bb())
+    }
+
+    /// Returns the `Square` and `Bitboard` of the least significant bit and removes
+    /// that bit from the `Bitboard`. If there are no bits left (the board is empty), returns
+    /// `None`.
+    #[inline(always)]
+    pub fn pop_some_lsb_and_bit(&mut self) -> Option<(Square, Bitboard)> {
+        if self.is_empty() {
+            None
+        } else {
+            Some(self.pop_lsb_and_bit())
+        }
     }
 }
 

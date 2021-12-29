@@ -1,7 +1,7 @@
 use crate::position::Square;
 use std::fmt;
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct CastlingRights {
     pub white_queenside: bool,
     pub white_kingside: bool,
@@ -63,9 +63,9 @@ impl CastlingRights {
         new_castling_rights.white_kingside =
             self.white_kingside && (from != Square::E1) && (from != Square::H1);
         new_castling_rights.black_queenside =
-            self.black_queenside && (from != Square::E8) && (from != Square::A1);
+            self.black_queenside && (from != Square::E8) && (from != Square::A8);
         new_castling_rights.black_kingside =
-            self.black_kingside && (from != Square::E8) && (from != Square::H1);
+            self.black_kingside && (from != Square::E8) && (from != Square::H8);
 
         new_castling_rights
     }

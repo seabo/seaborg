@@ -8,7 +8,7 @@ mod state;
 use crate::bb::Bitboard;
 use crate::masks::{CASTLING_PATH, CASTLING_ROOK_START, FILE_BB, RANK_BB};
 use crate::mov::{Move, SpecialMove, UndoableMove};
-use crate::movegen::{bishop_moves, rook_moves};
+use crate::movegen::{bishop_moves, rook_moves, MoveGen};
 use crate::precalc::boards::{aligned, between_bb, king_moves, knight_moves, pawn_attacks_from};
 
 pub use board::Board;
@@ -80,7 +80,7 @@ impl fmt::Display for Player {
 }
 
 // TODO: turn off pub for all the `Position` fields and provide getters
-#[derive(Clone)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct Position {
     // Array of pieces
     pub(crate) board: Board,
@@ -141,6 +141,10 @@ impl Position {
         self.state = Some(State::from_position(&self));
     }
 
+    pub fn history(&self) -> &Vec<UndoableMove> {
+        &self.history
+    }
+
     /// Make a move on the Board and update the `Position`.
     ///
     /// # Panics
@@ -154,6 +158,9 @@ impl Position {
         // Add an undoable move to the position history
         let undoable_move = mov.to_undoable(&self);
         self.history.push(undoable_move);
+
+        // Reset the en passant square
+        self.ep_square = None;
 
         let us = self.turn();
         let them = !us;
@@ -269,7 +276,6 @@ impl Position {
 
             if undoable_move.is_castle() {
                 self.undo_castling(us, orig, dest);
-                self.castling_rights = undoable_move.prev_castling_rights;
             } else {
                 self.move_piece_c(piece_on, dest, orig);
                 let captured_piece = undoable_move.captured;
@@ -284,9 +290,15 @@ impl Position {
                     self.put_piece_c(Piece::make(!us, captured_piece), cap_sq);
                 }
             }
-
             self.half_move_clock = undoable_move.prev_half_move_clock;
             self.ep_square = undoable_move.prev_ep_square;
+            self.castling_rights = undoable_move.prev_castling_rights;
+            self.state = Some(undoable_move.state);
+
+            if us == Player::Black {
+                // unmaking a Black move, so decrement the whole move counter
+                self.move_number -= 1;
+            }
 
             Some(undoable_move)
         } else {
@@ -354,6 +366,24 @@ impl Position {
 
         self.move_piece_c(Piece::make(player, PieceType::King), k_dest, k_orig);
         self.move_piece_c(Piece::make(player, PieceType::Rook), r_dest, r_orig);
+    }
+
+    /// Makes the given uci move on the board if it's legal.
+    ///
+    /// Returns `true` if the move was legal and successfully applied on the board,
+    /// otherwise `false`.
+    pub fn make_uci_move(&mut self, uci: &str) -> Option<Move> {
+        let moves = MoveGen::generate_legal(&self);
+
+        for mov in moves {
+            let uci_mov = mov.to_uci_string();
+            if uci == uci_mov {
+                self.make_move(mov);
+                return Some(mov);
+            }
+        }
+
+        return None;
     }
 
     /// Moves a piece on the board for a given player from square `from`
@@ -552,6 +582,12 @@ impl Position {
     }
 
     // CHECKING
+    /// Returns if current side to move is in check.
+    #[inline(always)]
+    pub fn in_check(&self) -> bool {
+        // TODO: do something better with the unwrap
+        self.state.as_ref().unwrap().checkers.is_not_empty()
+    }
 
     /// Returns a `Bitboard` of possible attacks to a square with a given occupancy.
     /// Includes pieces from both players.
@@ -703,6 +739,13 @@ impl Position {
         self.ep_square
     }
 
+    /// Returns the checkers `Bitboard` for the current position.
+    #[inline]
+    pub fn checkers(&self) -> Bitboard {
+        // TODO: deal with the unwrap somehow
+        self.state.as_ref().unwrap().checkers
+    }
+
     /// Check if the castle path is impeded for the current player. Does not assume
     /// the current player has the ability to castle, whether by having castling-rights
     /// or having the rook and king be on the correct squares. Also does not check legality
@@ -761,7 +804,6 @@ impl Position {
     /// of castling through check is already dealt with in movegen.
     pub fn legal_move(&self, mov: Move) -> bool {
         if mov.is_none() || mov.is_null() {
-            println!("here");
             return false;
         }
 
@@ -845,10 +887,16 @@ impl fmt::Debug for Position {
         writeln!(f, "STATE\n=====\n")?;
 
         if let Some(state) = &self.state {
-            writeln!(f, "{}", state)
+            writeln!(f, "{}", state)?;
         } else {
-            writeln!(f, "None")
+            writeln!(f, "None")?;
         }
+        writeln!(f)?;
+        writeln!(f, "HISTORY\n=======")?;
+        for mov in &self.history {
+            write!(f, "{} ", mov)?;
+        }
+        writeln!(f)
     }
 }
 
