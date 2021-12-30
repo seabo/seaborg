@@ -28,12 +28,12 @@ impl PRNG {
         s
     }
 
-    /// Returns a u64 with exactly one bit set in a random location.
-    pub fn singular_bit(&mut self) -> u64 {
-        let arr: [u8; 8] = unsafe { std::mem::transmute(self.rand() ^ self.rand()) };
-        let byte: u8 = arr.iter().fold(0, |acc, &x| acc ^ x);
-        (1u64).wrapping_shl(((byte) >> 2) as u32)
-    }
+    // /// Returns a u64 with exactly one bit set in a random location.
+    // pub fn singular_bit(&mut self) -> u64 {
+    //     let arr: [u8; 8] = unsafe { std::mem::transmute(self.rand() ^ self.rand()) };
+    //     let byte: u8 = arr.iter().fold(0, |acc, &x| acc ^ x);
+    //     (1u64).wrapping_shl(((byte) >> 2) as u32)
+    // }
 
     /// Randomizes the current seed and returns a random value.
     fn rand_change(&mut self) -> u64 {

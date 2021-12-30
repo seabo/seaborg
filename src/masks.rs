@@ -74,16 +74,6 @@ pub const CASTLING_PATH_BLACK_Q_SIDE: u64 = (1 as u64) << Square::B8.0 as u32
     | (1 as u64) << Square::C8.0 as u32
     | (1 as u64) << Square::D8.0 as u32;
 
-/// Array for the bits representing the castling path for a white castle, indexed
-/// per the side available (king-side, queen-side).
-pub static CASTLING_PATH_WHITE: [u64; CASTLING_SIDES] =
-    [CASTLING_PATH_WHITE_K_SIDE, CASTLING_PATH_WHITE_Q_SIDE];
-
-/// Array for the bits representing the castling path for a white castle, indexed
-/// per the side available (king-side, queen-side).
-pub static CASTLING_PATH_BLACK: [u64; CASTLING_SIDES] =
-    [CASTLING_PATH_BLACK_K_SIDE, CASTLING_PATH_BLACK_Q_SIDE];
-
 /// Array for the bits representing the castling path for castle, indexed
 /// per the side available (king-side, queen-side), as well as indexed per player.
 pub static CASTLING_PATH: [[u64; CASTLING_SIDES]; PLAYER_CNT] = [
@@ -99,15 +89,6 @@ pub const ROOK_BLACK_QSIDE_START: u8 = 56;
 pub const ROOK_WHITE_KSIDE_START: u8 = 7;
 /// Starting square number of the white queen-side rook.
 pub const ROOK_WHITE_QSIDE_START: u8 = 0;
-
-/// Castling right bit representing the white king-side castle is still possible.
-pub const C_WHITE_K_MASK: u8 = 0b0000_1000;
-/// Castling right bit representing the white queen-side castle is still possible.
-pub const C_WHITE_Q_MASK: u8 = 0b0000_0100;
-/// Castling right bit representing the black king-side castle is still possible.
-pub const C_BLACK_K_MASK: u8 = 0b0000_0010;
-/// Castling right bit representing the black queen-side castle is still possible.
-pub const C_BLACK_Q_MASK: u8 = 0b0000_0001;
 
 /// Array containing all the starting rook positions for each side, for each player.
 pub static CASTLING_ROOK_START: [[u8; CASTLING_SIDES]; PLAYER_CNT] = [

@@ -158,12 +158,11 @@ where
     }
 
     fn generate_pawn_moves<PL: PlayerTrait>(&mut self, target: Bitboard) {
-        let (rank_8, rank_7, rank_3): (Bitboard, Bitboard, Bitboard) =
-            if PL::player() == Player::White {
-                (Bitboard::RANK_8, Bitboard::RANK_7, Bitboard::RANK_3)
-            } else {
-                (Bitboard::RANK_1, Bitboard::RANK_2, Bitboard::RANK_6)
-            };
+        let (rank_7, rank_3): (Bitboard, Bitboard) = if PL::player() == Player::White {
+            (Bitboard::RANK_7, Bitboard::RANK_3)
+        } else {
+            (Bitboard::RANK_2, Bitboard::RANK_6)
+        };
 
         let all_pawns = self.position.piece_bb(PL::player(), PieceType::Pawn);
 

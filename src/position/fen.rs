@@ -2,8 +2,6 @@ use super::{Board, CastlingRights, Piece, Player, Position, Square, State};
 
 use crate::bb::Bitboard;
 
-use std::fmt;
-
 pub const START_POSITION: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
 #[derive(Debug)]

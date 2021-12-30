@@ -16,7 +16,7 @@ pub struct PerftData {
 
 impl fmt::Display for PerftData {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f);
+        writeln!(f)?;
         writeln!(f, "Nodes: {}", self.nodes.separated_string())?;
         writeln!(f, "Ep: {}", self.en_passant.separated_string())?;
         writeln!(

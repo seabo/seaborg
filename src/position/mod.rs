@@ -59,7 +59,7 @@ impl Player {
     /// a given rank as seen from the `Player`s perspective.
     #[inline(always)]
     pub fn relative_rank(&self, rank: u8) -> u8 {
-        debug_assert!(rank >= 0 && rank <= 7);
+        debug_assert!(rank <= 7);
         match self {
             Player::White => rank,
             Player::Black => 7 - rank,
