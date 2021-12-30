@@ -237,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn undoable_move_is_16_bytes() {
-        assert_eq!(mem::size_of::<UndoableMove>(), 16);
+    fn undoable_move_is_56_bytes() {
+        assert_eq!(mem::size_of::<UndoableMove>(), 56);
     }
 }
