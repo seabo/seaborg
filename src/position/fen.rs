@@ -62,7 +62,7 @@ impl Position {
             black_pieces: bbs[14],
             white_piece_count: bbs[13].popcnt() as u8,
             black_piece_count: bbs[14].popcnt() as u8,
-            state: None,
+            state: State::blank(), // Temporary. The real `State` is generated below.
             history: Vec::new(),
         };
 

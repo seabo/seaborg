@@ -1,5 +1,4 @@
 use crate::position::{CastlingRights, PieceType, Player, Position, Square, State};
-use crate::precalc::boards;
 use std::fmt;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -138,7 +137,7 @@ impl Move {
             prev_ep_square: position.ep_square,
             prev_half_move_clock: position.half_move_clock,
             // TODO: deal with this unwrap(). Maybe we just need to stop making `state` be an `Option` in `Position`
-            state: position.state.unwrap(),
+            state: position.state,
         }
     }
 

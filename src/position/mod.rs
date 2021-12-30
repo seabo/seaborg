@@ -127,7 +127,7 @@ pub struct Position {
     // `State` struct stores other useful information for fast access
     // TODO: Pleco wraps this in an Arc for quick copying of states without
     // copying memory. Do we need that?
-    pub(crate) state: Option<State>,
+    pub(crate) state: State,
 
     /// History stores a `Vec` of `UndoableMove`s, allowing the `Position` to
     /// be rolled back with `unmake_move()`.
@@ -138,7 +138,7 @@ impl Position {
     /// Sets the `State` struct for the current position. Should only be called
     /// when initialising a new `Position`.
     pub fn set_state(&mut self) {
-        self.state = Some(State::from_position(&self));
+        self.state = State::from_position(&self);
     }
 
     pub fn history(&self) -> &Vec<UndoableMove> {
@@ -251,7 +251,7 @@ impl Position {
 
         // Update "invisible" state
         self.turn = them;
-        self.state = Some(State::from_position(&self));
+        self.state = State::from_position(&self);
     }
 
     /// Unmake the most recent move, returning the `Position` to the previous state.
@@ -293,7 +293,7 @@ impl Position {
             self.half_move_clock = undoable_move.prev_half_move_clock;
             self.ep_square = undoable_move.prev_ep_square;
             self.castling_rights = undoable_move.prev_castling_rights;
-            self.state = Some(undoable_move.state);
+            self.state = undoable_move.state;
 
             if us == Player::Black {
                 // unmaking a Black move, so decrement the whole move counter
@@ -586,7 +586,7 @@ impl Position {
     #[inline(always)]
     pub fn in_check(&self) -> bool {
         // TODO: do something better with the unwrap
-        self.state.as_ref().unwrap().checkers.is_not_empty()
+        self.state.checkers.is_not_empty()
     }
 
     /// Returns a `Bitboard` of possible attacks to a square with a given occupancy.
@@ -742,8 +742,7 @@ impl Position {
     /// Returns the checkers `Bitboard` for the current position.
     #[inline]
     pub fn checkers(&self) -> Bitboard {
-        // TODO: deal with the unwrap somehow
-        self.state.as_ref().unwrap().checkers
+        self.state.checkers
     }
 
     /// Check if the castle path is impeded for the current player. Does not assume
@@ -790,11 +789,7 @@ impl Position {
     /// Pinned is defined as pinned to the same players king
     #[inline(always)]
     pub fn pinned_pieces(&self, player: Player) -> Bitboard {
-        self.state
-            .as_ref()
-            .expect("tried to check state when it was not set")
-            .blockers[player as usize]
-            & self.get_occupied_player(player)
+        self.state.blockers[player as usize] & self.get_occupied_player(player)
     }
 
     // MOVE TESTING
@@ -888,11 +883,7 @@ impl fmt::Debug for Position {
         writeln!(f)?;
         writeln!(f, "STATE\n=====\n")?;
 
-        if let Some(state) = &self.state {
-            writeln!(f, "{}", state)?;
-        } else {
-            writeln!(f, "None")?;
-        }
+        writeln!(f, "{}", self.state)?;
         writeln!(f)?;
         writeln!(f, "HISTORY\n=======")?;
         for mov in &self.history {
