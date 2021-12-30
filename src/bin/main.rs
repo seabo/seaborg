@@ -45,7 +45,7 @@ fn main() {
             // pos.make_uci_move("e7e6");
             // pos.make_uci_move("c1g5");
             //============
-            let depth = 6;
+            let depth = 7;
             let now = Instant::now();
             let nodes = divide(pos, depth);
             let elapsed = now.elapsed().as_micros();
