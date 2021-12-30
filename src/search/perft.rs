@@ -12,6 +12,7 @@ pub struct PerftData {
     pub captures: usize,
     pub en_passant: usize,
     pub castles: usize,
+    pub promotions: usize,
 }
 
 impl fmt::Display for PerftData {
@@ -24,7 +25,8 @@ impl fmt::Display for PerftData {
             "Captures: {}",
             (self.captures + self.en_passant).separated_string()
         )?;
-        writeln!(f, "Castles: {}", self.castles.separated_string())
+        writeln!(f, "Castles: {}", self.castles.separated_string())?;
+        writeln!(f, "Promotions: {}", self.promotions.separated_string())
     }
 }
 
@@ -35,6 +37,7 @@ impl PerftData {
             captures: 0,
             en_passant: 0,
             castles: 0,
+            promotions: 0,
         }
     }
 }
@@ -120,6 +123,10 @@ impl<'a> Perft<'a> {
         if mov.is_castle() {
             self.data.castles += 1;
         }
+
+        if mov.is_promo() {
+            self.data.promotions += 1;
+        }
     }
 
     #[inline(always)]
@@ -136,5 +143,6 @@ impl std::ops::AddAssign<&PerftData> for PerftData {
         self.captures += rhs.captures;
         self.en_passant += rhs.en_passant;
         self.castles += rhs.castles;
+        self.castles += rhs.promotions;
     }
 }

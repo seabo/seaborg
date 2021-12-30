@@ -111,6 +111,8 @@ pub struct Position {
     // `State` struct stores other useful information for fast access
     // TODO: Pleco wraps this in an Arc for quick copying of states without
     // copying memory. Do we need that?
+    // TODO: This probably needs a better name since it really just has info
+    // on pins, checks and blocks.
     pub(crate) state: State,
 
     /// History stores a `Vec` of `UndoableMove`s, allowing the `Position` to
