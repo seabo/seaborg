@@ -3,19 +3,19 @@ use std::fmt;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Piece {
-    None,
-    WhitePawn,
-    WhiteKnight,
-    WhiteBishop,
-    WhiteRook,
-    WhiteQueen,
-    WhiteKing,
-    BlackPawn,
-    BlackKnight,
-    BlackBishop,
-    BlackRook,
-    BlackQueen,
-    BlackKing,
+    None = 0,
+    WhitePawn = 1,
+    WhiteKnight = 2,
+    WhiteBishop = 3,
+    WhiteRook = 4,
+    WhiteQueen = 5,
+    WhiteKing = 6,
+    BlackPawn = 7,
+    BlackKnight = 8,
+    BlackBishop = 9,
+    BlackRook = 10,
+    BlackQueen = 11,
+    BlackKing = 12,
 }
 
 impl Piece {
@@ -95,13 +95,13 @@ impl Piece {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum PieceType {
-    None,
-    Pawn,
-    Knight,
-    Bishop,
-    Rook,
-    Queen,
-    King,
+    None = 0,
+    Pawn = 1,
+    Knight = 2,
+    Bishop = 3,
+    Rook = 4,
+    Queen = 5,
+    King = 6,
 }
 
 pub const PROMO_PIECES: [PieceType; 4] = [

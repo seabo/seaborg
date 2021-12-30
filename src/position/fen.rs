@@ -31,7 +31,7 @@ impl Position {
         let [piece_positions, side_to_move, castling_rights, ep_square, half_move_clock, move_number] =
             Self::split_fen_fields(fen)?;
 
-        let (bbs, board) = Self::parse_piece_position_string(piece_positions)?;
+        let (bbs, player_occ, board) = Self::parse_piece_position_string(piece_positions)?;
         let turn = Self::parse_side_to_move(side_to_move)?;
         let castling_rights = Self::parse_castling_rights(castling_rights)?;
         let ep_square = Self::parse_ep_square(ep_square)?;
@@ -45,21 +45,9 @@ impl Position {
             ep_square,
             half_move_clock,
             move_number,
-            no_piece: bbs[0],
-            white_pawns: bbs[1],
-            white_knights: bbs[2],
-            white_bishops: bbs[3],
-            white_rooks: bbs[4],
-            white_queens: bbs[5],
-            white_king: bbs[6],
-            black_pawns: bbs[7],
-            black_knights: bbs[8],
-            black_bishops: bbs[9],
-            black_rooks: bbs[10],
-            black_queens: bbs[11],
-            black_king: bbs[12],
-            player_occ: [bbs[13], bbs[14]],
-            piece_counts: [bbs[13].popcnt() as u8, bbs[14].popcnt() as u8],
+            bbs,
+            player_occ,
+            piece_counts: [player_occ[0].popcnt() as u8, player_occ[1].popcnt() as u8],
             state: State::blank(), // Temporary. The real `State` is generated below.
             history: Vec::new(),
         };
@@ -88,7 +76,7 @@ impl Position {
 
     pub fn parse_piece_position_string(
         piece_positions: &str,
-    ) -> Result<([Bitboard; 15], Board), FenError> {
+    ) -> Result<([Bitboard; 13], [Bitboard; 2], Board), FenError> {
         let mut board: [Piece; 64] = [Piece::None; 64];
         let mut white_pawns: Bitboard = Bitboard::new(0);
         let mut white_knights: Bitboard = Bitboard::new(0);
@@ -275,9 +263,8 @@ impl Position {
                 black_rooks,
                 black_queens,
                 black_king,
-                white_pieces,
-                black_pieces,
             ],
+            [white_pieces, black_pieces],
             Board::from_array(board),
         ))
     }

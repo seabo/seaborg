@@ -20,6 +20,9 @@ pub use state::State;
 use std::fmt;
 use std::ops::Not;
 
+/// The number of piece types including color on a chess board. Includes `Piece::None`.
+pub const PIECE_TYPE_CNT: usize = 13;
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Player {
     White = 0,
@@ -86,33 +89,11 @@ pub struct Position {
     pub(crate) board: Board,
 
     // Bitboards for each piece type
-    // TODO: should we switch to a scheme where the bitboards give all of each piece type
-    // (i.e. white pawns and black pawns are all on one bitboard), and then we have a
-    // white_pieces bb and black_pieces bb maintained separately? To get white_pawns, you would
-    // do (pawns & white_pieces)
-    // TODO: rename `no_piece` to `no_pieces` for consistency
-    pub(crate) no_piece: Bitboard,
-    pub(crate) white_pawns: Bitboard,
-    pub(crate) white_knights: Bitboard,
-    pub(crate) white_bishops: Bitboard,
-    pub(crate) white_rooks: Bitboard,
-    pub(crate) white_queens: Bitboard,
-    pub(crate) white_king: Bitboard,
-    pub(crate) black_pawns: Bitboard,
-    pub(crate) black_knights: Bitboard,
-    pub(crate) black_bishops: Bitboard,
-    pub(crate) black_rooks: Bitboard,
-    pub(crate) black_queens: Bitboard,
-    pub(crate) black_king: Bitboard,
-    // Bitboards for each color
+    pub(crate) bbs: [Bitboard; PIECE_TYPE_CNT],
     pub(crate) player_occ: [Bitboard; PLAYER_CNT],
-    // pub(crate) white_pieces: Bitboard,
-    // pub(crate) black_pieces: Bitboard,
 
     // Piece counts
     pub(crate) piece_counts: [u8; PLAYER_CNT],
-    // pub(crate) white_piece_count: u8,
-    // pub(crate) black_piece_count: u8,
 
     // "Invisible" state
     turn: Player,
@@ -398,47 +379,8 @@ impl Position {
         debug_assert_ne!(from, to);
         let comb_bb: Bitboard = from.to_bb() | to.to_bb();
         let (player, piece_ty) = piece.player_piece();
-        self.no_piece ^= comb_bb;
-
-        match piece {
-            Piece::None => {}
-            Piece::WhitePawn => {
-                self.white_pawns ^= comb_bb;
-            }
-            Piece::WhiteKnight => {
-                self.white_knights ^= comb_bb;
-            }
-            Piece::WhiteBishop => {
-                self.white_bishops ^= comb_bb;
-            }
-            Piece::WhiteRook => {
-                self.white_rooks ^= comb_bb;
-            }
-            Piece::WhiteQueen => {
-                self.white_queens ^= comb_bb;
-            }
-            Piece::WhiteKing => {
-                self.white_king ^= comb_bb;
-            }
-            Piece::BlackPawn => {
-                self.black_pawns ^= comb_bb;
-            }
-            Piece::BlackKnight => {
-                self.black_knights ^= comb_bb;
-            }
-            Piece::BlackBishop => {
-                self.black_bishops ^= comb_bb;
-            }
-            Piece::BlackRook => {
-                self.black_rooks ^= comb_bb;
-            }
-            Piece::BlackQueen => {
-                self.black_queens ^= comb_bb;
-            }
-            Piece::BlackKing => {
-                self.black_king ^= comb_bb;
-            }
-        }
+        self.bbs[Piece::None as usize] ^= comb_bb;
+        self.bbs[piece as usize] ^= comb_bb;
 
         self.player_occ[player as usize] ^= comb_bb;
 
@@ -453,50 +395,11 @@ impl Position {
     /// In debug mode, panics if there is not a `piece` at the given square.
     fn remove_piece_c(&mut self, piece: Piece, square: Square) {
         debug_assert_eq!(self.piece_at_sq(square), piece);
-        let (player, piece_ty) = piece.player_piece();
+        let player = piece.player();
         let bb = square.to_bb();
-        self.no_piece ^= bb;
 
-        // TODO: factor this out into a function. The same thing is being done in `move_piece_c`
-        match piece {
-            Piece::None => {}
-            Piece::WhitePawn => {
-                self.white_pawns ^= bb;
-            }
-            Piece::WhiteKnight => {
-                self.white_knights ^= bb;
-            }
-            Piece::WhiteBishop => {
-                self.white_bishops ^= bb;
-            }
-            Piece::WhiteRook => {
-                self.white_rooks ^= bb;
-            }
-            Piece::WhiteQueen => {
-                self.white_queens ^= bb;
-            }
-            Piece::WhiteKing => {
-                self.white_king ^= bb;
-            }
-            Piece::BlackPawn => {
-                self.black_pawns ^= bb;
-            }
-            Piece::BlackKnight => {
-                self.black_knights ^= bb;
-            }
-            Piece::BlackBishop => {
-                self.black_bishops ^= bb;
-            }
-            Piece::BlackRook => {
-                self.black_rooks ^= bb;
-            }
-            Piece::BlackQueen => {
-                self.black_queens ^= bb;
-            }
-            Piece::BlackKing => {
-                self.black_king ^= bb;
-            }
-        }
+        self.bbs[Piece::None as usize] ^= bb;
+        self.bbs[piece as usize] ^= bb;
 
         self.player_occ[player as usize] ^= bb;
         self.piece_counts[player as usize] -= 1;
@@ -514,49 +417,8 @@ impl Position {
 
         let bb = square.to_bb();
         let (player, piece_ty) = piece.player_piece();
-        self.no_piece ^= bb;
-
-        // TODO: factor this out into a function. The same thing is being done in `move_piece_c`
-        match piece {
-            Piece::None => {}
-            Piece::WhitePawn => {
-                self.white_pawns ^= bb;
-            }
-            Piece::WhiteKnight => {
-                self.white_knights ^= bb;
-            }
-            Piece::WhiteBishop => {
-                self.white_bishops ^= bb;
-            }
-            Piece::WhiteRook => {
-                self.white_rooks ^= bb;
-            }
-            Piece::WhiteQueen => {
-                self.white_queens ^= bb;
-            }
-            Piece::WhiteKing => {
-                self.white_king ^= bb;
-            }
-            Piece::BlackPawn => {
-                self.black_pawns ^= bb;
-            }
-            Piece::BlackKnight => {
-                self.black_knights ^= bb;
-            }
-            Piece::BlackBishop => {
-                self.black_bishops ^= bb;
-            }
-            Piece::BlackRook => {
-                self.black_rooks ^= bb;
-            }
-            Piece::BlackQueen => {
-                self.black_queens ^= bb;
-            }
-            Piece::BlackKing => {
-                self.black_king ^= bb;
-            }
-        }
-
+        self.bbs[Piece::None as usize] ^= bb;
+        self.bbs[piece as usize] ^= bb;
         self.player_occ[player as usize] ^= bb;
         self.piece_counts[player as usize] += 1;
 
@@ -567,7 +429,6 @@ impl Position {
     /// Returns if current side to move is in check.
     #[inline(always)]
     pub fn in_check(&self) -> bool {
-        // TODO: do something better with the unwrap
         self.state.checkers.is_not_empty()
     }
 
@@ -581,10 +442,10 @@ impl Position {
                 & self.piece_bb(Player::Black, PieceType::Pawn)
             | (knight_moves(sq) & self.piece_bb_both_players(PieceType::Knight))
             | (rook_moves(occupied, sq)
-                & (self.white_rooks | self.black_rooks | self.white_queens | self.black_queens))
+                & (self.piece_two_bb_both_players(PieceType::Rook, PieceType::Queen)))
             | (bishop_moves(occupied, sq)
-                & (self.white_bishops | self.black_bishops | self.white_queens | self.black_queens))
-            | (king_moves(sq) & (self.white_king | self.black_king))
+                & (self.piece_two_bb_both_players(PieceType::Bishop, PieceType::Queen)))
+            | (king_moves(sq) & (self.piece_bb_both_players(PieceType::King)))
     }
 
     #[inline]
@@ -594,7 +455,7 @@ impl Position {
 
     #[inline]
     pub fn occupied(&self) -> Bitboard {
-        !self.no_piece
+        !self.bbs[Piece::None as usize]
     }
 
     #[inline]
@@ -641,26 +502,8 @@ impl Position {
 
     #[inline]
     pub fn piece_bb(&self, player: Player, piece_type: PieceType) -> Bitboard {
-        match player {
-            Player::White => match piece_type {
-                PieceType::None => Bitboard::ALL,
-                PieceType::Pawn => self.white_pawns,
-                PieceType::Knight => self.white_knights,
-                PieceType::Bishop => self.white_bishops,
-                PieceType::Rook => self.white_rooks,
-                PieceType::Queen => self.white_queens,
-                PieceType::King => self.white_king,
-            },
-            Player::Black => match piece_type {
-                PieceType::None => Bitboard::ALL,
-                PieceType::Pawn => self.black_pawns,
-                PieceType::Knight => self.black_knights,
-                PieceType::Bishop => self.black_bishops,
-                PieceType::Rook => self.black_rooks,
-                PieceType::Queen => self.black_queens,
-                PieceType::King => self.black_king,
-            },
-        }
+        let idx = 6 * (player as usize) + (piece_type as usize);
+        self.bbs[idx]
     }
     /// Returns the Bitboard of the Queens and Rooks for a given player.
     #[inline(always)]
@@ -676,15 +519,7 @@ impl Position {
     /// Returns the combined BitBoard of both players for a given piece.
     #[inline(always)]
     pub fn piece_bb_both_players(&self, piece: PieceType) -> Bitboard {
-        match piece {
-            PieceType::None => Bitboard(0),
-            PieceType::Pawn => self.white_pawns | self.black_pawns,
-            PieceType::Knight => self.white_knights | self.black_knights,
-            PieceType::Bishop => self.white_bishops | self.black_bishops,
-            PieceType::Rook => self.white_rooks | self.black_rooks,
-            PieceType::Queen => self.white_queens | self.black_queens,
-            PieceType::King => self.white_king | self.black_king,
-        }
+        self.piece_bb(Player::White, piece) | self.piece_bb(Player::Black, piece)
     }
 
     #[inline]
@@ -822,19 +657,67 @@ impl fmt::Debug for Position {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "")?;
         writeln!(f, "BITBOARDS\n=========\n")?;
-        writeln!(f, "No Pieces:\n {}", self.no_piece)?;
-        writeln!(f, "White Pawns:\n {}", self.white_pawns)?;
-        writeln!(f, "White Knights:\n {}", self.white_knights)?;
-        writeln!(f, "White Bishops:\n {}", self.white_bishops)?;
-        writeln!(f, "White Rooks:\n {}", self.white_rooks)?;
-        writeln!(f, "White Queens:\n {}", self.white_queens)?;
-        writeln!(f, "White King:\n {}", self.white_king)?;
-        writeln!(f, "Black Pawns:\n {}", self.black_pawns)?;
-        writeln!(f, "Black Knights:\n {}", self.black_knights)?;
-        writeln!(f, "Black Bishops:\n {}", self.black_bishops)?;
-        writeln!(f, "Black Rooks:\n {}", self.black_rooks)?;
-        writeln!(f, "Black Queens:\n {}", self.black_queens)?;
-        writeln!(f, "Black King:\n {}", self.black_king)?;
+        writeln!(f, "No Pieces:\n {}", self.bbs[Piece::None as usize])?;
+        writeln!(
+            f,
+            "White Pawns:\n {}",
+            self.piece_bb(Player::White, PieceType::Pawn)
+        )?;
+        writeln!(
+            f,
+            "White Knights:\n {}",
+            self.piece_bb(Player::White, PieceType::Knight)
+        )?;
+        writeln!(
+            f,
+            "White Bishops:\n {}",
+            self.piece_bb(Player::White, PieceType::Bishop)
+        )?;
+        writeln!(
+            f,
+            "White Rooks:\n {}",
+            self.piece_bb(Player::White, PieceType::Rook)
+        )?;
+        writeln!(
+            f,
+            "White Queens:\n {}",
+            self.piece_bb(Player::White, PieceType::Queen)
+        )?;
+        writeln!(
+            f,
+            "White King:\n {}",
+            self.piece_bb(Player::White, PieceType::King)
+        )?;
+        writeln!(
+            f,
+            "Black Pawns:\n {}",
+            self.piece_bb(Player::Black, PieceType::Pawn)
+        )?;
+        writeln!(
+            f,
+            "Black Knights:\n {}",
+            self.piece_bb(Player::Black, PieceType::Knight)
+        )?;
+        writeln!(
+            f,
+            "Black Bishops:\n {}",
+            self.piece_bb(Player::Black, PieceType::Bishop)
+        )?;
+        writeln!(
+            f,
+            "Black Rooks:\n {}",
+            self.piece_bb(Player::Black, PieceType::Rook)
+        )?;
+        writeln!(
+            f,
+            "Black Queens:\n {}",
+            self.piece_bb(Player::Black, PieceType::Queen)
+        )?;
+        writeln!(
+            f,
+            "Black King:\n {}",
+            self.piece_bb(Player::Black, PieceType::King)
+        )?;
         writeln!(f, "White Pieces:\n {}", self.occupied_white())?;
         writeln!(f, "Black Pieces:\n {}", self.occupied_black())?;
 

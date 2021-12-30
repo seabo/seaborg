@@ -115,7 +115,6 @@ impl Move {
     }
 
     pub fn to_undoable(&self, position: &Position) -> UndoableMove {
-        debug_assert!(position.ep_square().is_some());
         let captured = if self.is_en_passant() {
             let us = position.turn();
             let cap_sq = match us {
