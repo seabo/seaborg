@@ -1,15 +1,16 @@
 use crate::position::{CastlingRights, PieceType, Player, Position, Square, State};
+use bitflags::bitflags;
 use std::fmt;
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[repr(u8)]
-pub enum SpecialMove {
-    Promotion,
-    EnPassant,
-    Castling,
-    Capture,
-    Quiet,
-    Null,
+bitflags! {
+    pub struct MoveType: u8 {
+        const PROMOTION = 0b000000001;
+        const EN_PASSANT = 0b000000010;
+        const CASTLE    = 0b000000100;
+        const CAPTURE   = 0b000001000;
+        const QUIET     = 0b000010000;
+        const NULL      = 0b000100000;
+    }
 }
 
 /// Struct used to store moves which are generated in movegen.
@@ -24,7 +25,7 @@ pub struct Move {
     orig: Square,
     dest: Square,
     promo_piece_type: Option<PieceType>,
-    special_move: SpecialMove,
+    ty: MoveType,
 }
 
 impl Move {
@@ -34,33 +35,38 @@ impl Move {
             orig: Square(64),
             dest: Square(64),
             promo_piece_type: None,
-            special_move: SpecialMove::Null,
+            ty: MoveType::NULL,
         }
     }
 
+    #[inline(always)]
     pub fn is_null(&self) -> bool {
-        self.special_move == SpecialMove::Null
+        self.ty.contains(MoveType::NULL)
     }
 
+    #[inline(always)]
     pub fn is_capture(&self) -> bool {
-        self.special_move == SpecialMove::Capture
+        self.ty.contains(MoveType::CAPTURE)
     }
 
+    #[inline(always)]
     pub fn is_en_passant(&self) -> bool {
-        self.special_move == SpecialMove::EnPassant
+        self.ty.contains(MoveType::EN_PASSANT)
     }
 
+    #[inline(always)]
     pub fn is_castle(&self) -> bool {
-        self.special_move == SpecialMove::Castling
+        self.ty.contains(MoveType::CASTLE)
     }
 
+    #[inline(always)]
     pub fn is_promo(&self) -> bool {
-        debug_assert!(if self.special_move == SpecialMove::Promotion {
+        debug_assert!(if self.ty.contains(MoveType::PROMOTION) {
             self.promo_piece_type.is_some()
         } else {
             self.promo_piece_type.is_none()
         });
-        self.special_move == SpecialMove::Promotion
+        self.ty.contains(MoveType::PROMOTION)
     }
 
     pub fn promo_piece_type(&self) -> Option<PieceType> {
@@ -68,8 +74,8 @@ impl Move {
     }
 
     /// Returns the type of move, according to the `SpecialMove` field.
-    pub fn move_type(&self) -> SpecialMove {
-        self.special_move
+    pub fn move_type(&self) -> MoveType {
+        self.ty
     }
 
     /// Builds a move from an origin square, destination square
@@ -84,23 +90,13 @@ impl Move {
         orig: Square,
         dest: Square,
         promo_piece_type: Option<PieceType>,
-        flag: SpecialMove,
+        ty: MoveType,
     ) -> Self {
-        // let mut special_move = SpecialMove::Quiet;
-
-        // if let Some(_) = promo_piece_type {
-        //     special_move = SpecialMove::Promotion;
-        // } else if is_ep {
-        //     special_move = SpecialMove::EnPassant;
-        // } else if is_castling {
-        //     special_move = SpecialMove::Castling;
-        // }
-
         Self {
             orig,
             dest,
             promo_piece_type,
-            special_move: flag,
+            ty,
         }
     }
 
@@ -129,7 +125,7 @@ impl Move {
             dest: self.dest,
             promo_piece_type: self.promo_piece_type,
             captured: captured,
-            special_move: self.special_move,
+            ty: self.ty,
             prev_castling_rights: position.castling_rights,
             prev_ep_square: position.ep_square,
             prev_half_move_clock: position.half_move_clock,
@@ -166,7 +162,7 @@ pub struct UndoableMove {
     pub dest: Square,
     pub promo_piece_type: Option<PieceType>,
     pub captured: PieceType,
-    pub special_move: SpecialMove,
+    pub ty: MoveType,
     pub prev_castling_rights: CastlingRights,
     pub prev_ep_square: Option<Square>,
     pub prev_half_move_clock: u32,
@@ -176,26 +172,26 @@ pub struct UndoableMove {
 impl UndoableMove {
     #[inline(always)]
     pub fn is_null(&self) -> bool {
-        self.special_move == SpecialMove::Null
+        self.ty.contains(MoveType::NULL)
     }
 
     #[inline(always)]
     pub fn is_en_passant(&self) -> bool {
-        self.special_move == SpecialMove::EnPassant
+        self.ty.contains(MoveType::EN_PASSANT)
     }
 
     #[inline(always)]
     pub fn is_castle(&self) -> bool {
-        self.special_move == SpecialMove::Castling
+        self.ty.contains(MoveType::CASTLE)
     }
 
     pub fn is_promo(&self) -> bool {
-        debug_assert!(if self.special_move == SpecialMove::Promotion {
+        debug_assert!(if self.ty.contains(MoveType::PROMOTION) {
             self.promo_piece_type.is_some()
         } else {
             self.promo_piece_type.is_none()
         });
-        self.special_move == SpecialMove::Promotion
+        self.ty.contains(MoveType::PROMOTION)
     }
 
     /// Returns a string containing the uci encoding of this move.

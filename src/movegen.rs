@@ -3,7 +3,7 @@ use crate::mono_traits::{
     BishopType, BlackType, KingType, KnightType, PieceTrait, PlayerTrait, QueenType, RookType,
     WhiteType,
 };
-use crate::mov::{Move, SpecialMove};
+use crate::mov::{Move, MoveType};
 use crate::movelist::{MVPushable, MoveList};
 use crate::position::{CastleType, PieceType, Player, Position, Square, PROMO_PIECES};
 use crate::precalc::boards::{between_bb, king_moves, knight_moves, line_bb, pawn_attacks_from};
@@ -129,8 +129,8 @@ where
         // Separate captures and non-captures
         let mut captures_bb = k_moves & self.them_occ;
         let mut non_captures_bb = k_moves & !self.them_occ;
-        self.move_append_from_bb_flag(&mut captures_bb, ksq, SpecialMove::Capture);
-        self.move_append_from_bb_flag(&mut non_captures_bb, ksq, SpecialMove::Quiet);
+        self.move_append_from_bb_flag(&mut captures_bb, ksq, MoveType::CAPTURE);
+        self.move_append_from_bb_flag(&mut non_captures_bb, ksq, MoveType::QUIET);
 
         // If there is only one checking square, we can block or capture the piece
         if !(self.position.checkers().more_than_one()) {
@@ -152,8 +152,8 @@ where
             let moves_bb: Bitboard = self.moves_bb::<P>(orig) & !self.us_occ & target;
             let mut captures_bb: Bitboard = moves_bb & self.them_occ;
             let mut non_captures_bb: Bitboard = moves_bb & !self.them_occ;
-            self.move_append_from_bb_flag(&mut captures_bb, orig, SpecialMove::Capture);
-            self.move_append_from_bb_flag(&mut non_captures_bb, orig, SpecialMove::Quiet);
+            self.move_append_from_bb_flag(&mut captures_bb, orig, MoveType::CAPTURE);
+            self.move_append_from_bb_flag(&mut non_captures_bb, orig, MoveType::QUIET);
         }
     }
 
@@ -185,12 +185,12 @@ where
 
         for dest in push_one {
             let orig = PL::down(dest);
-            self.add_move(Move::build(orig, dest, None, SpecialMove::Quiet));
+            self.add_move(Move::build(orig, dest, None, MoveType::QUIET));
         }
 
         for dest in push_two {
             let orig = PL::down(PL::down(dest));
-            self.add_move(Move::build(orig, dest, None, SpecialMove::Quiet));
+            self.add_move(Move::build(orig, dest, None, MoveType::QUIET));
         }
 
         // Promotions
@@ -201,17 +201,17 @@ where
 
             for dest in no_cap_promo {
                 let orig = PL::down(dest);
-                self.add_all_promo_moves(orig, dest);
+                self.add_all_promo_moves(orig, dest, false);
             }
 
             for dest in left_cap_promo {
                 let orig = PL::down_right(dest);
-                self.add_all_promo_moves(orig, dest);
+                self.add_all_promo_moves(orig, dest, true);
             }
 
             for dest in right_cap_promo {
                 let orig = PL::down_left(dest);
-                self.add_all_promo_moves(orig, dest);
+                self.add_all_promo_moves(orig, dest, true);
             }
         }
 
@@ -221,12 +221,12 @@ where
 
         for dest in left_cap {
             let orig = PL::down_right(dest);
-            self.add_move(Move::build(orig, dest, None, SpecialMove::Capture));
+            self.add_move(Move::build(orig, dest, None, MoveType::CAPTURE));
         }
 
         for dest in right_cap {
             let orig = PL::down_left(dest);
-            self.add_move(Move::build(orig, dest, None, SpecialMove::Capture));
+            self.add_move(Move::build(orig, dest, None, MoveType::CAPTURE));
         }
 
         if let Some(ep_square) = self.position.ep_square() {
@@ -237,7 +237,12 @@ where
                 pawns_not_rank_7 & Bitboard(pawn_attacks_from(ep_square, PL::opp_player()));
 
             for orig in ep_cap {
-                self.add_move(Move::build(orig, ep_square, None, SpecialMove::EnPassant));
+                self.add_move(Move::build(
+                    orig,
+                    ep_square,
+                    None,
+                    MoveType::EN_PASSANT | MoveType::CAPTURE,
+                ));
             }
         }
     }
@@ -283,7 +288,7 @@ where
                 s = direction(s);
             }
             if can_castle {
-                self.add_move(Move::build(ksq, k_to, None, SpecialMove::Castling));
+                self.add_move(Move::build(ksq, k_to, None, MoveType::CASTLE));
             }
         }
     }
@@ -305,17 +310,23 @@ where
     // TODO: make `Move` struct have a dedicated `SpecialMove` field, and introduce new enum
     // variants for 'capturing', 'quiet' etc.
     #[inline]
-    fn move_append_from_bb_flag(&mut self, bb: &mut Bitboard, orig: Square, flag: SpecialMove) {
+    fn move_append_from_bb_flag(&mut self, bb: &mut Bitboard, orig: Square, ty: MoveType) {
         for dest in bb {
-            let mov = Move::build(orig, dest, None, flag);
+            let mov = Move::build(orig, dest, None, ty);
             self.add_move(mov);
         }
     }
 
+    /// Add the four possible promo moves (`=N`, `=B`, `=R`, `=Q`)
     #[inline]
-    fn add_all_promo_moves(&mut self, orig: Square, dest: Square) {
+    fn add_all_promo_moves(&mut self, orig: Square, dest: Square, is_capture: bool) {
+        let move_ty = if is_capture {
+            MoveType::PROMOTION | MoveType::CAPTURE
+        } else {
+            MoveType::PROMOTION
+        };
         for piece in PROMO_PIECES {
-            self.add_move(Move::build(orig, dest, Some(piece), SpecialMove::Promotion));
+            self.add_move(Move::build(orig, dest, Some(piece), move_ty));
         }
     }
 

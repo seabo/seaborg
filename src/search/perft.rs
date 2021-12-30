@@ -20,11 +20,7 @@ impl fmt::Display for PerftData {
         writeln!(f)?;
         writeln!(f, "Nodes: {}", self.nodes.separated_string())?;
         writeln!(f, "Ep: {}", self.en_passant.separated_string())?;
-        writeln!(
-            f,
-            "Captures: {}",
-            (self.captures + self.en_passant).separated_string()
-        )?;
+        writeln!(f, "Captures: {}", self.captures.separated_string())?;
         writeln!(f, "Castles: {}", self.castles.separated_string())?;
         writeln!(f, "Promotions: {}", self.promotions.separated_string())
     }
@@ -143,6 +139,6 @@ impl std::ops::AddAssign<&PerftData> for PerftData {
         self.captures += rhs.captures;
         self.en_passant += rhs.en_passant;
         self.castles += rhs.castles;
-        self.castles += rhs.promotions;
+        self.promotions += rhs.promotions;
     }
 }

@@ -7,7 +7,7 @@ mod state;
 
 use crate::bb::Bitboard;
 use crate::masks::{CASTLING_PATH, CASTLING_ROOK_START, FILE_BB, PLAYER_CNT, RANK_BB};
-use crate::mov::{Move, SpecialMove, UndoableMove};
+use crate::mov::{Move, MoveType, UndoableMove};
 use crate::movegen::{bishop_moves, rook_moves, MoveGen};
 use crate::precalc::boards::{aligned, between_bb, king_moves, knight_moves, pawn_attacks_from};
 
@@ -625,7 +625,7 @@ impl Position {
         let dest = mov.dest();
 
         // En passant
-        if mov.move_type() == SpecialMove::EnPassant {
+        if mov.move_type().contains(MoveType::EN_PASSANT) {
             let ksq = self.king_sq(us);
             let dest_bb = dest.to_bb();
             let captured_sq = Square((dest.0 as i8).wrapping_sub(us.pawn_push()) as u8);
@@ -644,7 +644,7 @@ impl Position {
         // If moving the king, check if the destination square is not being attacked
         // Note: castling moves are already checked in movegen.
         if piece.type_of() == PieceType::King {
-            return mov.move_type() == SpecialMove::Castling
+            return mov.move_type().contains(MoveType::CASTLE)
                 || (self.attackers_to(dest, self.occupied()) & self.get_occupied_player(them))
                     .is_empty();
         }

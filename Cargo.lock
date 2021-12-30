@@ -407,6 +407,7 @@ dependencies = [
 name = "rchess"
 version = "0.1.0"
 dependencies = [
+ "bitflags",
  "bitintr",
  "criterion",
  "num_enum",
