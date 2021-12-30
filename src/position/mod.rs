@@ -6,7 +6,7 @@ mod square;
 mod state;
 
 use crate::bb::Bitboard;
-use crate::masks::{CASTLING_PATH, CASTLING_ROOK_START, FILE_BB, RANK_BB};
+use crate::masks::{CASTLING_PATH, CASTLING_ROOK_START, FILE_BB, PLAYER_CNT, RANK_BB};
 use crate::mov::{Move, SpecialMove, UndoableMove};
 use crate::movegen::{bishop_moves, rook_moves, MoveGen};
 use crate::precalc::boards::{aligned, between_bb, king_moves, knight_moves, pawn_attacks_from};
@@ -105,12 +105,14 @@ pub struct Position {
     pub(crate) black_queens: Bitboard,
     pub(crate) black_king: Bitboard,
     // Bitboards for each color
-    pub(crate) white_pieces: Bitboard,
-    pub(crate) black_pieces: Bitboard,
+    pub(crate) player_occ: [Bitboard; PLAYER_CNT],
+    // pub(crate) white_pieces: Bitboard,
+    // pub(crate) black_pieces: Bitboard,
 
     // Piece counts
-    pub(crate) white_piece_count: u8,
-    pub(crate) black_piece_count: u8,
+    pub(crate) piece_counts: [u8; PLAYER_CNT],
+    // pub(crate) white_piece_count: u8,
+    // pub(crate) black_piece_count: u8,
 
     // "Invisible" state
     turn: Player,
@@ -438,10 +440,7 @@ impl Position {
             }
         }
 
-        match player {
-            Player::White => self.white_pieces ^= comb_bb,
-            Player::Black => self.black_pieces ^= comb_bb,
-        }
+        self.player_occ[player as usize] ^= comb_bb;
 
         self.board.remove(from);
         self.board.place(to, player, piece_ty);
@@ -499,17 +498,8 @@ impl Position {
             }
         }
 
-        match player {
-            Player::White => {
-                self.white_pieces ^= bb;
-                self.white_piece_count -= 1;
-            }
-
-            Player::Black => {
-                self.black_pieces ^= bb;
-                self.black_piece_count -= 1;
-            }
-        }
+        self.player_occ[player as usize] ^= bb;
+        self.piece_counts[player as usize] -= 1;
 
         self.board.remove(square);
     }
@@ -567,17 +557,9 @@ impl Position {
             }
         }
 
-        match player {
-            Player::White => {
-                self.white_pieces ^= bb;
-                self.white_piece_count += 1;
-            }
+        self.player_occ[player as usize] ^= bb;
+        self.piece_counts[player as usize] += 1;
 
-            Player::Black => {
-                self.black_pieces ^= bb;
-                self.black_piece_count += 1;
-            }
-        }
         self.board.place(square, player, piece_ty);
     }
 
@@ -617,20 +599,17 @@ impl Position {
 
     #[inline]
     pub fn get_occupied_player(&self, player: Player) -> Bitboard {
-        match player {
-            Player::White => self.white_pieces,
-            Player::Black => self.black_pieces,
-        }
+        self.player_occ[player as usize]
     }
 
     #[inline]
     pub fn occupied_white(&self) -> Bitboard {
-        self.white_pieces
+        self.player_occ[Player::White as usize]
     }
 
     #[inline]
     pub fn occupied_black(&self) -> Bitboard {
-        self.black_pieces
+        self.player_occ[Player::Black as usize]
     }
 
     /// Outputs the blockers and pinners of a given square in a tuple `(blockers, pinners)`.
@@ -856,15 +835,15 @@ impl fmt::Debug for Position {
         writeln!(f, "Black Rooks:\n {}", self.black_rooks)?;
         writeln!(f, "Black Queens:\n {}", self.black_queens)?;
         writeln!(f, "Black King:\n {}", self.black_king)?;
-        writeln!(f, "White Pieces:\n {}", self.white_pieces)?;
-        writeln!(f, "Black Pieces:\n {}", self.black_pieces)?;
+        writeln!(f, "White Pieces:\n {}", self.occupied_white())?;
+        writeln!(f, "Black Pieces:\n {}", self.occupied_black())?;
 
         writeln!(f, "BOARD ARRAY\n===========\n")?;
         writeln!(f, "{}", self.board)?;
 
         writeln!(f, "PIECE COUNTS\n============\n")?;
-        writeln!(f, "White: {}", self.white_piece_count)?;
-        writeln!(f, "Black: {}", self.black_piece_count)?;
+        writeln!(f, "White: {}", self.piece_counts[Player::White as usize])?;
+        writeln!(f, "Black: {}", self.piece_counts[Player::Black as usize])?;
         writeln!(f)?;
 
         writeln!(f, "INVISIBLE STATE\n===============\n")?;

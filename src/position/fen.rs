@@ -58,10 +58,8 @@ impl Position {
             black_rooks: bbs[10],
             black_queens: bbs[11],
             black_king: bbs[12],
-            white_pieces: bbs[13],
-            black_pieces: bbs[14],
-            white_piece_count: bbs[13].popcnt() as u8,
-            black_piece_count: bbs[14].popcnt() as u8,
+            player_occ: [bbs[13], bbs[14]],
+            piece_counts: [bbs[13].popcnt() as u8, bbs[14].popcnt() as u8],
             state: State::blank(), // Temporary. The real `State` is generated below.
             history: Vec::new(),
         };
