@@ -186,12 +186,12 @@ where
 
         for dest in push_one {
             let orig = PL::down(dest);
-            self.add_move(Move::build(orig, dest, None, false, false));
+            self.add_move(Move::build(orig, dest, None, SpecialMove::Quiet));
         }
 
         for dest in push_two {
             let orig = PL::down(PL::down(dest));
-            self.add_move(Move::build(orig, dest, None, false, false));
+            self.add_move(Move::build(orig, dest, None, SpecialMove::Quiet));
         }
 
         // Promotions
@@ -222,12 +222,12 @@ where
 
         for dest in left_cap {
             let orig = PL::down_right(dest);
-            self.add_move(Move::build(orig, dest, None, false, false));
+            self.add_move(Move::build(orig, dest, None, SpecialMove::Capture));
         }
 
         for dest in right_cap {
             let orig = PL::down_left(dest);
-            self.add_move(Move::build(orig, dest, None, false, false));
+            self.add_move(Move::build(orig, dest, None, SpecialMove::Capture));
         }
 
         if let Some(ep_square) = self.position.ep_square() {
@@ -238,7 +238,7 @@ where
                 pawns_not_rank_7 & Bitboard(pawn_attacks_from(ep_square, PL::opp_player()));
 
             for orig in ep_cap {
-                self.add_move(Move::build(orig, ep_square, None, true, false));
+                self.add_move(Move::build(orig, ep_square, None, SpecialMove::EnPassant));
             }
         }
     }
@@ -284,7 +284,7 @@ where
                 s = direction(s);
             }
             if can_castle {
-                self.add_move(Move::build(ksq, k_to, None, false, true));
+                self.add_move(Move::build(ksq, k_to, None, SpecialMove::Castling));
             }
         }
     }
@@ -308,7 +308,7 @@ where
     #[inline]
     fn move_append_from_bb_flag(&mut self, bb: &mut Bitboard, orig: Square, flag: SpecialMove) {
         for dest in bb {
-            let mov = Move::build(orig, dest, None, false, false);
+            let mov = Move::build(orig, dest, None, flag);
             self.add_move(mov);
         }
     }
@@ -316,7 +316,7 @@ where
     #[inline]
     fn add_all_promo_moves(&mut self, orig: Square, dest: Square) {
         for piece in PROMO_PIECES {
-            self.add_move(Move::build(orig, dest, Some(piece), false, false));
+            self.add_move(Move::build(orig, dest, Some(piece), SpecialMove::Promotion));
         }
     }
 

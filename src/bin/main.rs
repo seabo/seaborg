@@ -1,7 +1,7 @@
 use rchess::position::Position;
 use rchess::precalc::boards::init_boards;
 use rchess::precalc::magic::{bishop_attacks, init_magics};
-use rchess::search::perft::divide;
+use rchess::search::perft::{divide, perft};
 
 use separator::Separatable;
 
@@ -47,12 +47,23 @@ fn main() {
             //============
             let depth = 7;
             let now = Instant::now();
-            let nodes = divide(pos, depth);
+            let perft_result = perft(pos, depth);
             let elapsed = now.elapsed().as_micros();
-            println!("{}us to calculate perft {}", elapsed, depth);
+            println!("Nodes: {}", perft_result.nodes.separated_string());
+            println!("Ep: {}", perft_result.en_passant.separated_string());
+            println!(
+                "Captures: {}",
+                (perft_result.captures + perft_result.en_passant).separated_string()
+            );
+            println!("Castles: {}", perft_result.castles.separated_string());
+            println!(
+                "{}us to calculate perft {}",
+                elapsed.separated_string(),
+                depth
+            );
             println!(
                 "{} nodes/sec",
-                ((nodes * 1000000) / (elapsed as usize)).separated_string()
+                ((perft_result.nodes * 1000000) / (elapsed as usize)).separated_string()
             );
             //============
         }

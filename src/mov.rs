@@ -4,7 +4,6 @@ use std::fmt;
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum SpecialMove {
-    None,
     Promotion,
     EnPassant,
     Castling,
@@ -43,8 +42,8 @@ impl Move {
         self.special_move == SpecialMove::Null
     }
 
-    pub fn is_none(&self) -> bool {
-        self.special_move == SpecialMove::None
+    pub fn is_capture(&self) -> bool {
+        self.special_move == SpecialMove::Capture
     }
 
     pub fn is_en_passant(&self) -> bool {
@@ -85,24 +84,23 @@ impl Move {
         orig: Square,
         dest: Square,
         promo_piece_type: Option<PieceType>,
-        is_ep: bool,
-        is_castling: bool,
+        flag: SpecialMove,
     ) -> Self {
-        let mut special_move = SpecialMove::Quiet;
+        // let mut special_move = SpecialMove::Quiet;
 
-        if let Some(_) = promo_piece_type {
-            special_move = SpecialMove::Promotion;
-        } else if is_ep {
-            special_move = SpecialMove::EnPassant;
-        } else if is_castling {
-            special_move = SpecialMove::Castling;
-        }
+        // if let Some(_) = promo_piece_type {
+        //     special_move = SpecialMove::Promotion;
+        // } else if is_ep {
+        //     special_move = SpecialMove::EnPassant;
+        // } else if is_castling {
+        //     special_move = SpecialMove::Castling;
+        // }
 
         Self {
             orig,
             dest,
             promo_piece_type,
-            special_move,
+            special_move: flag,
         }
     }
 
@@ -179,11 +177,6 @@ impl UndoableMove {
     #[inline(always)]
     pub fn is_null(&self) -> bool {
         self.special_move == SpecialMove::Null
-    }
-
-    #[inline(always)]
-    pub fn is_none(&self) -> bool {
-        self.special_move == SpecialMove::None
     }
 
     #[inline(always)]

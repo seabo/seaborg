@@ -612,7 +612,7 @@ impl Position {
     /// can create a discovered check, or the moving side can move into check. The case
     /// of castling through check is already dealt with in movegen.
     pub fn legal_move(&self, mov: Move) -> bool {
-        if mov.is_none() || mov.is_null() {
+        if mov.is_null() {
             return false;
         }
 
