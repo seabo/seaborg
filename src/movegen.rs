@@ -14,6 +14,12 @@ use std::ops::Index;
 pub struct MoveGen {}
 
 impl MoveGen {
+    /// Generates pseudo-legal moves for the passed position.
+    ///
+    /// This function could return moves which are either:
+    /// - Legal
+    /// - Would cause a discovered check (i.e. the moving piece is pinned)
+    /// - Would cause the moving king to land in check
     #[inline]
     pub fn generate(position: &Position) -> MoveList {
         let mut movelist = MoveList::default();
@@ -21,6 +27,16 @@ impl MoveGen {
         movelist
     }
 
+    /// Generates legal moves only, by first generating pseudo-legal
+    /// moves with `generate()`, and then filtering through and eliminating
+    /// those which do not pass a legality check.
+    ///
+    /// # Note
+    ///
+    /// This method is currently slow. We are using a `Vec` to collect
+    /// the legal moves, which pushes things onto the heap. We should
+    /// try to stick with the `MoveList` structure, which lives on the stack
+    /// TODO: do that ^
     pub fn generate_legal(position: &Position) -> Vec<Move> {
         let pseudo_legal = Self::generate(position);
         let pseudo_legal_vec = pseudo_legal.vec();

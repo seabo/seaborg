@@ -72,6 +72,39 @@ impl Into<Vec<Move>> for MoveList {
     }
 }
 
+pub struct MoveListIterator {
+    movelist: MoveList,
+    cursor: usize,
+}
+
+impl IntoIterator for MoveList {
+    type Item = Move;
+    type IntoIter = MoveListIterator;
+
+    fn into_iter(self) -> Self::IntoIter {
+        Self::IntoIter {
+            movelist: self,
+            cursor: 0,
+        }
+    }
+}
+
+impl Iterator for MoveListIterator {
+    type Item = Move;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.cursor < self.movelist.len {
+            unsafe {
+                let mov = self.movelist.inner.get_unchecked(self.cursor);
+                self.cursor += 1;
+                Some(*mov)
+            }
+        } else {
+            None
+        }
+    }
+}
+
 impl MoveList {
     /// Returns true if empty.
     #[inline(always)]

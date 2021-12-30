@@ -1,6 +1,4 @@
-use rchess::mov::Move;
-use rchess::movegen::MoveGen;
-use rchess::position::{Position, Square};
+use rchess::position::Position;
 use rchess::precalc::boards::init_boards;
 use rchess::precalc::magic::{bishop_attacks, init_magics};
 use rchess::search::perft::divide;
@@ -39,25 +37,15 @@ fn main() {
     let mut pos = Position::from_fen(start_position);
     match pos {
         Ok(ref mut pos) => {
-            // pos.make_uci_move("a2a4");
+            // pos.make_uci_move("a2a3");
             // pos.make_uci_move("a7a6");
-            // pos.make_uci_move("a4a5");
-            // pos.make_uci_move("b7b5");
             // pos.make_uci_move("b2b3");
-            // println!("{:?}", pos);
-            // let pre_move = pos.clone();
-            // let ep_move = pos.make_uci_move("a5b6");
-            // pos.unmake_move();
-            // let post_move = pos.clone();
-            // if pre_move != post_move {
-            //     // println!("PRE======================\n{:?}", pre_move);
-            //     // println!("POST=====================\n{:?}", post_move);
-            //     println!("ep_mov: {:?}", ep_move);
-            //     panic!();
-            // }
+            // pos.make_uci_move("a6a5");
+            // pos.make_uci_move("d2d3");
+            // pos.make_uci_move("e7e6");
+            // pos.make_uci_move("c1g5");
             //============
             let depth = 6;
-
             let now = Instant::now();
             let nodes = divide(pos, depth);
             let elapsed = now.elapsed().as_micros();
@@ -66,23 +54,7 @@ fn main() {
                 "{} nodes/sec",
                 ((nodes * 1000000) / (elapsed as usize)).separated_string()
             );
-
-            // let now = Instant::now();
-            // let movelist = MoveGen::generate_legal(&pos);
-            // let elapsed = now.elapsed().as_micros();
-            // // Make the first move on the board
-            // if let Some(mov) = movelist.iter().next() {
-            //     println!("making move {}", mov);
-            //     pos.make_move(*mov);
-            //     pos.unmake_move();
-            // }
-            // println!("{:?}", pos);
-            // for mov in movelist.iter() {
-            //     println!("{}", mov);
-            // }
-
-            // println!("# of moves: {}", movelist.len());
-            // println!("Took {}us to gen moves", elapsed);
+            //============
         }
         Err(fen_error) => {
             println!("{}", fen_error.msg);

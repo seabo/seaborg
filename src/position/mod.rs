@@ -837,7 +837,9 @@ impl Position {
                 || (self.attackers_to(dest, self.occupied()) & self.get_occupied_player(them))
                     .is_empty();
         }
-        // Ensure we are not moving a pinned piece
+
+        // Ensure we are not moving a pinned piece, or if we are, it is remaining staying
+        // pinned but moving along the current rank, file, diagonal between the pinner and the king
         (self.pinned_pieces(us) & orig_bb).is_empty() || aligned(orig, dest, self.king_sq(us))
     }
 }

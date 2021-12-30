@@ -57,6 +57,7 @@ impl Bitboard {
     }
 
     /// Produces a `Bitboard` with a single bit set at the index provided.
+    #[inline(always)]
     pub fn from_sq_idx(sq: u8) -> Self {
         Bitboard(1 << sq)
     }
@@ -84,13 +85,13 @@ impl Bitboard {
     }
 
     /// Returns true iff the `Bitboard` has no bits set.
-    #[inline]
+    #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.0 == 0
     }
 
     /// Returns true iff the `Bitboard` has at least one bit set.
-    #[inline]
+    #[inline(always)]
     pub fn is_not_empty(&self) -> bool {
         self.0 != 0
     }
@@ -101,11 +102,14 @@ impl Bitboard {
         more_than_one(self.0)
     }
 
-    /// Returns the square for a given bitboard. Panics if more than one
-    /// bit is set.
-    #[inline]
+    /// Returns the square for a given bitboard.
+    ///
+    /// # Panics
+    ///
+    /// In debug mode, panics if more than one bit is set.
+    #[inline(always)]
     pub fn to_square(&self) -> Square {
-        assert!(self.popcnt() == 1);
+        debug_assert!(self.popcnt() == 1);
         Square(self.bsf() as u8)
     }
 
@@ -137,132 +141,6 @@ impl Bitboard {
 }
 
 impl_bit_ops!(Bitboard, u64);
-
-// impl std::ops::Add for Bitboard {
-//     type Output = Self;
-
-//     fn add(self, other: Self) -> Self::Output {
-//         match (self, other) {
-//             (Bitboard(left), Bitboard(right)) => Bitboard(left + right),
-//         }
-//     }
-// }
-
-// impl std::ops::AddAssign for Bitboard {
-//     fn add_assign(&mut self, other: Self) {
-//         *self = *self + other
-//     }
-// }
-
-// impl std::ops::Sub for Bitboard {
-//     type Output = Self;
-
-//     fn sub(self, other: Self) -> Self::Output {
-//         match (self, other) {
-//             (Bitboard(left), Bitboard(right)) => Bitboard(left - right),
-//         }
-//     }
-// }
-
-// impl std::ops::SubAssign for Bitboard {
-//     fn sub_assign(&mut self, other: Self) {
-//         *self = *self - other
-//     }
-// }
-
-// impl std::ops::Add<u64> for Bitboard {
-//     type Output = Self;
-
-//     fn add(self, other: u64) -> Self::Output {
-//         match self {
-//             Bitboard(left) => Bitboard(left + other),
-//         }
-//     }
-// }
-
-// impl std::ops::AddAssign<u64> for Bitboard {
-//     fn add_assign(&mut self, other: u64) {
-//         *self = *self + other
-//     }
-// }
-
-// impl std::ops::Sub<u64> for Bitboard {
-//     type Output = Self;
-
-//     fn sub(self, other: u64) -> Self::Output {
-//         match self {
-//             Bitboard(left) => Bitboard(left - other),
-//         }
-//     }
-// }
-
-// impl std::ops::SubAssign<u64> for Bitboard {
-//     fn sub_assign(&mut self, other: u64) {
-//         *self = *self - other
-//     }
-// }
-
-// impl std::ops::BitAnd for Bitboard {
-//     type Output = Self;
-
-//     fn bitand(self, other: Self) -> Self::Output {
-//         match (self, other) {
-//             (Bitboard(left), Bitboard(right)) => Bitboard(left & right),
-//         }
-//     }
-// }
-
-// impl std::ops::BitAndAssign for Bitboard {
-//     fn bitand_assign(&mut self, other: Self) {
-//         *self = *self & other;
-//     }
-// }
-
-// impl std::ops::BitOr for Bitboard {
-//     type Output = Self;
-
-//     fn bitor(self, other: Self) -> Self::Output {
-//         match (self, other) {
-//             (Bitboard(left), Bitboard(right)) => Bitboard(left | right),
-//         }
-//     }
-// }
-
-// impl std::ops::BitOrAssign for Bitboard {
-//     fn bitor_assign(&mut self, other: Self) {
-//         *self = *self | other;
-//     }
-// }
-
-// impl std::ops::Not for Bitboard {
-//     type Output = Self;
-
-//     fn not(self) -> Bitboard {
-//         match self {
-//             Bitboard(bb) => Bitboard(!bb),
-//         }
-//     }
-// }
-
-// impl std::ops::Shl<usize> for Bitboard {
-//     type Output = Self;
-
-//     fn shl(self, shift: usize) -> Bitboard {
-//         match self {
-//             Bitboard(bb) => Bitboard(bb << shift),
-//         }
-//     }
-// }
-
-// impl std::ops::Shr<usize> for Bitboard {
-//     type Output = Self;
-
-//     fn shr(self, shift: usize) -> Self::Output {
-//         match self {
-//             Bitboard(bb) => Bitboard(bb >> shift),
-//         }
-//     }
-// }
 
 impl std::iter::Iterator for Bitboard {
     type Item = Square;

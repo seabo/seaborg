@@ -1,44 +1,45 @@
 use crate::movegen::MoveGen;
-use crate::position::Position;
+use crate::position::{Position, Square};
 
 pub fn perft(position: &mut Position, depth: usize) -> usize {
+    if depth == 0 {
+        return 1;
+    }
     assert!(depth >= 1);
-    let moves = MoveGen::generate_legal(&position);
+    let moves = MoveGen::generate(&position);
     let mut node_count = 0;
-    if depth == 1 {
-        moves.len()
-    } else {
-        for mov in moves {
-            let pre_move = position.clone();
+
+    for mov in moves {
+        if !position.legal_move(mov) {
+            continue;
+        }
+
+        if depth == 1 {
+            node_count += 1
+        } else {
             position.make_move(mov);
             node_count += perft(position, depth - 1);
             position.unmake_move();
-            let post_move = position.clone();
-            if pre_move != post_move {
-                println!("{}", mov);
-                println!("{:?}", position);
-                println!("PRE======================\n{:?}", pre_move);
-                println!("POST=====================\n{:?}", post_move);
-                panic!();
-            }
         }
-        node_count
     }
+    node_count
 }
 
 pub fn divide(position: &mut Position, depth: usize) -> usize {
     assert!(depth >= 1);
 
-    let moves = MoveGen::generate_legal(&position);
+    let moves = MoveGen::generate(&position);
     let mut node_count = 0;
 
-    if depth == 1 {
-        for mov in moves {
+    for mov in moves {
+        if !position.legal_move(mov) {
+            continue;
+        }
+
+        if depth == 1 {
             println!("{}: 1", mov);
             node_count += 1;
-        }
-    } else {
-        for mov in moves {
+        } else {
             position.make_move(mov);
             let node_perft = perft(position, depth - 1);
             println!("{}: {}", mov, node_perft);
