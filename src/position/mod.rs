@@ -13,6 +13,7 @@ use crate::precalc::boards::{aligned, between_bb, king_moves, knight_moves, pawn
 
 pub use board::Board;
 pub use castling::{CastleType, CastlingRights};
+pub use fen::START_POSITION;
 pub use piece::{Piece, PieceType, PROMO_PIECES};
 pub use square::Square;
 pub use state::State;
@@ -183,7 +184,6 @@ impl Position {
             let mut cap_sq = to;
             if captured_piece.type_of() == PieceType::Pawn {
                 if mov.is_en_passant() {
-                    debug_assert_eq!(to, self.ep_square.unwrap());
                     match us {
                         Player::White => cap_sq -= Square(8),
                         Player::Black => cap_sq += Square(8),

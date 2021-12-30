@@ -42,6 +42,7 @@ pub trait MVPushable: Sized + IndexMut<usize> + Index<usize> + DerefMut {
     unsafe fn over_bounds_ptr(&mut self) -> *mut Self::Output;
 }
 
+#[derive(Clone)]
 pub struct MoveList {
     inner: [Move; MAX_MOVES],
     len: usize,

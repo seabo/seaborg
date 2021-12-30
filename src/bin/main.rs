@@ -1,7 +1,7 @@
 use rchess::position::Position;
 use rchess::precalc::boards::init_boards;
 use rchess::precalc::magic::{bishop_attacks, init_magics};
-use rchess::search::perft::{divide, perft};
+use rchess::search::perft::Perft;
 
 use separator::Separatable;
 
@@ -34,7 +34,7 @@ fn main() {
     let cpw_position5 = "rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8";
     let cpw_position6 = "r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10";
 
-    let mut pos = Position::from_fen(start_position);
+    let mut pos = Position::from_fen(cpw_position6);
     match pos {
         Ok(ref mut pos) => {
             // pos.make_uci_move("a2a3");
@@ -45,25 +45,20 @@ fn main() {
             // pos.make_uci_move("e7e6");
             // pos.make_uci_move("c1g5");
             //============
-            let depth = 7;
+            let depth = 5;
             let now = Instant::now();
-            let perft_result = perft(pos, depth);
-            let elapsed = now.elapsed().as_micros();
-            println!("Nodes: {}", perft_result.nodes.separated_string());
-            println!("Ep: {}", perft_result.en_passant.separated_string());
+            let perft_result = Perft::divide(pos, depth);
+            let elapsed = now.elapsed();
+
             println!(
-                "Captures: {}",
-                (perft_result.captures + perft_result.en_passant).separated_string()
-            );
-            println!("Castles: {}", perft_result.castles.separated_string());
-            println!(
-                "{}us to calculate perft {}",
-                elapsed.separated_string(),
+                "{}µs to calculate perft {}",
+                elapsed.as_micros().separated_string(),
                 depth
             );
             println!(
                 "{} nodes/sec",
-                ((perft_result.nodes * 1000000) / (elapsed as usize)).separated_string()
+                ((perft_result.nodes * 1_000_000_000) / (elapsed.as_nanos() as usize))
+                    .separated_string()
             );
             //============
         }
