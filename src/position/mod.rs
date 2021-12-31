@@ -9,6 +9,7 @@ use crate::bb::Bitboard;
 use crate::masks::{CASTLING_PATH, CASTLING_ROOK_START, FILE_BB, PLAYER_CNT, RANK_BB};
 use crate::mov::{Move, MoveType, UndoableMove};
 use crate::movegen::{bishop_moves, rook_moves, MoveGen};
+use crate::movelist::MoveList;
 use crate::precalc::boards::{aligned, between_bb, king_moves, knight_moves, pawn_attacks_from};
 
 pub use board::Board;
@@ -358,7 +359,7 @@ impl Position {
     /// Returns `true` if the move was legal and successfully applied on the board,
     /// otherwise `false`.
     pub fn make_uci_move(&mut self, uci: &str) -> Option<Move> {
-        let moves = MoveGen::generate_legal(&self);
+        let moves = self.generate_moves();
 
         for mov in moves {
             let uci_mov = mov.to_uci_string();
@@ -432,6 +433,10 @@ impl Position {
     #[inline(always)]
     pub fn in_check(&self) -> bool {
         self.state.checkers.is_not_empty()
+    }
+
+    pub fn in_checkmate(&self) -> bool {
+        self.in_check() && self.generate_moves().is_empty()
     }
 
     /// Returns a `Bitboard` of possible attacks to a square with a given occupancy.
@@ -606,6 +611,11 @@ impl Position {
     #[inline(always)]
     pub fn pinned_pieces(&self, player: Player) -> Bitboard {
         self.state.blockers[player as usize] & self.get_occupied_player(player)
+    }
+
+    // MOVE GENERATION
+    pub fn generate_moves(&self) -> MoveList {
+        MoveGen::generate_legal(&self)
     }
 
     // MOVE TESTING

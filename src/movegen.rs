@@ -37,16 +37,15 @@ impl MoveGen {
     /// the legal moves, which pushes things onto the heap. We should
     /// try to stick with the `MoveList` structure, which lives on the stack
     /// TODO: do that ^
-    pub fn generate_legal(position: &Position) -> Vec<Move> {
+    pub fn generate_legal(position: &Position) -> MoveList {
         let pseudo_legal = Self::generate(position);
-        let pseudo_legal_vec = pseudo_legal.vec();
-        let mut legal_vec: Vec<Move> = Vec::new();
-        for pseudo_mov in pseudo_legal_vec {
-            if position.legal_move(pseudo_mov) {
-                legal_vec.push(pseudo_mov);
+        let mut legal: MoveList = Default::default();
+        for mov in pseudo_legal {
+            if position.legal_move(mov) {
+                legal.push(mov);
             }
         }
-        legal_vec
+        legal
     }
 }
 
@@ -307,8 +306,6 @@ where
         }
     }
 
-    // TODO: make `Move` struct have a dedicated `SpecialMove` field, and introduce new enum
-    // variants for 'capturing', 'quiet' etc.
     #[inline]
     fn move_append_from_bb_flag(&mut self, bb: &mut Bitboard, orig: Square, ty: MoveType) {
         for dest in bb {
