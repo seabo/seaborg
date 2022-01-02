@@ -1,6 +1,7 @@
 use rchess::position::Position;
 use rchess::precalc::boards::init_boards;
 use rchess::precalc::magic::init_magics;
+use rchess::search::alphabeta::alphabeta;
 use rchess::search::perft::Perft;
 
 use separator::Separatable;
@@ -19,6 +20,32 @@ fn init_globals() {
 
 fn main() {
     init_globals();
+    // do_perft();
+    do_ab();
+}
+
+fn do_ab() {
+    // let mate_in_2 = "r5rk/5p1p/5R2/4B3/8/8/7P/7K w - - 0 1";
+    let mate_in_5 = "4b3/4B1bq/p2Q2pp/4pp2/8/8/p7/k1K5 w - - 0 1";
+    let mut pos = Position::from_fen(mate_in_5);
+    match pos {
+        Ok(ref mut pos) => {
+            let now = Instant::now();
+            let val = alphabeta(pos, 9, -10000, 10000, pos.turn().is_white());
+            let elapsed = now.elapsed();
+            println!("{}", val);
+            println!(
+                "Evaluated position in {}ms",
+                elapsed.as_millis().separated_string()
+            );
+        }
+        Err(fen_error) => {
+            println!("{}", fen_error.msg);
+        }
+    }
+}
+
+fn do_perft() {
     // let start_position = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
     // let other_position = "rn3rk1/1bq2ppp/p3p3/1pnp2B1/3N1P2/2b3Q1/PPP3PP/2KRRB2 w - - 0 17";
     // let position3 = "2r1b2k/3P4/8/8/8/8/8/7K w - - 0 1";
@@ -35,6 +62,7 @@ fn main() {
     // let cpw_position4 = "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1";
     // let cpw_position5 = "rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8";
     // let cpw_position6 = "r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10";
+    let problem = "8/4p1Rp/4pk1P/4p3/1n2P1p1/B2P2p1/3P2P1/K7 w - - 0 1";
 
     let mut pos = Position::from_fen(kiwipete);
 

@@ -257,7 +257,7 @@ impl<'a> Perft<'a> {
             if self.position.in_checkmate() {
                 self.data.checkmate += 1;
             }
-            if self.position.in_check() {
+            if self.position.in_double_check() {
                 self.data.check += 1;
             }
             self.position.unmake_move();

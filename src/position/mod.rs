@@ -32,6 +32,21 @@ pub enum Player {
 }
 
 impl Player {
+    /// Returns if the player is `Player::White`
+    #[inline(always)]
+    pub fn is_white(&self) -> bool {
+        match self {
+            Player::White => true,
+            Player::Black => false,
+        }
+    }
+
+    /// Returns if the player is `Player::Black`
+    #[inline(always)]
+    pub fn is_black(&self) -> bool {
+        !self.is_white()
+    }
+
     /// Returns the other player.
     pub fn other_player(&self) -> Self {
         match self {
@@ -437,6 +452,10 @@ impl Position {
 
     pub fn in_checkmate(&self) -> bool {
         self.in_check() && self.generate_moves().is_empty()
+    }
+
+    pub fn in_double_check(&self) -> bool {
+        self.state.checkers.popcnt() == 2
     }
 
     /// Returns a `Bitboard` of possible attacks to a square with a given occupancy.
