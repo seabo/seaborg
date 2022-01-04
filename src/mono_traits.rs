@@ -7,6 +7,7 @@
 /// code reuse. We also inline all the functions in the implementation for speed
 /// in the compiled monomorphized code.
 use crate::bb::Bitboard;
+use crate::eval::*;
 use crate::position::{PieceType, Player, Square};
 
 pub trait PlayerTrait {
@@ -257,6 +258,9 @@ impl PlayerTrait for BlackType {
 pub trait PieceTrait {
     /// Returns the `PieceType`.
     fn piece_type() -> PieceType;
+
+    /// Returns the material value for the `PieceType`.
+    fn material_val() -> i32;
 }
 
 /// Dummy type to represent a pawn, which implements `PieceTrait`.
@@ -282,12 +286,22 @@ impl PieceTrait for PawnType {
     fn piece_type() -> PieceType {
         PieceType::Pawn
     }
+
+    #[inline(always)]
+    fn material_val() -> i32 {
+        PAWN_VALUE
+    }
 }
 
 impl PieceTrait for KnightType {
     #[inline(always)]
     fn piece_type() -> PieceType {
         PieceType::Knight
+    }
+
+    #[inline(always)]
+    fn material_val() -> i32 {
+        KNIGHT_VALUE
     }
 }
 
@@ -296,12 +310,22 @@ impl PieceTrait for BishopType {
     fn piece_type() -> PieceType {
         PieceType::Bishop
     }
+
+    #[inline(always)]
+    fn material_val() -> i32 {
+        BISHOP_VALUE
+    }
 }
 
 impl PieceTrait for RookType {
     #[inline(always)]
     fn piece_type() -> PieceType {
         PieceType::Rook
+    }
+
+    #[inline(always)]
+    fn material_val() -> i32 {
+        ROOK_VALUE
     }
 }
 
@@ -310,11 +334,21 @@ impl PieceTrait for QueenType {
     fn piece_type() -> PieceType {
         PieceType::Queen
     }
+
+    #[inline(always)]
+    fn material_val() -> i32 {
+        QUEEN_VALUE
+    }
 }
 
 impl PieceTrait for KingType {
     #[inline(always)]
     fn piece_type() -> PieceType {
         PieceType::King
+    }
+
+    #[inline(always)]
+    fn material_val() -> i32 {
+        KING_VALUE
     }
 }

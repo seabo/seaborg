@@ -1,18 +1,19 @@
+use crate::eval::material_eval;
 use crate::position::Position;
 use std::cmp::{max, min};
 
 pub fn alphabeta(
     pos: &mut Position,
     depth: usize,
-    mut alpha: i64,
-    mut beta: i64,
+    mut alpha: i32,
+    mut beta: i32,
     is_white: bool,
-) -> i64 {
+) -> i32 {
     if depth == 0 {
         if pos.in_checkmate() {
             return if is_white { -10000 } else { 10000 };
         } else {
-            return 0;
+            return material_eval(pos);
         }
     }
 
@@ -44,4 +45,12 @@ pub fn alphabeta(
         }
         return val;
     }
+}
+
+pub fn iterative_deepening(pos: &mut Position, target_depth: usize) -> i32 {
+    for i in 1..target_depth {
+        let val = alphabeta(pos, i, -10000, 10000, pos.turn().is_white());
+        println!("Depth: {}, val: {}", i, val);
+    }
+    0
 }

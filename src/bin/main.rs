@@ -1,7 +1,8 @@
+use rchess::eval::material_eval;
 use rchess::position::Position;
 use rchess::precalc::boards::init_boards;
 use rchess::precalc::magic::init_magics;
-use rchess::search::alphabeta::alphabeta;
+use rchess::search::alphabeta::{alphabeta, iterative_deepening};
 use rchess::search::perft::Perft;
 
 use separator::Separatable;
@@ -22,6 +23,20 @@ fn main() {
     init_globals();
     // do_perft();
     do_ab();
+    // do_material_eval();
+}
+
+fn do_material_eval() {
+    let mate_in_5 = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+    let mut pos = Position::from_fen(mate_in_5);
+    match pos {
+        Ok(ref mut pos) => {
+            println!("Material eval: {}", material_eval(&pos));
+        }
+        Err(fen_error) => {
+            println!("{}", fen_error.msg);
+        }
+    }
 }
 
 fn do_ab() {
@@ -31,7 +46,7 @@ fn do_ab() {
     match pos {
         Ok(ref mut pos) => {
             let now = Instant::now();
-            let val = alphabeta(pos, 9, -10000, 10000, pos.turn().is_white());
+            let val = iterative_deepening(pos, 9);
             let elapsed = now.elapsed();
             println!("{}", val);
             println!(

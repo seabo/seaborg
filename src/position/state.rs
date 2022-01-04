@@ -63,9 +63,6 @@ impl State {
 
         self.blockers[Player::Black as usize] = black_blockers;
         self.pinners[Player::Black as usize] = black_pinners;
-
-        // let ksq = position.king_sq(position.turn().other_player());
-        // let occupied = position.occupied();
     }
 }
 
