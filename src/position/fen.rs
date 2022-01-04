@@ -301,7 +301,7 @@ impl Position {
         }
 
         if castling_rights == "-" {
-            return Ok(CastlingRights::none());
+            return Ok(CastlingRights::empty());
         }
 
         let mut white_kingside = false;
@@ -360,12 +360,12 @@ impl Position {
             }
         }
 
-        Ok(CastlingRights {
+        Ok(CastlingRights::new(
             white_kingside,
             white_queenside,
             black_kingside,
             black_queenside,
-        })
+        ))
     }
 
     fn parse_ep_square(ep_square: &str) -> Result<Option<Square>, FenError> {

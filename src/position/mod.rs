@@ -611,18 +611,15 @@ impl Position {
     /// Check if the given player can castle to the given side.
     #[inline]
     pub fn can_castle(&self, player: Player, side: CastleType) -> bool {
-        if player == Player::White {
-            if side == CastleType::Kingside {
-                self.castling_rights.white_kingside
-            } else {
-                self.castling_rights.white_queenside
-            }
-        } else {
-            if side == CastleType::Kingside {
-                self.castling_rights.black_kingside
-            } else {
-                self.castling_rights.black_queenside
-            }
+        match player {
+            Player::White => match side {
+                CastleType::Kingside => self.castling_rights.white_kingside(),
+                CastleType::Queenside => self.castling_rights.white_queenside(),
+            },
+            Player::Black => match side {
+                CastleType::Kingside => self.castling_rights.black_kingside(),
+                CastleType::Queenside => self.castling_rights.black_queenside(),
+            },
         }
     }
 
