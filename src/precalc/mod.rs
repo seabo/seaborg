@@ -1,3 +1,4 @@
 pub mod boards;
 pub mod magic;
-mod prng;
+pub mod prng;
+pub mod zobrist;

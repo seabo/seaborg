@@ -1,4 +1,4 @@
-use super::{Board, CastlingRights, Piece, Player, Position, Square, State};
+use super::{Board, CastlingRights, Piece, Player, Position, Square, State, Zobrist};
 
 use crate::bb::Bitboard;
 
@@ -50,11 +50,17 @@ impl Position {
             piece_counts: [player_occ[0].popcnt() as u8, player_occ[1].popcnt() as u8],
             state: State::blank(), // Temporary. The real `State` is generated below.
             history: Vec::new(),
+            zobrist: Zobrist(0),
         };
 
         pos.set_state();
+        pos.set_zobrist();
 
         Ok(pos)
+    }
+
+    pub fn start_pos() -> Self {
+        Self::from_fen(START_POSITION).unwrap()
     }
 
     pub fn split_fen_fields(fen: &str) -> Result<[&str; 6], FenError> {

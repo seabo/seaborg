@@ -4,6 +4,7 @@ mod fen;
 mod piece;
 mod square;
 mod state;
+mod zobrist;
 
 use crate::bb::Bitboard;
 use crate::masks::{CASTLING_PATH, CASTLING_ROOK_START, FILE_BB, PLAYER_CNT, RANK_BB};
@@ -18,6 +19,7 @@ pub use fen::START_POSITION;
 pub use piece::{Piece, PieceType, PROMO_PIECES};
 pub use square::Square;
 pub use state::State;
+pub use zobrist::Zobrist;
 
 use std::fmt;
 use std::ops::Not;
@@ -134,6 +136,10 @@ pub struct Position {
     /// History stores a `Vec` of `UndoableMove`s, allowing the `Position` to
     /// be rolled back with `unmake_move()`.
     pub(crate) history: Vec<UndoableMove>,
+
+    /// The Zobrist key of the current position. Incrementally updated in `makemove()`
+    /// and `unmakemove()`.
+    pub(crate) zobrist: Zobrist,
 }
 
 impl Position {
@@ -141,6 +147,13 @@ impl Position {
     /// when initialising a new `Position`.
     pub fn set_state(&mut self) {
         self.state = State::from_position(&self);
+    }
+
+    /// Set the `Zobrist` key for the current position based on the other data in
+    /// the `Position` struct. Should only be called when initialising a new `Position`
+    /// as the zobrist key is kept incrementally updated thereafter.
+    pub fn set_zobrist(&mut self) {
+        self.zobrist = Zobrist::from_position(&self);
     }
 
     pub fn history(&self) -> &Vec<UndoableMove> {
@@ -773,6 +786,7 @@ impl fmt::Debug for Position {
         )?;
         writeln!(f, "Half move clock: {}", self.half_move_clock)?;
         writeln!(f, "Move number: {}", self.move_number)?;
+        writeln!(f, "Zobrist key: {:b}", self.zobrist.0)?;
         writeln!(f)?;
         writeln!(f, "STATE\n=====\n")?;
 

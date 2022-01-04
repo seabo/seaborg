@@ -2,6 +2,7 @@ use rchess::eval::material_eval;
 use rchess::position::Position;
 use rchess::precalc::boards::init_boards;
 use rchess::precalc::magic::init_magics;
+use rchess::precalc::zobrist::init_zobrist;
 use rchess::search::alphabeta::{alphabeta, iterative_deepening};
 use rchess::search::perft::Perft;
 
@@ -16,14 +17,16 @@ fn init_globals() {
     INITALIZED.call_once(|| {
         init_magics();
         init_boards();
+        init_zobrist();
     })
 }
 
 fn main() {
     init_globals();
-    // do_perft();
-    do_ab();
+    do_perft();
+    // do_ab();
     // do_material_eval();
+    // println!("{:?}", Position::start_pos());
 }
 
 fn do_material_eval() {
@@ -83,7 +86,7 @@ fn do_perft() {
 
     match pos {
         Ok(ref mut pos) => {
-            let depth = 6;
+            let depth = 5;
             let now = Instant::now();
             let perft_result = Perft::divide(pos, depth, false);
             let elapsed = now.elapsed();
