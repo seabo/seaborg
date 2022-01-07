@@ -160,6 +160,10 @@ impl Position {
         &self.history
     }
 
+    pub fn zobrist(&self) -> Zobrist {
+        self.zobrist
+    }
+
     /// Make a move on the Board and update the `Position`.
     ///
     /// # Panics
@@ -175,6 +179,7 @@ impl Position {
         self.history.push(undoable_move);
 
         // Reset the en passant square
+        self.zobrist.update_ep_square(self.ep_square, None);
         self.ep_square = None;
 
         let us = self.turn();
@@ -198,8 +203,13 @@ impl Position {
             self.move_number += 1;
         }
 
+        // Toggle player to move in zobrist key
+        self.zobrist.toggle_side_to_move();
+
         // Castling rights
         let new_castling_rights = self.castling_rights.update(from);
+        self.zobrist
+            .update_castling_rights(self.castling_rights, new_castling_rights);
         self.castling_rights = new_castling_rights;
 
         // Castling move
@@ -252,6 +262,8 @@ impl Position {
                     & self.piece_bb(them, PieceType::Pawn))
                 .is_not_empty()
                 {
+                    self.zobrist
+                        .update_ep_square(self.ep_square, Some(Square(poss_ep)));
                     self.ep_square = Some(Square(poss_ep));
                 }
             } else if let Some(promo_piece_type) = mov.promo_piece_type() {
@@ -272,6 +284,7 @@ impl Position {
     pub fn unmake_move(&mut self) -> Option<UndoableMove> {
         if let Some(undoable_move) = self.history.pop() {
             self.turn = !self.turn();
+            self.zobrist.toggle_side_to_move();
             let us = self.turn();
             let orig = undoable_move.orig;
             let dest = undoable_move.dest;
@@ -304,6 +317,11 @@ impl Position {
                     self.put_piece_c(Piece::make(!us, captured_piece), cap_sq);
                 }
             }
+            self.zobrist
+                .update_castling_rights(self.castling_rights, undoable_move.prev_castling_rights);
+            self.zobrist
+                .update_ep_square(self.ep_square, undoable_move.prev_ep_square);
+
             self.half_move_clock = undoable_move.prev_half_move_clock;
             self.ep_square = undoable_move.prev_ep_square;
             self.castling_rights = undoable_move.prev_castling_rights;
@@ -417,6 +435,9 @@ impl Position {
 
         self.board.remove(from);
         self.board.place(to, player, piece_ty);
+
+        self.zobrist.toggle_piece_sq(piece, from);
+        self.zobrist.toggle_piece_sq(piece, to);
     }
 
     /// Removes a `Piece` from the board for a given player.
@@ -436,6 +457,8 @@ impl Position {
         self.piece_counts[player as usize] -= 1;
 
         self.board.remove(square);
+
+        self.zobrist.toggle_piece_sq(piece, square);
     }
 
     /// Places a `Piece` on the board at a given `Square`.
@@ -454,6 +477,8 @@ impl Position {
         self.piece_counts[player as usize] += 1;
 
         self.board.place(square, player, piece_ty);
+
+        self.zobrist.toggle_piece_sq(piece, square);
     }
 
     // CHECKING
@@ -490,6 +515,11 @@ impl Position {
     #[inline]
     pub fn turn(&self) -> Player {
         self.turn
+    }
+
+    #[inline]
+    pub fn castling_rights(&self) -> CastlingRights {
+        self.castling_rights
     }
 
     #[inline]

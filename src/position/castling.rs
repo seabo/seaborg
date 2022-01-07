@@ -21,6 +21,12 @@ impl CastlingRights {
         cr
     }
 
+    /// Used for `debug_assert!` calls to ensure that `self` is
+    /// between 0 and 15 (since the underlying type is u8).
+    pub fn is_okay(&self) -> bool {
+        self.bits() < 16
+    }
+
     #[inline(always)]
     pub fn white_kingside(&self) -> bool {
         self.contains(Self::WHITE_KINGSIDE)

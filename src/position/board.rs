@@ -73,6 +73,47 @@ impl Board {
     }
 }
 
+pub struct BoardIterator<'a> {
+    board: &'a Board,
+    square: Option<Square>,
+}
+
+impl<'a> BoardIterator<'a> {
+    pub fn new(board: &'a Board) -> Self {
+        Self {
+            board,
+            square: Some(Square::A1),
+        }
+    }
+}
+
+impl<'a> Iterator for BoardIterator<'a> {
+    type Item = (Square, Piece);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.square {
+            Some(Square::H8) => {
+                self.square = None;
+                Some((Square::H8, self.board.piece_at_sq(Square::H8)))
+            }
+            Some(sq) => {
+                self.square = Some(sq + Square(1));
+                Some((sq, self.board.piece_at_sq(sq)))
+            }
+            None => None,
+        }
+    }
+}
+
+impl<'a> IntoIterator for &'a Board {
+    type Item = (Square, Piece);
+    type IntoIter = BoardIterator<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        BoardIterator::new(self)
+    }
+}
+
 impl fmt::Display for Board {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.pretty_string())

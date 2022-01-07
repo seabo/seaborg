@@ -30,7 +30,7 @@ pub struct PerftData {
 impl PerftData {
     pub fn print_nodes(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(n) = self.nodes {
-            writeln!(f, "Nodes: {}", n.separated_string())
+            writeln!(f, "Nodes:      {}", n.separated_string())
         } else {
             write!(f, "")
         }
@@ -38,7 +38,7 @@ impl PerftData {
 
     pub fn print_captures(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(n) = self.captures {
-            writeln!(f, "Captures: {}", n.separated_string())
+            writeln!(f, "Captures:   {}", n.separated_string())
         } else {
             write!(f, "")
         }
@@ -46,7 +46,7 @@ impl PerftData {
 
     pub fn print_en_passant(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(n) = self.en_passant {
-            writeln!(f, "Ep: {}", n.separated_string())
+            writeln!(f, "Ep:         {}", n.separated_string())
         } else {
             write!(f, "")
         }
@@ -54,7 +54,7 @@ impl PerftData {
 
     pub fn print_castles(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(n) = self.castles {
-            writeln!(f, "Castles: {}", n.separated_string())
+            writeln!(f, "Castles:    {}", n.separated_string())
         } else {
             write!(f, "")
         }
@@ -78,7 +78,7 @@ impl PerftData {
 
     pub fn print_check(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(n) = self.check {
-            writeln!(f, "Check: {}", n.separated_string())
+            writeln!(f, "Check:      {}", n.separated_string())
         } else {
             write!(f, "")
         }
