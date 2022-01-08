@@ -5,6 +5,7 @@ use rchess::precalc::magic::init_magics;
 use rchess::precalc::zobrist::init_zobrist;
 use rchess::search::alphabeta::{alphabeta, iterative_deepening};
 use rchess::search::perft::Perft;
+use rchess::tables::{TranspoEntry, TranspoTable};
 
 use separator::Separatable;
 
@@ -23,11 +24,18 @@ fn init_globals() {
 
 fn main() {
     init_globals();
+    do_transpo_table();
     // do_zobrist();
-    do_perft();
+    // do_perft();
     // do_ab();
     // do_material_eval();
     // println!("{:?}", Position::start_pos());
+}
+
+fn do_transpo_table() {
+    let mut tt = TranspoTable::with_capacity(27);
+    let pos = Position::start_pos();
+    tt.insert(pos);
 }
 
 fn do_zobrist() {
@@ -90,7 +98,7 @@ fn do_perft() {
     // let cpw_position4 = "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1";
     // let cpw_position5 = "rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8";
     // let cpw_position6 = "r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10";
-    let problem = "8/4p1Rp/4pk1P/4p3/1n2P1p1/B2P2p1/3P2P1/K7 w - - 0 1";
+    // let problem = "8/4p1Rp/4pk1P/4p3/1n2P1p1/B2P2p1/3P2P1/K7 w - - 0 1";
 
     let mut pos = Position::from_fen(start_position);
 

@@ -10,6 +10,7 @@ pub mod movegen;
 pub mod movelist;
 pub mod position;
 pub mod search;
+pub mod tables;
 
 mod bit_twiddles;
 mod masks;
