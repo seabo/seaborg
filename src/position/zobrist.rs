@@ -7,6 +7,7 @@ use std::fmt;
 use std::ops::*;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(transparent)]
 pub struct Zobrist(pub u64);
 
 impl_bit_ops!(Zobrist, u64);

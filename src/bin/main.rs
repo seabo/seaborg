@@ -3,9 +3,10 @@ use rchess::position::Position;
 use rchess::precalc::boards::init_boards;
 use rchess::precalc::magic::init_magics;
 use rchess::precalc::zobrist::init_zobrist;
-use rchess::search::alphabeta::{alphabeta, iterative_deepening};
+use rchess::search::alphabeta::ABSearcher;
 use rchess::search::perft::Perft;
-use rchess::tables::{TranspoEntry, TranspoTable};
+use rchess::search::perft_with_tt::PerftWithTT;
+use rchess::tables::TranspoTable;
 
 use separator::Separatable;
 
@@ -24,7 +25,8 @@ fn init_globals() {
 
 fn main() {
     init_globals();
-    do_transpo_table();
+    do_perft_with_tt();
+    // do_transpo_table();
     // do_zobrist();
     // do_perft();
     // do_ab();
@@ -32,10 +34,33 @@ fn main() {
     // println!("{:?}", Position::start_pos());
 }
 
-fn do_transpo_table() {
-    let mut tt = TranspoTable::with_capacity(27);
-    let pos = Position::start_pos();
-    tt.insert(pos);
+fn do_perft_with_tt() {
+    let mut pos = Position::start_pos();
+    let depth = 7;
+    let now = Instant::now();
+    let nodes = PerftWithTT::perft(&mut pos, depth);
+    let elapsed = now.elapsed();
+    println!("Nodes: {}", nodes.separated_string());
+    println!(
+        "{}µs to calculate perft {}",
+        elapsed.as_micros().separated_string(),
+        depth
+    );
+
+    let now = Instant::now();
+    let perft_result = Perft::divide(&mut pos, depth, false);
+    let elapsed = now.elapsed();
+
+    println!(
+        "{}µs to calculate perft {}",
+        elapsed.as_micros().separated_string(),
+        depth
+    );
+    println!(
+        "{} nodes/sec",
+        ((perft_result.nodes.unwrap() * 1_000_000_000) / (elapsed.as_nanos() as usize))
+            .separated_string()
+    );
 }
 
 fn do_zobrist() {
@@ -62,18 +87,22 @@ fn do_material_eval() {
 
 fn do_ab() {
     // let mate_in_2 = "r5rk/5p1p/5R2/4B3/8/8/7P/7K w - - 0 1";
-    let mate_in_5 = "4b3/4B1bq/p2Q2pp/4pp2/8/8/p7/k1K5 w - - 0 1";
+    // let mate_in_5 = "4b3/4B1bq/p2Q2pp/4pp2/8/8/p7/k1K5 w - - 0 1";
+    let mate_in_5 = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
     let mut pos = Position::from_fen(mate_in_5);
     match pos {
         Ok(ref mut pos) => {
+            let turn = pos.turn().clone();
             let now = Instant::now();
-            let val = iterative_deepening(pos, 9);
+            let mut searcher = ABSearcher::new(pos);
+            let val = searcher.alphabeta(3, -10000, 10000, turn.is_white());
             let elapsed = now.elapsed();
             println!("{}", val);
             println!(
                 "Evaluated position in {}ms",
                 elapsed.as_millis().separated_string()
             );
+            searcher.display_trace();
         }
         Err(fen_error) => {
             println!("{}", fen_error.msg);

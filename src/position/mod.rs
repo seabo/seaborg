@@ -160,6 +160,15 @@ impl Position {
         &self.history
     }
 
+    pub fn print_history(&self) -> String {
+        let mut string = String::new();
+        for mov in &self.history {
+            let mov_str = format!("{} ", mov);
+            string.push_str(&mov_str);
+        }
+        string
+    }
+
     pub fn zobrist(&self) -> Zobrist {
         self.zobrist
     }

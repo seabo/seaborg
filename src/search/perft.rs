@@ -128,7 +128,7 @@ impl PerftDataInternal {
 pub struct Perft<'a> {
     options: PerftOptions,
     position: &'a mut Position,
-    pub data: PerftDataInternal,
+    data: PerftDataInternal,
 }
 
 impl<'a> Perft<'a> {
