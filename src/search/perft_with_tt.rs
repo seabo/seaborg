@@ -1,4 +1,3 @@
-use crate::movegen::MoveGen;
 use crate::position::Position;
 use crate::tables::TranspoTable;
 
@@ -26,16 +25,12 @@ impl<'a> PerftWithTT<'a> {
             return 1;
         }
 
-        let moves = MoveGen::generate(&self.position);
+        let moves = self.position.generate_moves();
 
         if depth == 1 {
             let mut n = 0;
-            for mov in moves {
-                if !self.position.legal_move(mov) {
-                    continue;
-                } else {
-                    n += 1;
-                }
+            for _ in moves {
+                n += 1;
             }
             return n;
         }
@@ -47,13 +42,9 @@ impl<'a> PerftWithTT<'a> {
                 } else {
                     let mut n = 0;
                     for mov in moves {
-                        if !self.position.legal_move(mov) {
-                            continue;
-                        } else {
-                            self.position.make_move(mov);
-                            n += self.perft_inner(depth - 1);
-                            self.position.unmake_move();
-                        }
+                        self.position.make_move(mov);
+                        n += self.perft_inner(depth - 1);
+                        self.position.unmake_move();
                     }
 
                     self.tt.insert(self.position, TTData { depth, nodes: n });
@@ -63,13 +54,9 @@ impl<'a> PerftWithTT<'a> {
             None => {
                 let mut n = 0;
                 for mov in moves {
-                    if !self.position.legal_move(mov) {
-                        continue;
-                    } else {
-                        self.position.make_move(mov);
-                        n += self.perft_inner(depth - 1);
-                        self.position.unmake_move();
-                    }
+                    self.position.make_move(mov);
+                    n += self.perft_inner(depth - 1);
+                    self.position.unmake_move();
                 }
                 self.tt.insert(self.position, TTData { depth, nodes: n });
                 return n;

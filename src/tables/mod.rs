@@ -5,9 +5,9 @@ use separator::Separatable;
 pub struct TranspoTable<T: Clone> {
     /// Data
     data: Vec<Option<TranspoSlot<T>>>,
-    // TODO: we want to keep some kind of struct containing info on
-    // accesses, collisions, updates, etc. Ideally this can be turned off
-    // for efficiency in production, but would that need a macro?
+    /// Pre-calculated mask to help with indexing into the table
+    modulus_mask: usize,
+    /// Contains tracking info to help debug perfomance
     trace: Tracer,
 }
 
@@ -53,7 +53,7 @@ impl Tracer {
         self.misses += 1;
     }
 
-    fn replacements(&mut self) {
+    fn replacement(&mut self) {
         self.replacements += 1;
     }
 }
@@ -103,9 +103,11 @@ impl<T: Clone> TranspoTable<T> {
         let capacity = usize::pow(2, c);
         let mut data: Vec<Option<TranspoSlot<T>>> = Vec::with_capacity(capacity);
         data.resize(capacity, None);
+        let modulus_mask = data.capacity() - 1;
 
         TranspoTable {
             data,
+            modulus_mask,
             trace: Tracer::new(),
         }
     }
@@ -126,8 +128,11 @@ impl<T: Clone> TranspoTable<T> {
             Some(slot) => {
                 if slot.signature == signature {
                     // we have a true hit (or possibly a hash collision, but there's no way to know)
+                    // TODO: currently, we just always replace - need a better thought through approach
+                    // to replacement strategy
+                    *entry = Some(TranspoSlot { signature, data });
                     self.trace.hit();
-                    // TODO: decide whether to replace or keep and implement replacement strategy
+                    self.trace.replacement();
                 } else {
                     // we had an index collision (i.e. the Zobrist hash led to an entry in the
                     // transposition table that was already populated by a different position
@@ -190,8 +195,7 @@ impl<T: Clone> TranspoTable<T> {
         let zob_left_bits = (zob.0 >> 32) as usize;
         let check_bits = zob.0 as u32 & u32::MAX;
         // Store the modulus mask in the TranspoTable rather than calculating every time
-        let modulus_mask = self.data.capacity() - 1;
-        let idx = zob_left_bits & modulus_mask;
+        let idx = zob_left_bits & self.modulus_mask;
         (idx, check_bits)
     }
 

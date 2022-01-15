@@ -3,10 +3,9 @@ use rchess::position::Position;
 use rchess::precalc::boards::init_boards;
 use rchess::precalc::magic::init_magics;
 use rchess::precalc::zobrist::init_zobrist;
-use rchess::search::alphabeta::ABSearcher;
 use rchess::search::perft::Perft;
 use rchess::search::perft_with_tt::PerftWithTT;
-use rchess::tables::TranspoTable;
+use rchess::search::pv_search::PVSearch;
 
 use separator::Separatable;
 
@@ -25,11 +24,11 @@ fn init_globals() {
 
 fn main() {
     init_globals();
-    do_perft_with_tt();
+    // do_perft_with_tt();
     // do_transpo_table();
     // do_zobrist();
     // do_perft();
-    // do_ab();
+    do_pv_search();
     // do_material_eval();
     // println!("{:?}", Position::start_pos());
 }
@@ -85,18 +84,30 @@ fn do_material_eval() {
     }
 }
 
-fn do_ab() {
-    // let mate_in_2 = "r5rk/5p1p/5R2/4B3/8/8/7P/7K w - - 0 1";
-    // let mate_in_5 = "4b3/4B1bq/p2Q2pp/4pp2/8/8/p7/k1K5 w - - 0 1";
-    let mate_in_5 = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+fn do_pv_search() {
+    let mate_in_1 = "8/p1p2ppk/4p1q1/8/1B5p/P4QbP/1P4PK/3r4 w - - 6 33";
+    let mate_in_3 = "r5rk/5p1p/5R2/4B3/8/8/7P/7K w - - 0 1";
+    let bernstein_kotov = "R6R/1r3pp1/4p1kp/3pP3/1r2qPP1/7P/1P1Q3K/8 w - - 0 1";
+    let grau_colle = "1k5r/pP3ppp/3p2b1/1BN1n3/1Q2P3/P1B5/KP3P1P/7q w - - 0 1";
+    let mate_with_promo = "8/R7/4kPP1/3ppp2/3B1P2/1K1P1P2/8/8 w - - 0 1";
+    let mate_in_5 = "4b3/4B1bq/p2Q2pp/4pp2/8/8/p7/k1K5 w - - 0 1";
+    let random_pos = "5k2/p1p2pp1/2Q1p1q1/8/7p/P1B4P/1P3bPK/3r4 w - - 0 30";
+    let skewer = "4q3/8/8/8/4k3/8/1K6/6Q1 w - - 0 1";
+
     let mut pos = Position::from_fen(mate_in_5);
     match pos {
         Ok(ref mut pos) => {
             let turn = pos.turn().clone();
             let now = Instant::now();
-            let mut searcher = ABSearcher::new(pos);
-            let val = searcher.alphabeta(3, -10000, 10000, turn.is_white());
+            let mut searcher = PVSearch::new(pos);
+            // let val = searcher.pv_search(9, -10000, 10000) * if turn.is_white() { 1 } else { -1 };
+            let val = searcher.iterative_deepening(9) * if turn.is_white() { 1 } else { -1 };
             let elapsed = now.elapsed();
+            let pv = searcher.recover_pv();
+            for mov in pv {
+                print!("{} ", mov);
+            }
+
             println!("{}", val);
             println!(
                 "Evaluated position in {}ms",

@@ -1,11 +1,18 @@
 use crate::eval::material_eval;
+use crate::mov::Move;
 use crate::position::Position;
 use crate::tables::TranspoTable;
 use std::cmp::{max, min};
 
+#[derive(Clone)]
+pub struct TTData {
+    depth: u8,
+    score: i32,
+}
+
 pub struct ABSearcher<'a> {
     pos: &'a mut Position,
-    tt: TranspoTable<u8>,
+    tt: TranspoTable<TTData>,
 }
 
 impl<'a> ABSearcher<'a> {
@@ -24,7 +31,7 @@ impl<'a> ABSearcher<'a> {
     pub fn alphabeta(
         &mut self,
         // pos: &mut Position,
-        depth: usize,
+        depth: u8,
         mut alpha: i32,
         mut beta: i32,
         is_white: bool,
@@ -36,36 +43,80 @@ impl<'a> ABSearcher<'a> {
                 return material_eval(self.pos);
             }
         }
-        if is_white {
-            let mut val = -10000;
-            let moves = self.pos.generate_moves();
-            for mov in moves {
-                self.pos.make_move(mov);
-                // Check TT for a transpo here
-                self.tt.insert(self.pos, 0);
-                val = max(val, self.alphabeta(depth - 1, alpha, beta, false));
-                self.pos.unmake_move();
-                alpha = max(alpha, val);
-                if val >= beta {
-                    break;
+
+        match self.tt.get(self.pos) {
+            Some(data) => {
+                if data.depth >= depth {
+                    return data.score;
+                } else {
+                    if is_white {
+                        let mut val = -10000;
+                        let moves = self.pos.generate_moves();
+                        for mov in moves {
+                            self.pos.make_move(mov);
+                            val = max(val, self.alphabeta(depth - 1, alpha, beta, false));
+                            self.pos.unmake_move();
+                            alpha = max(alpha, val);
+
+                            self.tt.insert(self.pos, TTData { depth, score: val });
+
+                            if val >= beta {
+                                break;
+                            }
+                        }
+                        return val;
+                    } else {
+                        let mut val = 10000;
+                        let moves = self.pos.generate_moves();
+                        for mov in moves {
+                            self.pos.make_move(mov);
+                            val = min(val, self.alphabeta(depth - 1, alpha, beta, true));
+                            self.pos.unmake_move();
+                            beta = min(beta, val);
+
+                            self.tt.insert(self.pos, TTData { depth, score: val });
+                            if val <= alpha {
+                                break;
+                            }
+                        }
+                        return val;
+                    }
                 }
             }
-            return val;
-        } else {
-            let mut val = 10000;
-            let moves = self.pos.generate_moves();
-            for mov in moves {
-                self.pos.make_move(mov);
-                // Check TT for a transpo here
-                self.tt.insert(self.pos, 0);
-                val = min(val, self.alphabeta(depth - 1, alpha, beta, true));
-                self.pos.unmake_move();
-                beta = min(beta, val);
-                if val <= alpha {
-                    break;
+            None => {
+                if is_white {
+                    let mut val = -10000;
+                    let moves = self.pos.generate_moves();
+                    for mov in moves {
+                        self.pos.make_move(mov);
+                        val = max(val, self.alphabeta(depth - 1, alpha, beta, false));
+                        self.pos.unmake_move();
+                        alpha = max(alpha, val);
+
+                        self.tt.insert(self.pos, TTData { depth, score: val });
+
+                        if val >= beta {
+                            break;
+                        }
+                    }
+                    return val;
+                } else {
+                    let mut val = 10000;
+                    let moves = self.pos.generate_moves();
+                    for mov in moves {
+                        self.pos.make_move(mov);
+                        val = min(val, self.alphabeta(depth - 1, alpha, beta, true));
+                        self.pos.unmake_move();
+                        beta = min(beta, val);
+
+                        self.tt.insert(self.pos, TTData { depth, score: val });
+                        if val <= alpha {
+                            break;
+                        }
+                    }
+                    return val;
                 }
             }
-            return val;
         }
     }
 }
