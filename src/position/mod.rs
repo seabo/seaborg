@@ -416,11 +416,11 @@ impl Position {
     pub fn make_uci_move(&mut self, uci: &str) -> Option<Move> {
         let moves = self.generate_moves();
 
-        for mov in moves {
+        for mov in &moves {
             let uci_mov = mov.to_uci_string();
             if uci == uci_mov {
-                self.make_move(mov);
-                return Some(mov);
+                self.make_move(*mov);
+                return Some(*mov);
             }
         }
 

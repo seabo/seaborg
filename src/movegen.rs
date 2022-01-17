@@ -33,16 +33,16 @@ impl MoveGen {
     ///
     /// # Note
     ///
-    /// This method is currently slow. We are using a `Vec` to collect
-    /// the legal moves, which pushes things onto the heap. We should
-    /// try to stick with the `MoveList` structure, which lives on the stack
-    /// TODO: do that ^
+    /// TODO: this should usually be used. Ideally, we generate pseudo-legal moves
+    /// and have these held in a special structure implementing `Iterator` which is
+    /// capable of spitting out our moves in a sensible order, and with fast time
+    /// complexity (i.e. by lazily hopping over illegal moves, and so on).
     pub fn generate_legal(position: &Position) -> MoveList {
         let pseudo_legal = Self::generate(position);
         let mut legal: MoveList = Default::default();
-        for mov in pseudo_legal {
-            if position.legal_move(mov) {
-                legal.push(mov);
+        for mov in &pseudo_legal {
+            if position.legal_move(*mov) {
+                legal.push(*mov);
             }
         }
         legal

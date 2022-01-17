@@ -52,8 +52,8 @@ impl<'a> ABSearcher<'a> {
                     if is_white {
                         let mut val = -10000;
                         let moves = self.pos.generate_moves();
-                        for mov in moves {
-                            self.pos.make_move(mov);
+                        for mov in &moves {
+                            self.pos.make_move(*mov);
                             val = max(val, self.alphabeta(depth - 1, alpha, beta, false));
                             self.pos.unmake_move();
                             alpha = max(alpha, val);
@@ -68,8 +68,8 @@ impl<'a> ABSearcher<'a> {
                     } else {
                         let mut val = 10000;
                         let moves = self.pos.generate_moves();
-                        for mov in moves {
-                            self.pos.make_move(mov);
+                        for mov in &moves {
+                            self.pos.make_move(*mov);
                             val = min(val, self.alphabeta(depth - 1, alpha, beta, true));
                             self.pos.unmake_move();
                             beta = min(beta, val);
@@ -87,8 +87,8 @@ impl<'a> ABSearcher<'a> {
                 if is_white {
                     let mut val = -10000;
                     let moves = self.pos.generate_moves();
-                    for mov in moves {
-                        self.pos.make_move(mov);
+                    for mov in &moves {
+                        self.pos.make_move(*mov);
                         val = max(val, self.alphabeta(depth - 1, alpha, beta, false));
                         self.pos.unmake_move();
                         alpha = max(alpha, val);
@@ -103,8 +103,8 @@ impl<'a> ABSearcher<'a> {
                 } else {
                     let mut val = 10000;
                     let moves = self.pos.generate_moves();
-                    for mov in moves {
-                        self.pos.make_move(mov);
+                    for mov in &moves {
+                        self.pos.make_move(*mov);
                         val = min(val, self.alphabeta(depth - 1, alpha, beta, true));
                         self.pos.unmake_move();
                         beta = min(beta, val);

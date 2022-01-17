@@ -29,7 +29,7 @@ impl<'a> PerftWithTT<'a> {
 
         if depth == 1 {
             let mut n = 0;
-            for _ in moves {
+            for _ in &moves {
                 n += 1;
             }
             return n;
@@ -41,8 +41,8 @@ impl<'a> PerftWithTT<'a> {
                     return data.nodes;
                 } else {
                     let mut n = 0;
-                    for mov in moves {
-                        self.position.make_move(mov);
+                    for mov in &moves {
+                        self.position.make_move(*mov);
                         n += self.perft_inner(depth - 1);
                         self.position.unmake_move();
                     }
@@ -53,8 +53,8 @@ impl<'a> PerftWithTT<'a> {
             }
             None => {
                 let mut n = 0;
-                for mov in moves {
-                    self.position.make_move(mov);
+                for mov in &moves {
+                    self.position.make_move(*mov);
                     n += self.perft_inner(depth - 1);
                     self.position.unmake_move();
                 }

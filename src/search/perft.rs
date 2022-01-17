@@ -170,15 +170,15 @@ impl<'a> Perft<'a> {
 
         let moves = MoveGen::generate(&self.position);
 
-        for mov in moves {
-            if !self.position.legal_move(mov) {
+        for mov in &moves {
+            if !self.position.legal_move(*mov) {
                 continue;
             }
 
             if depth == 1 {
-                self.handle_leaf(mov);
+                self.handle_leaf(*mov);
             } else {
-                self.recurse(mov, depth - 1);
+                self.recurse(*mov, depth - 1);
             }
         }
     }
@@ -213,15 +213,15 @@ impl<'a> Perft<'a> {
         let mut perft = Self::new(position, perft_options);
         let mut cumulative_nodes: usize = 0;
         let moves = MoveGen::generate(&perft.position);
-        for mov in moves {
-            if !perft.position.legal_move(mov) {
+        for mov in &moves {
+            if !perft.position.legal_move(*mov) {
                 continue;
             }
             if depth == 1 {
                 println!("{}: 1", mov);
-                perft.handle_leaf(mov);
+                perft.handle_leaf(*mov);
             } else {
-                perft.position.make_move(mov);
+                perft.position.make_move(*mov);
                 perft.perft_inner(depth - 1);
                 perft.position.unmake_move();
                 let new_nodes_for_mov = perft.data.nodes - cumulative_nodes;

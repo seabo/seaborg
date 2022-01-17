@@ -1,6 +1,5 @@
 use crate::eval::material_eval;
 use crate::mov::Move;
-use crate::movelist::MoveList;
 use crate::position::Position;
 use crate::tables::TranspoTable;
 use separator::Separatable;
@@ -31,7 +30,7 @@ pub struct PVSearch<'a> {
 
 impl<'a> PVSearch<'a> {
     pub fn new(pos: &'a mut Position) -> Self {
-        let tt: TranspoTable<TTData> = TranspoTable::with_capacity(27);
+        let tt = TranspoTable::with_capacity(27);
         PVSearch {
             pos,
             tt,
@@ -131,9 +130,9 @@ impl<'a> PVSearch<'a> {
         let mut best_move: Move = moves[0];
         self.moves_considered += moves.len();
 
-        for mov in moves {
+        for mov in &moves {
             self.moves_visited += 1;
-            self.pos.make_move(mov);
+            self.pos.make_move(*mov);
             let mut score: i32;
             if search_pv {
                 score = -self.pv_search(depth - 1, -beta, -alpha);
@@ -175,14 +174,4 @@ impl<'a> PVSearch<'a> {
         self.tt.insert(self.pos, tt_entry);
         return val;
     }
-}
-
-// TODO: for move-ordering, we want to construct an `Iterator` which
-// lazily picks the next best move for consideration using a selection
-// sort, based on some priority ordering. We want the struct which
-// maintains the state of this process to have a reference to the
-// transposition table. It's likely that the transpo table needs a
-// read-write lock soon, because everything wants access to it...
-struct MoveOrdering {
-    moves: MoveList,
 }

@@ -116,8 +116,8 @@ impl<'a> Negamax<'a> {
         let mut val = -10_000;
         let mut best_move: Move = moves[0];
 
-        for mov in moves {
-            self.pos.make_move(mov);
+        for mov in &moves {
+            self.pos.make_move(*mov);
             let score = -self.negamax(depth - 1, -beta, -alpha);
             if score > val {
                 val = score;
