@@ -20,16 +20,16 @@ pub struct TTData {
     best_move: Move,
 }
 
-pub struct PVSearch<'a> {
-    pos: &'a mut Position,
+pub struct PVSearch {
+    pos: Position,
     tt: Table<TTData>,
     visited: usize,
     moves_considered: usize,
     moves_visited: usize,
 }
 
-impl<'a> PVSearch<'a> {
-    pub fn new(pos: &'a mut Position) -> Self {
+impl PVSearch {
+    pub fn new(pos: Position) -> Self {
         let tt = Table::with_capacity(27);
         PVSearch {
             pos,
@@ -56,7 +56,7 @@ impl<'a> PVSearch<'a> {
     }
 
     pub fn get_best_move(&mut self) -> Option<Move> {
-        match self.tt.get(self.pos) {
+        match self.tt.get(&self.pos) {
             Some(data) => Some(data.best_move),
             None => None,
         }
@@ -85,10 +85,8 @@ impl<'a> PVSearch<'a> {
             self.pv_search(i, -10_000, 10_000);
         }
 
-        match self.tt.get(self.pos) {
-            Some(data) => data.score,
-            None => unreachable!(),
-        }
+        // The TT should always have an entry here, so the unwrap never fails
+        self.tt.get(&self.pos).unwrap().score
     }
 
     pub fn pv_search(&mut self, depth: u8, mut alpha: i32, mut beta: i32) -> i32 {
@@ -100,7 +98,7 @@ impl<'a> PVSearch<'a> {
             return -10_000;
         }
 
-        if let Some(data) = self.tt.get(self.pos) {
+        if let Some(data) = self.tt.get(&self.pos) {
             if data.depth >= depth {
                 match data.node_type {
                     NodeType::Exact => return data.score,
@@ -111,7 +109,7 @@ impl<'a> PVSearch<'a> {
         };
 
         if depth == 0 {
-            return material_eval(self.pos) * if is_white { 1 } else { -1 };
+            return material_eval(&self.pos) * if is_white { 1 } else { -1 };
         }
 
         let moves = self.pos.generate_moves();
@@ -168,7 +166,7 @@ impl<'a> PVSearch<'a> {
             best_move,
         };
 
-        self.tt.insert(self.pos, tt_entry);
+        self.tt.insert(&self.pos, tt_entry);
         return val;
     }
 }

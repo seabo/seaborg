@@ -94,9 +94,10 @@ fn do_pv_search() {
     let random_pos = "5k2/p1p2pp1/2Q1p1q1/8/7p/P1B4P/1P3bPK/3r4 w - - 0 30";
     let skewer = "4q3/8/8/8/4k3/8/1K6/6Q1 w - - 0 1";
 
-    let mut pos = Position::from_fen(mate_in_5);
+    let pos = Position::from_fen(mate_in_5);
+
     match pos {
-        Ok(ref mut pos) => {
+        Ok(pos) => {
             let turn = pos.turn().clone();
             let now = Instant::now();
             let mut searcher = PVSearch::new(pos);
