@@ -1,7 +1,7 @@
 use crate::eval::material_eval;
 use crate::mov::Move;
 use crate::position::Position;
-use crate::tables::TranspoTable;
+use crate::tables::Table;
 use separator::Separatable;
 use std::cmp::{max, min};
 
@@ -22,7 +22,7 @@ pub struct TTData {
 
 pub struct PVSearch<'a> {
     pos: &'a mut Position,
-    tt: TranspoTable<TTData>,
+    tt: Table<TTData>,
     visited: usize,
     moves_considered: usize,
     moves_visited: usize,
@@ -30,7 +30,7 @@ pub struct PVSearch<'a> {
 
 impl<'a> PVSearch<'a> {
     pub fn new(pos: &'a mut Position) -> Self {
-        let tt = TranspoTable::with_capacity(27);
+        let tt = Table::with_capacity(27);
         PVSearch {
             pos,
             tt,

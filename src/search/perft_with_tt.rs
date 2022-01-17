@@ -1,5 +1,5 @@
 use crate::position::Position;
-use crate::tables::TranspoTable;
+use crate::tables::Table;
 
 #[derive(Clone)]
 pub struct TTData {
@@ -9,14 +9,14 @@ pub struct TTData {
 
 pub struct PerftWithTT<'a> {
     position: &'a mut Position,
-    tt: TranspoTable<TTData>,
+    tt: Table<TTData>,
 }
 
 impl<'a> PerftWithTT<'a> {
     fn new(position: &'a mut Position) -> Self {
         Self {
             position,
-            tt: TranspoTable::with_capacity(27),
+            tt: Table::with_capacity(27),
         }
     }
 

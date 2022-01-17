@@ -1,7 +1,7 @@
 use crate::eval::material_eval;
 use crate::mov::Move;
 use crate::position::Position;
-use crate::tables::TranspoTable;
+use crate::tables::Table;
 use separator::Separatable;
 use std::cmp::{max, min};
 
@@ -22,13 +22,13 @@ pub struct TTData {
 
 pub struct Negamax<'a> {
     pos: &'a mut Position,
-    tt: TranspoTable<TTData>,
+    tt: Table<TTData>,
     visited: usize,
 }
 
 impl<'a> Negamax<'a> {
     pub fn new(pos: &'a mut Position) -> Self {
-        let tt: TranspoTable<TTData> = TranspoTable::with_capacity(27);
+        let tt: Table<TTData> = Table::with_capacity(27);
         Negamax {
             pos,
             tt,

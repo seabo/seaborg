@@ -1,7 +1,7 @@
 use crate::eval::material_eval;
 use crate::mov::Move;
 use crate::position::Position;
-use crate::tables::TranspoTable;
+use crate::tables::Table;
 use std::cmp::{max, min};
 
 #[derive(Clone)]
@@ -12,7 +12,7 @@ pub struct TTData {
 
 pub struct ABSearcher<'a> {
     pos: &'a mut Position,
-    tt: TranspoTable<TTData>,
+    tt: Table<TTData>,
 }
 
 impl<'a> ABSearcher<'a> {
@@ -20,7 +20,7 @@ impl<'a> ABSearcher<'a> {
     pub fn new(pos: &'a mut Position) -> Self {
         ABSearcher {
             pos,
-            tt: TranspoTable::with_capacity(27),
+            tt: Table::with_capacity(27),
         }
     }
 

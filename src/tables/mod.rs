@@ -2,7 +2,7 @@ use crate::position::Position;
 use separator::Separatable;
 use std::cell::RefCell;
 
-pub struct TranspoTable<T> {
+pub struct Table<T> {
     /// Data
     data: Vec<Option<Slot<T>>>,
     /// Pre-calculated mask to help with indexing into the table
@@ -17,14 +17,14 @@ struct Slot<T> {
     pub data: T,
 }
 
-impl<T: Clone> TranspoTable<T> {
+impl<T: Clone> Table<T> {
     pub fn with_capacity(c: u32) -> Self {
         let capacity = usize::pow(2, c);
         let mut data: Vec<Option<Slot<T>>> = Vec::with_capacity(capacity);
         data.resize(capacity, None);
         let modulus_mask = data.capacity() - 1;
 
-        TranspoTable {
+        Table {
             data,
             modulus_mask,
             trace: RefCell::new(Tracer::new()),
