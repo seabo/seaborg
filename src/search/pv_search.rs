@@ -100,17 +100,14 @@ impl<'a> PVSearch<'a> {
             return -10_000;
         }
 
-        match self.tt.get(self.pos) {
-            Some(data) => {
-                if data.depth >= depth {
-                    match data.node_type {
-                        NodeType::Exact => return data.score,
-                        NodeType::LowerBound => alpha = max(alpha, data.score),
-                        NodeType::UpperBound => beta = min(beta, data.score),
-                    }
+        if let Some(data) = self.tt.get(self.pos) {
+            if data.depth >= depth {
+                match data.node_type {
+                    NodeType::Exact => return data.score,
+                    NodeType::LowerBound => alpha = max(alpha, data.score),
+                    NodeType::UpperBound => beta = min(beta, data.score),
                 }
             }
-            None => {}
         };
 
         if depth == 0 {
