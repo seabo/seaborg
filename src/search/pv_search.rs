@@ -98,7 +98,11 @@ impl PVSearch {
             return -10_000;
         }
 
+        let mut tt_move: Option<Move> = None;
+
         if let Some(data) = self.tt.get(&self.pos) {
+            tt_move = Some(data.best_move);
+
             if data.depth >= depth {
                 match data.node_type {
                     NodeType::Exact => return data.score,
@@ -120,14 +124,15 @@ impl PVSearch {
                 return 0;
             }
         }
-        let mut search_pv = true;
-        let mut val = -10_000;
+
         let mut best_move: Move = moves[0];
         self.moves_considered += moves.len();
-
-        for mov in &moves {
+        let mut search_pv = true;
+        let mut val = -10_000;
+        let ordered_moves = OrderedMoveList::new(moves, tt_move);
+        for mov in ordered_moves {
             self.moves_visited += 1;
-            self.pos.make_move(*mov);
+            self.pos.make_move(mov);
             let mut score: i32;
             if search_pv {
                 score = -self.pv_search(depth - 1, -beta, -alpha);
@@ -265,14 +270,21 @@ impl Iterator for OrderedMoveList {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::init::init_globals;
     use crate::position::Position;
     #[test]
-    fn orders_captures_first() {
+    fn orders_moves() {
+        init_globals();
+
         let pos = Position::from_fen("4b3/4B1bq/p2Q2pp/4pp2/8/8/p7/k1K5 w - - 0 1").unwrap();
         let move_list = pos.generate_moves();
-        let ordered_move_list = OrderedMoveList::new(move_list, None);
-        for mov in ordered_move_list {
-            println!("{}", mov);
-        }
+        let tt_move = move_list[4].clone();
+        let mut ordered_move_list = OrderedMoveList::new(move_list, Some(tt_move));
+
+        assert_eq!(ordered_move_list.next().unwrap(), tt_move);
+        assert_eq!(ordered_move_list.next().unwrap().is_capture(), true);
+        assert_eq!(ordered_move_list.next().unwrap().is_capture(), true);
+        assert_eq!(ordered_move_list.next().unwrap().is_capture(), true);
+        assert_eq!(ordered_move_list.next().unwrap().is_capture(), false);
     }
 }

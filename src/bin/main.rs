@@ -1,26 +1,13 @@
 use rchess::eval::material_eval;
+use rchess::init::init_globals;
 use rchess::position::Position;
-use rchess::precalc::boards::init_boards;
-use rchess::precalc::magic::init_magics;
-use rchess::precalc::zobrist::init_zobrist;
 use rchess::search::perft::Perft;
 use rchess::search::perft_with_tt::PerftWithTT;
 use rchess::search::pv_search::{OrderedMoveList, PVSearch};
 
 use separator::Separatable;
 
-use std::sync::Once;
 use std::time::Instant;
-
-static INITALIZED: Once = Once::new();
-
-fn init_globals() {
-    INITALIZED.call_once(|| {
-        init_magics();
-        init_boards();
-        init_zobrist();
-    })
-}
 
 fn main() {
     init_globals();
@@ -28,8 +15,8 @@ fn main() {
     // do_transpo_table();
     // do_zobrist();
     // do_perft();
-    // do_pv_search();
-    do_ordered_moves();
+    do_pv_search();
+    // do_ordered_moves();
     // do_material_eval();
     // println!("{:?}", Position::start_pos());
 }
@@ -94,8 +81,9 @@ fn do_pv_search() {
     let mate_in_5 = "4b3/4B1bq/p2Q2pp/4pp2/8/8/p7/k1K5 w - - 0 1";
     let random_pos = "5k2/p1p2pp1/2Q1p1q1/8/7p/P1B4P/1P3bPK/3r4 w - - 0 30";
     let skewer = "4q3/8/8/8/4k3/8/1K6/6Q1 w - - 0 1";
+    let mate_in_7 = "rn3rk1/pbppq1pp/1p2pb2/4N2Q/3PN3/3B4/PPP2PPP/R3K2R w KQ - 7 11";
 
-    let pos = Position::from_fen(mate_in_5);
+    let pos = Position::from_fen(mate_in_7);
 
     match pos {
         Ok(pos) => {
@@ -103,7 +91,7 @@ fn do_pv_search() {
             let now = Instant::now();
             let mut searcher = PVSearch::new(pos);
             // let val = searcher.pv_search(9, -10000, 10000) * if turn.is_white() { 1 } else { -1 };
-            let val = searcher.iterative_deepening(9) * if turn.is_white() { 1 } else { -1 };
+            let val = searcher.iterative_deepening(19) * if turn.is_white() { 1 } else { -1 };
             let elapsed = now.elapsed();
             let pv = searcher.recover_pv();
             for mov in pv {

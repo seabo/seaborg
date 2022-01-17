@@ -20,7 +20,7 @@ bitflags! {
 /// There is not enough information in a `Move` to allow undoing. When a move
 /// is actually made on the board, a `MoveHistory` struct is built which contains
 /// more information allowing for efficient an `unmake_move()`.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct Move {
     orig: Square,
     dest: Square,
