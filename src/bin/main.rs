@@ -5,7 +5,7 @@ use rchess::precalc::magic::init_magics;
 use rchess::precalc::zobrist::init_zobrist;
 use rchess::search::perft::Perft;
 use rchess::search::perft_with_tt::PerftWithTT;
-use rchess::search::pv_search::PVSearch;
+use rchess::search::pv_search::{OrderedMoveList, PVSearch};
 
 use separator::Separatable;
 
@@ -28,7 +28,8 @@ fn main() {
     // do_transpo_table();
     // do_zobrist();
     // do_perft();
-    do_pv_search();
+    // do_pv_search();
+    do_ordered_moves();
     // do_material_eval();
     // println!("{:?}", Position::start_pos());
 }
@@ -174,5 +175,21 @@ fn do_perft() {
         Err(fen_error) => {
             println!("{}", fen_error.msg);
         }
+    }
+}
+
+fn do_ordered_moves() {
+    let pos = Position::from_fen("4b3/4B1bq/p2Q2pp/4pp2/8/8/p7/k1K5 w - - 0 1").unwrap();
+    let move_list = pos.generate_moves();
+    for mov in &move_list {
+        println!("{}", mov);
+    }
+
+    println!("====");
+
+    let ordered_move_list = OrderedMoveList::new(move_list, None);
+
+    for mov in ordered_move_list {
+        println!("{}", mov);
     }
 }
