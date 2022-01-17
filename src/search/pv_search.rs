@@ -30,10 +30,9 @@ pub struct PVSearch {
 
 impl PVSearch {
     pub fn new(pos: Position) -> Self {
-        let tt = Table::with_capacity(27);
         PVSearch {
             pos,
-            tt,
+            tt: Table::with_capacity(27),
             visited: 0,
             moves_considered: 0,
             moves_visited: 0,

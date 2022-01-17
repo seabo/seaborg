@@ -13,8 +13,8 @@ pub struct Table<T> {
 
 #[derive(Clone, Debug)]
 struct Slot<T> {
-    pub signature: u32,
-    pub data: T,
+    signature: u32,
+    data: T,
 }
 
 impl<T: Clone> Table<T> {
