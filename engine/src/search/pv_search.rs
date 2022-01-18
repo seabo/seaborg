@@ -25,10 +25,10 @@
 // this.
 
 use crate::eval::material_eval;
-use crate::mov::Move;
-use crate::movelist::MoveList;
-use crate::position::Position;
 use crate::tables::Table;
+use core::mov::Move;
+use core::movelist::MoveList;
+use core::position::Position;
 use separator::Separatable;
 use std::cmp::{max, min};
 
@@ -296,8 +296,8 @@ impl Iterator for OrderedMoveList {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::init::init_globals;
-    use crate::position::Position;
+    use core::init::init_globals;
+    use core::position::Position;
     #[test]
     fn orders_moves() {
         init_globals();

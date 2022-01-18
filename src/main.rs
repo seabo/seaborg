@@ -1,10 +1,10 @@
-use rchess::comm::uci::UciSess;
-use rchess::eval::material_eval;
-use rchess::init::init_globals;
-use rchess::position::Position;
-use rchess::search::perft::Perft;
-use rchess::search::perft_with_tt::PerftWithTT;
-use rchess::search::pv_search::{OrderedMoveList, PVSearch};
+use core::init::init_globals;
+use core::position::Position;
+use engine::comm::uci::UciSess;
+use engine::eval::material_eval;
+use engine::search::perft::Perft;
+use engine::search::perft_with_tt::PerftWithTT;
+use engine::search::pv_search::{OrderedMoveList, PVSearch};
 
 use separator::Separatable;
 

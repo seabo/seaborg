@@ -1,5 +1,5 @@
-use crate::position::Position;
 use crate::tables::Table;
+use core::position::Position;
 
 #[derive(Clone)]
 pub struct TTData {

@@ -1,7 +1,7 @@
 use crate::eval::material_eval;
-use crate::mov::Move;
-use crate::position::Position;
 use crate::tables::Table;
+use core::mov::Move;
+use core::position::Position;
 use separator::Separatable;
 use std::cmp::{max, min};
 

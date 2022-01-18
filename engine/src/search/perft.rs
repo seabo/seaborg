@@ -1,6 +1,5 @@
-use crate::mov::Move;
-use crate::movegen::MoveGen;
-use crate::position::Position;
+use core::mov::Move;
+use core::position::Position;
 
 use separator::Separatable;
 
@@ -168,13 +167,9 @@ impl<'a> Perft<'a> {
             self.data.nodes += 1;
         }
 
-        let moves = MoveGen::generate(&self.position);
+        let moves = self.position.generate_moves();
 
         for mov in &moves {
-            if !self.position.legal_move(*mov) {
-                continue;
-            }
-
             if depth == 1 {
                 self.handle_leaf(*mov);
             } else {
@@ -212,7 +207,7 @@ impl<'a> Perft<'a> {
         let perft_options = PerftOptions::new(collect_check_data);
         let mut perft = Self::new(position, perft_options);
         let mut cumulative_nodes: usize = 0;
-        let moves = MoveGen::generate(&perft.position);
+        let moves = perft.position.generate_moves();
         for mov in &moves {
             if !perft.position.legal_move(*mov) {
                 continue;

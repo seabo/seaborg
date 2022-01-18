@@ -1,4 +1,4 @@
-use crate::position::Position;
+use core::position::Position;
 use separator::Separatable;
 use std::cell::RefCell;
 

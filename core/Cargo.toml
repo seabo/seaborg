@@ -1,9 +1,8 @@
 [package]
-name = "rchess"
+name = "core"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-core = { path = "./core" }
-engine = { path = "./engine" }
 separator = "0.4"
+bitflags = "1.3"

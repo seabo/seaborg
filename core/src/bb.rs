@@ -9,12 +9,6 @@ use std::ops::*;
 #[repr(transparent)]
 pub struct Bitboard(pub u64);
 
-pub const WHITE_SINGLE_PAWN_MOVE_MASK: Bitboard = Bitboard(0x0000FFFFFFFFFF00);
-pub const WHITE_LEFT_PAWN_CAPTURE_MASK: Bitboard = Bitboard(0x007F7F7F7F7F0000);
-pub const WHITE_RIGHT_PAWN_CAPTURE_MASK: Bitboard = Bitboard(0x00FEFEFEFEFE0000);
-pub const WHITE_LEFTWARD_PROMOTION_MASK: Bitboard = Bitboard(0x00FE000000000000);
-pub const WHITE_RIGHTWARD_PROMOTION_MASK: Bitboard = Bitboard(0x007F000000000000);
-
 impl Bitboard {
     /// Bitboard of all squares
     pub const ALL: Bitboard = Bitboard(ALL);
