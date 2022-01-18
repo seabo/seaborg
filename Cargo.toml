@@ -6,4 +6,5 @@ edition = "2021"
 [dependencies]
 core = { path = "./core" }
 engine = { path = "./engine" }
+clap = { version = "3.0.9", features = ["derive"] }
 separator = "0.4"

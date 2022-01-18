@@ -1,10 +1,5 @@
-mod cmdline;
-mod dev;
-
-use cmdline::cmdline;
 use core::init::init_globals;
 use core::position::Position;
-use engine::comm::uci::UciSess;
 use engine::eval::material_eval;
 use engine::search::perft::Perft;
 use engine::search::perft_with_tt::PerftWithTT;
@@ -15,31 +10,16 @@ use separator::Separatable;
 use std::io;
 use std::time::Instant;
 
-fn main() {
-    real_main();
-    // init_globals();
+pub fn dev() {
+    init_globals();
     // do_perft_with_tt();
     // do_transpo_table();
     // do_zobrist();
     // do_perft();
-    //do_pv_search();
+    do_pv_search();
     // do_main_loop();
     // do_ordered_moves();
     // do_material_eval();
-    // println!("{:?}", Position::start_pos());
-}
-
-// This will evenutally become the real program's entry point, once
-// everything is ready. It will:
-// - do any lightweight initialisation (but not magic bitboards and the like)
-// - hand off the command line parser (clap)
-fn real_main() {
-    cmdline();
-}
-
-fn do_main_loop() {
-    let mut uci = UciSess::new();
-    uci.run();
 }
 
 fn do_perft_with_tt() {
