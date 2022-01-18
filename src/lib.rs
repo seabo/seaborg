@@ -4,6 +4,7 @@ mod macros;
 pub mod precalc;
 
 pub mod bb;
+pub mod comm;
 pub mod eval;
 pub mod init;
 pub mod mov;

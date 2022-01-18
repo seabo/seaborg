@@ -1,3 +1,29 @@
+// Note: using the TT can cause 'instability' (in the sense that we can end up
+// with a different result from not using the TT) because:
+// - if you get a TT hit from a previous search at a _higher_ depth then you
+//   definitely want to use this information, but it won't give precisely the same
+//   answer as if you had run a plain search with no TT (the answer should actually
+//   be better)
+//
+// As a test of correctness, we should follow this
+// [advice](https://webdocs.cs.ualberta.ca/~jonathan/PREVIOUS/Courses/657/A1.pdf):
+//
+//   If you initially restrict a TT lookup to be valid only if the table depth exactly
+//   matches the depth that you need, then the TT will not change the result of a
+//   fixed-depth alpha-beta search. It should, however, reduce the number of nodes
+//   searched. Verify that this is working correctly.
+//
+//   Add in iterative deepening and move ordering. If you do this right, it should not
+//   change the final result of the search but, again, it should reduce the number of
+//   nodes searched.
+//
+//   Only when you are sure all the above is 100% working should you move on to more
+//   search enhancements and a better evaluation function.
+//
+// TODO: set up some automated test suite which assesses whether we are getting precisely
+// accurate equivalent results as plain alpha-beta search, when restricting the TT like
+// this.
+
 use crate::eval::material_eval;
 use crate::mov::Move;
 use crate::movelist::MoveList;

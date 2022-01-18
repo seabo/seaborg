@@ -1,3 +1,4 @@
+use rchess::comm::uci::UciSess;
 use rchess::eval::material_eval;
 use rchess::init::init_globals;
 use rchess::position::Position;
@@ -7,6 +8,7 @@ use rchess::search::pv_search::{OrderedMoveList, PVSearch};
 
 use separator::Separatable;
 
+use std::io;
 use std::time::Instant;
 
 fn main() {
@@ -16,9 +18,15 @@ fn main() {
     // do_zobrist();
     // do_perft();
     do_pv_search();
+    // do_main_loop();
     // do_ordered_moves();
     // do_material_eval();
     // println!("{:?}", Position::start_pos());
+}
+
+fn do_main_loop() {
+    let mut uci = UciSess::new();
+    uci.run();
 }
 
 fn do_perft_with_tt() {
