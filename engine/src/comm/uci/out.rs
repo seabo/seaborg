@@ -1,5 +1,4 @@
 //! Emit engine uci commands to stdout.
-
 use std::io::{self, Stdout};
 
 const NAME: &str = env!("CARGO_PKG_NAME");
@@ -11,7 +10,7 @@ pub struct UciOut {}
 impl UciOut {
     pub fn identify(h: &Stdout) {
         // TODO: get these details from Cargo.toml somehow
-        println!("id name {}", NAME);
+        println!("id name {} {}", NAME, VERSION);
         println!("id author {}", AUTHORS);
     }
 }

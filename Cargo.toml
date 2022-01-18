@@ -1,6 +1,10 @@
+[workspace]
+members = ["core", "engine"]
+
 [package]
 name = "rchess"
 version = "0.1.0"
+authors = ["George Seabridge <georgeseabridge@gmail.com>"]
 edition = "2021"
 
 [dependencies]
