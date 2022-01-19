@@ -1,6 +1,6 @@
 use crate::dev::dev;
 use clap::Parser;
-use engine::comm::uci;
+use engine::sess::Session;
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -18,8 +18,8 @@ pub fn cmdline() {
     let args = Args::parse();
 
     if args.uci {
-        let mut uci_sess = uci::EngineSess::new();
-        uci_sess.run();
+        let mut engine_sess = Session::new();
+        engine_sess.main_loop();
     }
 
     if args.dev {
