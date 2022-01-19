@@ -1,4 +1,4 @@
-//! A UCI session.
+//! An Engine session.
 //!
 //! This structure is created when the user loads the program
 //! with the `--uci` flag, or when the `uci` command is sent.
@@ -10,21 +10,19 @@
 //! parses these commands, and issues internal engine commands
 //! via the communication channel.
 
-// TODO: probably should split `uci` module into two submodules:
 // uci::sess - manages a uci_session, which includes:
-//             - holding a handle to the command line buffer
-//             - running an infinite loop waiting for command line input
+//     DONE    - holding a handle to the command line buffer
+//     DONE    - running an infinite loop waiting for command line input
 //             - holding `crossbeam_channel` tx and rx handles
 //             - spawning the main search thread and holding a handle to it
-//             - communicating the latest commands from the GUI through to the engine
+//     DONE    - communicating the latest commands from the GUI through to the engine
 //             - and passing search info back from the engine to the GUI
 
-mod cmd;
-mod out;
+pub mod cmd;
+pub mod out;
 
-use cmd::UciParser;
-use out::UciOut;
-use std::io::{self, Stdin, Stdout};
+use std::io::{self, Stdin};
+use std::thread;
 
 // TODO: this needs to move to the engine crate and be imported to here
 #[derive(Debug)]
@@ -33,6 +31,11 @@ pub enum EngineCommand {
     SetStartpos,
     SetOption,
     Go,
+}
+
+#[derive(Debug)]
+pub enum GuiCommand {
+    ReadyOk,
 }
 
 /// A `SessionCommand` is a command which queries the UCI session for readiness
@@ -55,37 +58,4 @@ pub enum SessionCommand {
     /// An engine command was sent, which the UCI session should process and pass
     /// through to the engine process.
     Engine(EngineCommand),
-}
-
-pub struct UciSess {
-    stdin: Stdin,
-    stdout: Stdout,
-}
-
-impl UciSess {
-    pub fn new() -> Self {
-        Self {
-            stdin: io::stdin(),
-            stdout: io::stdout(),
-        }
-    }
-
-    pub fn run(&mut self) {
-        loop {
-            // let mut buffer = String::new();
-            // self.handle.read_line(&mut buffer);
-            // let token_stream = UciSess::scan_input(&buffer);
-            match UciParser::next_command(&self.stdin) {
-                Ok(cmd) => self.execute_command(cmd),
-                Err(err) => println!("Parsing error: {:?}", err),
-            }
-        }
-    }
-
-    fn execute_command(&mut self, cmd: SessionCommand) {
-        match cmd {
-            SessionCommand::Uci => UciOut::identify(&self.stdout),
-            _ => todo!(),
-        }
-    }
 }

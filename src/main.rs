@@ -4,7 +4,7 @@ mod dev;
 use cmdline::cmdline;
 use core::init::init_globals;
 use core::position::Position;
-use engine::comm::uci::UciSess;
+use engine::comm::uci::EngineSess;
 use engine::eval::material_eval;
 use engine::search::perft::Perft;
 use engine::search::perft_with_tt::PerftWithTT;
@@ -38,7 +38,7 @@ fn real_main() {
 }
 
 fn do_main_loop() {
-    let mut uci = UciSess::new();
+    let mut uci = EngineSess::new();
     uci.run();
 }
 

@@ -18,7 +18,7 @@ pub fn cmdline() {
     let args = Args::parse();
 
     if args.uci {
-        let mut uci_sess = uci::UciSess::new();
+        let mut uci_sess = uci::EngineSess::new();
         uci_sess.run();
     }
 

@@ -7,7 +7,6 @@ use engine::search::pv_search::{OrderedMoveList, PVSearch};
 
 use separator::Separatable;
 
-use std::io;
 use std::time::Instant;
 
 pub fn dev() {
