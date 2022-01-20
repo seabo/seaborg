@@ -10,6 +10,12 @@ pub struct FenError {
     pub msg: String,
 }
 
+impl std::fmt::Display for FenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.ty, self.msg)
+    }
+}
+
 #[derive(Debug)]
 pub enum FenErrorType {
     IncorrectNumberOfFields,
@@ -24,6 +30,39 @@ pub enum FenErrorType {
     PiecePositionsInvalidNumber,
     PiecePositionsRowTooLong,
     PiecePositionsRowTooShort,
+}
+
+impl std::fmt::Display for FenErrorType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FenErrorType::IncorrectNumberOfFields => write!(f, "incorrect number of fields"),
+            FenErrorType::SideToMoveInvalid => write!(f, "side to move invalid"),
+            FenErrorType::MoveNumberFieldNotPositiveInteger => {
+                write!(f, "move number field not positive integer")
+            }
+            FenErrorType::HalfMoveCounterNotNonNegInteger => {
+                write!(f, "half move counter not a non-negative integer")
+            }
+            FenErrorType::EnPassantSquareInvalid => write!(f, "en passant square invalid"),
+            FenErrorType::CastlingRightsInvalid => write!(f, "castling rights invalid"),
+            FenErrorType::PiecePositionsNotEightRows => {
+                write!(f, "piece positions string does not have eight ranks")
+            }
+            FenErrorType::PiecePositionsConsecutiveNumbers => {
+                write!(f, "piece positions consecutive numbers")
+            }
+            FenErrorType::PiecePositionsInvalidPiece => {
+                write!(f, "piece positions has an invalid piece")
+            }
+            FenErrorType::PiecePositionsInvalidNumber => {
+                write!(f, "piece positions has invalid number")
+            }
+            FenErrorType::PiecePositionsRowTooLong => write!(f, "piece positions row is too long"),
+            FenErrorType::PiecePositionsRowTooShort => {
+                write!(f, "piece positions row is too short")
+            }
+        }
+    }
 }
 
 impl Position {

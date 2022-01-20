@@ -58,16 +58,22 @@ impl Board {
             squares[rank][file] = self.arr[i]
         }
 
-        s.push_str("   ┌────────────────────────┐\n");
+        s.push_str(" ╔═══╤═══╤═══╤═══╤═══╤═══╤═══╤═══╗\n");
         for (i, row) in squares.iter().rev().enumerate() {
-            s.push_str(&format!(" {} │", 8 - i));
-            for square in row {
+            s.push_str(" ║");
+            for (j, square) in row.iter().enumerate() {
                 s.push_str(&format!(" {} ", square));
+                if j != 7 {
+                    s.push_str("│")
+                }
             }
-            s.push_str("│\n");
+            s.push_str(&format!("║ {}\n", 8 - i));
+            if i != 7 {
+                s.push_str(" ╟───┼───┼───┼───┼───┼───┼───┼───╢\n");
+            }
         }
-        s.push_str("   └────────────────────────┘\n");
-        s.push_str("     a  b  c  d  e  f  g  h \n");
+        s.push_str(" ╚═══╧═══╧═══╧═══╧═══╧═══╧═══╧═══╝\n");
+        s.push_str("   a   b   c   d   e   f   g   h \n");
 
         s
     }

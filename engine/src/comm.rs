@@ -82,7 +82,7 @@ impl Comm {
         let to_gui_thread = thread::spawn(move || loop {
             let engine_cmd = rx.recv();
 
-            match engine_cmd {
+            match engine_cmd.clone() {
                 Ok(res) => Uci::emit(res),
                 Err(_) => {}
             }

@@ -15,7 +15,7 @@ use crate::precalc::boards::{aligned, between_bb, king_moves, knight_moves, pawn
 
 pub use board::Board;
 pub use castling::{CastleType, CastlingRights};
-pub use fen::START_POSITION;
+pub use fen::{FenError, START_POSITION};
 pub use piece::{Piece, PieceType, PROMO_PIECES};
 pub use square::Square;
 pub use state::State;
@@ -730,6 +730,12 @@ impl Position {
         // Ensure we are not moving a pinned piece, or if we are, it is remaining staying
         // pinned but moving along the current rank, file, diagonal between the pinner and the king
         (self.pinned_pieces(us) & orig_bb).is_empty() || aligned(orig, dest, self.king_sq(us))
+    }
+}
+
+impl fmt::Display for Position {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "{}", self.board)
     }
 }
 

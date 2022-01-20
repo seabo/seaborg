@@ -5,12 +5,13 @@ static VERSION: &str = "0.1.0";
 static AUTHORS: &str = "George Seabridge <georgeseabridge@gmail.com>";
 
 /// Represents a response to be sent to the GUI.
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Res {
     Uciok,
     Readyok,
     Identify,
     Quit,
+    Error(String),
 }
 
 /// Functions to emit uci responses to stdout
@@ -26,6 +27,7 @@ impl Uci {
             Res::Readyok => println!("readyok"),
             Res::Identify => Self::identify(),
             Res::Quit => println!("exiting"),
+            Res::Error(msg) => println!("{}", msg),
         }
     }
 }

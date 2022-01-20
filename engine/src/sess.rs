@@ -34,7 +34,7 @@ pub struct Session {
     /// The communication module used by the session to orchestrate interactions
     /// between the search thread and the GUI.
     comm: Comm,
-    /// A `JoinHandle` for the thread where the engine is running.
+    /// Manages the thread where the `Engine` executes searches.
     engine: Engine,
     /// `Receiver` of communications from the GUI or Engine.
     rx: Receiver<Message>,
@@ -95,6 +95,7 @@ impl Session {
         let res = match report {
             Report::BestMove => Res::Uciok,
             Report::InitializationComplete => Res::Readyok,
+            Report::Error(msg) => Res::Error(msg), 
         };
         self.comm.send(res);
     }

@@ -1,4 +1,4 @@
-use crate::search::pv_search::PVSearch;
+use crate::search::params::{Builder, BuilderError, BuilderResult, Params};
 use crate::sess::Message;
 use crate::uci::Pos;
 use core::position::Position;
@@ -22,14 +22,18 @@ pub enum Command {
 /// by converting into a uci response written to stdout.
 // TODO: this should live in a more appropriate module eventually.
 pub enum Report {
-    /// Communicates the best move found by the engine
+    /// Communicates the best move found by the engine.
     BestMove,
-    /// Initialization complete
+    /// Initialization complete.
     InitializationComplete,
+    /// Error report.
+    Error(String),
 }
 
 /// Owns the thread in which the chess engine's search routine executes, and passes
 /// commands for the engine into that thread through a channel.
+///
+/// This struct lives in the `Session` thread.
 pub struct Engine {
     /// A `JoinHandle` for the engine thread.
     handle: Option<JoinHandle<()>>,
@@ -89,18 +93,20 @@ impl Engine {
 
 /// A convenient way to organise the code which runs in the engine thread.
 /// Otherwise we would just have a load of local variables to manage.
+///
+/// This struct lives in the `Engine` thread.
 struct EngineInner {
     /// A `Sender` to emit `Message`s back to the `Session`.
     session_tx: Sender<Message>,
-    /// The internal board position.
-    pos: Option<Position>,
+    /// Helper to construct search `Params` structs for each new search.
+    builder: Builder,
 }
 
 impl EngineInner {
     pub fn new(session_tx: Sender<Message>) -> Self {
         Self {
             session_tx,
-            pos: None,
+            builder: Builder::default(),
         }
     }
 
@@ -108,24 +114,33 @@ impl EngineInner {
         // Ensure globals variables like magic numbers have been initialized.
         core::init::init_globals();
 
-        // Set up the initial position on the internal board.
-        self.pos = Some(Position::start_pos());
-
         // Report that initialization has completed.
         self.report(Report::InitializationComplete);
     }
 
     pub fn set_position(&mut self, pos: Pos) {
-        match pos {
-            Pos::Startpos => todo!("engine will set the starting position on its internal board"),
-            Pos::Fen(fen) => todo!(
-                "engine will set the position on its internal board: {}",
-                fen
-            ),
+        let result = self.builder.set_position(pos);
+
+        self.handle_result(result);
+    }
+
+    fn handle_result(&self, res: BuilderResult) {
+        match res {
+            Ok(()) => {}
+            Err(be) => match be {
+                BuilderError::IllegalFen(fe) => {
+                    self.report_error(format!("{}", fe));
+                }
+            },
         }
     }
 
     pub fn report(&self, report: Report) {
+        // TODO: use the result.
         self.session_tx.send(Message::FromEngine(report));
+    }
+
+    pub fn report_error(&self, msg: String) {
+        self.report(Report::Error(msg));
     }
 }
