@@ -1,6 +1,10 @@
 use crate::uci::Pos;
 use core::position::{FenError, Position};
 
+/// Default transposition table capacity. This means the table will have `2^27`
+/// available slots, which is approximately 134 million.
+static DEFAULT_TT_CAP: u32 = 27;
+
 /// The parameters to be used to run a search.
 #[derive(Clone, Debug)]
 pub struct Params {
@@ -8,10 +12,16 @@ pub struct Params {
     pos: Position,
     /// The capacity to use for the transposition table. The number of available
     /// transposition table entries will be `2^tt_cap`.
-    tt_cap: u32,
+    pub tt_cap: u32,
     // TODO: much more will go here, for example:
     // - time management
     // - search type (iterative deepening, fixed depth)
+}
+
+impl Params {
+    pub fn take_pos(&mut self) -> Position {
+        std::mem::replace(&mut self.pos, Position::blank())
+    }
 }
 
 /// A helper structure to construct `Params` with defaults and methods
@@ -33,6 +43,7 @@ impl Builder {
         }
     }
 
+    /// Set the position.
     pub fn set_position(&mut self, pos: Pos) -> BuilderResult {
         // If we are being asked to set a position, then we need to ensure that
         // the global variables are initialised. This is inexpensive if initialization
@@ -50,6 +61,28 @@ impl Builder {
             }
         }
         Ok(())
+    }
+
+    /// Set the transposition table capacity.
+    ///
+    /// The number of available transposition tabel entries will be `2^tt_cap`.
+    pub fn set_tt_cap(&mut self, cap: u32) -> BuilderResult {
+        self.tt_cap = Some(cap);
+        Ok(())
+    }
+
+    pub fn build(self) -> Params {
+        let pos = match self.pos {
+            Some(pos) => pos,
+            None => Default::default(),
+        };
+
+        let tt_cap = match &self.tt_cap {
+            Some(tt_cap) => *tt_cap,
+            None => DEFAULT_TT_CAP,
+        };
+
+        Params { pos, tt_cap }
     }
 }
 

@@ -26,12 +26,16 @@
 // accurate equivalent results as plain alpha-beta search, when restricting the TT like
 // this.
 
+use super::params::Params;
+
 use crate::eval::material_eval;
 use crate::tables::Table;
+
 use core::mov::Move;
 use core::movelist::MoveList;
 use core::position::Position;
 use separator::Separatable;
+
 use std::cmp::{max, min};
 
 #[derive(Clone, Debug)]
@@ -58,10 +62,13 @@ pub struct Search {
 }
 
 impl Search {
-    pub fn new(pos: Position) -> Self {
+    pub fn new(mut params: Params) -> Self {
+        let pos = params.take_pos();
+        let tt = Table::with_capacity(params.tt_cap);
+
         Search {
             pos,
-            tt: Table::with_capacity(27),
+            tt,
             visited: 0,
             moves_considered: 0,
             moves_visited: 0,

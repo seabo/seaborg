@@ -86,16 +86,16 @@ impl Session {
             Req::IsReady => self.isready(),
             Req::UciNewGame => self.new_game(),
             Req::SetPosition(pos) => self.set_position(pos),
-            Req::Go => todo!(),
+            Req::Go => self.go(),
             Req::Quit => self.quit_session(),
         }
     }
 
     fn handle_engine_message(&mut self, report: Report) {
         let res = match report {
-            Report::BestMove => Res::Uciok,
+            Report::BestMove => todo!(),
             Report::InitializationComplete => Res::Readyok,
-            Report::Error(msg) => Res::Error(msg), 
+            Report::Error(msg) => Res::Error(msg),
         };
         self.comm.send(res);
     }
@@ -107,7 +107,7 @@ impl Session {
     }
 
     fn isready(&mut self) {
-        // Initialize engine
+        // Initialize engine.
         self.initialize_engine();
     }
 
@@ -126,6 +126,11 @@ impl Session {
 
     fn initialize_engine(&mut self) {
         self.engine.send(Command::Initialize);
+    }
+
+    /// Handle a `go` message from the GUI.
+    fn go(&mut self) {
+        self.engine.send(Command::Search);
     }
 
     fn quit_session(&mut self) {

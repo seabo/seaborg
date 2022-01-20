@@ -143,6 +143,25 @@ pub struct Position {
 }
 
 impl Position {
+    /// Creates a 'blank' `Position` struct. This method is safe to call even
+    /// before `init_globals()`.
+    pub fn blank() -> Self {
+        Self {
+            board: Board::new(),
+            bbs: [Bitboard::new(0); PIECE_TYPE_CNT],
+            player_occ: [Bitboard::new(0); PLAYER_CNT],
+            piece_counts: [0; PLAYER_CNT],
+            turn: Player::White,
+            castling_rights: CastlingRights::none(),
+            ep_square: None,
+            half_move_clock: 0,
+            move_number: 1,
+            state: State::blank(),
+            history: Vec::new(),
+            zobrist: Zobrist::empty(),
+        }
+    }
+
     /// Sets the `State` struct for the current position. Should only be called
     /// when initialising a new `Position`.
     pub fn set_state(&mut self) {
@@ -730,6 +749,12 @@ impl Position {
         // Ensure we are not moving a pinned piece, or if we are, it is remaining staying
         // pinned but moving along the current rank, file, diagonal between the pinner and the king
         (self.pinned_pieces(us) & orig_bb).is_empty() || aligned(orig, dest, self.king_sq(us))
+    }
+}
+
+impl Default for Position {
+    fn default() -> Self {
+        Self::start_pos()
     }
 }
 

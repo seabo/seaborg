@@ -174,7 +174,7 @@ impl<'a> Parser<'a> {
             Token::Keyword(Keyword::Position) => self.parse_position(),
             Token::Keyword(Keyword::Fen) => todo!(),
             Token::Keyword(Keyword::Startpos) => todo!(),
-            Token::Keyword(Keyword::Go) => todo!(),
+            Token::Keyword(Keyword::Go) => self.parse_go(),
             Token::Keyword(Keyword::SearchMoves) => todo!(),
             Token::Keyword(Keyword::Ponder) => todo!(),
             Token::Keyword(Keyword::Wtime) => todo!(),
@@ -227,6 +227,12 @@ impl<'a> Parser<'a> {
         let fen = fen_vec.join(" ");
 
         return Ok(Req::SetPosition(Pos::Fen(fen_vec.join(" "))));
+    }
+
+    fn parse_go(&mut self) -> ParseResult {
+        // TODO: this needs to parse all the possible `go` strings from the UCI
+        // protocol. Currently, we just accept the word `go` on its own.
+        Ok(Req::Go)
     }
 
     fn unexpected_token(&mut self, msg: &str) -> ParseResult {

@@ -7,6 +7,7 @@ pub struct Board {
 }
 
 impl Board {
+    // TODO: rename this `empty()`.
     pub fn new() -> Self {
         Self {
             arr: [Piece::None; 64],

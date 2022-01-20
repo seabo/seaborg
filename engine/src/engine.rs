@@ -1,4 +1,5 @@
 use crate::search::params::{Builder, BuilderError, BuilderResult, Params};
+use crate::search::search::Search;
 use crate::sess::Message;
 use crate::uci::Pos;
 use core::position::Position;
@@ -59,9 +60,9 @@ impl Engine {
                 match cmd {
                     Command::Initialize => engine_inner.init(),
                     Command::SetPosition(pos) => engine_inner.set_position(pos),
+                    Command::Search => engine_inner.search(),
                     Command::Halt => halt = true,
                     Command::Quit => quit = true,
-                    Command::Search => todo!(),
                 }
 
                 // If the engine isn't halted, and we aren't quitting, proceed
@@ -122,6 +123,22 @@ impl EngineInner {
         let result = self.builder.set_position(pos);
 
         self.handle_result(result);
+    }
+
+    /// Launch the search. This will take the current params `Builder` and
+    /// build the actual `Params` struct. Then a new `Search` will be started
+    /// with those `Params`.
+    pub fn search(&mut self) {
+        let params = std::mem::take(&mut self.builder).build();
+
+        let mut search = Search::new(params);
+
+        // TODO: for now, the way this is implemented the `Search` will be
+        // dropped as soon as this returns. Ideally we want to keep it around
+        // and allow a paused search to be restarted. This probably just means
+        // set the `Search` as a field on `EngineInner`.
+        let val = search.iterative_deepening(5);
+        println!("search yielded {}", val);
     }
 
     fn handle_result(&self, res: BuilderResult) {

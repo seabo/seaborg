@@ -12,6 +12,7 @@ bitflags! {
 }
 
 impl CastlingRights {
+    /// Build a new `CastlingRights` struct with the passed values.
     pub fn new(wk: bool, wq: bool, bk: bool, bq: bool) -> Self {
         let mut cr = Self::empty();
         cr.set_wk(wk);
@@ -19,6 +20,11 @@ impl CastlingRights {
         cr.set_bk(bk);
         cr.set_bq(bq);
         cr
+    }
+
+    /// Build a new `CastlingRights` struct with no castling rights.
+    pub fn none() -> Self {
+        CastlingRights::new(false, false, false, false)
     }
 
     /// Used for `debug_assert!` calls to ensure that `self` is
