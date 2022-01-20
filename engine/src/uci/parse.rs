@@ -1,14 +1,28 @@
 use super::Uci;
 
 /// Represents a UCI message sent by the GUI to the engine.
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Req {
+    /// Put the engine into UCI communication mode.
     Uci,
+    /// Ask the engine if it is ready to receive further commands.
     IsReady,
+    /// Tell the engine that we are analysing a position from a different game.
     UciNewGame,
-    SetPosition,
+    /// Set the given position on the internal board.
+    SetPosition(Pos),
+    /// Commence the search process on the internal board.
     Go,
+    /// Stop the search process and quit the engine.
     Quit,
+}
+
+/// Represents a position to be set on the internal board, either as the
+/// `startpos` keyword, or a fen string.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Pos {
+    Fen(String),
+    Startpos,
 }
 
 impl Uci {
@@ -60,8 +74,15 @@ enum Keyword {
 
 #[derive(Debug)]
 pub enum ParseError {
+    /// Represents a token which should not have appeared where it did.
     UnexpectedToken(String),
+    /// Represents a situation where the `position` keyword was sent,
+    /// but no further information on which position to set the board to.
+    NoPosition,
+    /// Represents an error reading from stdin.
     Io(String),
+    /// Represents a situation where there was no input string received when
+    /// reading from stdin.
     NoInput,
 }
 
@@ -83,6 +104,7 @@ impl std::fmt::Display for ParseError {
             ParseError::UnexpectedToken(tok) => writeln!(f, "unexpected token: {}", tok),
             ParseError::Io(err) => writeln!(f, "io error: {}", err),
             ParseError::NoInput => writeln!(f, "no input"),
+            ParseError::NoPosition => writeln!(f, "no position provided"),
         }
     }
 }
@@ -124,6 +146,15 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn peek(&mut self) -> Option<Token<'a>> {
+        if self.cursor < self.toks.len() {
+            let next = self.toks[self.cursor].clone();
+            Some(next)
+        } else {
+            None
+        }
+    }
+
     fn parse_command(&mut self) -> ParseResult {
         match self.advance() {
             Some(tok) => self.parse_keyword(tok),
@@ -140,7 +171,7 @@ impl<'a> Parser<'a> {
             Token::Keyword(Keyword::IsReady) => Ok(Req::IsReady),
             Token::Keyword(Keyword::SetOption) => todo!(),
             Token::Keyword(Keyword::UciNewGame) => Ok(Req::UciNewGame),
-            Token::Keyword(Keyword::Position) => todo!(),
+            Token::Keyword(Keyword::Position) => self.parse_position(),
             Token::Keyword(Keyword::Fen) => todo!(),
             Token::Keyword(Keyword::Startpos) => todo!(),
             Token::Keyword(Keyword::Go) => todo!(),
@@ -159,10 +190,48 @@ impl<'a> Parser<'a> {
             Token::Keyword(Keyword::Stop) => todo!(),
             Token::Keyword(Keyword::PonderHit) => todo!(),
             Token::Keyword(Keyword::Quit) => Ok(Req::Quit),
-            _ => Err(ParseError::UnexpectedToken(
-                "expected a uci keyword".to_string(),
-            )),
+            _ => self.unexpected_token("expected a uci keyword"),
         }
+    }
+
+    fn parse_position(&mut self) -> ParseResult {
+        match self.advance() {
+            Some(tok) => match tok {
+                Token::Keyword(Keyword::Startpos) => Ok(Req::SetPosition(Pos::Startpos)),
+                Token::Keyword(Keyword::Fen) => self.parse_fen(),
+                _ => self.unexpected_token("expected a fen string or `startpos`"),
+            },
+            None => Err(ParseError::NoPosition),
+        }
+    }
+
+    fn parse_fen(&mut self) -> ParseResult {
+        // A fen string should have 6 whitespace-separate fields, so we collect
+        // the next 6 tokens with advance.
+        let mut fen_vec = Vec::new();
+
+        for _ in 0..6 {
+            match self.advance() {
+                Some(Token::String(field)) => {
+                    fen_vec.push(field);
+                }
+                Some(_) => {
+                    return self.unexpected_token("expected a fen string");
+                }
+                None => {
+                    return Err(ParseError::NoPosition);
+                }
+            }
+        }
+
+        let fen = fen_vec.join(" ");
+        
+
+        return Ok(Req::SetPosition(Pos::Fen(fen_vec.join(" "))));
+    }
+
+    fn unexpected_token(&mut self, msg: &str) -> ParseResult {
+        Err(ParseError::UnexpectedToken(msg.to_string()))
     }
 
     fn scan_token(str: &str) -> Token {

@@ -1,5 +1,6 @@
 use crate::search::pv_search::PVSearch;
 use crate::sess::Message;
+use crate::uci::Pos;
 use core::position::Position;
 
 use crossbeam_channel::{unbounded, Sender};
@@ -9,7 +10,7 @@ use std::thread::{self, JoinHandle};
 #[derive(Debug)]
 pub enum Command {
     Initialize,
-    SetPosition,
+    SetPosition(Pos),
     Search,
     Halt,
     Quit,
@@ -27,9 +28,11 @@ pub enum Report {
     InitializationComplete,
 }
 
+/// Owns the thread in which the chess engine's search routine executes, and passes
+/// commands for the engine into that thread through a channel.
 pub struct Engine {
     /// A `JoinHandle` for the engine thread.
-    handle: JoinHandle<()>,
+    handle: Option<JoinHandle<()>>,
     /// A `Sender` to transmit commands into the engine thread.
     tx: Sender<Command>,
 }
@@ -39,27 +42,7 @@ impl Engine {
         // A channel to send commands into the engine thread.
         let (tx, rx) = unbounded::<Command>();
 
-        let handle = thread::spawn(move || {
-            // let mut pos = Position::start_pos();
-            // let turn = pos.turn().clone();
-            // let mut searcher = PVSearch::new(pos);
-            // let val = searcher.iterative_deepening(19) * if turn.is_white() { 1 } else { -1 };
-
-            // loop {
-            //     // TODO: handle the error case
-            //     if let Ok(cmd) = rx.recv() {
-            //         match cmd {
-            //             Command::Initialize => {
-            //                 core::init::init_globals();
-            //                 // TODO: use result
-            //                 session_tx.send(Message::FromEngine(Report::InitializationComplete));
-            //             }
-            //         }
-            //     }
-            // }
-
-            // // -------------------
-
+        let engine_thread = thread::spawn(move || {
             let mut quit = false;
             let mut halt = true;
 
@@ -71,20 +54,36 @@ impl Engine {
 
                 match cmd {
                     Command::Initialize => engine_inner.init(),
-                    Command::SetPosition => todo!(),
+                    Command::SetPosition(pos) => engine_inner.set_position(pos),
                     Command::Halt => halt = true,
                     Command::Quit => quit = true,
                     Command::Search => todo!(),
                 }
+
+                // If the engine isn't halted, and we aren't quitting, proceed
+                // to run the search.
+                if !halt && !quit {}
             }
         });
 
-        Self { handle, tx }
+        Self {
+            handle: Some(engine_thread),
+            tx,
+        }
     }
 
+    /// Send a `Command` into the engine thread.
     pub fn send(&self, cmd: Command) {
         // TODO: use the result
         self.tx.send(cmd);
+    }
+
+    /// When quitting a session, use this to join on the `Engine` thread and wait
+    /// for it to successfully shutdown.
+    pub fn wait_for_shutdown(&mut self) {
+        if let Some(h) = self.handle.take() {
+            h.join().expect("Error: fatal");
+        }
     }
 }
 
@@ -102,10 +101,20 @@ impl EngineInner {
 
     pub fn init(&self) {
         core::init::init_globals();
-        self.send(Report::InitializationComplete);
+        self.report(Report::InitializationComplete);
     }
 
-    pub fn send(&self, report: Report) {
+    pub fn set_position(&mut self, pos: Pos) {
+        match pos {
+            Pos::Startpos => todo!("engine will set the starting position on its internal board"),
+            Pos::Fen(fen) => todo!(
+                "engine will set the position on its internal board: {}",
+                fen
+            ),
+        }
+    }
+
+    pub fn report(&self, report: Report) {
         self.session_tx.send(Message::FromEngine(report));
     }
 }

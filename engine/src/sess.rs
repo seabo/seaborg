@@ -19,7 +19,7 @@
 
 use crate::comm::Comm;
 use crate::engine::{Command, Engine, Report};
-use crate::uci::{Req, Res};
+use crate::uci::{Pos, Req, Res};
 
 use crossbeam_channel::{unbounded, Receiver};
 
@@ -85,7 +85,7 @@ impl Session {
             Req::Uci => self.uci(),
             Req::IsReady => self.isready(),
             Req::UciNewGame => self.new_game(),
-            Req::SetPosition => todo!(),
+            Req::SetPosition(pos) => self.set_position(pos),
             Req::Go => todo!(),
             Req::Quit => self.quit_session(),
         }
@@ -119,6 +119,10 @@ impl Session {
         // and go commands to tell us everything we need to know.
     }
 
+    fn set_position(&mut self, pos: Pos) {
+        self.engine.send(Command::SetPosition(pos));
+    }
+
     fn initialize_engine(&mut self) {
         self.engine.send(Command::Initialize);
     }
@@ -130,6 +134,7 @@ impl Session {
 
         // Shut down the engine thread.
         self.engine.send(Command::Quit);
+        self.engine.wait_for_shutdown();
 
         // Set the session quit flag to true, so that the main loop
         // breaks.

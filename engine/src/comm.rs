@@ -66,7 +66,7 @@ impl Comm {
             let uci_msg = Uci::read_command();
 
             // TODO: use the result
-            tx.send(Message::FromGui(uci_msg));
+            tx.send(Message::FromGui(uci_msg.clone()));
 
             if uci_msg == Req::Quit {
                 break;
