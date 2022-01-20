@@ -13,8 +13,14 @@ pub enum Req {
     SetPosition(Pos),
     /// Commence the search process on the internal board.
     Go,
+    /// Halt the search process, but don't quit the engine.
+    Stop,
     /// Stop the search process and quit the engine.
     Quit,
+    /// Represents a request we have decided to ignore, likely because it
+    /// does not conform to the UCI protocol, or we just don't implement that
+    /// command.
+    Ignored,
 }
 
 /// Represents a position to be set on the internal board, either as the
@@ -173,7 +179,7 @@ impl<'a> Parser<'a> {
             Token::Keyword(Keyword::UciNewGame) => Ok(Req::UciNewGame),
             Token::Keyword(Keyword::Position) => self.parse_position(),
             Token::Keyword(Keyword::Fen) => todo!(),
-            Token::Keyword(Keyword::Startpos) => todo!(),
+            Token::Keyword(Keyword::Startpos) => Ok(Req::Ignored),
             Token::Keyword(Keyword::Go) => self.parse_go(),
             Token::Keyword(Keyword::SearchMoves) => todo!(),
             Token::Keyword(Keyword::Ponder) => todo!(),
@@ -187,7 +193,7 @@ impl<'a> Parser<'a> {
             Token::Keyword(Keyword::Mate) => todo!(),
             Token::Keyword(Keyword::MoveTime) => todo!(),
             Token::Keyword(Keyword::Infinite) => todo!(),
-            Token::Keyword(Keyword::Stop) => todo!(),
+            Token::Keyword(Keyword::Stop) => Ok(Req::Stop),
             Token::Keyword(Keyword::PonderHit) => todo!(),
             Token::Keyword(Keyword::Quit) => Ok(Req::Quit),
             _ => self.unexpected_token("expected a uci keyword"),

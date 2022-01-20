@@ -6,6 +6,7 @@ use core::position::Position;
 
 use crossbeam_channel::{unbounded, Sender};
 
+use std::sync::{Arc, RwLock};
 use std::thread::{self, JoinHandle};
 
 #[derive(Debug)]
@@ -13,7 +14,6 @@ pub enum Command {
     Initialize,
     SetPosition(Pos),
     Search,
-    Halt,
     Quit,
 }
 
@@ -24,7 +24,7 @@ pub enum Command {
 // TODO: this should live in a more appropriate module eventually.
 pub enum Report {
     /// Communicates the best move found by the engine.
-    BestMove,
+    BestMove(String),
     /// Initialization complete.
     InitializationComplete,
     /// Error report.
@@ -40,6 +40,14 @@ pub struct Engine {
     handle: Option<JoinHandle<()>>,
     /// A `Sender` to transmit commands into the engine thread.
     tx: Sender<Command>,
+    /// Flag which allows the search process to know if it needs to halt while
+    /// in the middle of a search.
+    ///
+    /// We pass an `Arc` clone of this to the `Search`, and then inside
+    /// the main search loop, we intermittently check that the value hasn't recently
+    /// been set to `true`. When it does get set to `true` the search can bail early
+    /// and send useful data back through the channel.
+    halt: Arc<RwLock<bool>>,
 }
 
 impl Engine {
@@ -47,10 +55,12 @@ impl Engine {
         // A channel to send commands into the engine thread.
         let (tx, rx) = unbounded::<Command>();
 
+        // A halt flag.
+        let halt = Arc::new(RwLock::new(false));
+        let halt_clone = Arc::clone(&halt);
+
         let engine_thread = thread::spawn(move || {
             let mut quit = false;
-            let mut halt = true;
-
             let mut engine_inner = EngineInner::new(session_tx);
 
             // Keep the thread alive until we receive a quit command
@@ -60,27 +70,35 @@ impl Engine {
                 match cmd {
                     Command::Initialize => engine_inner.init(),
                     Command::SetPosition(pos) => engine_inner.set_position(pos),
-                    Command::Search => engine_inner.search(),
-                    Command::Halt => halt = true,
+                    Command::Search => engine_inner.search(Arc::clone(&halt_clone)),
                     Command::Quit => quit = true,
                 }
-
-                // If the engine isn't halted, and we aren't quitting, proceed
-                // to run the search.
-                if !halt && !quit {}
             }
         });
 
         Self {
             handle: Some(engine_thread),
+            halt,
             tx,
         }
     }
 
     /// Send a `Command` into the engine thread.
     pub fn send(&self, cmd: Command) {
-        // TODO: use the result
-        self.tx.send(cmd);
+        match self.tx.send(cmd) {
+            Ok(_) => {}
+            Err(err) => eprintln!("{}", err),
+        }
+    }
+
+    /// Halt the search process.
+    pub fn halt(&self) {
+        *self.halt.write().unwrap() = true;
+    }
+
+    /// Unhalt the search process.
+    pub fn unhalt(&self) {
+        *self.halt.write().unwrap() = false;
     }
 
     /// When quitting a session, use this to join on the `Engine` thread and wait
@@ -128,16 +146,19 @@ impl EngineInner {
     /// Launch the search. This will take the current params `Builder` and
     /// build the actual `Params` struct. Then a new `Search` will be started
     /// with those `Params`.
-    pub fn search(&mut self) {
+    pub fn search(&mut self, halt: Arc<RwLock<bool>>) {
+        // Ensure globals variables like magic numbers have been initialized.
+        core::init::init_globals();
+        // Build the search params.
         let params = std::mem::take(&mut self.builder).build();
 
-        let mut search = Search::new(params);
+        let mut search = Search::new(params, Some(self.session_tx.clone()), halt);
 
         // TODO: for now, the way this is implemented the `Search` will be
         // dropped as soon as this returns. Ideally we want to keep it around
         // and allow a paused search to be restarted. This probably just means
         // set the `Search` as a field on `EngineInner`.
-        let val = search.iterative_deepening(5);
+        let val = search.iterative_deepening(15);
         println!("search yielded {}", val);
     }
 

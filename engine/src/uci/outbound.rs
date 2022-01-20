@@ -10,6 +10,7 @@ pub enum Res {
     Uciok,
     Readyok,
     Identify,
+    BestMove(String),
     Quit,
     Error(String),
 }
@@ -26,6 +27,7 @@ impl Uci {
             Res::Uciok => println!("uciok"),
             Res::Readyok => println!("readyok"),
             Res::Identify => Self::identify(),
+            Res::BestMove(uci_move) => println!("bestmove {}", uci_move),
             Res::Quit => println!("exiting"),
             Res::Error(msg) => println!("{}", msg),
         }

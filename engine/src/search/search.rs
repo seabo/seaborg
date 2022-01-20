@@ -28,15 +28,20 @@
 
 use super::params::Params;
 
+use crate::engine::Report;
 use crate::eval::material_eval;
+use crate::sess::Message;
 use crate::tables::Table;
 
 use core::mov::Move;
 use core::movelist::MoveList;
 use core::position::Position;
+
+use crossbeam_channel::Sender;
 use separator::Separatable;
 
 use std::cmp::{max, min};
+use std::sync::{Arc, RwLock};
 
 #[derive(Clone, Debug)]
 pub enum NodeType {
@@ -56,19 +61,27 @@ pub struct TTData {
 pub struct Search {
     pos: Position,
     tt: Table<TTData>,
+    sender: Option<Sender<Message>>,
+    halt: Arc<RwLock<bool>>,
     visited: usize,
     moves_considered: usize,
     moves_visited: usize,
 }
 
 impl Search {
-    pub fn new(mut params: Params) -> Self {
+    pub fn new(
+        mut params: Params,
+        sender: Option<Sender<Message>>,
+        halt: Arc<RwLock<bool>>,
+    ) -> Self {
         let pos = params.take_pos();
         let tt = Table::with_capacity(params.tt_cap);
 
         Search {
             pos,
             tt,
+            sender,
+            halt,
             visited: 0,
             moves_considered: 0,
             moves_visited: 0,
@@ -116,12 +129,34 @@ impl Search {
 
     pub fn iterative_deepening(&mut self, target_depth: u8) -> i32 {
         for i in 0..target_depth + 1 {
+            if self.is_halted() {
+                break;
+            }
+
             println!("searching depth {}", i);
             self.pv_search(i, -10_000, 10_000);
         }
 
-        // The TT should always have an entry here, so the unwrap never fails
-        self.tt.get(&self.pos).unwrap().score
+        // The TT should always have an entry here, so the unwrap never fails.
+        // TODO: however - it's probably wiser to fall back on a simple static
+        // evaluation if the `get()` returns `None`
+        let score = self.tt.get(&self.pos).unwrap().score;
+
+        // TODO: temp; replace with cleaner stuff.
+        let best_move = self.get_best_move();
+        match best_move {
+            Some(mov) => {
+                if self.sender.is_some() {
+                    self.sender
+                        .as_ref()
+                        .unwrap()
+                        .send(Message::FromEngine(Report::BestMove(mov.to_uci_string())));
+                }
+            }
+            None => {}
+        }
+
+        score
     }
 
     pub fn pv_search(&mut self, depth: u8, mut alpha: i32, mut beta: i32) -> i32 {
@@ -146,6 +181,17 @@ impl Search {
                 }
             }
         };
+
+        if self.is_halted() {
+            // Engine received a halt command, and has set the halt flag to true.
+            // We need to unwind from the search, transmit the best move found so far
+            // through the channel and and return the current evaluation gracefully.
+
+            // TODO: this isn't right. We can't return the current alpha. This function
+            // to return a monad of some kind, which tells the caller whether we are
+            // returning early.
+            return alpha;
+        }
 
         if depth == 0 {
             return material_eval(&self.pos) * if is_white { 1 } else { -1 };
@@ -209,7 +255,25 @@ impl Search {
         self.tt.insert(&self.pos, tt_entry);
         return val;
     }
+
+    fn is_halted(&self) -> bool {
+        *self.halt.read().unwrap()
+    }
+
+    fn report(&self, msg: Report) {
+        match &self.sender {
+            Some(sender) => {
+                sender
+                  .send(Message::FromSearch(msg))
+                  .expect("Error: couldn't send report to GUI. No communication channel provided to search thread.");
+            }
+            None => {}
+        }
+    }
 }
+
+// -------
+// TODO: everything below here should live in another module
 
 /// A wrapper around a `MoveList`.
 ///

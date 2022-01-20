@@ -28,6 +28,7 @@ use crossbeam_channel::{unbounded, Receiver};
 pub enum Message {
     FromGui(Req),
     FromEngine(Report),
+    FromSearch(Report),
 }
 
 pub struct Session {
@@ -77,6 +78,7 @@ impl Session {
         match msg {
             Message::FromGui(s) => self.handle_gui_message(s),
             Message::FromEngine(r) => self.handle_engine_message(r),
+            Message::FromSearch(r) => self.handle_search_message(r),
         }
     }
 
@@ -87,17 +89,26 @@ impl Session {
             Req::UciNewGame => self.new_game(),
             Req::SetPosition(pos) => self.set_position(pos),
             Req::Go => self.go(),
+            Req::Stop => self.stop(),
             Req::Quit => self.quit_session(),
+            Req::Ignored => {}
         }
     }
 
     fn handle_engine_message(&mut self, report: Report) {
         let res = match report {
-            Report::BestMove => todo!(),
+            Report::BestMove(uci_move) => Res::BestMove(uci_move),
             Report::InitializationComplete => Res::Readyok,
             Report::Error(msg) => Res::Error(msg),
         };
         self.comm.send(res);
+    }
+
+    fn handle_search_message(&mut self, report: Report) {
+        // TODO: we just hand off to the other function for now, but
+        // ultimately it might be worth distinguishing reports from
+        // the engine control loop and the actual search routine itself
+        self.handle_engine_message(report);
     }
 
     fn uci(&self) {
@@ -120,17 +131,26 @@ impl Session {
         // and go commands to tell us everything we need to know.
     }
 
+    /// Tell the engine to set up its internal position with the given
+    /// `Pos`.
     fn set_position(&mut self, pos: Pos) {
         self.engine.send(Command::SetPosition(pos));
     }
 
+    /// Tell the engine to initialize its internal parameters.
     fn initialize_engine(&mut self) {
         self.engine.send(Command::Initialize);
     }
 
     /// Handle a `go` message from the GUI.
     fn go(&mut self) {
+        self.engine.unhalt();
         self.engine.send(Command::Search);
+    }
+
+    /// Handle a `stop` message from the GUI.
+    fn stop(&mut self) {
+        self.engine.halt();
     }
 
     fn quit_session(&mut self) {
