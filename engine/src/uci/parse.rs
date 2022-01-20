@@ -225,7 +225,6 @@ impl<'a> Parser<'a> {
         }
 
         let fen = fen_vec.join(" ");
-        
 
         return Ok(Req::SetPosition(Pos::Fen(fen_vec.join(" "))));
     }

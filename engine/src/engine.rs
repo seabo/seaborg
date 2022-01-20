@@ -92,15 +92,26 @@ impl Engine {
 struct EngineInner {
     /// A `Sender` to emit `Message`s back to the `Session`.
     session_tx: Sender<Message>,
+    /// The internal board position.
+    pos: Option<Position>,
 }
 
 impl EngineInner {
     pub fn new(session_tx: Sender<Message>) -> Self {
-        Self { session_tx }
+        Self {
+            session_tx,
+            pos: None,
+        }
     }
 
-    pub fn init(&self) {
+    pub fn init(&mut self) {
+        // Ensure globals variables like magic numbers have been initialized.
         core::init::init_globals();
+
+        // Set up the initial position on the internal board.
+        self.pos = Some(Position::start_pos());
+
+        // Report that initialization has completed.
         self.report(Report::InitializationComplete);
     }
 
