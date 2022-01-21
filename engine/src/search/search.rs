@@ -75,6 +75,7 @@ impl Search {
         halt: Arc<RwLock<bool>>,
     ) -> Self {
         let pos = params.take_pos();
+        println!("{}", pos);
         let tt = Table::with_capacity(params.tt_cap);
 
         Search {

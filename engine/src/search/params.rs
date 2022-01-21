@@ -44,7 +44,7 @@ impl Builder {
     }
 
     /// Set the position.
-    pub fn set_position(&mut self, pos: Pos) -> BuilderResult {
+    pub fn set_position(&mut self, pos: Pos, moves: Option<Vec<String>>) -> BuilderResult {
         // If we are being asked to set a position, then we need to ensure that
         // the global variables are initialised. This is inexpensive if initialization
         // has already taken place, which should be the case in any normal UCI
@@ -53,13 +53,25 @@ impl Builder {
         // `isready`.
         core::init::init_globals();
 
-        match pos {
-            Pos::Startpos => self.pos = Some(Position::start_pos()),
-            Pos::Fen(fen) => {
-                let pos = Position::from_fen(&fen)?;
-                self.pos = Some(pos);
+        let mut position = match pos {
+            Pos::Startpos => Position::start_pos(),
+            Pos::Fen(fen) => Position::from_fen(&fen)?,
+        };
+
+        match moves {
+            Some(move_list) => {
+                for mov in move_list {
+                    match position.make_uci_move(&mov) {
+                        Some(_) => {}
+                        None => return Err(BuilderError::IllegalMove(mov)),
+                    }
+                }
             }
+            None => {}
         }
+
+        self.pos = Some(position);
+
         Ok(())
     }
 
@@ -99,6 +111,7 @@ pub type BuilderResult = Result<(), BuilderError>;
 
 pub enum BuilderError {
     IllegalFen(FenError),
+    IllegalMove(String),
 }
 
 impl From<FenError> for BuilderError {

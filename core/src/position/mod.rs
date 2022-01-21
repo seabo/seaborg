@@ -430,8 +430,8 @@ impl Position {
 
     /// Makes the given uci move on the board if it's legal.
     ///
-    /// Returns `true` if the move was legal and successfully applied on the board,
-    /// otherwise `false`.
+    /// Returns `Option<Move>` with `Some(mov)` if the move was legal, and
+    /// None if it wasn't.
     pub fn make_uci_move(&mut self, uci: &str) -> Option<Move> {
         let moves = self.generate_moves();
 

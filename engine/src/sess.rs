@@ -87,7 +87,7 @@ impl Session {
             Req::Uci => self.uci(),
             Req::IsReady => self.isready(),
             Req::UciNewGame => self.new_game(),
-            Req::SetPosition(pos) => self.set_position(pos),
+            Req::SetPosition((pos, moves)) => self.set_position(pos, moves),
             Req::Go => self.go(),
             Req::Stop => self.stop(),
             Req::Quit => self.quit_session(),
@@ -133,8 +133,8 @@ impl Session {
 
     /// Tell the engine to set up its internal position with the given
     /// `Pos`.
-    fn set_position(&mut self, pos: Pos) {
-        self.engine.send(Command::SetPosition(pos));
+    fn set_position(&mut self, pos: Pos, moves: Option<Vec<String>>) {
+        self.engine.send(Command::SetPosition((pos, moves)));
     }
 
     /// Tell the engine to initialize its internal parameters.

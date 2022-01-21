@@ -9,8 +9,10 @@ pub enum Req {
     IsReady,
     /// Tell the engine that we are analysing a position from a different game.
     UciNewGame,
-    /// Set the given position on the internal board.
-    SetPosition(Pos),
+    /// Set the given position on the internal board and advances that
+    /// position by playing any additional moves given in the second slot
+    /// of the tuple.
+    SetPosition((Pos, Option<Vec<String>>)),
     /// Commence the search process on the internal board.
     Go,
     /// Halt the search process, but don't quit the engine.
@@ -60,6 +62,7 @@ enum Keyword {
     Position,
     Fen,
     Startpos,
+    Moves,
     Go,
     SearchMoves,
     Ponder,
@@ -177,7 +180,7 @@ impl<'a> Parser<'a> {
             Token::Keyword(Keyword::IsReady) => Ok(Req::IsReady),
             Token::Keyword(Keyword::SetOption) => todo!(),
             Token::Keyword(Keyword::UciNewGame) => Ok(Req::UciNewGame),
-            Token::Keyword(Keyword::Position) => self.parse_position(),
+            Token::Keyword(Keyword::Position) => self.parse_position_and_moves(),
             Token::Keyword(Keyword::Fen) => todo!(),
             Token::Keyword(Keyword::Startpos) => Ok(Req::Ignored),
             Token::Keyword(Keyword::Go) => self.parse_go(),
@@ -200,10 +203,17 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_position(&mut self) -> ParseResult {
+    fn parse_position_and_moves(&mut self) -> ParseResult {
+        let pos = self.parse_position()?;
+        let moves = self.parse_moves()?;
+
+        Ok(Req::SetPosition((pos, moves)))
+    }
+
+    fn parse_position(&mut self) -> Result<Pos, ParseError> {
         match self.advance() {
             Some(tok) => match tok {
-                Token::Keyword(Keyword::Startpos) => Ok(Req::SetPosition(Pos::Startpos)),
+                Token::Keyword(Keyword::Startpos) => Ok(Pos::Startpos),
                 Token::Keyword(Keyword::Fen) => self.parse_fen(),
                 _ => self.unexpected_token("expected a fen string or `startpos`"),
             },
@@ -211,7 +221,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_fen(&mut self) -> ParseResult {
+    fn parse_fen(&mut self) -> Result<Pos, ParseError> {
         // A fen string should have 6 whitespace-separate fields, so we collect
         // the next 6 tokens with advance.
         let mut fen_vec = Vec::new();
@@ -232,7 +242,32 @@ impl<'a> Parser<'a> {
 
         let fen = fen_vec.join(" ");
 
-        return Ok(Req::SetPosition(Pos::Fen(fen_vec.join(" "))));
+        Ok(Pos::Fen(fen))
+    }
+
+    fn parse_moves(&mut self) -> Result<Option<Vec<String>>, ParseError> {
+        match self.peek() {
+            Some(tok) => match tok {
+                Token::Keyword(Keyword::Moves) => {
+                    self.advance();
+                    self.parse_move_list()
+                }
+                _ => self.unexpected_token("expected `moves` keyword after position"),
+            },
+            _ => Ok(None),
+        }
+    }
+
+    fn parse_move_list(&mut self) -> Result<Option<Vec<String>>, ParseError> {
+        let mut moves = Vec::new();
+        while let Some(tok) = self.advance() {
+            match tok {
+                Token::String(mov) => moves.push(mov.to_string()),
+                _ => return self.unexpected_token("expected move, found keyword"),
+            }
+        }
+
+        Ok(Some(moves))
     }
 
     fn parse_go(&mut self) -> ParseResult {
@@ -241,7 +276,7 @@ impl<'a> Parser<'a> {
         Ok(Req::Go)
     }
 
-    fn unexpected_token(&mut self, msg: &str) -> ParseResult {
+    fn unexpected_token<T>(&mut self, msg: &str) -> Result<T, ParseError> {
         Err(ParseError::UnexpectedToken(msg.to_string()))
     }
 
@@ -257,6 +292,7 @@ impl<'a> Parser<'a> {
             "position" => Token::Keyword(Keyword::Position),
             "fen" => Token::Keyword(Keyword::Fen),
             "startpos" => Token::Keyword(Keyword::Startpos),
+            "moves" => Token::Keyword(Keyword::Moves),
             "go" => Token::Keyword(Keyword::Go),
             "searchmoves" => Token::Keyword(Keyword::SearchMoves),
             "ponder" => Token::Keyword(Keyword::Ponder),

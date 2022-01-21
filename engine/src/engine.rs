@@ -12,7 +12,7 @@ use std::thread::{self, JoinHandle};
 #[derive(Debug)]
 pub enum Command {
     Initialize,
-    SetPosition(Pos),
+    SetPosition((Pos, Option<Vec<String>>)),
     Search,
     Quit,
 }
@@ -69,7 +69,7 @@ impl Engine {
 
                 match cmd {
                     Command::Initialize => engine_inner.init(),
-                    Command::SetPosition(pos) => engine_inner.set_position(pos),
+                    Command::SetPosition((pos, moves)) => engine_inner.set_position(pos, moves),
                     Command::Search => engine_inner.search(Arc::clone(&halt_clone)),
                     Command::Quit => quit = true,
                 }
@@ -137,8 +137,8 @@ impl EngineInner {
         self.report(Report::InitializationComplete);
     }
 
-    pub fn set_position(&mut self, pos: Pos) {
-        let result = self.builder.set_position(pos);
+    pub fn set_position(&mut self, pos: Pos, moves: Option<Vec<String>>) {
+        let result = self.builder.set_position(pos, moves);
 
         self.handle_result(result);
     }
@@ -150,7 +150,7 @@ impl EngineInner {
         // Ensure globals variables like magic numbers have been initialized.
         core::init::init_globals();
         // Build the search params.
-        let params = std::mem::take(&mut self.builder).build();
+        let params = self.builder.clone().build();
 
         let mut search = Search::new(params, Some(self.session_tx.clone()), halt);
 
@@ -167,7 +167,10 @@ impl EngineInner {
             Ok(()) => {}
             Err(be) => match be {
                 BuilderError::IllegalFen(fe) => {
-                    self.report_error(format!("{}", fe));
+                    self.report_error(format!("illegal FEN string: {}", fe));
+                }
+                BuilderError::IllegalMove(mov) => {
+                    self.report_error(format!("illegal move: {}", mov));
                 }
             },
         }
