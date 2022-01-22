@@ -3,4 +3,6 @@
 
 flamegraph.svg
 perf.*
+log.txt
+run.sh
 
