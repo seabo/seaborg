@@ -97,6 +97,9 @@ pub struct Search {
     start_time: Option<Instant>,
     /// The amount of time, in milliseconds, to limit this search to.
     time_limit: Option<u32>,
+    /// Tracks the best move found for the root position after the last complete iterative
+    /// deepening iteration.
+    best_so_far: Option<Move>,
 }
 
 impl Search {
@@ -124,6 +127,7 @@ impl Search {
             moves_visited: 0,
             start_time: None,
             time_limit,
+            best_so_far: None,
         }
     }
 
@@ -171,6 +175,8 @@ impl Search {
         self.set_start_time();
 
         for i in 0..MAX_DEPTH_PLY {
+            self.best_so_far = self.get_best_move();
+
             if self.is_halted() || self.timed_out() {
                 break;
             }
@@ -183,19 +189,27 @@ impl Search {
         // evaluation if the `get()` returns `None`
         let score = self.tt.get(&self.pos).unwrap().score;
 
-        let best_move = self.get_best_move();
-        match best_move {
-            Some(mov) => match &self.sender {
-                Some(tx) => {
-                    tx.send(Message::FromEngine(Report::BestMove(mov.to_uci_string())))
-                        .expect("failed to send report to engine thread");
-                }
-                None => {}
-            },
-            None => {}
+        match self.best_so_far {
+            Some(mov) => self.send_best_move(mov),
+            None => {
+                // TODO: shouldn't really unwrap here, because if we are in checkmate
+                // or stalemate, then there won't be any legal moves and this will
+                // return `None`.
+                self.send_best_move(self.pos.random_move().unwrap());
+            }
         }
 
         score
+    }
+
+    fn send_best_move(&self, mov: Move) {
+        match &self.sender {
+            Some(tx) => {
+                tx.send(Message::FromEngine(Report::BestMove(mov.to_uci_string())))
+                    .expect("failed to send report to engine thread");
+            }
+            None => {}
+        }
     }
 
     fn set_start_time(&mut self) {

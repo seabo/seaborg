@@ -11,6 +11,8 @@
 /// the former in debug builds. We can then stress test by running a variety of
 /// perft tests and check there are no bound overflow panics. Clearly this is still
 /// not a cast-iron guarantee of safety but should be good enough.
+use rand::{thread_rng, Rng};
+
 use std::ops::{Deref, DerefMut, Index, IndexMut};
 use std::slice;
 
@@ -129,9 +131,17 @@ impl MoveList {
         self.len
     }
 
+    /// Get the `MoveList` as a slice, `&[Move]`.
     #[inline(always)]
     pub fn as_slice(&self) -> &[Move] {
         self
+    }
+
+    /// Return a random move from the list.
+    #[inline]
+    pub fn random(&self) -> Option<Move> {
+        let mut rng = thread_rng();
+        rng.choose(self.as_slice()).copied()
     }
 }
 

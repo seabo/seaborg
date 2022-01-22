@@ -710,6 +710,10 @@ impl Position {
         MoveGen::generate_legal(&self)
     }
 
+    pub fn random_move(&self) -> Option<Move> {
+        self.generate_moves().random()
+    }
+
     // MOVE TESTING
     /// Tests if a given pseudo-legal move is legal. Used for checking the legality
     /// of moves that are generated as pseudo-legal in movegen. Pseudo-legal moves
