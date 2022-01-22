@@ -144,8 +144,23 @@ impl Session {
 
     /// Handle a `go` message from the GUI.
     fn go(&mut self, search_mode: SearchMode) {
+        if let SearchMode::Timed(tc) = search_mode {
+            println!("TC: {:?}", tc);
+            println!(
+                "Time for move: {}ms",
+                tc.to_fixed_time(10, core::position::Player::White)
+            )
+        }
+
         self.engine.unhalt();
-        self.engine.send(Command::Search);
+
+        // TODO: everything would probably be clearner if we break this down into two commands.
+        // In fact, the engine should have it's own command API, and it doesn't need to follow
+        // UCI so closely. In this case, we could issue a `TimeManagement(time_control)` command
+        // and then immediately afterwards a `CommenceSearch` command, or something like that.
+        // We could even separate out the notion of `InfiniteSearch` and `GetBestGameMove` or some
+        // such, and have the engine treat these completely separately.
+        self.engine.send(Command::Search(search_mode));
     }
 
     /// Handle a `stop` message from the GUI.

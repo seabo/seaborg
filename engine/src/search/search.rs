@@ -49,7 +49,7 @@ use std::sync::{Arc, RwLock};
 /// searched indefinitely in 'analysis mode', or it can be followed by a
 /// string like `wtime 10000 btime 10000 winc 1000 binc 1000 movestogo 5`
 /// which represents the clock situation in a timed game.
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub enum SearchMode {
     Infinite,
     Timed(TimeControl),

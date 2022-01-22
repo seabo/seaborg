@@ -1,5 +1,5 @@
 use crate::search::params::{Builder, BuilderError, BuilderResult, Params};
-use crate::search::search::Search;
+use crate::search::search::{Search, SearchMode};
 use crate::sess::Message;
 use crate::uci::Pos;
 
@@ -12,7 +12,7 @@ use std::thread::{self, JoinHandle};
 pub enum Command {
     Initialize,
     SetPosition((Pos, Option<Vec<String>>)),
-    Search,
+    Search(SearchMode),
     Quit,
 }
 
@@ -69,7 +69,10 @@ impl Engine {
                 match cmd {
                     Command::Initialize => engine_inner.init(),
                     Command::SetPosition((pos, moves)) => engine_inner.set_position(pos, moves),
-                    Command::Search => engine_inner.search(Arc::clone(&halt_clone)),
+                    Command::Search(mode) => {
+                        engine_inner.set_search_mode(mode);
+                        engine_inner.search(Arc::clone(&halt_clone));
+                    }
                     Command::Quit => quit = true,
                 }
             }
@@ -140,6 +143,10 @@ impl EngineInner {
         let result = self.builder.set_position(pos, moves);
 
         self.handle_result(result);
+    }
+
+    pub fn set_search_mode(&mut self, search_mode: SearchMode) {
+        self.builder.set_search_mode(search_mode);
     }
 
     /// Launch the search. This will take the current params `Builder` and

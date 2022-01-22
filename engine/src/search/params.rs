@@ -1,9 +1,12 @@
+use crate::search::search::SearchMode;
 use crate::uci::Pos;
 use core::position::{FenError, Position};
 
 /// Default transposition table capacity. This means the table will have `2^27`
 /// available slots, which is approximately 134 million.
 static DEFAULT_TT_CAP: u32 = 27;
+/// Default search mode to use.
+static DEFAULT_SEARCH_MODE: SearchMode = SearchMode::Infinite;
 
 /// The parameters to be used to run a search.
 #[derive(Clone, Debug)]
@@ -13,8 +16,8 @@ pub struct Params {
     /// The capacity to use for the transposition table. The number of available
     /// transposition table entries will be `2^tt_cap`.
     pub tt_cap: u32,
-    // TODO: much more will go here, for example:
-    // - time management
+    /// The search mode to use.
+    search_mode: SearchMode,
     // - search type (iterative deepening, fixed depth)
 }
 
@@ -33,14 +36,13 @@ pub struct Builder {
     /// The capacity to use for the transposition table. The number of available
     /// transposition table entries will be `2^tt_cap`.
     tt_cap: Option<u32>,
+    /// The search mode to use.
+    search_mode: Option<SearchMode>,
 }
 
 impl Builder {
     pub fn new() -> Self {
-        Self {
-            pos: None,
-            tt_cap: None,
-        }
+        Default::default()
     }
 
     /// Set the position.
@@ -83,6 +85,11 @@ impl Builder {
         Ok(())
     }
 
+    pub fn set_search_mode(&mut self, search_mode: SearchMode) -> BuilderResult {
+        self.search_mode = Some(search_mode);
+        Ok(())
+    }
+
     pub fn build(self) -> Params {
         let pos = match self.pos {
             Some(pos) => pos,
@@ -94,7 +101,16 @@ impl Builder {
             None => DEFAULT_TT_CAP,
         };
 
-        Params { pos, tt_cap }
+        let search_mode = match &self.search_mode {
+            Some(search_mode) => *search_mode,
+            None => DEFAULT_SEARCH_MODE,
+        };
+
+        Params {
+            pos,
+            tt_cap,
+            search_mode,
+        }
     }
 }
 
@@ -103,6 +119,7 @@ impl Default for Builder {
         Builder {
             pos: None,
             tt_cap: None,
+            search_mode: None,
         }
     }
 }
