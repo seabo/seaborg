@@ -32,6 +32,7 @@ use crate::engine::Report;
 use crate::eval::material_eval;
 use crate::sess::Message;
 use crate::tables::Table;
+use crate::time::TimeControl;
 
 use core::mov::Move;
 use core::movelist::MoveList;
@@ -42,6 +43,17 @@ use separator::Separatable;
 
 use std::cmp::{max, min};
 use std::sync::{Arc, RwLock};
+
+/// Represents the search mode specified in a `go` command. The `go` keyword
+/// can either be followed by `infinite` which means the position should be
+/// searched indefinitely in 'analysis mode', or it can be followed by a
+/// string like `wtime 10000 btime 10000 winc 1000 binc 1000 movestogo 5`
+/// which represents the clock situation in a timed game.
+#[derive(Clone, Debug)]
+pub enum SearchMode {
+    Infinite,
+    Timed(TimeControl),
+}
 
 #[derive(Clone, Debug)]
 pub enum NodeType {

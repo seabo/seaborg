@@ -44,8 +44,9 @@ impl Comm {
     }
 
     pub fn send(&self, msg: Res) {
-        // TODO: use result
-        self.to_gui_tx.send(msg);
+        self.to_gui_tx
+            .send(msg)
+            .expect("couldn't send message to GUI");
     }
 
     /// When quitting a session, use this to join on the `Comm` threads and wait for
@@ -65,10 +66,10 @@ impl Comm {
             // Blocks until a new message is received on stdin.
             let uci_msg = Uci::read_command();
 
-            // TODO: use the result
-            tx.send(Message::FromGui(uci_msg.clone()));
+            tx.send(Message::FromGui(uci_msg.clone()))
+                .expect("couldn't send message from stdin to the engine session");
 
-            if uci_msg == Req::Quit {
+            if let Req::Quit = uci_msg {
                 break;
             }
         });

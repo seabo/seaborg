@@ -1,7 +1,9 @@
 use super::Uci;
+use crate::search::search::SearchMode;
+use crate::time::TimeControl;
 
 /// Represents a UCI message sent by the GUI to the engine.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum Req {
     /// Put the engine into UCI communication mode.
     Uci,
@@ -14,15 +16,11 @@ pub enum Req {
     /// of the tuple.
     SetPosition((Pos, Option<Vec<String>>)),
     /// Commence the search process on the internal board.
-    Go,
+    Go(SearchMode),
     /// Halt the search process, but don't quit the engine.
     Stop,
     /// Stop the search process and quit the engine.
     Quit,
-    /// Represents a request we have decided to ignore, likely because it
-    /// does not conform to the UCI protocol, or we just don't implement that
-    /// command.
-    Ignored,
 }
 
 /// Represents a position to be set on the internal board, either as the
@@ -85,6 +83,8 @@ enum Keyword {
 pub enum ParseError {
     /// Represents a token which should not have appeared where it did.
     UnexpectedToken(String),
+    /// Expected more tokens but reach the end of the input.
+    ExpectedMore(String),
     /// Represents a situation where the `position` keyword was sent,
     /// but no further information on which position to set the board to.
     NoPosition,
@@ -93,6 +93,14 @@ pub enum ParseError {
     /// Represents a situation where there was no input string received when
     /// reading from stdin.
     NoInput,
+    /// Unsupported time control. This error is used for the time control
+    /// formats which are legitimate within the UCI protocol but which we do
+    /// not yet support.
+    /// TODO: support all formats and delete this.
+    UnsupportedTimeControl,
+    /// A set of time control parameters was expected, but this was incomplete
+    /// in the command.
+    IncompleteTimeControl,
 }
 
 impl ParseError {
@@ -111,9 +119,12 @@ impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ParseError::UnexpectedToken(tok) => writeln!(f, "unexpected token: {}", tok),
+            ParseError::ExpectedMore(err) => writeln!(f, "expected further input: {}", err),
             ParseError::Io(err) => writeln!(f, "io error: {}", err),
             ParseError::NoInput => writeln!(f, "no input"),
             ParseError::NoPosition => writeln!(f, "no position provided"),
+            ParseError::UnsupportedTimeControl => writeln!(f, "unsupported time control"),
+            ParseError::IncompleteTimeControl => writeln!(f, "incomplete time control provided"),
         }
     }
 }
@@ -166,40 +177,19 @@ impl<'a> Parser<'a> {
 
     fn parse_command(&mut self) -> ParseResult {
         match self.advance() {
-            Some(tok) => self.parse_keyword(tok),
+            Some(tok) => match tok {
+                Token::Keyword(Keyword::Uci) => Ok(Req::Uci),
+                Token::Keyword(Keyword::Debug) => todo!(),
+                Token::Keyword(Keyword::IsReady) => Ok(Req::IsReady),
+                Token::Keyword(Keyword::SetOption) => todo!(),
+                Token::Keyword(Keyword::UciNewGame) => Ok(Req::UciNewGame),
+                Token::Keyword(Keyword::Position) => self.parse_position_and_moves(),
+                Token::Keyword(Keyword::Go) => self.parse_go(),
+                Token::Keyword(Keyword::Stop) => Ok(Req::Stop),
+                Token::Keyword(Keyword::Quit) => Ok(Req::Quit),
+                _ => self.unexpected_token("expected a valid uci command"),
+            },
             None => Err(ParseError::NoInput),
-        }
-    }
-
-    fn parse_keyword(&mut self, tok: Token) -> ParseResult {
-        match tok {
-            Token::Keyword(Keyword::Uci) => Ok(Req::Uci),
-            Token::Keyword(Keyword::Debug) => todo!(),
-            Token::Keyword(Keyword::On) => todo!(),
-            Token::Keyword(Keyword::Off) => todo!(),
-            Token::Keyword(Keyword::IsReady) => Ok(Req::IsReady),
-            Token::Keyword(Keyword::SetOption) => todo!(),
-            Token::Keyword(Keyword::UciNewGame) => Ok(Req::UciNewGame),
-            Token::Keyword(Keyword::Position) => self.parse_position_and_moves(),
-            Token::Keyword(Keyword::Fen) => todo!(),
-            Token::Keyword(Keyword::Startpos) => Ok(Req::Ignored),
-            Token::Keyword(Keyword::Go) => self.parse_go(),
-            Token::Keyword(Keyword::SearchMoves) => todo!(),
-            Token::Keyword(Keyword::Ponder) => todo!(),
-            Token::Keyword(Keyword::Wtime) => todo!(),
-            Token::Keyword(Keyword::Btime) => todo!(),
-            Token::Keyword(Keyword::Winc) => todo!(),
-            Token::Keyword(Keyword::Binc) => todo!(),
-            Token::Keyword(Keyword::MovesToGo) => todo!(),
-            Token::Keyword(Keyword::Depth) => todo!(),
-            Token::Keyword(Keyword::Nodes) => todo!(),
-            Token::Keyword(Keyword::Mate) => todo!(),
-            Token::Keyword(Keyword::MoveTime) => todo!(),
-            Token::Keyword(Keyword::Infinite) => todo!(),
-            Token::Keyword(Keyword::Stop) => Ok(Req::Stop),
-            Token::Keyword(Keyword::PonderHit) => todo!(),
-            Token::Keyword(Keyword::Quit) => Ok(Req::Quit),
-            _ => self.unexpected_token("expected a uci keyword"),
         }
     }
 
@@ -271,9 +261,116 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_go(&mut self) -> ParseResult {
-        // TODO: this needs to parse all the possible `go` strings from the UCI
-        // protocol. Currently, we just accept the word `go` on its own.
-        Ok(Req::Go)
+        // The next token will be one of:
+        // - searchmoves
+        // - ponder
+        // - wtime, btime, winc, binc
+        // - movestogo
+        // - depth
+        // - nodes
+        // - mate
+        // - movetime
+        // - infinite
+        //
+        // We only want to support the time control version and infinite for now.
+        // We'll match on the next token, and handle the legitimate UCI commands
+        // with a panic saying that we don't support that time control (or we
+        // could just return `go infinite` and at least not crash).
+
+        match self.peek() {
+            Some(tok) => match tok {
+                Token::Keyword(Keyword::SearchMoves) => Parser::unsupported_time_control(),
+                Token::Keyword(Keyword::Ponder) => Parser::unsupported_time_control(),
+                Token::Keyword(Keyword::Wtime) => self.parse_time_control(),
+                Token::Keyword(Keyword::Btime) => self.parse_time_control(),
+                Token::Keyword(Keyword::Winc) => self.parse_time_control(),
+                Token::Keyword(Keyword::Binc) => self.parse_time_control(),
+                Token::Keyword(Keyword::MovesToGo) => self.parse_time_control(),
+                Token::Keyword(Keyword::Depth) => Parser::unsupported_time_control(),
+                Token::Keyword(Keyword::Nodes) => Parser::unsupported_time_control(),
+                Token::Keyword(Keyword::Mate) => Parser::unsupported_time_control(),
+                Token::Keyword(Keyword::MoveTime) => Parser::unsupported_time_control(),
+                Token::Keyword(Keyword::Infinite) => {
+                    self.advance();
+                    self.expect_end(Ok(Req::Go(SearchMode::Infinite)))
+                }
+                Token::Keyword(Keyword::PonderHit) => Parser::unsupported_time_control(),
+                _ => Err(ParseError::UnexpectedToken(
+                    "did not recognise token after `go` command".to_string(),
+                )),
+            },
+            None => Err(ParseError::ExpectedMore(
+                "no time control information provided in `go` command".to_string(),
+            )),
+        }
+    }
+
+    fn parse_time_control(&mut self) -> ParseResult {
+        let mut wtime: Option<u32> = None;
+        let mut btime: Option<u32> = None;
+        let mut winc: u32 = 0;
+        let mut binc: u32 = 0;
+        let mut moves_to_go: Option<u8> = None;
+
+        if let Some(Token::Keyword(Keyword::Infinite)) = self.peek() {
+            // We found `infnite` after the `go` command. We expect this to be the end
+            // of input, so bail here immediately.
+            self.advance();
+            return self.expect_end(Ok(Req::Go(SearchMode::Infinite)));
+        }
+
+        while self.peek().is_some() {
+            match self.advance().unwrap() {
+                Token::Keyword(Keyword::Wtime) => {
+                    wtime = Some(self.parse_number()?);
+                }
+                Token::Keyword(Keyword::Btime) => {
+                    btime = Some(self.parse_number()?);
+                }
+                Token::Keyword(Keyword::Winc) => {
+                    winc = self.parse_number()?;
+                }
+                Token::Keyword(Keyword::Binc) => {
+                    binc = self.parse_number()?;
+                }
+                Token::Keyword(Keyword::MovesToGo) => {
+                    moves_to_go = Some(self.parse_number()?);
+                }
+                _ => {
+                    return Err(ParseError::UnexpectedToken(
+                        "expected one of `wtime`, `btime`, `winc`, `binc` in time control"
+                            .to_string(),
+                    ));
+                }
+            }
+        }
+
+        if wtime.is_none() || btime.is_none() {
+            return Err(ParseError::IncompleteTimeControl);
+        }
+
+        Ok(Req::Go(SearchMode::Timed(TimeControl::new(
+            wtime.unwrap(),
+            btime.unwrap(),
+            winc,
+            binc,
+            moves_to_go,
+        ))))
+    }
+
+    fn parse_number<T: std::str::FromStr>(&mut self) -> Result<T, ParseError> {
+        match self.advance() {
+            Some(Token::String(tok)) => match str::parse::<T>(tok) {
+                Ok(i) => Ok(i),
+                Err(err) => Err(ParseError::UnexpectedToken("expected a number".to_string())),
+            },
+            Some(_) => Err(ParseError::UnexpectedToken("expected a number".to_string())),
+            None => Err(ParseError::ExpectedMore("expected a number".to_string())),
+        }
+    }
+
+    fn unsupported_time_control() -> ParseResult {
+        Err(ParseError::UnsupportedTimeControl)
     }
 
     fn unexpected_token<T>(&mut self, msg: &str) -> Result<T, ParseError> {
@@ -310,6 +407,15 @@ impl<'a> Parser<'a> {
             "ponderhit" => Token::Keyword(Keyword::PonderHit),
             "quit" => Token::Keyword(Keyword::Quit),
             _ => Token::String(str),
+        }
+    }
+
+    fn expect_end(&mut self, res: ParseResult) -> ParseResult {
+        match self.advance() {
+            Some(_) => Err(ParseError::UnexpectedToken(
+                "should have reached end of input, but found more tokens".to_string(),
+            )),
+            None => res,
         }
     }
 }

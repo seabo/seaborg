@@ -2,7 +2,6 @@ use crate::search::params::{Builder, BuilderError, BuilderResult, Params};
 use crate::search::search::Search;
 use crate::sess::Message;
 use crate::uci::Pos;
-use core::position::Position;
 
 use crossbeam_channel::{unbounded, Sender};
 
@@ -177,8 +176,9 @@ impl EngineInner {
     }
 
     pub fn report(&self, report: Report) {
-        // TODO: use the result.
-        self.session_tx.send(Message::FromEngine(report));
+        self.session_tx
+            .send(Message::FromEngine(report))
+            .expect("couldn't send engine report to session thread");
     }
 
     pub fn report_error(&self, msg: String) {

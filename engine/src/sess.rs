@@ -19,6 +19,7 @@
 
 use crate::comm::Comm;
 use crate::engine::{Command, Engine, Report};
+use crate::search::search::SearchMode;
 use crate::uci::{Pos, Req, Res};
 
 use crossbeam_channel::{unbounded, Receiver};
@@ -88,10 +89,9 @@ impl Session {
             Req::IsReady => self.isready(),
             Req::UciNewGame => self.new_game(),
             Req::SetPosition((pos, moves)) => self.set_position(pos, moves),
-            Req::Go => self.go(),
+            Req::Go(search_mode) => self.go(search_mode),
             Req::Stop => self.stop(),
             Req::Quit => self.quit_session(),
-            Req::Ignored => {}
         }
     }
 
@@ -143,7 +143,7 @@ impl Session {
     }
 
     /// Handle a `go` message from the GUI.
-    fn go(&mut self) {
+    fn go(&mut self, search_mode: SearchMode) {
         self.engine.unhalt();
         self.engine.send(Command::Search);
     }
