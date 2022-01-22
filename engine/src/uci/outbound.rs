@@ -1,5 +1,7 @@
 use super::Uci;
 
+use log::info;
+
 static NAME: &str = "rchess";
 static VERSION: &str = "0.1.0";
 static AUTHORS: &str = "George Seabridge <georgeseabridge@gmail.com>";
@@ -15,21 +17,26 @@ pub enum Res {
     Error(String),
 }
 
+impl std::fmt::Display for Res {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Res::Uciok => writeln!(f, "uciok"),
+            Res::Readyok => writeln!(f, "readyok"),
+            Res::Identify => {
+                writeln!(f, "id name {} {}", NAME, VERSION);
+                writeln!(f, "id author {}", AUTHORS)
+            }
+            Res::BestMove(uci_move) => writeln!(f, "bestmove {}", uci_move),
+            Res::Quit => writeln!(f, "exiting"),
+            Res::Error(msg) => writeln!(f, "{}", msg),
+        }
+    }
+}
+
 /// Functions to emit uci responses to stdout
 impl Uci {
-    pub fn identify() {
-        println!("id name {} {}", NAME, VERSION);
-        println!("id author {}", AUTHORS);
-    }
-
     pub fn emit(res: Res) {
-        match res {
-            Res::Uciok => println!("uciok"),
-            Res::Readyok => println!("readyok"),
-            Res::Identify => Self::identify(),
-            Res::BestMove(uci_move) => println!("bestmove {}", uci_move),
-            Res::Quit => println!("exiting"),
-            Res::Error(msg) => println!("{}", msg),
-        }
+        info!("writing response to stdout: {}", res);
+        println!("{}", res);
     }
 }

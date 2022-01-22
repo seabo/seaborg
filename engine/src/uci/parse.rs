@@ -2,6 +2,8 @@ use super::Uci;
 use crate::search::search::SearchMode;
 use crate::time::TimeControl;
 
+use log::info;
+
 /// Represents a UCI message sent by the GUI to the engine.
 #[derive(Clone, Debug)]
 pub enum Req {
@@ -105,7 +107,7 @@ pub enum ParseError {
 
 impl ParseError {
     pub fn emit(&self) {
-        eprintln!("{}", self);
+        info!("parse error: {}", self);
     }
 }
 
@@ -121,7 +123,7 @@ impl std::fmt::Display for ParseError {
             ParseError::UnexpectedToken(tok) => writeln!(f, "unexpected token: {}", tok),
             ParseError::ExpectedMore(err) => writeln!(f, "expected further input: {}", err),
             ParseError::Io(err) => writeln!(f, "io error: {}", err),
-            ParseError::NoInput => writeln!(f, "no input"),
+            ParseError::NoInput => writeln!(f, "expected command but received no input"),
             ParseError::NoPosition => writeln!(f, "no position provided"),
             ParseError::UnsupportedTimeControl => writeln!(f, "unsupported time control"),
             ParseError::IncompleteTimeControl => writeln!(f, "incomplete time control provided"),

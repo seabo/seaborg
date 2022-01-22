@@ -39,6 +39,7 @@ use core::mov::Move;
 use core::position::Position;
 
 use crossbeam_channel::Sender;
+use log::info;
 use separator::Separatable;
 
 use std::cmp::{max, min};
@@ -171,11 +172,21 @@ impl Search {
     }
 
     pub fn iterative_deepening(&mut self) -> i32 {
+        info!("starting iterative deepening");
+
         // Record the time we started the search
         self.set_start_time();
 
-        for i in 0..MAX_DEPTH_PLY {
+        for i in 1..MAX_DEPTH_PLY {
+            info!("iterative deepening: ply {}", i);
             self.best_so_far = self.get_best_move();
+            info!(
+                "best move found so far: {}",
+                match self.best_so_far {
+                    Some(mov) => mov,
+                    None => Move::null(),
+                }
+            );
 
             if self.is_halted() || self.timed_out() {
                 break;
@@ -184,10 +195,12 @@ impl Search {
             self.search(i, -10_000, 10_000);
         }
 
-        // The TT should always have an entry here, so the unwrap never fails.
-        // TODO: however - it's probably wiser to fall back on a simple static
-        // evaluation if the `get()` returns `None`
-        let score = self.tt.get(&self.pos).unwrap().score;
+        // TODO: if the TT has a `None` score, we should at least fall back on
+        // a static evaluation of the position.
+        let score = match self.tt.get(&self.pos) {
+            Some(entry) => entry.score,
+            None => 0,
+        };
 
         match self.best_so_far {
             Some(mov) => self.send_best_move(mov),
@@ -198,6 +211,8 @@ impl Search {
                 self.send_best_move(self.pos.random_move().unwrap());
             }
         }
+
+        info!("exiting iterative deepening routine");
 
         score
     }

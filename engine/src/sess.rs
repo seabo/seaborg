@@ -23,6 +23,7 @@ use crate::search::search::SearchMode;
 use crate::uci::{Pos, Req, Res};
 
 use crossbeam_channel::{unbounded, Receiver};
+use log::info;
 
 /// Represents a message received by the session, either from the GUI or from
 /// the engine thread.
@@ -70,7 +71,7 @@ impl Session {
 
             match result {
                 Ok(msg) => self.handle_message(msg),
-                Err(err) => eprintln!("{}", err),
+                Err(err) => info!("err: {}", err),
             }
         }
     }
