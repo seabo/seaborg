@@ -17,7 +17,7 @@ pub struct Params {
     /// transposition table entries will be `2^tt_cap`.
     pub tt_cap: u32,
     /// The search mode to use.
-    search_mode: SearchMode,
+    pub search_mode: SearchMode,
     // - search type (iterative deepening, fixed depth)
 }
 
@@ -126,6 +126,7 @@ impl Default for Builder {
 
 pub type BuilderResult = Result<(), BuilderError>;
 
+#[derive(Debug)]
 pub enum BuilderError {
     IllegalFen(FenError),
     IllegalMove(String),

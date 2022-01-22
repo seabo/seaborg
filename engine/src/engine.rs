@@ -87,10 +87,9 @@ impl Engine {
 
     /// Send a `Command` into the engine thread.
     pub fn send(&self, cmd: Command) {
-        match self.tx.send(cmd) {
-            Ok(_) => {}
-            Err(err) => eprintln!("{}", err),
-        }
+        self.tx
+            .send(cmd)
+            .expect("failed to send command into engine thread");
     }
 
     /// Halt the search process.
@@ -146,7 +145,9 @@ impl EngineInner {
     }
 
     pub fn set_search_mode(&mut self, search_mode: SearchMode) {
-        self.builder.set_search_mode(search_mode);
+        self.builder
+            .set_search_mode(search_mode)
+            .expect("couldn't set the search mode");
     }
 
     /// Launch the search. This will take the current params `Builder` and
@@ -164,8 +165,7 @@ impl EngineInner {
         // dropped as soon as this returns. Ideally we want to keep it around
         // and allow a paused search to be restarted. This probably just means
         // set the `Search` as a field on `EngineInner`.
-        let val = search.iterative_deepening(15);
-        println!("search yielded {}", val);
+        let val = search.iterative_deepening();
     }
 
     fn handle_result(&self, res: BuilderResult) {

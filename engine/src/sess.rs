@@ -144,14 +144,6 @@ impl Session {
 
     /// Handle a `go` message from the GUI.
     fn go(&mut self, search_mode: SearchMode) {
-        if let SearchMode::Timed(tc) = search_mode {
-            println!("TC: {:?}", tc);
-            println!(
-                "Time for move: {}ms",
-                tc.to_fixed_time(10, core::position::Player::White)
-            )
-        }
-
         self.engine.unhalt();
 
         // TODO: everything would probably be clearner if we break this down into two commands.

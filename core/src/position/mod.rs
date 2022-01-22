@@ -546,6 +546,11 @@ impl Position {
     }
 
     #[inline]
+    pub fn move_number(&self) -> u32 {
+        self.move_number
+    }
+
+    #[inline]
     pub fn castling_rights(&self) -> CastlingRights {
         self.castling_rights
     }

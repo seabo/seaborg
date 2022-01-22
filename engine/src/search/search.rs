@@ -43,6 +43,10 @@ use separator::Separatable;
 
 use std::cmp::{max, min};
 use std::sync::{Arc, RwLock};
+use std::time::Instant;
+
+/// The maximum ply to reach in the iterative deepening function.
+static MAX_DEPTH_PLY: u8 = u8::MAX;
 
 /// Represents the search mode specified in a `go` command. The `go` keyword
 /// can either be followed by `infinite` which means the position should be
@@ -71,13 +75,28 @@ pub struct TTData {
 }
 
 pub struct Search {
+    /// The internal board representation used by the search.
     pos: Position,
+    /// The transposition table used by the search process.
     tt: Table<TTData>,
+    /// A channel sender for transmitting messages back to the `Engine`. These messages are
+    /// usually things like info reports or the result of a search.
     sender: Option<Sender<Message>>,
+    /// A cross-thread boolean flag which is set to `true` by the `Engine` struct when it wants
+    /// to halt the process from the outside. TODO: it's assumed that this is cheaper and
+    /// lighterweight than setting up a channel into this thread and periodically calling `recv()`
+    /// inside the search function to determine whether or not to stop.
     halt: Arc<RwLock<bool>>,
+    /// The number of nodes we have visited in the search tree.
     visited: usize,
+    /// A counter of the number of moves which have been considered from all nodes visited.
     moves_considered: usize,
+    /// A counter of the number of edge traversals we have done in the search tree.
     moves_visited: usize,
+    /// The time at which the search commenced.
+    start_time: Option<Instant>,
+    /// The amount of time, in milliseconds, to limit this search to.
+    time_limit: Option<u32>,
 }
 
 impl Search {
@@ -87,8 +106,13 @@ impl Search {
         halt: Arc<RwLock<bool>>,
     ) -> Self {
         let pos = params.take_pos();
-        println!("{}", pos);
+
         let tt = Table::with_capacity(params.tt_cap);
+
+        let time_limit = match params.search_mode {
+            SearchMode::Infinite => None,
+            SearchMode::Timed(tc) => Some(tc.to_fixed_time(pos.move_number(), pos.turn())),
+        };
 
         Search {
             pos,
@@ -98,6 +122,8 @@ impl Search {
             visited: 0,
             moves_considered: 0,
             moves_visited: 0,
+            start_time: None,
+            time_limit,
         }
     }
 
@@ -140,14 +166,16 @@ impl Search {
         pv
     }
 
-    pub fn iterative_deepening(&mut self, target_depth: u8) -> i32 {
-        for i in 0..target_depth + 1 {
-            if self.is_halted() {
+    pub fn iterative_deepening(&mut self) -> i32 {
+        // Record the time we started the search
+        self.set_start_time();
+
+        for i in 0..MAX_DEPTH_PLY {
+            if self.is_halted() || self.timed_out() {
                 break;
             }
 
-            println!("searching depth {}", i);
-            self.pv_search(i, -10_000, 10_000);
+            self.search(i, -10_000, 10_000);
         }
 
         // The TT should always have an entry here, so the unwrap never fails.
@@ -155,30 +183,60 @@ impl Search {
         // evaluation if the `get()` returns `None`
         let score = self.tt.get(&self.pos).unwrap().score;
 
-        // TODO: temp; replace with cleaner stuff.
         let best_move = self.get_best_move();
         match best_move {
-            Some(mov) => {
-                if self.sender.is_some() {
-                    self.sender
-                        .as_ref()
-                        .unwrap()
-                        .send(Message::FromEngine(Report::BestMove(mov.to_uci_string())));
+            Some(mov) => match &self.sender {
+                Some(tx) => {
+                    tx.send(Message::FromEngine(Report::BestMove(mov.to_uci_string())))
+                        .expect("failed to send report to engine thread");
                 }
-            }
+                None => {}
+            },
             None => {}
         }
 
         score
     }
 
-    pub fn pv_search(&mut self, depth: u8, mut alpha: i32, mut beta: i32) -> i32 {
+    fn set_start_time(&mut self) {
+        self.start_time = Some(Instant::now());
+    }
+
+    fn timed_out(&self) -> bool {
+        if self.start_time.is_none() || self.time_limit.is_none() {
+            return false;
+        }
+
+        match self.start_time {
+            Some(start) => match self.time_limit {
+                Some(limit) => start.elapsed().as_millis() >= limit as u128,
+                None => false,
+            },
+            None => false,
+        }
+    }
+
+    fn search(&mut self, depth: u8, mut alpha: i32, mut beta: i32) -> i32 {
         let is_white = self.pos.turn().is_white();
         let alpha_orig = alpha;
         self.visited += 1;
 
         if self.pos.in_checkmate() {
             return -10_000;
+        }
+
+        // Check if we need to break out of the search because we were halted or
+        // ran out of time.
+        // Note: to avoid running this at every single node, we only do it at
+        // leaf nodes, because we'll hit leaf nodes very frequently but we can
+        // cut down on time wasted on the checks.
+        if depth == 0 && (self.is_halted() || self.timed_out()) {
+            // We need to unwind from the search, transmit the best move found so far
+            // through the channel and and return the current evaluation gracefully.
+            // TODO: this isn't right. We can't return the current alpha. This function
+            // to return a monad of some kind, which tells the caller whether we are
+            // returning early.
+            return alpha;
         }
 
         let mut tt_move: Option<Move> = None;
@@ -194,17 +252,6 @@ impl Search {
                 }
             }
         };
-
-        if self.is_halted() {
-            // Engine received a halt command, and has set the halt flag to true.
-            // We need to unwind from the search, transmit the best move found so far
-            // through the channel and and return the current evaluation gracefully.
-
-            // TODO: this isn't right. We can't return the current alpha. This function
-            // to return a monad of some kind, which tells the caller whether we are
-            // returning early.
-            return alpha;
-        }
 
         if depth == 0 {
             return material_eval(&self.pos) * if is_white { 1 } else { -1 };
@@ -229,12 +276,12 @@ impl Search {
             self.pos.make_move(mov);
             let mut score: i32;
             if search_pv {
-                score = -self.pv_search(depth - 1, -beta, -alpha);
+                score = -self.search(depth - 1, -beta, -alpha);
             } else {
-                score = -self.pv_search(depth - 1, -alpha - 100, -alpha);
+                score = -self.search(depth - 1, -alpha - 100, -alpha);
                 if score > alpha {
                     // re-search
-                    score = -self.pv_search(depth - 1, -beta, -alpha);
+                    score = -self.search(depth - 1, -beta, -alpha);
                 }
             }
             self.pos.unmake_move();

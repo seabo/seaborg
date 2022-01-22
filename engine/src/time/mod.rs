@@ -1,5 +1,7 @@
 use core::position::Player;
 
+use std::cmp::{max, min};
+
 /// Following Lichess, we naively assume games are 40 moves long, or 80 ply, on average.
 static AVERAGE_GAME_LENGTH: u32 = 40;
 /// Minimum remaining moves to assume.
@@ -7,7 +9,10 @@ static MINIMUM_REMAINING_MOVES: u32 = 20;
 /// Buffer time (in ms) to allocate to each move for executing non-search code (like
 /// parsing commands, setting up the board position, calculating time management etc.)
 /// TODO: experiment / run tests to work out appropriate time for this.
-static PER_MOVE_BUFFER_TIME: u32 = 100;
+static PER_MOVE_BUFFER_TIME: u32 = 50;
+/// A minimum time to allocate to each move, in ms, in case the algorithm comes up with
+/// something unreasonably short.
+static MINIMUM_TIME_PER_MOVE: u32 = 50;
 
 /// A struct to hold information about the time control for a search.
 #[derive(Copy, Clone, Debug)]
@@ -49,7 +54,7 @@ impl TimeControl {
         // An estimate of the number of remaining moves in the game.
         let remaining_moves = match self.moves_to_go {
             Some(n) => u32::from(n),
-            None => std::cmp::max(
+            None => max(
                 MINIMUM_REMAINING_MOVES,
                 AVERAGE_GAME_LENGTH - curr_move_number,
             ),
@@ -66,10 +71,14 @@ impl TimeControl {
             self.binc
         };
         let remaining_time = base_time + remaining_moves * inc;
-        let remaining_time_less_buffer = remaining_time - PER_MOVE_BUFFER_TIME * remaining_moves;
+        let remaining_time_less_buffer =
+            max(0, remaining_time - PER_MOVE_BUFFER_TIME * remaining_moves);
 
         // The implied time to use for this move.
-        let time_for_move = remaining_time_less_buffer / remaining_moves;
+        let time_for_move = max(
+            MINIMUM_TIME_PER_MOVE,
+            remaining_time_less_buffer / remaining_moves,
+        );
         time_for_move
     }
 }
