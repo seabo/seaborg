@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use rchess::bb::Bitboard;
+use seaborg::bb::Bitboard;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let bb = Bitboard::new(0x00000000C0000000);

@@ -1,7 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use rchess::mov::{Move, MoveType};
-use rchess::movegen::MoveGen;
-use rchess::position::{Position, Square};
+use seaborg::mov::{Move, MoveType};
+use seaborg::movegen::MoveGen;
+use seaborg::position::{Position, Square};
 
 fn criterion_benchmark(c: &mut Criterion) {
     let fen = "rn3rk1/1bq2ppp/p3p3/1pnp2B1/3N1P2/2b3Q1/PPP3PP/2KRRB2 w - - 0 17";

@@ -2,7 +2,7 @@ use super::Uci;
 
 use log::info;
 
-static NAME: &str = "rchess";
+static NAME: &str = "seaborg";
 static VERSION: &str = "0.1.0";
 static AUTHORS: &str = "George Seabridge <georgeseabridge@gmail.com>";
 
