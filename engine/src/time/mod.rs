@@ -1,6 +1,6 @@
 use core::position::Player;
 
-use std::cmp::{max, min};
+use std::cmp::max;
 
 /// Following Lichess, we naively assume games are 40 moves long, or 80 ply, on average.
 static AVERAGE_GAME_LENGTH: u32 = 40;
@@ -71,14 +71,12 @@ impl TimeControl {
             self.binc
         };
         let remaining_time = base_time + remaining_moves * inc;
-        let remaining_time_less_buffer =
-            max(0, remaining_time - PER_MOVE_BUFFER_TIME * remaining_moves);
+        let buffer_time = PER_MOVE_BUFFER_TIME * remaining_moves;
 
-        // The implied time to use for this move.
-        let time_for_move = max(
-            MINIMUM_TIME_PER_MOVE,
-            remaining_time_less_buffer / remaining_moves,
-        );
-        time_for_move
+        if remaining_time < buffer_time {
+            MINIMUM_TIME_PER_MOVE
+        } else {
+            (remaining_time - buffer_time) / remaining_moves
+        }
     }
 }
