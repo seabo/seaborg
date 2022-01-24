@@ -291,7 +291,7 @@ impl<'a> Parser<'a> {
                 Token::Keyword(Keyword::Depth) => Parser::unsupported_time_control(),
                 Token::Keyword(Keyword::Nodes) => Parser::unsupported_time_control(),
                 Token::Keyword(Keyword::Mate) => Parser::unsupported_time_control(),
-                Token::Keyword(Keyword::MoveTime) => Parser::unsupported_time_control(),
+                Token::Keyword(Keyword::MoveTime) => self.parse_move_time(),
                 Token::Keyword(Keyword::Infinite) => {
                     self.advance();
                     self.expect_end(Ok(Req::Go(SearchMode::Infinite)))
@@ -358,6 +358,15 @@ impl<'a> Parser<'a> {
             binc,
             moves_to_go,
         ))))
+    }
+
+    fn parse_move_time(&mut self) -> ParseResult {
+        // Consume the `movetime` token.
+        self.advance();
+
+        let ms: u32 = self.parse_number()?;
+
+        Ok(Req::Go(SearchMode::FixedTime(ms)))
     }
 
     fn parse_number<T: std::str::FromStr>(&mut self) -> Result<T, ParseError> {

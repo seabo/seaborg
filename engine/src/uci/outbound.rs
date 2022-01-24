@@ -37,6 +37,6 @@ impl std::fmt::Display for Res {
 impl Uci {
     pub fn emit(res: Res) {
         info!("writing response to stdout: {}", res);
-        println!("{}", res);
+        print!("{}", res);
     }
 }

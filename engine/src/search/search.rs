@@ -56,8 +56,12 @@ static MAX_DEPTH_PLY: u8 = u8::MAX;
 /// which represents the clock situation in a timed game.
 #[derive(Copy, Clone, Debug)]
 pub enum SearchMode {
+    /// Search the position indefinitely, until a `stop` command.
     Infinite,
+    /// Contains information representing the clock situation for white and black.
     Timed(TimeControl),
+    /// Contains a fixed amount of time, in milliseconds, in which to make the move.
+    FixedTime(u32),
 }
 
 #[derive(Clone, Debug)]
@@ -116,6 +120,7 @@ impl Search {
         let time_limit = match params.search_mode {
             SearchMode::Infinite => None,
             SearchMode::Timed(tc) => Some(tc.to_fixed_time(pos.move_number(), pos.turn())),
+            SearchMode::FixedTime(t) => Some(t),
         };
 
         Search {
