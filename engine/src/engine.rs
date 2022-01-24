@@ -4,6 +4,7 @@ use crate::sess::Message;
 use crate::uci::Pos;
 
 use crossbeam_channel::{unbounded, Sender};
+use log::info;
 
 use std::sync::{Arc, RwLock};
 use std::thread::{self, JoinHandle};
@@ -145,6 +146,8 @@ impl EngineInner {
     }
 
     pub fn set_search_mode(&mut self, search_mode: SearchMode) {
+        info!("setting engine search mode to: {:?}", search_mode);
+
         self.builder
             .set_search_mode(search_mode)
             .expect("couldn't set the search mode");

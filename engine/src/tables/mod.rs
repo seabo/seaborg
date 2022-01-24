@@ -2,6 +2,7 @@ use core::position::Position;
 use separator::Separatable;
 use std::cell::RefCell;
 
+#[derive(Debug)]
 pub struct Table<T> {
     /// Data
     data: Vec<Option<Slot<T>>>,

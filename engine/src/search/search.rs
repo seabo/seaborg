@@ -79,6 +79,7 @@ pub struct TTData {
     best_move: Move,
 }
 
+#[derive(Debug)]
 pub struct Search {
     /// The internal board representation used by the search.
     pos: Position,
@@ -123,7 +124,9 @@ impl Search {
             SearchMode::FixedTime(t) => Some(t),
         };
 
-        Search {
+        info!("setting search time limit to: {:?}", time_limit);
+
+        let search = Search {
             pos,
             tt,
             sender,
@@ -134,7 +137,9 @@ impl Search {
             start_time: None,
             time_limit,
             best_so_far: None,
-        }
+        };
+
+        search
     }
 
     pub fn display_trace(&self) {
@@ -223,13 +228,7 @@ impl Search {
     }
 
     fn send_best_move(&self, mov: Move) {
-        match &self.sender {
-            Some(tx) => {
-                tx.send(Message::FromEngine(Report::BestMove(mov.to_uci_string())))
-                    .expect("failed to send report to engine thread");
-            }
-            None => {}
-        }
+        self.report(Report::BestMove(mov.to_uci_string()));
     }
 
     fn set_start_time(&mut self) {
@@ -264,12 +263,14 @@ impl Search {
         // Note: to avoid running this at every single node, we only do it at
         // leaf nodes, because we'll hit leaf nodes very frequently but we can
         // cut down on time wasted on the checks.
-        if depth == 0 && (self.is_halted() || self.timed_out()) {
+        if self.is_halted() || self.timed_out() {
             // We need to unwind from the search, transmit the best move found so far
             // through the channel and and return the current evaluation gracefully.
             // TODO: this isn't right. We can't return the current alpha. This function
             // to return a monad of some kind, which tells the caller whether we are
             // returning early.
+            info!("timed-out/halted at depth {}", depth);
+
             return alpha;
         }
 
@@ -319,6 +320,7 @@ impl Search {
                 }
             }
             self.pos.unmake_move();
+
             if score > val {
                 val = score;
                 search_pv = false;

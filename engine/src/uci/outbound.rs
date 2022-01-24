@@ -28,7 +28,7 @@ impl std::fmt::Display for Res {
             }
             Res::BestMove(uci_move) => writeln!(f, "bestmove {}", uci_move),
             Res::Quit => writeln!(f, "exiting"),
-            Res::Error(msg) => writeln!(f, "{}", msg),
+            Res::Error(msg) => writeln!(f, "err: {}", msg),
         }
     }
 }
@@ -36,7 +36,7 @@ impl std::fmt::Display for Res {
 /// Functions to emit uci responses to stdout
 impl Uci {
     pub fn emit(res: Res) {
-        info!("writing response to stdout: {}", res);
+        info!("writing response to stdout: {:?}", res);
         print!("{}", res);
     }
 }
