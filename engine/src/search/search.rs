@@ -382,7 +382,7 @@ impl Search {
         alpha
     }
 
-    fn evaluate(&mut self) -> i32 {
+    pub fn evaluate(&mut self) -> i32 {
         material_eval(&self.pos) * if self.pos.turn().is_white() { 1 } else { -1 }
     }
 

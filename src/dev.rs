@@ -6,30 +6,37 @@ use engine::search::perft::Perft;
 use engine::search::perft_with_tt::PerftWithTT;
 use engine::search::pv_search::{OrderedMoveList, PVSearch};
 use engine::search::search::Search;
+use engine::uci::Pos;
 
 use separator::Separatable;
 
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 pub fn dev() {
     init_globals();
+    do_quiesce();
     // do_perft_with_tt();
     // do_transpo_table();
     // do_zobrist();
     // do_perft();
-    do_pv_search();
+    // do_pv_search();
     // do_main_loop();
     // do_ordered_moves();
     // do_material_eval();
 }
 
 fn do_quiesce() {
-    // let mut pos = Position::from_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1").unwrap();
-    // let params_builder = Builder::new();
-    // params_builder.set_position(, None);
-    // let search = Search::new(params)
+    let pos = Pos::Fen("6k1/2q1p3/3n4/8/4N3/3Q4/8/1K6 w - - 0 1".to_string());
+    let mut params_builder = Builder::new();
+    params_builder
+        .set_position(pos, None)
+        .expect("couldn't set position");
+    let halt = Arc::new(RwLock::new(false));
+    let mut search = Search::new(params_builder.build(), None, halt);
 
-    // println!("{}", pos.quiesce(-10_000, 10_000));
+    println!("Current material eval: {}", search.evaluate());
+    println!("Quiescent eval: {}", search.quiesce(-10_000, 10_000));
 }
 
 fn do_perft_with_tt() {

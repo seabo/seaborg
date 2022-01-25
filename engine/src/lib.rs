@@ -4,6 +4,6 @@ pub mod eval;
 pub mod search;
 mod tables;
 mod time;
-mod uci;
+pub mod uci;
 
 pub mod sess;
