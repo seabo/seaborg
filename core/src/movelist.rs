@@ -13,6 +13,7 @@
 /// not a cast-iron guarantee of safety but should be good enough.
 use rand::{thread_rng, Rng};
 
+use std::fmt;
 use std::ops::{Deref, DerefMut, Index, IndexMut};
 use std::slice;
 
@@ -48,6 +49,16 @@ pub trait MVPushable: Sized + IndexMut<usize> + Index<usize> + DerefMut {
 pub struct MoveList {
     inner: [Move; MAX_MOVES],
     len: usize,
+}
+
+impl fmt::Display for MoveList {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[");
+        for i in 0..self.len() {
+            write!(f, "{}, ", self.inner[i]);
+        }
+        writeln!(f, "]")
+    }
 }
 
 impl Default for MoveList {

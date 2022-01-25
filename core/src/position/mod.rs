@@ -710,6 +710,10 @@ impl Position {
         MoveGen::generate_legal(&self)
     }
 
+    pub fn generate_captures(&self) -> MoveList {
+        MoveGen::generate_legal_captures(&self)
+    }
+
     pub fn random_move(&self) -> Option<Move> {
         self.generate_moves().random()
     }

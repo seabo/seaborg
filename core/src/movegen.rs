@@ -1,7 +1,8 @@
 use crate::bb::Bitboard;
 use crate::mono_traits::{
-    BishopType, BlackType, KingType, KnightType, PieceTrait, PlayerTrait, QueenType, RookType,
-    WhiteType,
+    AllGenType, BishopType, BlackType, CapturesGenType, EvasionsGenType, GenTypeTrait, KingType,
+    KnightType, NonEvasionsGenType, PieceTrait, PlayerTrait, QueenType, QuietChecksGenType,
+    QuietsGenType, RookType, WhiteType,
 };
 use crate::mov::{Move, MoveType};
 use crate::movelist::{MVPushable, MoveList};
@@ -10,6 +11,35 @@ use crate::precalc::boards::{between_bb, king_moves, knight_moves, line_bb, pawn
 use crate::precalc::magic;
 
 use std::ops::Index;
+
+/// Types of move generating options.
+///
+/// `GenTypes::All` -> All available moves.
+///
+/// `GenTypes::Captures` -> All captures and both capture/non-capture promotions.
+///
+/// `GenTypes::Quiets` -> All non captures and both capture/non-capture promotions.
+///
+/// `GenTypes::QuietChecks` -> Moves likely to give check.
+///
+/// `GenTypes::Evasions` -> Generates evasions for a board in check.
+///
+/// `GenTypes::NonEvasions` -> Generates all moves for a board not in check.
+///
+/// # Safety
+///
+/// `GenTypes::QuietChecks` and `GenTypes::NonEvasions` can only be used if the board
+/// if not in check, while `GenTypes::Evasions` can only be used if the the board is
+/// in check. The remaining `GenTypes` can be used legally whenever.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum GenType {
+    All,
+    Captures,
+    Quiets,
+    QuietChecks,
+    Evasions,
+    NonEvasions,
+}
 
 pub struct MoveGen {}
 
@@ -21,10 +51,40 @@ impl MoveGen {
     /// - Would cause a discovered check (i.e. the moving piece is pinned)
     /// - Would cause the moving king to land in check
     #[inline]
-    pub fn generate(position: &Position) -> MoveList {
+    pub fn generate<G: GenTypeTrait>(position: &Position) -> MoveList {
         let mut movelist = MoveList::default();
-        InnerMoveGen::<MoveList>::generate(position, &mut movelist);
+        InnerMoveGen::<MoveList>::generate::<G>(position, &mut movelist);
         movelist
+    }
+
+    /// Generates pseudo-legal capture moves for the passed position.
+    ///
+    /// This function could return moves which are either:
+    /// - Legal
+    /// - Would cause a discovered check (i.e. the moving piece is pinned)
+    /// - Would cause the moving king to land in check
+    #[inline]
+    pub fn generate_pseudolegal_captures(position: &Position) -> MoveList {
+        Self::generate::<CapturesGenType>(position)
+    }
+
+    #[inline]
+    pub fn generate_legal_captures(position: &Position) -> MoveList {
+        let pseudolegal = Self::generate_pseudolegal_captures(position);
+        Self::filter_legal(position, pseudolegal)
+    }
+
+    // TODO: this is just temporary. Should really all happen in `InnerMoveGen` and
+    // be controlled by a monotrait.
+    #[inline]
+    pub fn filter_legal(position: &Position, pseudo_legal: MoveList) -> MoveList {
+        let mut legal: MoveList = Default::default();
+        for mov in &pseudo_legal {
+            if position.legal_move(*mov) {
+                legal.push(*mov);
+            }
+        }
+        legal
     }
 
     /// Generates legal moves only, by first generating pseudo-legal
@@ -38,7 +98,7 @@ impl MoveGen {
     /// capable of spitting out our moves in a sensible order, and with fast time
     /// complexity (i.e. by lazily hopping over illegal moves, and so on).
     pub fn generate_legal(position: &Position) -> MoveList {
-        let pseudo_legal = Self::generate(position);
+        let pseudo_legal = Self::generate::<AllGenType>(position);
         let mut legal: MoveList = Default::default();
         for mov in &pseudo_legal {
             if position.legal_move(*mov) {
@@ -56,7 +116,7 @@ pub struct InnerMoveGen<'a, MP: MVPushable + 'a> {
     occ: Bitboard,
     /// Squares occupied by the player to move
     us_occ: Bitboard,
-    /// Square occupied by the opponent
+    /// Squares occupied by the opponent
     them_occ: Bitboard,
 }
 
@@ -67,10 +127,15 @@ where
     /// Generate all pseudo-legal moves in the given position
     // TODO: use the monorphization technique to generalise this over desired legality status
     // of the moves. So you can ask for only totally legal, or pseudo-legal.
-    fn generate(position: &'a Position, movelist: &'a mut MP) -> &'a mut MP {
+    #[inline(always)]
+    fn generate<G: GenTypeTrait>(position: &'a Position, movelist: &'a mut MP) -> &'a mut MP {
         match position.turn() {
-            Player::White => InnerMoveGen::<MP>::generate_helper::<WhiteType>(position, movelist),
-            Player::Black => InnerMoveGen::<MP>::generate_helper::<BlackType>(position, movelist),
+            Player::White => {
+                InnerMoveGen::<MP>::generate_helper::<G, WhiteType>(position, movelist)
+            }
+            Player::Black => {
+                InnerMoveGen::<MP>::generate_helper::<G, BlackType>(position, movelist)
+            }
         }
     }
 
@@ -85,16 +150,34 @@ where
         }
     }
 
-    fn generate_helper<P: PlayerTrait>(position: &'a Position, movelist: &'a mut MP) -> &'a mut MP {
+    #[inline(always)]
+    fn generate_helper<G: GenTypeTrait, P: PlayerTrait>(
+        position: &'a Position,
+        movelist: &'a mut MP,
+    ) -> &'a mut MP {
         let mut movegen = InnerMoveGen::<MP>::get_self(position, movelist);
-        if movegen.position.in_check() {
-            movegen.generate_evasions::<P>();
-        } else {
-            movegen.generate_all::<P>();
+        let gen_type = G::gen_type();
+
+        if gen_type == GenType::Evasions {
+            movegen.generate_evasions::<P>(false);
+        } else if gen_type == GenType::Captures {
+            if movegen.position.in_check() {
+                movegen.generate_evasions::<P>(true);
+            } else {
+                movegen.generate_captures::<P>();
+            }
+        } else if gen_type == GenType::All {
+            if movegen.position.in_check() {
+                movegen.generate_evasions::<P>(false);
+            } else {
+                movegen.generate_all::<P>();
+            }
         }
+
         movegen.movelist
     }
 
+    #[inline(always)]
     fn generate_all<P: PlayerTrait>(&mut self) {
         self.generate_pawn_moves::<P>(Bitboard::ALL);
         self.generate_castling::<P>();
@@ -105,8 +188,25 @@ where
         self.moves_per_piece::<P, QueenType>(Bitboard::ALL);
     }
 
-    fn generate_evasions<P: PlayerTrait>(&mut self) {
+    #[inline(always)]
+    fn generate_captures<P: PlayerTrait>(&mut self) {
+        self.generate_pawn_moves::<P>(self.them_occ);
+        self.moves_per_piece::<P, KnightType>(self.them_occ);
+        self.moves_per_piece::<P, KingType>(self.them_occ);
+        self.moves_per_piece::<P, RookType>(self.them_occ);
+        self.moves_per_piece::<P, BishopType>(self.them_occ);
+        self.moves_per_piece::<P, QueenType>(self.them_occ);
+    }
+
+    #[inline(always)]
+    fn generate_evasions<P: PlayerTrait>(&mut self, captures_only: bool) {
         debug_assert!(self.position.in_check());
+
+        let target_sqs = if captures_only {
+            self.them_occ
+        } else {
+            Bitboard::ALL
+        };
 
         let ksq = self.position.king_sq(P::player());
         let mut slider_attacks = Bitboard(0);
@@ -123,7 +223,7 @@ where
         }
 
         // Possible king moves, where the king cannot move into a slider / own pieces
-        let k_moves = king_moves(ksq) & !slider_attacks & !self.us_occ;
+        let k_moves = king_moves(ksq) & !slider_attacks & !self.us_occ & target_sqs;
 
         // Separate captures and non-captures
         let mut captures_bb = k_moves & self.them_occ;
@@ -136,7 +236,8 @@ where
             let checking_sq = Square(self.position.checkers().bsf() as u8);
 
             // Squares that allow a block or captures of the sliding piece
-            let target = Bitboard(between_bb(checking_sq, ksq)) | checking_sq.to_bb();
+            let target =
+                target_sqs & (Bitboard(between_bb(checking_sq, ksq)) | checking_sq.to_bb());
             self.generate_pawn_moves::<P>(target);
             self.moves_per_piece::<P, KnightType>(target);
             self.moves_per_piece::<P, BishopType>(target);
@@ -145,6 +246,7 @@ where
         }
     }
 
+    #[inline(always)]
     fn moves_per_piece<PL: PlayerTrait, P: PieceTrait>(&mut self, target: Bitboard) {
         let piece_bb: Bitboard = self.position.piece_bb(PL::player(), P::piece_type());
         for orig in piece_bb {
@@ -156,6 +258,7 @@ where
         }
     }
 
+    #[inline(always)]
     fn generate_pawn_moves<PL: PlayerTrait>(&mut self, target: Bitboard) {
         let (rank_7, rank_3): (Bitboard, Bitboard) = if PL::player() == Player::White {
             (Bitboard::RANK_7, Bitboard::RANK_3)
@@ -247,12 +350,14 @@ where
     }
 
     // Generates castling for both sides
+    #[inline(always)]
     fn generate_castling<PL: PlayerTrait>(&mut self) {
         self.castling_side::<PL>(CastleType::Queenside);
         self.castling_side::<PL>(CastleType::Kingside);
     }
 
     // Generates castling for a single side
+    #[inline(always)]
     fn castling_side<PL: PlayerTrait>(&mut self, side: CastleType) {
         if self.position.can_castle(PL::player(), side)
             && !self.position.castle_impeded(side)
@@ -292,6 +397,7 @@ where
         }
     }
 
+    #[inline(always)]
     fn moves_bb<P: PieceTrait>(&mut self, sq: Square) -> Bitboard {
         debug_assert!(sq.is_okay());
         debug_assert_ne!(P::piece_type(), PieceType::Pawn);
@@ -306,7 +412,7 @@ where
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn move_append_from_bb_flag(&mut self, bb: &mut Bitboard, orig: Square, ty: MoveType) {
         for dest in bb {
             let mov = Move::build(orig, dest, None, ty);
@@ -315,7 +421,7 @@ where
     }
 
     /// Add the four possible promo moves (`=N`, `=B`, `=R`, `=Q`)
-    #[inline]
+    #[inline(always)]
     fn add_all_promo_moves(&mut self, orig: Square, dest: Square, is_capture: bool) {
         let move_ty = if is_capture {
             MoveType::PROMOTION | MoveType::CAPTURE
@@ -359,4 +465,123 @@ pub fn rook_moves(occupied: Bitboard, sq: Square) -> Bitboard {
 pub fn queen_moves(occupied: Bitboard, sq: Square) -> Bitboard {
     debug_assert!(sq.is_okay());
     Bitboard(magic::rook_attacks(occupied.0, sq.0) | magic::bishop_attacks(occupied.0, sq.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::init::init_globals;
+    use crate::position::Position;
+
+    fn number_of_captures(fen: &str) -> usize {
+        let pos = Position::from_fen(fen).unwrap();
+        let captures = pos.generate_captures();
+        captures.len()
+    }
+
+    struct Perft<'a> {
+        position: &'a mut Position,
+        nodes: usize,
+    }
+
+    impl<'a> Perft<'a> {
+        pub fn new(position: &'a mut Position) -> Self {
+            Self { position, nodes: 0 }
+        }
+
+        fn perft(&mut self, depth: usize) {
+            if depth == 0 {
+                self.nodes += 1;
+            }
+
+            let moves = self.position.generate_captures();
+            // let all_moves = self.position.generate_moves();
+
+            // use crate::movelist::{MVPushable, MoveList};
+            // let mut caps = MoveList::default();
+            // for mov in &all_moves {
+            //     if mov.is_capture() {
+            //         caps.push(*mov);
+            //     }
+            // }
+
+            // if caps.len() != moves.len() {
+            //     println!("-----");
+            //     print!("Hist: ");
+            //     for mov in self.position.history() {
+            //         print!("{} ", mov);
+            //     }
+            //     print!("\n");
+            //     println!("Caps:\n {}", caps);
+            //     println!("Moves:\n {}", moves);
+            // }
+
+            for mov in &moves {
+                if depth == 1 {
+                    self.nodes += 1;
+                } else {
+                    self.position.make_move(*mov);
+                    self.perft(depth - 1);
+                    self.position.unmake_move();
+                }
+            }
+        }
+    }
+
+    fn perft_captures_only(fen: &str, depth: usize) -> usize {
+        let mut pos = Position::from_fen(fen).unwrap();
+        let mut perft = Perft::new(&mut pos);
+        perft.perft(depth);
+        perft.nodes
+    }
+
+    /// Ensure that `generate_captures()` returns the right number of capture moves
+    /// for a suite of test positions.
+    #[rustfmt::skip]
+    #[test]
+    fn correct_capture_counts() {
+        init_globals();
+        
+        assert_eq!(number_of_captures("r1bqk1r1/1p1p1n2/p1n2pN1/2p1b2Q/2P1Pp2/1PN5/PB4PP/R4RK1 w q - 0 1"), 4);
+        assert_eq!(number_of_captures("r1n2N1k/2n2K1p/3pp3/5Pp1/b5R1/8/1PPP4/8 w - - 0 1"), 5);
+        assert_eq!(number_of_captures("r1b1r1k1/1pqn1pbp/p2pp1p1/P7/1n1NPP1Q/2NBBR2/1PP3PP/R6K w - - 0 1"), 3);
+        assert_eq!(number_of_captures("5b2/p2k1p2/P3pP1p/n2pP1p1/1p1P2P1/1P1KBN2/7P/8 w - - 0 1"), 2);
+        assert_eq!(number_of_captures("r3kbnr/1b3ppp/pqn5/1pp1P3/3p4/1BN2N2/PP2QPPP/R1BR2K1 w kq - 0 1"), 5);
+        assert_eq!(number_of_captures("r2r2k1/1p1n1pp1/4pnp1/8/PpBRqP2/1Q2B1P1/1P5P/R5K1 b - - 0 1"), 4);
+        assert_eq!(number_of_captures("2rq1rk1/pb1n1ppN/4p3/1pb5/3P1Pn1/P1N5/1PQ1B1PP/R1B2RK1 b - - 0 1"), 4);
+        assert_eq!(number_of_captures("r2qk2r/ppp1bppp/2n5/3p1b2/3P1Bn1/1QN1P3/PP3P1P/R3KBNR w KQkq - 0 1"), 4);
+        assert_eq!(number_of_captures("rnb1kb1r/p4p2/1qp1pn2/1p2N2p/2p1P1p1/2N3B1/PPQ1BPPP/3RK2R w Kkq - 0 1"), 7);
+        assert_eq!(number_of_captures("5rk1/pp1b4/4pqp1/2Ppb2p/1P2p3/4Q2P/P3BPP1/1R3R1K b - - 0 1"), 1);
+        assert_eq!(number_of_captures("r1b2r1k/ppp2ppp/8/4p3/2BPQ3/P3P1K1/1B3PPP/n3q1NR w - - 0 1"), 6);
+        assert_eq!(number_of_captures("1nkr1b1r/5p2/1q2p2p/1ppbP1p1/2pP4/2N3B1/1P1QBPPP/R4RK1 w - - 0 1"), 5);
+        assert_eq!(number_of_captures("1nrq1rk1/p4pp1/bp2pn1p/3p4/2PP1B2/P1PB2N1/4QPPP/1R2R1K1 w - - 0 1"), 5);
+        assert_eq!(number_of_captures("5k2/1rn2p2/3pb1p1/7p/p3PP2/PnNBK2P/3N2P1/1R6 w - - 0 1"), 3);
+        assert_eq!(number_of_captures("8/p2p4/r7/1k6/8/pK5Q/P7/b7 w - - 0 1"), 1);
+        assert_eq!(number_of_captures("1b1rr1k1/pp1q1pp1/8/NP1p1b1p/1B1Pp1n1/PQR1P1P1/4BP1P/5RK1 w - - 0 1"), 3);
+        assert_eq!(number_of_captures("1r3rk1/6p1/p1pb1qPp/3p4/4nPR1/2N4Q/PPP4P/2K1BR2 b - - 0 1"), 6);
+        assert_eq!(number_of_captures("r1b1kb1r/1p1n1p2/p3pP1p/q7/3N3p/2N5/P1PQB1PP/1R3R1K b kq - 0 1"), 3);
+        assert_eq!(number_of_captures("3kB3/5K2/7p/3p4/3pn3/4NN2/8/1b4B1 w - - 0 1"), 2);
+        assert_eq!(number_of_captures("1nrrb1k1/1qn1bppp/pp2p3/3pP3/N2P3P/1P1B1NP1/PBR1QPK1/2R5 w - - 0 1"), 4);
+        assert_eq!(number_of_captures("3rr1k1/1pq2b1p/2pp2p1/4bp2/pPPN4/4P1PP/P1QR1PB1/1R4K1 b - - 0 1"), 3);
+        assert_eq!(number_of_captures("r4rk1/p2nbpp1/2p2np1/q7/Np1PPB2/8/PPQ1N1PP/1K1R3R w - - 0 1"), 1);
+        assert_eq!(number_of_captures("r3r2k/1bq1nppp/p2b4/1pn1p2P/2p1P1QN/2P1N1P1/PPBB1P1R/2KR4 w - - 0 1"), 2);
+        assert_eq!(number_of_captures("r2q1r1k/3bppbp/pp1p4/2pPn1Bp/P1P1P2P/2N2P2/1P1Q2P1/R3KB1R w KQ - 0 1"), 1);
+        assert_eq!(number_of_captures("2kb4/p7/r1p3p1/p1P2pBp/R2P3P/2K3P1/5P2/8 w - - 0 1"), 2);
+        assert_eq!(number_of_captures("rqn2rk1/pp2b2p/2n2pp1/1N2p3/5P1N/1PP1B3/4Q1PP/R4RK1 w - - 0 1"), 5);
+        assert_eq!(number_of_captures("8/3Pk1p1/1p2P1K1/1P1Bb3/7p/7P/6P1/8 w - - 0 1"), 0);
+        assert_eq!(number_of_captures("4rrk1/Rpp3pp/6q1/2PPn3/4p3/2N5/1P2QPPP/5RK1 w - - 0 1"), 3);
+        assert_eq!(number_of_captures("2q2rk1/2p2pb1/PpP1p1pp/2n5/5B1P/3Q2P1/4PPN1/2R3K1 w - - 0 1"), 4);
+    }
+
+    #[test]
+    fn kiwipete_perft_captures_only() {
+        init_globals();
+
+        assert_eq!(
+            perft_captures_only(
+                "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+                8
+            ),
+            5_068_953
+        );
+    }
 }

@@ -7,6 +7,7 @@
 /// code reuse. We also inline all the functions in the implementation for speed
 /// in the compiled monomorphized code.
 use crate::bb::Bitboard;
+use crate::movegen::GenType;
 use crate::position::{PieceType, Player, Square};
 
 pub trait PlayerTrait {
@@ -316,5 +317,68 @@ impl PieceTrait for KingType {
     #[inline(always)]
     fn piece_type() -> PieceType {
         PieceType::King
+    }
+}
+
+/// The `GenTypeTrait` allows for reusing movegen code by monomorphizing
+/// over different 'generation types', such as 'captures-only', 'evasions-only'
+/// 'quiet moves only' etc.
+pub trait GenTypeTrait {
+    /// Returns the `GenType`.
+    fn gen_type() -> GenType;
+}
+
+/// Dummy type to represent a `GenType::All` which implements `GenTypeTrait`.
+pub struct AllGenType {}
+/// Dummy type to represent a `GenType::Captures` which implements `GenTypeTrait`.
+pub struct CapturesGenType {}
+/// Dummy type to represent a `GenType::Quiets` which implements `GenTypeTrait`.
+pub struct QuietsGenType {}
+/// Dummy type to represent a `GenType::QuietChecks` which implements `GenTypeTrait`.
+pub struct QuietChecksGenType {}
+/// Dummy type to represent a `GenType::Evasions` which implements `GenTypeTrait`.
+pub struct EvasionsGenType {}
+/// Dummy type to represent a `GenType::NonEvasions` which implements `GenTypeTrait`.
+pub struct NonEvasionsGenType {}
+
+impl GenTypeTrait for AllGenType {
+    #[inline(always)]
+    fn gen_type() -> GenType {
+        GenType::All
+    }
+}
+
+impl GenTypeTrait for CapturesGenType {
+    #[inline(always)]
+    fn gen_type() -> GenType {
+        GenType::Captures
+    }
+}
+
+impl GenTypeTrait for QuietsGenType {
+    #[inline(always)]
+    fn gen_type() -> GenType {
+        GenType::Quiets
+    }
+}
+
+impl GenTypeTrait for QuietChecksGenType {
+    #[inline(always)]
+    fn gen_type() -> GenType {
+        GenType::QuietChecks
+    }
+}
+
+impl GenTypeTrait for EvasionsGenType {
+    #[inline(always)]
+    fn gen_type() -> GenType {
+        GenType::Evasions
+    }
+}
+
+impl GenTypeTrait for NonEvasionsGenType {
+    #[inline(always)]
+    fn gen_type() -> GenType {
+        GenType::NonEvasions
     }
 }

@@ -352,6 +352,10 @@ impl Search {
         return val;
     }
 
+    fn quiesce(&mut self, mut alpha: i32, mut beta: i32) -> i32 {
+        0
+    }
+
     fn is_halted(&self) -> bool {
         *self.halt.read().unwrap()
     }
