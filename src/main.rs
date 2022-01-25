@@ -1,5 +1,6 @@
 mod cmdline;
 mod dev;
+mod perft;
 
 use log::info;
 use simple_logger::SimpleLogger;
