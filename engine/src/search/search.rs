@@ -64,6 +64,7 @@ pub enum SearchMode {
     FixedTime(u32),
 }
 
+// TODO: make the variants contain the value for cleaner access / manipulation.
 #[derive(Clone, Debug)]
 pub enum NodeType {
     Exact,
@@ -189,14 +190,17 @@ impl Search {
 
         for i in 1..MAX_DEPTH_PLY {
             info!("iterative deepening: ply {}", i);
-            self.best_so_far = self.get_best_move();
-            info!(
-                "best move found so far: {}",
-                match self.best_so_far {
-                    Some(mov) => mov,
-                    None => Move::null(),
-                }
-            );
+
+            if !self.is_halted() && !self.timed_out() {
+                self.best_so_far = self.get_best_move();
+                info!(
+                    "best move found so far: {}",
+                    match self.best_so_far {
+                        Some(mov) => mov,
+                        None => Move::null(),
+                    }
+                );
+            }
 
             if self.is_halted() || self.timed_out() {
                 break;
