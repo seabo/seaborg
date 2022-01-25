@@ -540,37 +540,37 @@ impl Position {
             | (king_moves(sq) & (self.piece_bb_both_players(PieceType::King)))
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn turn(&self) -> Player {
         self.turn
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn move_number(&self) -> u32 {
         self.move_number
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn castling_rights(&self) -> CastlingRights {
         self.castling_rights
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn occupied(&self) -> Bitboard {
         !self.bbs[Piece::None as usize]
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn get_occupied_player(&self, player: Player) -> Bitboard {
         self.player_occ[player as usize]
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn occupied_white(&self) -> Bitboard {
         self.player_occ[Player::White as usize]
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn occupied_black(&self) -> Bitboard {
         self.player_occ[Player::Black as usize]
     }

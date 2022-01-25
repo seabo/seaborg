@@ -250,7 +250,7 @@ impl Search {
     }
 
     fn search(&mut self, depth: u8, mut alpha: i32, mut beta: i32) -> i32 {
-        let is_white = self.pos.turn().is_white();
+        // let is_white = self.pos.turn().is_white();
         let alpha_orig = alpha;
         self.visited += 1;
 
@@ -289,7 +289,7 @@ impl Search {
         };
 
         if depth == 0 {
-            return material_eval(&self.pos) * if is_white { 1 } else { -1 };
+            return self.quiesce(alpha, beta);
         }
 
         let moves = self.pos.generate_moves();
@@ -352,8 +352,38 @@ impl Search {
         return val;
     }
 
-    fn quiesce(&mut self, mut alpha: i32, mut beta: i32) -> i32 {
-        0
+    pub fn quiesce(&mut self, mut alpha: i32, beta: i32) -> i32 {
+        let stand_pat = self.evaluate();
+        if stand_pat >= beta {
+            return beta;
+        }
+
+        if alpha < stand_pat {
+            alpha = stand_pat;
+        }
+
+        let captures = self.pos.generate_captures();
+        let mut score: i32;
+
+        for mov in &captures {
+            self.pos.make_move(*mov);
+            score = -self.quiesce(-beta, -alpha);
+            self.pos.unmake_move();
+
+            if score >= beta {
+                return beta;
+            }
+
+            if score > alpha {
+                alpha = score;
+            }
+        }
+
+        alpha
+    }
+
+    fn evaluate(&mut self) -> i32 {
+        material_eval(&self.pos) * if self.pos.turn().is_white() { 1 } else { -1 }
     }
 
     fn is_halted(&self) -> bool {

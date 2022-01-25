@@ -1,9 +1,11 @@
 use core::init::init_globals;
 use core::position::Position;
 use engine::eval::material_eval;
+use engine::search::params::{Builder, Params};
 use engine::search::perft::Perft;
 use engine::search::perft_with_tt::PerftWithTT;
 use engine::search::pv_search::{OrderedMoveList, PVSearch};
+use engine::search::search::Search;
 
 use separator::Separatable;
 
@@ -19,6 +21,15 @@ pub fn dev() {
     // do_main_loop();
     // do_ordered_moves();
     // do_material_eval();
+}
+
+fn do_quiesce() {
+    // let mut pos = Position::from_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1").unwrap();
+    // let params_builder = Builder::new();
+    // params_builder.set_position(, None);
+    // let search = Search::new(params)
+
+    // println!("{}", pos.quiesce(-10_000, 10_000));
 }
 
 fn do_perft_with_tt() {
