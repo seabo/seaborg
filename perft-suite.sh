@@ -1,0 +1,1 @@
+cargo test --workspace --release perft_suite -- --nocapture
