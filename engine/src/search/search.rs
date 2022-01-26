@@ -392,7 +392,9 @@ impl Search {
         let captures = self.pos().generate_captures();
         let mut score: i32;
 
+        let mut node_move_count = 0;
         for mov in &captures {
+            node_move_count += 1;
             self.pos_mut().make_move(*mov);
             score = -self.quiesce(-beta, -alpha);
             self.pos_mut().unmake_move();
@@ -403,6 +405,18 @@ impl Search {
 
             if score > alpha {
                 alpha = score;
+            }
+        }
+
+        if node_move_count == 0 {
+            // If this condition is true, then we had no moves in this position. So it's
+            // either checkmate or stalemate.
+            if self.pos().in_check() {
+                // Checkmate
+                return -10_000;
+            } else {
+                // Stalemate
+                return 0;
             }
         }
 

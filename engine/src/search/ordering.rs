@@ -113,47 +113,6 @@ impl<'a> Iterator for OrderedMoveList {
         }
 
         None
-
-        // if self.yielded == self.move_list.len() {
-        //     None
-        // } else {
-        //     // 1. Do we need to yield the TT move?
-        //     if !self.yielded_tt_move {
-        //         self.yielded += 1;
-        //         self.yielded_tt_move = true;
-        //         return Some(self.tt_move);
-        //     }
-        //     // 2. Do we need to yield captures
-        //     if !self.yielded_all_captures {
-        //         // Yes - scan for the first capture
-        //         for i in 0..self.move_list.len() {
-        //             let mov = unsafe { self.move_list.get_unchecked_mut(i) };
-        //             if mov.is_capture() {
-        //                 self.yielded += 1;
-        //                 let returned_move = mov.clone();
-        //                 // set that entry to a null move and return it
-        //                 *mov = Move::null();
-        //                 return Some(returned_move);
-        //             }
-        //         }
-        //         // If we get here, then nothing was a capture
-        //         self.yielded_all_captures = true;
-        //     }
-        //     // More blocks of moves according to some predicate (like `is_capture()`) would go here and follow the pattern of 2.
-        //     // 3. Yield any remaining moves
-        //     for i in 0..self.move_list.len() {
-        //         let mov = unsafe { self.move_list.get_unchecked_mut(i) };
-        //         if !mov.is_null() {
-        //             self.yielded += 1;
-        //             let returned_move = mov.clone();
-        //             // set that entry to a null move and return it
-        //             *mov = Move::null();
-        //             return Some(returned_move);
-        //         }
-        //     }
-        //     // if we get all the way here, then we didn't find any moves at all, so return `None`
-        //     None
-        // }
     }
 }
 
