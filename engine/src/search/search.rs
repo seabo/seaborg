@@ -42,7 +42,9 @@ use crossbeam_channel::Sender;
 use log::info;
 use separator::Separatable;
 
+use std::cell::{Ref, RefCell, RefMut};
 use std::cmp::{max, min};
+use std::rc::Rc;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
@@ -80,12 +82,18 @@ pub struct TTData {
     best_move: Move,
 }
 
+impl TTData {
+    pub fn best_move(&self) -> Move {
+        self.best_move
+    }
+}
+
 #[derive(Debug)]
 pub struct Search {
     /// The internal board representation used by the search.
-    pos: Position,
+    pos: Rc<RefCell<Position>>,
     /// The transposition table used by the search process.
-    tt: Table<TTData>,
+    tt: Rc<RefCell<Table<TTData>>>,
     /// A channel sender for transmitting messages back to the `Engine`. These messages are
     /// usually things like info reports or the result of a search.
     sender: Option<Sender<Message>>,
@@ -115,13 +123,15 @@ impl Search {
         sender: Option<Sender<Message>>,
         halt: Arc<RwLock<bool>>,
     ) -> Self {
-        let pos = params.take_pos();
+        let pos = Rc::new(RefCell::new(params.take_pos()));
 
-        let tt = Table::with_capacity(params.tt_cap);
+        let tt = Rc::new(RefCell::new(Table::with_capacity(params.tt_cap)));
 
         let time_limit = match params.search_mode {
             SearchMode::Infinite => None,
-            SearchMode::Timed(tc) => Some(tc.to_fixed_time(pos.move_number(), pos.turn())),
+            SearchMode::Timed(tc) => {
+                Some(tc.to_fixed_time(pos.borrow().move_number(), pos.borrow().turn()))
+            }
             SearchMode::FixedTime(t) => Some(t),
         };
 
@@ -143,6 +153,26 @@ impl Search {
         search
     }
 
+    #[inline(always)]
+    pub fn pos(&self) -> Ref<'_, Position> {
+        self.pos.borrow()
+    }
+
+    #[inline(always)]
+    pub fn pos_mut(&self) -> RefMut<'_, Position> {
+        self.pos.borrow_mut()
+    }
+
+    #[inline(always)]
+    pub fn tt(&self) -> Ref<'_, Table<TTData>> {
+        self.tt.borrow()
+    }
+
+    #[inline(always)]
+    pub fn tt_mut(&self) -> RefMut<'_, Table<TTData>> {
+        self.tt.borrow_mut()
+    }
+
     pub fn display_trace(&self) {
         println!("Visited {} nodes", self.visited.separated_string());
         println!(
@@ -155,11 +185,11 @@ impl Search {
             ((1 as f32 - self.moves_visited as f32 / self.moves_considered as f32) * 100 as f32)
                 .separated_string()
         );
-        self.tt.display_trace();
+        self.tt().display_trace();
     }
 
     pub fn get_best_move(&mut self) -> Option<Move> {
-        match self.tt.get(&self.pos) {
+        match self.tt().get(&self.pos()) {
             Some(data) => Some(data.best_move),
             None => None,
         }
@@ -170,13 +200,13 @@ impl Search {
         let mut length = 0;
         while let Some(mov) = self.get_best_move() {
             pv.push(mov);
-            self.pos.make_move(mov);
+            self.pos_mut().make_move(mov);
             length += 1;
         }
 
         while length > 0 {
             length -= 1;
-            self.pos.unmake_move();
+            self.pos_mut().unmake_move();
         }
 
         pv
@@ -211,7 +241,7 @@ impl Search {
 
         // TODO: if the TT has a `None` score, we should at least fall back on
         // a static evaluation of the position.
-        let score = match self.tt.get(&self.pos) {
+        let score = match self.tt().get(&self.pos()) {
             Some(entry) => entry.score,
             None => 0,
         };
@@ -222,7 +252,7 @@ impl Search {
                 // TODO: shouldn't really unwrap here, because if we are in checkmate
                 // or stalemate, then there won't be any legal moves and this will
                 // return `None`.
-                self.send_best_move(self.pos.random_move().unwrap());
+                self.send_best_move(self.pos().random_move().unwrap());
             }
         }
 
@@ -258,7 +288,7 @@ impl Search {
         let alpha_orig = alpha;
         self.visited += 1;
 
-        if self.pos.in_checkmate() {
+        if self.pos().in_checkmate() {
             return -10_000;
         }
 
@@ -280,7 +310,7 @@ impl Search {
 
         let mut tt_move: Option<Move> = None;
 
-        if let Some(data) = self.tt.get(&self.pos) {
+        if let Some(data) = self.tt().get(&self.pos()) {
             tt_move = Some(data.best_move);
 
             if data.depth >= depth {
@@ -296,9 +326,9 @@ impl Search {
             return self.quiesce(alpha, beta);
         }
 
-        let moves = self.pos.generate_moves();
+        let moves = self.pos().generate_moves();
         if moves.is_empty() {
-            if self.pos.in_check() {
+            if self.pos().in_check() {
                 return -10_000;
             } else {
                 return 0;
@@ -309,10 +339,10 @@ impl Search {
         self.moves_considered += moves.len();
         let mut search_pv = true;
         let mut val = -10_000;
-        let ordered_moves = OrderedMoveList::new(moves, tt_move);
+        let ordered_moves = OrderedMoveList::new(self.pos.clone(), self.tt.clone());
         for mov in ordered_moves {
             self.moves_visited += 1;
-            self.pos.make_move(mov);
+            self.pos_mut().make_move(mov);
             let mut score: i32;
             if search_pv {
                 score = -self.search(depth - 1, -beta, -alpha);
@@ -323,7 +353,7 @@ impl Search {
                     score = -self.search(depth - 1, -beta, -alpha);
                 }
             }
-            self.pos.unmake_move();
+            self.pos_mut().unmake_move();
 
             if score > val {
                 val = score;
@@ -352,7 +382,7 @@ impl Search {
             best_move,
         };
 
-        self.tt.insert(&self.pos, tt_entry);
+        self.tt_mut().insert(&self.pos(), tt_entry);
         return val;
     }
 
@@ -366,13 +396,13 @@ impl Search {
             alpha = stand_pat;
         }
 
-        let captures = self.pos.generate_captures();
+        let captures = self.pos().generate_captures();
         let mut score: i32;
 
         for mov in &captures {
-            self.pos.make_move(*mov);
+            self.pos_mut().make_move(*mov);
             score = -self.quiesce(-beta, -alpha);
-            self.pos.unmake_move();
+            self.pos_mut().unmake_move();
 
             if score >= beta {
                 return beta;
@@ -387,7 +417,7 @@ impl Search {
     }
 
     pub fn evaluate(&mut self) -> i32 {
-        material_eval(&self.pos) * if self.pos.turn().is_white() { 1 } else { -1 }
+        material_eval(&self.pos()) * if self.pos().turn().is_white() { 1 } else { -1 }
     }
 
     fn is_halted(&self) -> bool {
