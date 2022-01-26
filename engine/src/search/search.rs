@@ -29,7 +29,7 @@
 use super::ordering::OrderedMoveList;
 use super::params::Params;
 
-use crate::engine::Report;
+use crate::engine::{Info, Report};
 use crate::eval::material_eval;
 use crate::sess::Message;
 use crate::tables::Table;
@@ -113,6 +113,8 @@ pub struct Search {
     /// Tracks the best move found for the root position after the last complete iterative
     /// deepening iteration.
     best_so_far: Option<Move>,
+    /// Highest depth reached so far in iterative deepening.
+    highest_depth: u8,
 }
 
 impl Search {
@@ -145,6 +147,7 @@ impl Search {
             start_time: None,
             time_limit,
             best_so_far: None,
+            highest_depth: 0,
         };
 
         search
@@ -176,7 +179,7 @@ impl Search {
         self.tt().display_trace();
     }
 
-    pub fn get_best_move(&mut self) -> Option<Move> {
+    pub fn get_tt_move(&mut self) -> Option<Move> {
         match self.tt().get(&self.pos()) {
             Some(data) => Some(data.best_move),
             None => None,
@@ -186,7 +189,7 @@ impl Search {
     pub fn recover_pv(&mut self) -> Vec<Move> {
         let mut pv: Vec<Move> = Vec::new();
         let mut length = 0;
-        while let Some(mov) = self.get_best_move() {
+        while let Some(mov) = self.get_tt_move() {
             pv.push(mov);
             self.pos_mut().make_move(mov);
             length += 1;
@@ -208,23 +211,15 @@ impl Search {
 
         for i in 1..MAX_DEPTH_PLY {
             info!("iterative deepening: ply {}", i);
-
-            if !self.is_halted() && !self.timed_out() {
-                self.best_so_far = self.get_best_move();
-                info!(
-                    "best move found so far: {}",
-                    match self.best_so_far {
-                        Some(mov) => mov,
-                        None => Move::null(),
-                    }
-                );
-            }
-
             if self.is_halted() || self.timed_out() {
                 break;
+            } else {
+                self.update_best_move();
+                self.report_info();
             }
 
             self.search(i, -10_000, 10_000);
+            self.highest_depth = i;
         }
 
         // TODO: if the TT has a `None` score, we should at least fall back on
@@ -251,6 +246,17 @@ impl Search {
         );
 
         score
+    }
+
+    fn update_best_move(&mut self) {
+        self.best_so_far = self.get_tt_move();
+        info!(
+            "best move found so far: {}",
+            match self.best_so_far {
+                Some(mov) => mov,
+                None => Move::null(),
+            }
+        );
     }
 
     fn send_best_move(&self, mov: Move) {
@@ -439,6 +445,30 @@ impl Search {
                   .expect("Error: couldn't send report to GUI. No communication channel provided to search thread.");
             }
             None => {}
+        }
+    }
+
+    fn report_info(&self) {
+        if let Some(info) = self.build_info() {
+            self.report(Report::Info(info));
+        }
+    }
+
+    fn build_info(&self) -> Option<Info> {
+        match self.tt().get(&self.pos()) {
+            Some(tt_entry) => {
+                Some(Info {
+                    depth: self.highest_depth,
+                    // TODO: `seldepth` currently just same as `depth`
+                    seldepth: self.highest_depth,
+                    score: tt_entry.score,
+                    nodes: self.visited,
+                    nps: self.visited * 1_000_000
+                        / self.start_time.unwrap().elapsed().as_micros() as usize,
+                    pv: tt_entry.best_move.to_string(),
+                })
+            }
+            None => None,
         }
     }
 }

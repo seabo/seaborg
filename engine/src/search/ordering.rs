@@ -25,10 +25,6 @@ pub struct OrderedMoveList {
     /// The underlying `MoveList`. This gets consumed by the `OrderedMoveList`
     /// and won't be available after the iteration.
     pub move_list: Option<MoveList>,
-    /// Tracks how many `Move`s have so far been yielded by the iteration.
-    /// When this reaches `MoveList.len` then we can halt the iteration by
-    /// returning `None`.
-    yielded: usize,
     /// Tracks whether we have yielded the transposition table move yet
     yielded_tt_move: bool,
     /// Tracks whether we have yielded every capture yet
@@ -41,7 +37,6 @@ impl OrderedMoveList {
             pos,
             tt,
             move_list: None,
-            yielded: 0,
             yielded_tt_move: false,
             yielded_all_captures: false,
         }
@@ -69,10 +64,9 @@ impl<'a> Iterator for OrderedMoveList {
         if !self.yielded_tt_move {
             // 1. Set the yielded flag to true, even if we aren't going to yield anything
             self.yielded_tt_move = true;
-            // 1. Yield the tt move, if any
+            // 2. Yield the tt move, if any
             match self.get_tt_move() {
                 Some(mov) => {
-                    self.yielded += 1;
                     return Some(mov);
                 }
                 None => {}
@@ -92,7 +86,6 @@ impl<'a> Iterator for OrderedMoveList {
             for i in 0..move_list.len() {
                 let mov = unsafe { move_list.get_unchecked_mut(i) };
                 if mov.is_capture() {
-                    self.yielded += 1;
                     let returned_move = mov.clone();
                     *mov = Move::null();
                     return Some(returned_move);
@@ -105,7 +98,6 @@ impl<'a> Iterator for OrderedMoveList {
         for i in 0..move_list.len() {
             let mov = unsafe { move_list.get_unchecked_mut(i) };
             if !mov.is_null() {
-                self.yielded += 1;
                 let returned_move = mov.clone();
                 *mov = Move::null();
                 return Some(returned_move);

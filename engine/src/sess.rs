@@ -100,6 +100,7 @@ impl Session {
         let res = match report {
             Report::BestMove(uci_move) => Res::BestMove(uci_move),
             Report::InitializationComplete => Res::Readyok,
+            Report::Info(info) => Res::Info(info),
             Report::Error(msg) => Res::Error(msg),
         };
         self.comm.send(res);

@@ -1,4 +1,5 @@
 use super::Uci;
+use crate::engine::Info;
 
 use log::info;
 
@@ -13,6 +14,7 @@ pub enum Res {
     Readyok,
     Identify,
     BestMove(String),
+    Info(Info),
     Quit,
     Error(String),
 }
@@ -27,6 +29,11 @@ impl std::fmt::Display for Res {
                 writeln!(f, "id author {}", AUTHORS)
             }
             Res::BestMove(uci_move) => writeln!(f, "bestmove {}", uci_move),
+            Res::Info(info) => writeln!(
+                f,
+                "info depth {} seldepth {} score cp {} nodes {} nps {} pv {}",
+                info.depth, info.seldepth, info.score, info.nodes, info.nps, info.pv
+            ),
             Res::Quit => writeln!(f, "exiting"),
             Res::Error(msg) => writeln!(f, "err: {}", msg),
         }

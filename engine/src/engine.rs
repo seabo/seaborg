@@ -25,10 +25,22 @@ pub enum Command {
 pub enum Report {
     /// Communicates the best move found by the engine.
     BestMove(String),
+    /// Info
+    Info(Info),
     /// Initialization complete.
     InitializationComplete,
     /// Error report.
     Error(String),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Info {
+    pub(crate) depth: u8,
+    pub(crate) seldepth: u8,
+    pub(crate) score: i32,
+    pub(crate) nodes: usize,
+    pub(crate) nps: usize,
+    pub(crate) pv: String,
 }
 
 /// Owns the thread in which the chess engine's search routine executes, and passes
