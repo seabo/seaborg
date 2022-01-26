@@ -8,6 +8,7 @@ mod zobrist;
 
 use crate::bb::Bitboard;
 use crate::masks::{CASTLING_PATH, CASTLING_ROOK_START, FILE_BB, PLAYER_CNT, RANK_BB};
+use crate::mono_traits::GenTypeTrait;
 use crate::mov::{Move, MoveType, UndoableMove};
 use crate::movegen::{bishop_moves, rook_moves, MoveGen};
 use crate::movelist::MoveList;
@@ -706,6 +707,12 @@ impl Position {
     }
 
     // MOVE GENERATION
+    // Eventually, we should stabilise to just using this function, with resp.
+    // 'trait signature' for each use.
+    pub fn generate<G: GenTypeTrait>(&self) -> MoveList {
+        MoveGen::generate::<G>(&self)
+    }
+
     pub fn generate_moves(&self) -> MoveList {
         MoveGen::generate_legal(&self)
     }

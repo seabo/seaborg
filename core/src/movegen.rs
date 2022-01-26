@@ -16,9 +16,9 @@ use std::ops::Index;
 ///
 /// `GenTypes::All` -> All available moves.
 ///
-/// `GenTypes::Captures` -> All captures and both capture/non-capture promotions.
+/// `GenTypes::Captures` -> All captures.
 ///
-/// `GenTypes::Quiets` -> All non captures and both capture/non-capture promotions.
+/// `GenTypes::Quiets` -> All non captures.
 ///
 /// `GenTypes::QuietChecks` -> Moves likely to give check.
 ///
@@ -125,8 +125,6 @@ where
     <MP as Index<usize>>::Output: Sized,
 {
     /// Generate all pseudo-legal moves in the given position
-    // TODO: use the monorphization technique to generalise this over desired legality status
-    // of the moves. So you can ask for only totally legal, or pseudo-legal.
     #[inline(always)]
     fn generate<G: GenTypeTrait>(position: &'a Position, movelist: &'a mut MP) -> &'a mut MP {
         match position.turn() {
@@ -166,7 +164,15 @@ where
             } else {
                 movegen.generate_captures::<P>();
             }
-        } else if gen_type == GenType::All {
+        }
+        // else if gen_type == GenType::Quiets {
+        //     if movegen.position.in_check() {
+        //         movegen.generate_evasions::<P>()
+        //     } else {
+
+        //     }
+        // }
+        else if gen_type == GenType::All {
             if movegen.position.in_check() {
                 movegen.generate_evasions::<P>(false);
             } else {

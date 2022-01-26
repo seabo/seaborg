@@ -1,5 +1,6 @@
 use core::init::init_globals;
 use core::position::Position;
+use core::CapturesGenType;
 use engine::eval::material_eval;
 use engine::search::ordering::OrderedMoveList;
 use engine::search::params::Builder;
@@ -14,7 +15,7 @@ use std::time::Instant;
 
 pub fn dev() {
     init_globals();
-    do_quiesce();
+    // do_quiesce();
     // do_transpo_table();
     // do_zobrist();
     // do_perft();
@@ -22,6 +23,15 @@ pub fn dev() {
     // do_main_loop();
     // do_ordered_moves();
     // do_material_eval();
+    do_movegen();
+}
+
+fn do_movegen() {
+    let mut pos = Position::from_fen("k3n3/5P2/8/8/8/8/4R3/K7 w - - 0 1").unwrap();
+    let captures = pos.generate::<CapturesGenType>();
+    for mov in &captures {
+        println!("{}", *mov);
+    }
 }
 
 fn do_quiesce() {

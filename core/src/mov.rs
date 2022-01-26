@@ -4,12 +4,12 @@ use std::fmt;
 
 bitflags! {
     pub struct MoveType: u8 {
-        const PROMOTION = 0b000000001;
-        const EN_PASSANT = 0b000000010;
-        const CASTLE    = 0b000000100;
-        const CAPTURE   = 0b000001000;
-        const QUIET     = 0b000010000;
-        const NULL      = 0b000100000;
+        const PROMOTION  = 0b00000001;
+        const EN_PASSANT = 0b00000010;
+        const CASTLE     = 0b00000100;
+        const CAPTURE    = 0b00001000;
+        const QUIET      = 0b00010000;
+        const NULL       = 0b00100000;
     }
 }
 

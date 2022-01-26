@@ -14,6 +14,7 @@ pub mod movelist;
 pub mod position;
 
 pub use mono_traits::{
-    BishopType, BlackType, KingType, KnightType, PawnType, PieceTrait, PlayerTrait, QueenType,
-    RookType, WhiteType,
+    AllGenType, BishopType, BlackType, CapturesGenType, EvasionsGenType, GenTypeTrait, KingType,
+    KnightType, NonEvasionsGenType, PawnType, PieceTrait, PlayerTrait, QueenType,
+    QuietChecksGenType, QuietsGenType, RookType, WhiteType,
 };
