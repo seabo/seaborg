@@ -104,8 +104,6 @@ pub struct Search {
     halt: Arc<RwLock<bool>>,
     /// The number of nodes we have visited in the search tree.
     visited: usize,
-    /// A counter of the number of moves which have been considered from all nodes visited.
-    moves_considered: usize,
     /// A counter of the number of edge traversals we have done in the search tree.
     moves_visited: usize,
     /// The time at which the search commenced.
@@ -143,7 +141,6 @@ impl Search {
             sender,
             halt,
             visited: 0,
-            moves_considered: 0,
             moves_visited: 0,
             start_time: None,
             time_limit,
@@ -175,16 +172,7 @@ impl Search {
 
     pub fn display_trace(&self) {
         println!("Visited {} nodes", self.visited.separated_string());
-        println!(
-            "Moves considered: {}",
-            self.moves_considered.separated_string()
-        );
         println!("Moves visited: {}", self.moves_visited.separated_string());
-        println!(
-            "Pruning factor: {:.4}%",
-            ((1 as f32 - self.moves_visited as f32 / self.moves_considered as f32) * 100 as f32)
-                .separated_string()
-        );
         self.tt().display_trace();
     }
 
@@ -292,9 +280,9 @@ impl Search {
         let alpha_orig = alpha;
         self.visited += 1;
 
-        if self.pos().in_checkmate() {
-            return -10_000;
-        }
+        // if self.pos().in_checkmate() {
+        //     return -10_000;
+        // }
 
         // Check if we need to break out of the search because we were halted or
         // ran out of time.
@@ -312,11 +300,7 @@ impl Search {
             return alpha;
         }
 
-        let mut tt_move: Option<Move> = None;
-
         if let Some(data) = self.tt().get(&self.pos()) {
-            tt_move = Some(data.best_move);
-
             if data.depth >= depth {
                 match data.node_type {
                     NodeType::Exact => return data.score,
@@ -330,21 +314,13 @@ impl Search {
             return self.quiesce(alpha, beta);
         }
 
-        let moves = self.pos().generate_moves();
-        if moves.is_empty() {
-            if self.pos().in_check() {
-                return -10_000;
-            } else {
-                return 0;
-            }
-        }
-
-        let mut best_move: Move = moves[0];
-        self.moves_considered += moves.len();
+        let mut best_move: Move = Move::null();
         let mut search_pv = true;
         let mut val = -10_000;
+        let mut node_move_count = 0;
         let ordered_moves = OrderedMoveList::new(self.pos.clone(), self.tt.clone());
         for mov in ordered_moves {
+            node_move_count += 1;
             self.moves_visited += 1;
             self.pos_mut().make_move(mov);
             let mut score: i32;
@@ -371,6 +347,18 @@ impl Search {
             }
         }
 
+        if node_move_count == 0 {
+            // If this condition is true, then we had no moves in this position. So it's
+            // either checkmate or stalemate.
+            if self.pos().in_check() {
+                // Checkmate
+                return -10_000;
+            } else {
+                // Stalemate
+                return 0;
+            }
+        }
+
         let node_type = if val <= alpha_orig {
             NodeType::UpperBound
         } else if val >= beta {
@@ -379,14 +367,15 @@ impl Search {
             NodeType::Exact
         };
 
-        let tt_entry = TTData {
-            depth,
-            node_type,
-            score: val,
-            best_move,
-        };
-
-        self.tt_mut().insert(&self.pos(), tt_entry);
+        if !best_move.is_null() {
+            let tt_entry = TTData {
+                depth,
+                node_type,
+                score: val,
+                best_move,
+            };
+            self.tt_mut().insert(&self.pos(), tt_entry);
+        }
         return val;
     }
 
