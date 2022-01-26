@@ -257,6 +257,10 @@ impl Search {
         }
 
         info!("exiting iterative deepening routine");
+        info!(
+            "search speed: {} NPS",
+            self.visited as f32 / self.start_time.unwrap().elapsed().as_secs_f32()
+        );
 
         score
     }

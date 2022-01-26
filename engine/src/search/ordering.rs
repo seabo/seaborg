@@ -5,6 +5,8 @@ use core::mov::Move;
 use core::movelist::MoveList;
 use core::position::Position;
 
+use log::info;
+
 use std::cell::{Ref, RefCell};
 use std::rc::Rc;
 
@@ -22,7 +24,7 @@ pub struct OrderedMoveList {
     tt: Rc<RefCell<Table<TTData>>>,
     /// The underlying `MoveList`. This gets consumed by the `OrderedMoveList`
     /// and won't be available after the iteration.
-    move_list: Option<MoveList>,
+    pub move_list: Option<MoveList>,
     /// Tracks how many `Move`s have so far been yielded by the iteration.
     /// When this reaches `MoveList.len` then we can halt the iteration by
     /// returning `None`.
@@ -110,7 +112,6 @@ impl<'a> Iterator for OrderedMoveList {
             }
         }
 
-        // If we get here, there were no moves at all, so return `None`.
         None
 
         // if self.yielded == self.move_list.len() {
