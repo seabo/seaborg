@@ -5,9 +5,11 @@ use engine::eval::material_eval;
 use engine::search::ordering::OrderedMoveList;
 use engine::search::params::Builder;
 use engine::search::perft::Perft;
-use engine::search::search::Search;
+use engine::search::search::{Search, TTData};
+use engine::tables::Table;
 use engine::uci::Pos;
 
+use log::info;
 use separator::Separatable;
 
 use std::sync::{Arc, RwLock};
@@ -23,7 +25,24 @@ pub fn dev() {
     // do_main_loop();
     // do_ordered_moves();
     // do_material_eval();
-    do_movegen();
+    // do_movegen();
+    do_ordering();
+}
+
+fn do_ordering() {
+    let mut pos =
+        Position::from_fen("r2k3r/pb1Q1pp1/1pp3N1/b1P3Pn/1n4pq/2N3B1/PPP2PPP/R3K2R b KQ - 1 1")
+            .unwrap();
+    let tt: Table<TTData> = Table::with_capacity(5);
+
+    let ordered_moves = OrderedMoveList::new(
+        std::rc::Rc::new(std::cell::RefCell::new(pos)),
+        std::rc::Rc::new(std::cell::RefCell::new(tt)),
+    );
+
+    for (mov, phase) in ordered_moves {
+        println!("{} -> {}", mov, phase);
+    }
 }
 
 fn do_movegen() {

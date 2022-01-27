@@ -2,7 +2,7 @@ mod comm;
 mod engine;
 pub mod eval;
 pub mod search;
-mod tables;
+pub mod tables;
 mod time;
 pub mod uci;
 

@@ -1,4 +1,4 @@
-use core::position::Position;
+use core::position::{PieceType, Position};
 use core::{
     BishopType, BlackType, KingType, KnightType, PawnType, PieceTrait, PlayerTrait, QueenType,
     RookType, WhiteType,
@@ -78,5 +78,28 @@ impl Material for KingType {
     #[inline(always)]
     fn material_val() -> i32 {
         KING_VALUE
+    }
+}
+
+/// Trait to assign material values to the `PieceType` enum. Preferred to keep this
+/// in the `engine` crate, rather than `core` which should only focus on chess rules.
+pub trait Value {
+    /// Material valuation.
+    fn value(&self) -> i32;
+}
+
+impl Value for PieceType {
+    fn value(&self) -> i32 {
+        match self {
+            PieceType::Pawn => PAWN_VALUE,
+            PieceType::Knight => KNIGHT_VALUE,
+            PieceType::Bishop => BISHOP_VALUE,
+            PieceType::Rook => ROOK_VALUE,
+            PieceType::Queen => QUEEN_VALUE,
+            // We should never call `value()` on something which could be a king,
+            // so have a panic to alert to a bug.
+            PieceType::King => KING_VALUE,
+            PieceType::None => 0,
+        }
     }
 }

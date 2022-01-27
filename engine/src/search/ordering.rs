@@ -1,13 +1,15 @@
+use crate::eval::Value;
 use crate::search::search::{Search, TTData};
 use crate::tables::Table;
 
 use core::mov::Move;
-use core::movelist::MoveList;
+use core::movelist::{MoveList, MAX_MOVES};
 use core::position::Position;
 
 use log::info;
 
 use std::cell::{Ref, RefCell};
+use std::fmt;
 use std::rc::Rc;
 
 /// A wrapper around a `MoveList`.
@@ -25,21 +27,32 @@ pub struct OrderedMoveList {
     /// The underlying `MoveList`. This gets consumed by the `OrderedMoveList`
     /// and won't be available after the iteration.
     pub move_list: Option<MoveList>,
+    /// Parallel array to the `move_list`, containing ordering scores of the associated moves.
+    move_scores: Option<[i32; MAX_MOVES]>,
+    /// Boolean flag to indicate if we have prepared for return the full move list yet.
+    prepared: bool,
+    /// The transposition table move.
+    tt_move: Option<Move>,
     /// Tracks whether we have yielded the transposition table move yet
     yielded_tt_move: bool,
-    /// Tracks whether we have yielded every capture yet
-    yielded_all_captures: bool,
 }
 
 impl OrderedMoveList {
     pub fn new(pos: Rc<RefCell<Position>>, tt: Rc<RefCell<Table<TTData>>>) -> Self {
-        Self {
+        let mut list = Self {
             pos,
             tt,
             move_list: None,
+            move_scores: None,
+            prepared: false,
+            tt_move: None,
             yielded_tt_move: false,
-            yielded_all_captures: false,
-        }
+        };
+
+        let tt_move = list.get_tt_move();
+        list.tt_move = tt_move;
+
+        list
     }
 
     fn pos(&self) -> Ref<'_, Position> {
@@ -56,6 +69,87 @@ impl OrderedMoveList {
             None => None,
         }
     }
+
+    fn score_move(&self, mov: Move) -> i32 {
+        if mov.is_null() {
+            0
+        } else if mov.is_capture() {
+            let pos = self.pos();
+            let victim_value = pos.piece_at_sq(mov.dest()).type_of().value();
+            let attacker_value = pos.piece_at_sq(mov.orig()).type_of().value();
+            10000 + victim_value - attacker_value
+        } else {
+            10
+        }
+    }
+
+    fn prepare_move_list(&mut self) {
+        let moves = self.pos().generate_moves();
+        self.move_list = Some(moves);
+
+        // Build a structure with scores for each move in the list.
+        let mut move_scores = [0; MAX_MOVES];
+
+        for (i, mov) in self.move_list.as_ref().unwrap().iter().enumerate() {
+            // Remove the tt move as we'll already have returned it by now.
+            if Some(*mov) == self.tt_move {
+                unsafe {
+                    *move_scores.get_unchecked_mut(i) = 0;
+                }
+            }
+            let score = self.score_move(*mov);
+            unsafe {
+                *move_scores.get_unchecked_mut(i) = score;
+            }
+        }
+
+        self.move_scores = Some(move_scores);
+
+        // TODO: once killer moves are implemented, remove them from the list
+        // killer moves as we'll already be returning them before getting this far.
+
+        self.prepared = true;
+    }
+
+    fn yield_next(&mut self) -> Option<(Move, OrderingPhase)> {
+        // Perform a selection sort on the move list and return the highest
+        // scoring move.
+        let mut best_score_so_far = 0;
+        let mut best_index_so_far = 0;
+
+        for (i, score) in self.move_scores.as_mut().unwrap().iter_mut().enumerate() {
+            if *score > best_score_so_far {
+                best_score_so_far = *score;
+                best_index_so_far = i;
+            }
+        }
+
+        if best_score_so_far == 0 {
+            None
+        } else {
+            let mov = unsafe {
+                self.move_list
+                    .as_ref()
+                    .unwrap()
+                    .get_unchecked(best_index_so_far)
+            };
+            unsafe {
+                *self
+                    .move_scores
+                    .as_mut()
+                    .unwrap()
+                    .get_unchecked_mut(best_index_so_far) = 0;
+            };
+
+            let phase = if mov.is_capture() {
+                OrderingPhase::Captures
+            } else {
+                OrderingPhase::Rest
+            };
+
+            Some((*mov, phase))
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -65,14 +159,22 @@ pub enum OrderingPhase {
     Rest,
 }
 
+impl fmt::Display for OrderingPhase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            OrderingPhase::TTMove => write!(f, "TT Move"),
+            OrderingPhase::Captures => write!(f, "Capture"),
+            OrderingPhase::Rest => write!(f, "Rest"),
+        }
+    }
+}
+
 impl<'a> Iterator for OrderedMoveList {
     type Item = (Move, OrderingPhase);
     fn next(&mut self) -> Option<Self::Item> {
         if !self.yielded_tt_move {
-            // 1. Set the yielded flag to true, even if we aren't going to yield anything
             self.yielded_tt_move = true;
-            // 2. Yield the tt move, if any
-            match self.get_tt_move() {
+            match self.tt_move {
                 Some(mov) => {
                     return Some((mov, OrderingPhase::TTMove));
                 }
@@ -80,38 +182,11 @@ impl<'a> Iterator for OrderedMoveList {
             }
         }
 
-        if let None = self.move_list {
-            let moves = self.pos().generate_moves();
-            self.move_list = Some(moves);
+        if !self.prepared {
+            self.prepare_move_list();
         }
 
-        let move_list = self.move_list.as_deref_mut().unwrap();
-
-        if !self.yielded_all_captures {
-            // The unwrap should be safe because we have just set `self.move_list` to
-            // `Some`.
-            for i in 0..move_list.len() {
-                let mov = unsafe { move_list.get_unchecked_mut(i) };
-                if mov.is_capture() {
-                    let returned_move = mov.clone();
-                    *mov = Move::null();
-                    return Some((returned_move, OrderingPhase::Captures));
-                }
-            }
-            // If we get here, then nothing was a capture.
-            self.yielded_all_captures = true;
-        }
-
-        for i in 0..move_list.len() {
-            let mov = unsafe { move_list.get_unchecked_mut(i) };
-            if !mov.is_null() {
-                let returned_move = mov.clone();
-                *mov = Move::null();
-                return Some((returned_move, OrderingPhase::Rest));
-            }
-        }
-
-        None
+        self.yield_next()
     }
 }
 
