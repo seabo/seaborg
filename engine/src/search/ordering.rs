@@ -58,8 +58,15 @@ impl OrderedMoveList {
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum OrderingPhase {
+    TTMove,
+    Captures,
+    Rest,
+}
+
 impl<'a> Iterator for OrderedMoveList {
-    type Item = Move;
+    type Item = (Move, OrderingPhase);
     fn next(&mut self) -> Option<Self::Item> {
         if !self.yielded_tt_move {
             // 1. Set the yielded flag to true, even if we aren't going to yield anything
@@ -67,7 +74,7 @@ impl<'a> Iterator for OrderedMoveList {
             // 2. Yield the tt move, if any
             match self.get_tt_move() {
                 Some(mov) => {
-                    return Some(mov);
+                    return Some((mov, OrderingPhase::TTMove));
                 }
                 None => {}
             }
@@ -88,7 +95,7 @@ impl<'a> Iterator for OrderedMoveList {
                 if mov.is_capture() {
                     let returned_move = mov.clone();
                     *mov = Move::null();
-                    return Some(returned_move);
+                    return Some((returned_move, OrderingPhase::Captures));
                 }
             }
             // If we get here, then nothing was a capture.
@@ -100,7 +107,7 @@ impl<'a> Iterator for OrderedMoveList {
             if !mov.is_null() {
                 let returned_move = mov.clone();
                 *mov = Move::null();
-                return Some(returned_move);
+                return Some((returned_move, OrderingPhase::Rest));
             }
         }
 

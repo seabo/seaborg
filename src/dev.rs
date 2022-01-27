@@ -28,9 +28,24 @@ pub fn dev() {
 
 fn do_movegen() {
     let mut pos = Position::from_fen("k3n3/5P2/8/8/8/8/4R3/K7 w - - 0 1").unwrap();
-    let captures = pos.generate::<CapturesGenType>();
+    let now = Instant::now();
+    let captures = pos.generate_captures();
+    println!(
+        "{}ns to generate captures",
+        now.elapsed().as_nanos().separated_string()
+    );
     for mov in &captures {
-        println!("{}", *mov);
+        println!("{}", mov);
+    }
+
+    let now = Instant::now();
+    let all_moves = pos.generate_moves();
+    println!(
+        "{}ns to generate all moves",
+        now.elapsed().as_nanos().separated_string()
+    );
+    for mov in &all_moves {
+        println!("{}", mov);
     }
 }
 

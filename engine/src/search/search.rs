@@ -26,7 +26,7 @@
 // accurate equivalent results as plain alpha-beta search, when restricting the TT like
 // this.
 
-use super::ordering::OrderedMoveList;
+use super::ordering::{OrderedMoveList, OrderingPhase};
 use super::params::Params;
 
 use crate::engine::{Info, Report};
@@ -102,10 +102,18 @@ pub struct Search {
     /// lighterweight than setting up a channel into this thread and periodically calling `recv()`
     /// inside the search function to determine whether or not to stop.
     halt: Arc<RwLock<bool>>,
-    /// The number of nodes we have visited in the search tree.
+    /// The number of nodes entered by calling `search()`.
     visited: usize,
     /// A counter of the number of edge traversals we have done in the search tree.
     moves_visited: usize,
+    /// Counts the total number of beta cutoffs which have occurred in the search.
+    beta_cutoffs: usize,
+    /// Counts the number of beta cutoffs which occurred when searching a transposition table move,
+    /// and therefore before invoking a movegen for the current node (because of the lazy move iterator).
+    beta_cutoffs_on_tt_move: usize,
+    /// Counts the number of beta cutoffs which occurred when searching a capture move,
+    /// and therefore before invoking the final movegen for the current node (because of the lazy move iterator).
+    beta_cutoffs_on_captures: usize,
     /// The time at which the search commenced.
     start_time: Option<Instant>,
     /// The amount of time, in milliseconds, to limit this search to.
@@ -144,6 +152,9 @@ impl Search {
             halt,
             visited: 0,
             moves_visited: 0,
+            beta_cutoffs: 0,
+            beta_cutoffs_on_tt_move: 0,
+            beta_cutoffs_on_captures: 0,
             start_time: None,
             time_limit,
             best_so_far: None,
@@ -239,13 +250,32 @@ impl Search {
             }
         }
 
+        self.exit_search();
+
+        score
+    }
+
+    fn exit_search(&mut self) {
         info!("exiting iterative deepening routine");
         info!(
             "search speed: {} NPS",
             self.visited as f32 / self.start_time.unwrap().elapsed().as_secs_f32()
         );
-
-        score
+        info!("visited {} nodes in search", self.visited);
+        info!("beta-cutoffs: {}", self.beta_cutoffs);
+        info!("beta-cutoffs at tt moves: {}", self.beta_cutoffs_on_tt_move);
+        info!(
+            "{}% of beta-cutoffs at tt moves",
+            self.beta_cutoffs_on_tt_move as f32 * 100 as f32 / self.beta_cutoffs as f32
+        );
+        info!(
+            "beta-cutoffs at capture moves: {}",
+            self.beta_cutoffs_on_captures
+        );
+        info!(
+            "{}% of beta-cutoffs at capture moves",
+            self.beta_cutoffs_on_captures as f32 * 100 as f32 / self.beta_cutoffs as f32
+        );
     }
 
     fn update_best_move(&mut self) {
@@ -325,7 +355,7 @@ impl Search {
         let mut val = -10_000;
         let mut node_move_count = 0;
         let ordered_moves = OrderedMoveList::new(self.pos.clone(), self.tt.clone());
-        for mov in ordered_moves {
+        for (mov, ordering_phase) in ordered_moves {
             node_move_count += 1;
             self.moves_visited += 1;
             self.pos_mut().make_move(mov);
@@ -349,6 +379,12 @@ impl Search {
             alpha = max(alpha, val);
 
             if val >= beta {
+                self.beta_cutoffs += 1;
+                if ordering_phase == OrderingPhase::TTMove {
+                    self.beta_cutoffs_on_tt_move += 1;
+                } else if ordering_phase == OrderingPhase::Captures {
+                    self.beta_cutoffs_on_captures += 1;
+                }
                 break;
             }
         }
