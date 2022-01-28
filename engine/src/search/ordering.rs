@@ -1,12 +1,10 @@
 use crate::eval::Value;
-use crate::search::search::{Search, TTData};
+use crate::search::search::TTData;
 use crate::tables::Table;
 
 use core::mov::Move;
 use core::movelist::{MoveList, MAX_MOVES};
 use core::position::Position;
-
-use log::info;
 
 use std::cell::{Ref, RefCell};
 use std::fmt;
@@ -188,26 +186,4 @@ impl<'a> Iterator for OrderedMoveList {
 
         self.yield_next()
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use core::init::init_globals;
-    use core::position::Position;
-    // #[test]
-    // fn orders_moves() {
-    //     init_globals();
-
-    //     let pos = Position::from_fen("4b3/4B1bq/p2Q2pp/4pp2/8/8/p7/k1K5 w - - 0 1").unwrap();
-    //     let move_list = pos.generate_moves();
-    //     let tt_move = move_list[4].clone();
-    //     let mut ordered_move_list = OrderedMoveList::new(move_list, Some(tt_move));
-
-    //     assert_eq!(ordered_move_list.next().unwrap(), tt_move);
-    //     assert_eq!(ordered_move_list.next().unwrap().is_capture(), true);
-    //     assert_eq!(ordered_move_list.next().unwrap().is_capture(), true);
-    //     assert_eq!(ordered_move_list.next().unwrap().is_capture(), true);
-    //     assert_eq!(ordered_move_list.next().unwrap().is_capture(), false);
-    // }
 }
