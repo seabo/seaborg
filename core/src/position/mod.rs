@@ -8,11 +8,14 @@ mod zobrist;
 
 use crate::bb::Bitboard;
 use crate::masks::{CASTLING_PATH, CASTLING_ROOK_START, FILE_BB, PLAYER_CNT, RANK_BB};
-use crate::mono_traits::GenTypeTrait;
+use crate::mono_traits::{BlackType, GenTypeTrait, PlayerTrait, WhiteType};
 use crate::mov::{Move, MoveType, UndoableMove};
-use crate::movegen::{bishop_moves, rook_moves, MoveGen};
+use crate::movegen::MoveGen;
 use crate::movelist::MoveList;
-use crate::precalc::boards::{aligned, between_bb, king_moves, knight_moves, pawn_attacks_from};
+use crate::precalc::boards::{
+    aligned, between_bb, bishop_moves, king_moves, knight_moves, moves_bb, pawn_attacks_from,
+    rook_moves,
+};
 
 pub use board::Board;
 pub use castling::{CastleType, CastlingRights};
@@ -21,6 +24,8 @@ pub use piece::{Piece, PieceType, PROMO_PIECES};
 pub use square::Square;
 pub use state::State;
 pub use zobrist::Zobrist;
+
+use log::info;
 
 use std::fmt;
 use std::ops::Not;
@@ -672,7 +677,7 @@ impl Position {
         (path & self.occupied()).is_not_empty()
     }
 
-    /// Check if the given player can castle to the given side.
+    /// Check if the given player has the castling rights to allow castling on the given side.
     #[inline]
     pub fn can_castle(&self, player: Player, side: CastleType) -> bool {
         match player {
@@ -688,8 +693,8 @@ impl Position {
     }
 
     #[inline]
-    pub fn castling_rook_square(&self, side: CastleType) -> Square {
-        Square(CASTLING_ROOK_START[self.turn() as usize][side as usize])
+    pub fn castling_rook_square(&self, player: Player, side: CastleType) -> Square {
+        Square(CASTLING_ROOK_START[player as usize][side as usize])
     }
 
     /// Returns the king square for the given player.
@@ -769,6 +774,185 @@ impl Position {
         // Ensure we are not moving a pinned piece, or if we are, it is remaining staying
         // pinned but moving along the current rank, file, diagonal between the pinner and the king
         (self.pinned_pieces(us) & orig_bb).is_empty() || aligned(orig, dest, self.king_sq(us))
+    }
+
+    /// Determine if there is a pseudo-legal move in the current board state with the given
+    /// origin and destination squares, which is not a capture. Used in search to check
+    /// whether a killer move is available. If the origin and destination squares are legitimate,
+    /// this function returns `Some(Move)`. If there is no available legal move which matches,
+    /// it returns `None`.
+    ///
+    /// Note: in the case of promotion, there are actually four moves which would satisfy
+    /// the criteria. For now, we just return the Queen promotion for simplicity.
+    // TODO: probably should move this into the move generation module somehow.
+    pub fn is_non_capturing_pseudo_move(
+        &self,
+        orig: Square,
+        dest: Square,
+        is_castle: bool,
+    ) -> Option<Move> {
+        let us = self.turn();
+        let them = us.other_player();
+        let us_occ = self.get_occupied_player(us);
+
+        // Check that the current side to move has a piece on the origin square.
+        if (us_occ & orig.to_bb()).is_empty() {
+            return None;
+        }
+
+        // The type of piece on the origin square.
+        let mover = self.piece_at_sq(orig).type_of();
+
+        if is_castle {
+            debug_assert_eq!(mover, PieceType::King);
+            return if us == Player::White {
+                self.is_pseudo_castling_move::<WhiteType>(orig, dest)
+            } else {
+                self.is_pseudo_castling_move::<BlackType>(orig, dest)
+            };
+        }
+
+        match mover {
+            PieceType::None => unreachable!(), // since we checked above that there was a piece here
+            PieceType::Pawn => {
+                if us == Player::White {
+                    self.is_non_capturing_pseudo_pawn_move::<WhiteType>(orig, dest)
+                } else {
+                    self.is_non_capturing_pseudo_pawn_move::<BlackType>(orig, dest)
+                }
+            }
+            PieceType::King => {
+                todo!();
+            }
+            piece_type => {
+                let them_occ = self.get_occupied_player(them);
+                let dest_bb = dest.to_bb();
+                let moves_bb = moves_bb(piece_type, orig, self.occupied());
+                if (moves_bb & !them_occ & dest_bb).is_not_empty() {
+                    let mov = Move::build(orig, dest, None, MoveType::QUIET);
+                    return Some(mov);
+                }
+                None
+            }
+        }
+    }
+
+    fn is_non_capturing_pseudo_pawn_move<PL: PlayerTrait>(
+        &self,
+        orig: Square,
+        dest: Square,
+    ) -> Option<Move> {
+        let dest_bb = dest.to_bb();
+        let (rank_7, rank_3): (Bitboard, Bitboard) = if PL::player() == Player::White {
+            (Bitboard::RANK_7, Bitboard::RANK_3)
+        } else {
+            (Bitboard::RANK_2, Bitboard::RANK_6)
+        };
+        let all_pawns = self.piece_bb(PL::player(), PieceType::Pawn);
+        let pawns_rank_7 = all_pawns & rank_7;
+        let pawns_not_rank_7 = all_pawns & !rank_7;
+
+        // Single and double pawn pushes
+        let empty_squares = !self.occupied();
+        let mut push_one = empty_squares & PL::shift_up(pawns_not_rank_7);
+        let mut push_two = PL::shift_up(push_one & rank_3) & empty_squares;
+        push_one &= dest_bb;
+        push_two &= dest_bb;
+        if push_one.is_not_empty() || push_two.is_not_empty() {
+            // There is a one or two move pawn push available.
+            let mov = Move::build(orig, dest, None, MoveType::QUIET);
+            return Some(mov);
+        }
+
+        // Promotions
+        if pawns_rank_7.is_not_empty() {
+            let no_cap_promo = dest_bb & PL::shift_up(pawns_rank_7) & empty_squares;
+            if no_cap_promo.is_not_empty() {
+                let mov = Move::build(orig, dest, Some(PieceType::Queen), MoveType::PROMOTION);
+                return Some(mov);
+            }
+        }
+
+        None
+    }
+
+    fn is_pseudo_castling_move<PL: PlayerTrait>(&self, orig: Square, dest: Square) -> Option<Move> {
+        if orig != PL::player().relative_square(Square::E1) {
+            return None;
+        }
+        if dest == PL::player().relative_square(Square::G1) {
+            if self.can_castle(PL::player(), CastleType::Kingside)
+                && !self.castle_impeded(CastleType::Kingside)
+            {
+                // Check if squares king goes through are in check
+                let enemies = self.get_occupied_player(PL::player().other_player());
+                let direction: fn(Square) -> Square = |x: Square| x - Square(1);
+                let mut s: Square = dest;
+                let mut can_castle = true;
+                while s != orig {
+                    let attackers = self.attackers_to(s, self.occupied()) & enemies;
+                    if attackers.is_not_empty() {
+                        can_castle = false;
+                        break;
+                    }
+                    s = direction(s);
+                }
+                if can_castle {
+                    let mov = Move::build(orig, dest, None, MoveType::CASTLE);
+                    return Some(mov);
+                }
+            } else {
+                return None;
+            }
+        }
+        if dest == PL::player().relative_square(Square::C1) {
+            if self.can_castle(PL::player(), CastleType::Queenside)
+                && !self.castle_impeded(CastleType::Queenside)
+            {
+                // Check if squares king goes through are in check
+                let enemies = self.get_occupied_player(PL::player().other_player());
+                let direction: fn(Square) -> Square = |x: Square| x + Square(1);
+                let mut s: Square = dest;
+                let mut can_castle = true;
+                while s != orig {
+                    let attackers = self.attackers_to(s, self.occupied()) & enemies;
+                    if attackers.is_not_empty() {
+                        can_castle = false;
+                        break;
+                    }
+                    s = direction(s);
+                }
+
+                if can_castle {
+                    let mov = Move::build(orig, dest, None, MoveType::CASTLE);
+                    return Some(mov);
+                }
+            } else {
+                return None;
+            }
+        }
+
+        None
+    }
+
+    /// Similar to `is_pseudo_move()`, but also runs a legality check to ensure that the
+    /// move is not actually leaving the king in check, etc.
+    pub fn is_non_capturing_move(
+        &self,
+        orig: Square,
+        dest: Square,
+        is_castle: bool,
+    ) -> Option<Move> {
+        match self.is_non_capturing_pseudo_move(orig, dest, is_castle) {
+            Some(mov) => {
+                if self.legal_move(mov) {
+                    Some(mov)
+                } else {
+                    None
+                }
+            }
+            None => None,
+        }
     }
 }
 

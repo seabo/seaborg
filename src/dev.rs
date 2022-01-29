@@ -1,5 +1,5 @@
 use core::init::init_globals;
-use core::position::Position;
+use core::position::{Position, Square};
 use core::CapturesGenType;
 use engine::eval::material_eval;
 use engine::search::ordering::OrderedMoveList;
@@ -26,7 +26,18 @@ pub fn dev() {
     // do_ordered_moves();
     // do_material_eval();
     // do_movegen();
-    do_ordering();
+    // do_ordering();
+    do_is_move();
+}
+
+fn do_is_move() {
+    let pos =
+        Position::from_fen("r3k2r/pb3pp1/1pp5/b1P3Pn/1nq3p1/2N3B1/PPP2PPP/R3K2R b KQkq - 1 1")
+            .unwrap();
+    println!(
+        "{:?}",
+        pos.is_non_capturing_move(Square::E8, Square::G8, true)
+    );
 }
 
 fn do_ordering() {

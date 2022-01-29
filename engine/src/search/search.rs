@@ -26,6 +26,7 @@
 // accurate equivalent results as plain alpha-beta search, when restricting the TT like
 // this.
 
+use super::killer::KillerMove;
 use super::ordering::{OrderedMoveList, OrderingPhase};
 use super::params::Params;
 
@@ -50,6 +51,9 @@ use std::time::Instant;
 
 /// The maximum ply to reach in the iterative deepening function.
 static MAX_DEPTH_PLY: u8 = u8::MAX;
+/// The maximum depth for which we store killer moves. Determines the size of the array
+/// kept on the `Search` struct.
+const MAX_KILLER_DEPTH: usize = 25;
 
 /// Represents the search mode specified in a `go` command. The `go` keyword
 /// can either be followed by `infinite` which means the position should be
@@ -102,6 +106,8 @@ pub struct Search {
     /// lighterweight than setting up a channel into this thread and periodically calling `recv()`
     /// inside the search function to determine whether or not to stop.
     halt: Arc<RwLock<bool>>,
+    /// The table storing killer moves.
+    killers: [(Option<KillerMove>, Option<KillerMove>); MAX_KILLER_DEPTH],
     /// The number of nodes entered by calling `search()`.
     visited: usize,
     /// A counter of the number of edge traversals we have done in the search tree.
@@ -150,6 +156,7 @@ impl Search {
             tt,
             sender,
             halt,
+            killers: [(None, None); MAX_KILLER_DEPTH],
             visited: 0,
             moves_visited: 0,
             beta_cutoffs: 0,
@@ -422,6 +429,10 @@ impl Search {
     }
 
     pub fn quiesce(&mut self, mut alpha: i32, beta: i32) -> i32 {
+        // TODO: if we are in check, don't do the stand pat stuff. Just generate evasions
+        // and try them all. It's possible we'll run into perpetuals by doing this though,
+        // so need to have some limiting mechanism, probably on depth?
+
         let stand_pat = self.evaluate();
         if stand_pat >= beta {
             return beta;

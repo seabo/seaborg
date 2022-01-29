@@ -1,6 +1,6 @@
 use super::magic::{bishop_attacks, rook_attacks};
 use crate::bb::Bitboard;
-use crate::position::{file_of_sq, u8_to_u64, Player, Square};
+use crate::position::{file_of_sq, u8_to_u64, PieceType, Player, Square};
 
 /// Fast lookup table for Knight moves
 static mut KING_TABLE: [u64; 64] = [0; 64];
@@ -30,11 +30,54 @@ pub fn knight_moves(square: Square) -> Bitboard {
     unsafe { Bitboard::new(*KNIGHT_TABLE.get_unchecked(square.0 as usize)) }
 }
 
+// MAGIC FUNCTIONS
+
+/// Generate bishop moves `Bitboard` from a square and an occupancy bitboard.
+/// This function will return captures to pieces on both sides. The resulting `Bitboard` must be
+/// AND'd with the inverse of the moving player's pieces.
+#[inline(always)]
+pub fn bishop_moves(occupied: Bitboard, sq: Square) -> Bitboard {
+    debug_assert!(sq.is_okay());
+    Bitboard(bishop_attacks(occupied.0, sq.0))
+}
+
+/// Generate rook moves `Bitboard` from a square and an occupancy bitboard.
+/// This function will return captures to pieces on both sides. The resulting `Bitboard` must be
+/// AND'd with the inverse of the moving player's pieces.#[inline(always)]
+pub fn rook_moves(occupied: Bitboard, sq: Square) -> Bitboard {
+    debug_assert!(sq.is_okay());
+    Bitboard(rook_attacks(occupied.0, sq.0))
+}
+
+/// Generate queen moves `Bitboard` from a square and an occupancy bitboard.
+/// This function will return captures to pieces on both sides. The resulting `Bitboard` must be
+/// AND'd with the inverse of the moving player's pieces.
+#[inline(always)]
+pub fn queen_moves(occupied: Bitboard, sq: Square) -> Bitboard {
+    debug_assert!(sq.is_okay());
+    Bitboard(rook_attacks(occupied.0, sq.0) | bishop_attacks(occupied.0, sq.0))
+}
+
 /// Generate King moves Bitboard from an origin square
 #[inline(always)]
 pub fn king_moves(square: Square) -> Bitboard {
     debug_assert!(square.is_okay());
     unsafe { Bitboard::new(*KING_TABLE.get_unchecked(square.0 as usize)) }
+}
+
+#[inline(always)]
+pub fn moves_bb(piece_type: PieceType, sq: Square, occ: Bitboard) -> Bitboard {
+    debug_assert!(sq.is_okay());
+    debug_assert_ne!(piece_type, PieceType::Pawn);
+    match piece_type {
+        PieceType::None => panic!(), // TODO
+        PieceType::Pawn => panic!(),
+        PieceType::Knight => knight_moves(sq),
+        PieceType::Bishop => bishop_moves(occ, sq),
+        PieceType::Rook => rook_moves(occ, sq),
+        PieceType::Queen => queen_moves(occ, sq),
+        PieceType::King => king_moves(sq),
+    }
 }
 
 #[cold]
