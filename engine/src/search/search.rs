@@ -627,7 +627,12 @@ impl Search {
     }
 
     pub fn evaluate(&mut self) -> i32 {
-        material_eval(&self.pos()) * if self.pos().turn().is_white() { 1 } else { -1 }
+        let fifty_move_ply = self.pos().half_move_clock() as i32;
+        let raw_material =
+            material_eval(&self.pos()) * if self.pos().turn().is_white() { 1 } else { -1 };
+
+        // Tapering the eval towards zero as the half move counter approaches a draw.
+        (50 - fifty_move_ply) * raw_material / 50
     }
 
     fn is_halted(&self) -> bool {

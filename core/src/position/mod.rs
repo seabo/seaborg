@@ -557,6 +557,11 @@ impl Position {
     }
 
     #[inline(always)]
+    pub fn half_move_clock(&self) -> u32 {
+        self.half_move_clock
+    }
+
+    #[inline(always)]
     pub fn castling_rights(&self) -> CastlingRights {
         self.castling_rights
     }
