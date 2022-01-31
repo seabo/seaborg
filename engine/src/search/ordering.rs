@@ -10,8 +10,8 @@ use std::fmt;
 use std::rc::Rc;
 
 const MVV_LVA_OFFSET: u16 = 100;
-const KILLER_VALUE_1: u16 = 30;
-const KILLER_VALUE_2: u16 = 20;
+const KILLER_VALUE_NEWEST: u16 = 30;
+const KILLER_VALUE_OLDEST: u16 = 20;
 const QUIET_VALUE: u16 = 10;
 
 // MVV_LVA[victim][attacker]
@@ -50,6 +50,8 @@ pub struct OrderedMoveList {
     killers: (Option<Move>, Option<Move>),
     /// Tracks whether we have yielded the transposition table move yet
     yielded_tt_move: bool,
+    /// Tracks how many quiet moves (in the `Rest` ordering phase) have been yielded.
+    quiet_moves_yielded: u8,
 }
 
 impl OrderedMoveList {
@@ -67,6 +69,7 @@ impl OrderedMoveList {
             tt_move: None,
             killers,
             yielded_tt_move: false,
+            quiet_moves_yielded: 0,
         };
 
         let tt_move = list.get_tt_move();
@@ -105,9 +108,9 @@ impl OrderedMoveList {
             let attacker = pos.piece_at_sq(mov.orig()).type_of() as usize;
             MVV_LVA_OFFSET + MVV_LVA[victim][attacker]
         } else if Some(mov) == self.killers.0 {
-            KILLER_VALUE_1
+            KILLER_VALUE_OLDEST
         } else if Some(mov) == self.killers.1 {
-            KILLER_VALUE_2
+            KILLER_VALUE_NEWEST
         } else {
             QUIET_VALUE
         }
@@ -172,11 +175,14 @@ impl OrderedMoveList {
             };
 
             let phase = if best_score_so_far >= 100 {
-                OrderingPhase::Captures
-            } else if best_score_so_far >= 20 {
-                OrderingPhase::Killers
+                OrderingPhase::Captures(best_score_so_far)
+            } else if best_score_so_far == 30 {
+                OrderingPhase::Killers(true)
+            } else if best_score_so_far == 20 {
+                OrderingPhase::Killers(false)
             } else {
-                OrderingPhase::Rest
+                self.quiet_moves_yielded += 1;
+                OrderingPhase::Rest(self.quiet_moves_yielded)
             };
 
             Some((*mov, phase))
@@ -188,21 +194,25 @@ impl OrderedMoveList {
 pub enum OrderingPhase {
     /// The transposition table move.
     TTMove,
-    /// Capturing moves.
-    Captures,
-    /// Killer moves.
-    Killers,
-    /// Everything else.
-    Rest,
+    /// Capturing moves. Contains the MVV-LVA score of the move.
+    Captures(u16),
+    /// Killer moves. Contains a bool which is true if this is the
+    /// most recently stored killer move at this depth.
+    Killers(bool),
+    /// Everything else. Contains an ordinal count for which quiet move this is,
+    /// starting at zero.
+    Rest(u8),
 }
 
 impl fmt::Display for OrderingPhase {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             OrderingPhase::TTMove => write!(f, "TT Move"),
-            OrderingPhase::Captures => write!(f, "Capture"),
-            OrderingPhase::Killers => write!(f, "Killer"),
-            OrderingPhase::Rest => write!(f, "Rest"),
+            OrderingPhase::Captures(score) => write!(f, "Capture (score: {})", score),
+            OrderingPhase::Killers(newest) => {
+                write!(f, "Killer: ({})", if *newest { "newest" } else { "oldest" })
+            }
+            OrderingPhase::Rest(count) => write!(f, "Rest: ({})", count),
         }
     }
 }

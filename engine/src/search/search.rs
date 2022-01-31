@@ -118,6 +118,14 @@ pub struct Search {
     beta_cutoffs_on_captures: usize,
     /// Counts the number of beta cutoffs which occurred when searching a killer move.
     beta_cutoffs_on_killers: usize,
+    /// Counts the number of moves we apply a 'late move reduction' to.
+    lmr_count: usize,
+    /// The number of leaf nodes we visited which were PV nodes, and returned a 'balanced' eval
+    /// from the quiescence search (i.e. 0)
+    balanced_eval_at_pv_leaf: usize,
+    /// Tracks whether we are currently inside an extension launched from a balanced leaf node that
+    /// we wanted to try and get a better value for.
+    extending_at_balanced_leaf: bool,
     /// The time at which the search commenced.
     start_time: Option<Instant>,
     /// The amount of time, in milliseconds, to limit this search to.
@@ -165,6 +173,9 @@ impl Search {
             beta_cutoffs_on_tt_move: 0,
             beta_cutoffs_on_captures: 0,
             beta_cutoffs_on_killers: 0,
+            lmr_count: 0,
+            balanced_eval_at_pv_leaf: 0,
+            extending_at_balanced_leaf: false,
             start_time: None,
             time_limit,
             best_so_far: None,
@@ -245,7 +256,7 @@ impl Search {
                 self.report_info();
             }
 
-            self.search(i, -10_000, 10_000);
+            self.search(i, -10_000, 10_000, true);
             self.highest_depth = i;
         }
 
@@ -300,6 +311,7 @@ impl Search {
             "{}% of beta-cutoffs at killer moves",
             self.beta_cutoffs_on_killers as f32 * 100 as f32 / self.beta_cutoffs as f32
         );
+        info!("LMR count: {}", self.lmr_count);
     }
 
     fn update_best_move(&mut self) {
@@ -335,14 +347,10 @@ impl Search {
         }
     }
 
-    fn search(&mut self, depth: u8, mut alpha: i32, mut beta: i32) -> i32 {
+    fn search(&mut self, depth: u8, mut alpha: i32, mut beta: i32, parent_is_pv: bool) -> i32 {
         // let is_white = self.pos.turn().is_white();
         let alpha_orig = alpha;
         self.visited += 1;
-
-        // if self.pos().in_checkmate() {
-        //     return -10_000;
-        // }
 
         // Check if we need to break out of the search because we were halted or
         // ran out of time.
@@ -371,29 +379,50 @@ impl Search {
         };
 
         if depth == 0 {
-            return self.quiesce(alpha, beta);
+            let q = self.quiesce(alpha, beta);
+
+            if q == 0 && parent_is_pv {
+                self.balanced_eval_at_pv_leaf += 1;
+                if !self.extending_at_balanced_leaf {
+                    self.extending_at_balanced_leaf = true;
+                    let deeper_search = self.search(1, alpha, beta, true);
+                    self.extending_at_balanced_leaf = false;
+                    return deeper_search;
+                } else {
+                    return q;
+                }
+            }
+
+            return q;
         }
 
         let mut best_move: Move = Move::null();
         let mut search_pv = true;
         let mut val = -10_000;
+
+        // Tracks how many moves we have iterated through.
         let mut node_move_count = 0;
+
         let killers = self.killers();
         let ordered_moves = OrderedMoveList::new(self.pos.clone(), self.tt.clone(), killers);
         let tt_move = ordered_moves.tt_move();
 
         for (mov, ordering_phase) in ordered_moves {
             node_move_count += 1;
+
+            // Search depth reduction to apply.
+            let child_depth: u8 = self.apply_lmr(depth - 1, mov, ordering_phase, search_pv);
+
             self.moves_visited += 1;
             self.make_move(mov);
             let mut score: i32;
             if search_pv {
-                score = -self.search(depth - 1, -beta, -alpha);
+                score = -self.search(child_depth, -beta, -alpha, search_pv);
             } else {
-                score = -self.search(depth - 1, -alpha - 100, -alpha);
+                score = -self.search(child_depth, -alpha - 100, -alpha, search_pv);
                 if score > alpha {
                     // re-search
-                    score = -self.search(depth - 1, -beta, -alpha);
+                    score = -self.search(child_depth, -beta, -alpha, search_pv);
                 }
             }
             self.unmake_move();
@@ -409,9 +438,9 @@ impl Search {
                 self.beta_cutoffs += 1;
                 if ordering_phase == OrderingPhase::TTMove {
                     self.beta_cutoffs_on_tt_move += 1;
-                } else if ordering_phase == OrderingPhase::Captures {
+                } else if let OrderingPhase::Captures(_) = ordering_phase {
                     self.beta_cutoffs_on_captures += 1;
-                } else if ordering_phase == OrderingPhase::Killers {
+                } else if let OrderingPhase::Killers(_) = ordering_phase {
                     self.beta_cutoffs_on_killers += 1;
                 }
 
@@ -465,10 +494,71 @@ impl Search {
         self.depth_from_root -= 1;
     }
 
+    fn apply_lmr(&mut self, depth: u8, mov: Move, phase: OrderingPhase, pv_node: bool) -> u8 {
+        if pv_node {
+            // No LMR allowed in PV nodes.
+            return depth;
+        }
+
+        if depth < 3 {
+            // No point doing a depth reduction when we only plan to search at such shallow
+            // depth anyway.
+            return depth;
+        }
+
+        if mov.is_promo() || self.pos().in_check() {
+            // In these cases it is dangerous to apply reductions.
+            return depth;
+        }
+
+        if let OrderingPhase::Rest(n) = phase {
+            if n > 6 && depth > 4 {
+                self.lmr_count += 1;
+                return depth - 3;
+            } else if n > 6 && depth > 4 {
+                self.lmr_count += 1;
+                return depth - 2;
+            } else if n > 3 {
+                self.lmr_count += 1;
+                return depth - 1;
+            } else {
+                return depth;
+            }
+            return depth;
+        } else {
+            // Otherwise, no depth reduction.
+            return depth;
+        }
+    }
+
     pub fn quiesce(&mut self, mut alpha: i32, beta: i32) -> i32 {
-        // TODO: if we are in check, don't do the stand pat stuff. Just generate evasions
-        // and try them all. It's possible we'll run into perpetuals by doing this though,
-        // so need to have some limiting mechanism, probably on depth?
+        // TODO: the code inside this if statement is very duplicative of the
+        // main code below. Refactor.
+        if self.pos().in_check() {
+            let evasions = self.pos().generate_moves();
+            let mut node_move_count = 0;
+            let mut score: i32;
+            for mov in &evasions {
+                node_move_count += 1;
+                self.make_move(*mov);
+                score = -self.quiesce(-beta, -alpha);
+                self.unmake_move();
+
+                if score >= beta {
+                    return beta;
+                }
+
+                if score > alpha {
+                    alpha = score;
+                }
+            }
+
+            if node_move_count == 0 {
+                return -10_000;
+            }
+
+            return alpha;
+        }
 
         let stand_pat = self.evaluate();
         if stand_pat >= beta {
