@@ -126,6 +126,8 @@ pub struct Search {
     /// Tracks whether we are currently inside an extension launched from a balanced leaf node that
     /// we wanted to try and get a better value for.
     extending_at_balanced_leaf: bool,
+    /// Count of the number of nodes we ran iid at.
+    iid_node_count: usize,
     /// The time at which the search commenced.
     start_time: Option<Instant>,
     /// The amount of time, in milliseconds, to limit this search to.
@@ -175,6 +177,7 @@ impl Search {
             beta_cutoffs_on_killers: 0,
             lmr_count: 0,
             balanced_eval_at_pv_leaf: 0,
+            iid_node_count: 0,
             extending_at_balanced_leaf: false,
             start_time: None,
             time_limit,
@@ -312,6 +315,7 @@ impl Search {
             self.beta_cutoffs_on_killers as f32 * 100 as f32 / self.beta_cutoffs as f32
         );
         info!("LMR count: {}", self.lmr_count);
+        info!("IID node count: {}", self.iid_node_count);
     }
 
     fn update_best_move(&mut self) {
@@ -347,6 +351,13 @@ impl Search {
         }
     }
 
+    fn internal_iterative_deepening(&mut self, target_depth: u8, alpha: i32, beta: i32) {
+        self.iid_node_count += 1;
+        for i in 1..target_depth {
+            self.search(i, alpha, beta, true);
+        }
+    }
+
     fn search(&mut self, depth: u8, mut alpha: i32, mut beta: i32, parent_is_pv: bool) -> i32 {
         // let is_white = self.pos.turn().is_white();
         let alpha_orig = alpha;
@@ -368,6 +379,8 @@ impl Search {
             return alpha;
         }
 
+        let mut has_tt_entry = true;
+
         if let Some(data) = self.tt().get(&self.pos()) {
             if data.depth >= depth {
                 match data.node_type {
@@ -376,7 +389,15 @@ impl Search {
                     NodeType::UpperBound => beta = min(beta, data.score),
                 }
             }
+        } else {
+            has_tt_entry = false;
         };
+
+        if !has_tt_entry {
+            // Since we have no TT move for this node, run internal iterative deepening
+            // to populate the TT with better moves to try.
+            self.internal_iterative_deepening(depth, alpha, beta);
+        }
 
         if depth == 0 {
             let q = self.quiesce(alpha, beta);
@@ -512,7 +533,10 @@ impl Search {
         }
 
         if let OrderingPhase::Rest(n) = phase {
-            if n > 6 && depth > 4 {
+            if n > 9 && depth > 6 {
+                self.lmr_count += 1;
+                return depth - 4;
+            } else if n > 6 && depth > 4 {
                 self.lmr_count += 1;
                 return depth - 3;
             } else if n > 6 && depth > 4 {
