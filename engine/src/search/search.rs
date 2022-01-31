@@ -26,7 +26,7 @@
 // accurate equivalent results as plain alpha-beta search, when restricting the TT like
 // this.
 
-use super::killer::KillerMove;
+use super::killer::{KillerArray, KillerMove};
 use super::ordering::{OrderedMoveList, OrderingPhase};
 use super::params::Params;
 
@@ -51,9 +51,6 @@ use std::time::Instant;
 
 /// The maximum ply to reach in the iterative deepening function.
 static MAX_DEPTH_PLY: u8 = u8::MAX;
-/// The maximum depth for which we store killer moves. Determines the size of the array
-/// kept on the `Search` struct.
-const MAX_KILLER_DEPTH: usize = 25;
 
 /// Represents the search mode specified in a `go` command. The `go` keyword
 /// can either be followed by `infinite` which means the position should be
@@ -106,8 +103,8 @@ pub struct Search {
     /// lighterweight than setting up a channel into this thread and periodically calling `recv()`
     /// inside the search function to determine whether or not to stop.
     halt: Arc<RwLock<bool>>,
-    /// The table storing killer moves.
-    killers: [(Option<KillerMove>, Option<KillerMove>); MAX_KILLER_DEPTH],
+    /// Killer move storage.
+    killers: KillerArray,
     /// The number of nodes entered by calling `search()`.
     visited: usize,
     /// A counter of the number of edge traversals we have done in the search tree.
@@ -117,9 +114,10 @@ pub struct Search {
     /// Counts the number of beta cutoffs which occurred when searching a transposition table move,
     /// and therefore before invoking a movegen for the current node (because of the lazy move iterator).
     beta_cutoffs_on_tt_move: usize,
-    /// Counts the number of beta cutoffs which occurred when searching a capture move,
-    /// and therefore before invoking the final movegen for the current node (because of the lazy move iterator).
+    /// Counts the number of beta cutoffs which occurred when searching a capture move.
     beta_cutoffs_on_captures: usize,
+    /// Counts the number of beta cutoffs which occurred when searching a killer move.
+    beta_cutoffs_on_killers: usize,
     /// The time at which the search commenced.
     start_time: Option<Instant>,
     /// The amount of time, in milliseconds, to limit this search to.
@@ -129,6 +127,8 @@ pub struct Search {
     best_so_far: Option<Move>,
     /// Highest depth reached so far in iterative deepening.
     highest_depth: u8,
+    /// The current depth from the root node.
+    depth_from_root: u8,
 }
 
 impl Search {
@@ -149,6 +149,8 @@ impl Search {
             SearchMode::FixedTime(t) => Some(t),
         };
 
+        let killers = KillerArray::new(pos.clone());
+
         info!("setting search time limit to: {:?}", time_limit);
 
         let search = Search {
@@ -156,16 +158,18 @@ impl Search {
             tt,
             sender,
             halt,
-            killers: [(None, None); MAX_KILLER_DEPTH],
+            killers,
             visited: 0,
             moves_visited: 0,
             beta_cutoffs: 0,
             beta_cutoffs_on_tt_move: 0,
             beta_cutoffs_on_captures: 0,
+            beta_cutoffs_on_killers: 0,
             start_time: None,
             time_limit,
             best_so_far: None,
             highest_depth: 0,
+            depth_from_root: 0,
         };
 
         search
@@ -189,6 +193,11 @@ impl Search {
     #[inline(always)]
     pub fn tt_mut(&self) -> RefMut<'_, Table<TTData>> {
         self.tt.borrow_mut()
+    }
+
+    #[inline(always)]
+    fn killers(&self) -> (Option<Move>, Option<Move>) {
+        self.killers.get_killers_as_moves(self.depth_from_root)
     }
 
     pub fn display_trace(&self) {
@@ -283,6 +292,14 @@ impl Search {
             "{}% of beta-cutoffs at capture moves",
             self.beta_cutoffs_on_captures as f32 * 100 as f32 / self.beta_cutoffs as f32
         );
+        info!(
+            "beta-cutoffs at killer moves: {}",
+            self.beta_cutoffs_on_killers
+        );
+        info!(
+            "{}% of beta-cutoffs at killer moves",
+            self.beta_cutoffs_on_killers as f32 * 100 as f32 / self.beta_cutoffs as f32
+        );
     }
 
     fn update_best_move(&mut self) {
@@ -361,11 +378,14 @@ impl Search {
         let mut search_pv = true;
         let mut val = -10_000;
         let mut node_move_count = 0;
-        let ordered_moves = OrderedMoveList::new(self.pos.clone(), self.tt.clone());
+        let killers = self.killers();
+        let ordered_moves = OrderedMoveList::new(self.pos.clone(), self.tt.clone(), killers);
+        let tt_move = ordered_moves.tt_move();
+
         for (mov, ordering_phase) in ordered_moves {
             node_move_count += 1;
             self.moves_visited += 1;
-            self.pos_mut().make_move(mov);
+            self.make_move(mov);
             let mut score: i32;
             if search_pv {
                 score = -self.search(depth - 1, -beta, -alpha);
@@ -376,7 +396,7 @@ impl Search {
                     score = -self.search(depth - 1, -beta, -alpha);
                 }
             }
-            self.pos_mut().unmake_move();
+            self.unmake_move();
 
             if score > val {
                 val = score;
@@ -391,7 +411,14 @@ impl Search {
                     self.beta_cutoffs_on_tt_move += 1;
                 } else if ordering_phase == OrderingPhase::Captures {
                     self.beta_cutoffs_on_captures += 1;
+                } else if ordering_phase == OrderingPhase::Killers {
+                    self.beta_cutoffs_on_killers += 1;
                 }
+
+                // Since we have had a beta cutoff, we should record it in the killer move
+                // array for future use.
+                self.killers.add_killer(mov, tt_move, self.depth_from_root);
+
                 break;
             }
         }
@@ -428,6 +455,16 @@ impl Search {
         return val;
     }
 
+    fn make_move(&mut self, mov: Move) {
+        self.pos_mut().make_move(mov);
+        self.depth_from_root += 1;
+    }
+
+    fn unmake_move(&mut self) {
+        self.pos_mut().unmake_move();
+        self.depth_from_root -= 1;
+    }
+
     pub fn quiesce(&mut self, mut alpha: i32, beta: i32) -> i32 {
         // TODO: if we are in check, don't do the stand pat stuff. Just generate evasions
         // and try them all. It's possible we'll run into perpetuals by doing this though,
@@ -448,9 +485,9 @@ impl Search {
         let mut node_move_count = 0;
         for mov in &captures {
             node_move_count += 1;
-            self.pos_mut().make_move(*mov);
+            self.make_move(*mov);
             score = -self.quiesce(-beta, -alpha);
-            self.pos_mut().unmake_move();
+            self.unmake_move();
 
             if score >= beta {
                 return beta;

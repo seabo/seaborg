@@ -6,7 +6,7 @@ mod outbound;
 mod parse;
 
 pub use outbound::Res;
-pub use parse::{Req, Pos};
+pub use parse::{Pos, Req};
 
 /// Dummy struct collecting UCI functionality.
 pub struct Uci {}

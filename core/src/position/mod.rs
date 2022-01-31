@@ -822,7 +822,11 @@ impl Position {
                 }
             }
             PieceType::King => {
-                todo!();
+                if us == Player::White {
+                    self.is_pseudo_castling_move::<WhiteType>(orig, dest)
+                } else {
+                    self.is_pseudo_castling_move::<BlackType>(orig, dest)
+                }
             }
             piece_type => {
                 let them_occ = self.get_occupied_player(them);

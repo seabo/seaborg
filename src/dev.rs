@@ -49,6 +49,7 @@ fn do_ordering() {
     let ordered_moves = OrderedMoveList::new(
         std::rc::Rc::new(std::cell::RefCell::new(pos)),
         std::rc::Rc::new(std::cell::RefCell::new(tt)),
+        (None, None),
     );
 
     for (mov, phase) in ordered_moves {

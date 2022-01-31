@@ -1,4 +1,3 @@
-use crate::eval::Value;
 use crate::search::search::TTData;
 use crate::tables::Table;
 
@@ -9,6 +8,22 @@ use core::position::Position;
 use std::cell::{Ref, RefCell};
 use std::fmt;
 use std::rc::Rc;
+
+const MVV_LVA_OFFSET: u16 = 100;
+const KILLER_VALUE_1: u16 = 30;
+const KILLER_VALUE_2: u16 = 20;
+const QUIET_VALUE: u16 = 10;
+
+// MVV_LVA[victim][attacker]
+pub const MVV_LVA: [[u16; 7]; 7] = [
+    [0, 0, 0, 0, 0, 0, 0],      // victim None, attacker K, Q, R, B, N, P, None
+    [0, 15, 14, 13, 12, 11, 0], // victim P, attacker K, Q, R, B, N, P, None
+    [0, 25, 24, 23, 22, 21, 0], // victim N, attacker K, Q, R, B, N, P, None
+    [0, 35, 34, 33, 32, 31, 0], // victim B, attacker K, Q, R, B, N, P, None
+    [0, 45, 44, 43, 42, 41, 0], // victim R, attacker K, Q, R, B, N, P, None
+    [0, 55, 54, 53, 52, 51, 0], // victim Q, attacker K, Q, R, B, N, P, None
+    [0, 0, 0, 0, 0, 0, 0],      // victim K, attacker K, Q, R, B, N, P, None
+];
 
 /// A wrapper around a `MoveList`.
 ///
@@ -26,17 +41,23 @@ pub struct OrderedMoveList {
     /// and won't be available after the iteration.
     pub move_list: Option<MoveList>,
     /// Parallel array to the `move_list`, containing ordering scores of the associated moves.
-    move_scores: Option<[i32; MAX_MOVES]>,
+    move_scores: Option<[u16; MAX_MOVES]>,
     /// Boolean flag to indicate if we have prepared for return the full move list yet.
     prepared: bool,
     /// The transposition table move.
     tt_move: Option<Move>,
+    /// THe killer moves.
+    killers: (Option<Move>, Option<Move>),
     /// Tracks whether we have yielded the transposition table move yet
     yielded_tt_move: bool,
 }
 
 impl OrderedMoveList {
-    pub fn new(pos: Rc<RefCell<Position>>, tt: Rc<RefCell<Table<TTData>>>) -> Self {
+    pub fn new(
+        pos: Rc<RefCell<Position>>,
+        tt: Rc<RefCell<Table<TTData>>>,
+        killers: (Option<Move>, Option<Move>),
+    ) -> Self {
         let mut list = Self {
             pos,
             tt,
@@ -44,6 +65,7 @@ impl OrderedMoveList {
             move_scores: None,
             prepared: false,
             tt_move: None,
+            killers,
             yielded_tt_move: false,
         };
 
@@ -51,6 +73,10 @@ impl OrderedMoveList {
         list.tt_move = tt_move;
 
         list
+    }
+
+    pub fn tt_move(&self) -> Option<Move> {
+        self.tt_move
     }
 
     fn pos(&self) -> Ref<'_, Position> {
@@ -68,16 +94,22 @@ impl OrderedMoveList {
         }
     }
 
-    fn score_move(&self, mov: Move) -> i32 {
+    /// Assigns a score to the remaining moves after having already returned the TT move.
+    fn score_move(&self, mov: Move) -> u16 {
         if mov.is_null() {
             0
         } else if mov.is_capture() {
+            // Note: the killer moves should never be captures, so there is no overlap.
             let pos = self.pos();
-            let victim_value = pos.piece_at_sq(mov.dest()).type_of().value();
-            let attacker_value = pos.piece_at_sq(mov.orig()).type_of().value();
-            10000 + victim_value - attacker_value
+            let victim = pos.piece_at_sq(mov.dest()).type_of() as usize;
+            let attacker = pos.piece_at_sq(mov.orig()).type_of() as usize;
+            MVV_LVA_OFFSET + MVV_LVA[victim][attacker]
+        } else if Some(mov) == self.killers.0 {
+            KILLER_VALUE_1
+        } else if Some(mov) == self.killers.1 {
+            KILLER_VALUE_2
         } else {
-            10
+            QUIET_VALUE
         }
     }
 
@@ -139,8 +171,10 @@ impl OrderedMoveList {
                     .get_unchecked_mut(best_index_so_far) = 0;
             };
 
-            let phase = if mov.is_capture() {
+            let phase = if best_score_so_far >= 100 {
                 OrderingPhase::Captures
+            } else if best_score_so_far >= 20 {
+                OrderingPhase::Killers
             } else {
                 OrderingPhase::Rest
             };
@@ -152,8 +186,13 @@ impl OrderedMoveList {
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum OrderingPhase {
+    /// The transposition table move.
     TTMove,
+    /// Capturing moves.
     Captures,
+    /// Killer moves.
+    Killers,
+    /// Everything else.
     Rest,
 }
 
@@ -162,6 +201,7 @@ impl fmt::Display for OrderingPhase {
         match self {
             OrderingPhase::TTMove => write!(f, "TT Move"),
             OrderingPhase::Captures => write!(f, "Capture"),
+            OrderingPhase::Killers => write!(f, "Killer"),
             OrderingPhase::Rest => write!(f, "Rest"),
         }
     }
