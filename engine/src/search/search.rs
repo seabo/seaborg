@@ -524,7 +524,6 @@ impl Search {
             } else {
                 return depth;
             }
-            return depth;
         } else {
             // Otherwise, no depth reduction.
             return depth;
