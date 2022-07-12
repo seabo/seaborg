@@ -233,11 +233,10 @@ impl Search {
             self.highest_depth = i;
         }
 
-        // TODO: if the TT has a `None` score, we should at least fall back on
-        // a static evaluation of the position.
-        let score = match self.tt().get(&self.pos()) {
+        let tt_result = self.tt().get(&self.pos());
+        let score = match tt_result {
             Some(entry) => entry.score,
-            None => 0,
+            None => self.quiesce(-10_000, 10_000),
         };
 
         match self.best_so_far {
