@@ -26,7 +26,26 @@ pub fn dev() {
     // do_ordered_moves();
     // do_material_eval();
     // do_movegen();
-    do_ordering();
+    // do_ordering();
+    do_perf_legal_move();
+}
+
+fn do_perf_legal_move() {
+    let mut pos =
+        Position::from_fen("r2k3r/pb1Q1pp1/1pp3N1/b1P3Pn/1n4pq/2N3B1/PPP2PPP/R3K2R b KQ - 1 1")
+            .unwrap();
+
+    let moves = pos.generate_moves();
+
+    let start = std::time::Instant::now();
+
+    let n = 100_000_000_u64;
+    let mov = &moves.iter().next().unwrap();
+    for _ in 0..n {
+        pos.legal_move(mov);
+    }
+
+    println!("{}", start.elapsed().as_nanos() as f64 / n as f64);
 }
 
 fn do_ordering() {
@@ -129,7 +148,7 @@ fn do_perft() {
             let start_zob = pos.zobrist().clone();
             let depth = 6;
             let now = Instant::now();
-            let perft_result = Perft::divide(pos, depth, false);
+            let perft_result = Perft::divide(pos, depth, true, false);
             let elapsed = now.elapsed();
 
             println!(

@@ -42,8 +42,7 @@ impl State {
         let them = !us;
         let ksq = position.king_sq(us);
 
-        state.checkers =
-            position.attackers_to(ksq, position.occupied()) & position.get_occupied_player(them);
+        state.checkers = position.attackers_to(ksq) & position.get_occupied_player(them);
         state.set_check_info(position);
 
         state

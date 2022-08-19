@@ -51,6 +51,7 @@ impl Player {
     }
 
     /// Returns the other player.
+    #[inline(always)]
     pub fn other_player(&self) -> Self {
         match self {
             Player::White => Player::Black,
@@ -88,6 +89,7 @@ impl Player {
 
 impl Not for Player {
     type Output = Self;
+    #[inline(always)]
     fn not(self) -> Self::Output {
         self.other_player()
     }
@@ -527,16 +529,15 @@ impl Position {
 
     /// Returns a `Bitboard` of possible attacks to a square with a given occupancy.
     /// Includes pieces from both players.
-    // TODO: is there any need to pass `occupied` here? Isn't it already available on `self`?
-    pub fn attackers_to(&self, sq: Square, occupied: Bitboard) -> Bitboard {
+    pub fn attackers_to(&self, sq: Square) -> Bitboard {
         (Bitboard(pawn_attacks_from(sq, Player::Black))
             & self.piece_bb(Player::White, PieceType::Pawn))
             | (Bitboard(pawn_attacks_from(sq, Player::White)))
                 & self.piece_bb(Player::Black, PieceType::Pawn)
             | (knight_moves(sq) & self.piece_bb_both_players(PieceType::Knight))
-            | (rook_moves(occupied, sq)
+            | (rook_moves(self.occupied(), sq)
                 & (self.piece_two_bb_both_players(PieceType::Rook, PieceType::Queen)))
-            | (bishop_moves(occupied, sq)
+            | (bishop_moves(self.occupied(), sq)
                 & (self.piece_two_bb_both_players(PieceType::Bishop, PieceType::Queen)))
             | (king_moves(sq) & (self.piece_bb_both_players(PieceType::King)))
     }
@@ -730,7 +731,10 @@ impl Position {
     /// of moves that are generated as pseudo-legal in movegen. Pseudo-legal moves
     /// can create a discovered check, or the moving side can move into check. The case
     /// of castling through check is already dealt with in movegen.
-    pub fn legal_move(&self, mov: Move) -> bool {
+    ///
+    /// This method does not actually play the move on the board, but uses faster techniques
+    /// to determine whether the move is legal.
+    pub fn legal_move(&self, mov: &Move) -> bool {
         if mov.is_null() {
             return false;
         }
@@ -762,8 +766,7 @@ impl Position {
         // Note: castling moves are already checked in movegen.
         if piece.type_of() == PieceType::King {
             return mov.move_type().contains(MoveType::CASTLE)
-                || (self.attackers_to(dest, self.occupied()) & self.get_occupied_player(them))
-                    .is_empty();
+                || (self.attackers_to(dest) & self.get_occupied_player(them)).is_empty();
         }
 
         // Ensure we are not moving a pinned piece, or if we are, it is remaining staying

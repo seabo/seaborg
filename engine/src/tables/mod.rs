@@ -42,7 +42,7 @@ impl<T: Clone> Table<T> {
         // Safety: `idx` is guaranteed to be smaller than the capacity
         // of `self.data` by construction (the modulus / mask trick).
         // We have also pre-initialized the entire Vec to `None`.
-        let entry = self.get_entry_mut(idx);
+        let entry = unsafe { self.get_entry_mut(idx) };
         match entry {
             Some(slot) => {
                 if slot.signature == signature {
@@ -67,7 +67,11 @@ impl<T: Clone> Table<T> {
 
     pub fn get(&self, pos: &Position) -> Option<T> {
         let (idx, signature) = self.pos_to_idx_and_sig(pos);
-        let entry = self.get_entry(idx);
+
+        // Safety: `idx` is guaranteed to be smaller than the capacity
+        // of `self.data` by construction (the modulus / mask trick).
+        // We have also pre-initialized the entire Vec to `None`.
+        let entry = unsafe { self.get_entry(idx) };
         match entry {
             Some(ts) => {
                 if ts.signature == signature {
@@ -106,18 +110,20 @@ impl<T: Clone> Table<T> {
         trace.replacement();
     }
 
-    fn get_entry(&self, idx: usize) -> &Option<Slot<T>> {
-        // SAFETY
-        // Should only be called with an idx derived from `pos_to_idx_and_sig()`
-        // This function is private to the module, so this is fine.
-        unsafe { self.data.get_unchecked(idx) }
+    /// SAFETY:
+    ///
+    /// Should only be called with an idx derived from `pos_to_idx_and_sig()`
+    /// This function is private to the module, so this is fine.
+    unsafe fn get_entry(&self, idx: usize) -> &Option<Slot<T>> {
+        self.data.get_unchecked(idx)
     }
 
-    fn get_entry_mut(&mut self, idx: usize) -> &mut Option<Slot<T>> {
-        // SAFETY
-        // Should only be called with an idx derived from `pos_to_idx_and_sig()`
-        // This function is private to the module, so this is fine.
-        unsafe { self.data.get_unchecked_mut(idx) }
+    /// SAFETY:
+    ///
+    /// Should only be called with an idx derived from `pos_to_idx_and_sig()`
+    /// This function is private to the module, so this is fine.
+    unsafe fn get_entry_mut(&mut self, idx: usize) -> &mut Option<Slot<T>> {
+        self.data.get_unchecked_mut(idx)
     }
 
     #[inline(always)]

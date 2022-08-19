@@ -139,6 +139,7 @@ impl_bit_ops!(Bitboard, u64);
 impl std::iter::Iterator for Bitboard {
     type Item = Square;
 
+    #[inline(always)]
     fn next(&mut self) -> Option<Square> {
         match self.bsf() {
             64 => None,

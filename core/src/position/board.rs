@@ -22,6 +22,7 @@ impl Board {
     ///
     /// Uses unchecked access to the array. Only checks that the `Square` is
     /// legitimate in debug mode.
+    #[inline]
     pub fn piece_at_sq(&self, sq: Square) -> Piece {
         debug_assert!(sq.is_okay());
         unsafe { *self.arr.get_unchecked(sq.0 as usize) }

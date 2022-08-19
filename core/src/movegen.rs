@@ -80,7 +80,7 @@ impl MoveGen {
     pub fn filter_legal(position: &Position, pseudo_legal: MoveList) -> MoveList {
         let mut legal: MoveList = Default::default();
         for mov in &pseudo_legal {
-            if position.legal_move(*mov) {
+            if position.legal_move(mov) {
                 legal.push(*mov);
             }
         }
@@ -101,7 +101,7 @@ impl MoveGen {
         let pseudo_legal = Self::generate::<AllGenType>(position);
         let mut legal: MoveList = Default::default();
         for mov in &pseudo_legal {
-            if position.legal_move(*mov) {
+            if position.legal_move(mov) {
                 legal.push(*mov);
             }
         }
@@ -390,7 +390,7 @@ where
             // Loop through all the squares the king goes through
             // If any enemies attack that square, cannot castle
             'outer: while s != ksq {
-                let attackers = self.position.attackers_to(s, self.occ) & enemies;
+                let attackers = self.position.attackers_to(s) & enemies;
                 if attackers.is_not_empty() {
                     can_castle = false;
                     break 'outer;
@@ -459,6 +459,7 @@ pub fn bishop_moves(occupied: Bitboard, sq: Square) -> Bitboard {
 /// Generate rook moves `Bitboard` from a square and an occupancy bitboard.
 /// This function will return captures to pieces on both sides. The resulting `Bitboard` must be
 /// AND'd with the inverse of the moving player's pieces.#[inline(always)]
+#[inline(always)]
 pub fn rook_moves(occupied: Bitboard, sq: Square) -> Bitboard {
     debug_assert!(sq.is_okay());
     Bitboard(magic::rook_attacks(occupied.0, sq.0))

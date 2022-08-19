@@ -1,4 +1,5 @@
 use core::mov::Move;
+use core::movelist::MoveList;
 use core::position::Position;
 
 use separator::Separatable;
@@ -85,14 +86,19 @@ impl PerftData {
 }
 
 pub struct PerftOptions {
-    /// Flag for whether this perft run should collect information about both
-    /// checks and checkmates.
-    pub collect_check_data: bool,
+    /// Should this perft run collect detailed data on captures, en passant, castles and
+    /// promotions.
+    ///
+    /// This does not include information on cheks and checkmates, as they are considerably more
+    /// expensive to calculate. These are enabled with the `collect_check_date` option.
+    pub detailed: bool,
+    /// Should this perft run collect information about checks and checkmates.
+    pub checks: bool,
 }
 
 impl PerftOptions {
-    pub fn new(collect_check_data: bool) -> Self {
-        Self { collect_check_data }
+    pub fn new(detailed: bool, checks: bool) -> Self {
+        Self { detailed, checks }
     }
 }
 
@@ -143,7 +149,7 @@ impl<'a> Perft<'a> {
         let check: Option<usize>;
         let checkmate: Option<usize>;
 
-        if self.options.collect_check_data {
+        if self.options.checks {
             check = Some(self.data.check);
             checkmate = Some(self.data.checkmate);
         } else {
@@ -169,10 +175,10 @@ impl<'a> Perft<'a> {
 
         let moves = self.position.generate_moves();
 
-        for mov in &moves {
-            if depth == 1 {
-                self.handle_leaf(*mov);
-            } else {
+        if depth == 1 {
+            self.handle_leaf(&moves);
+        } else {
+            for mov in &moves {
                 self.recurse(*mov, depth - 1);
             }
         }
@@ -181,10 +187,11 @@ impl<'a> Perft<'a> {
     pub fn perft(
         position: &'a mut Position,
         depth: usize,
+        collect_detailed_data: bool,
         collect_check_data: bool,
         print_data: bool,
     ) -> PerftData {
-        let perft_options = PerftOptions::new(collect_check_data);
+        let perft_options = PerftOptions::new(collect_detailed_data, collect_check_data);
         let mut perft = Self::new(position, perft_options);
         perft.perft_inner(depth);
 
@@ -202,23 +209,25 @@ impl<'a> Perft<'a> {
     /// requires determining whether the leaf nodes are in checkmate, which is
     /// expensive (causes an extra movegen at each leaf node), so `divide()`
     /// becomes c.5-6x slower when running in this mode.  
-    pub fn divide(position: &'a mut Position, depth: usize, collect_check_data: bool) -> PerftData {
+    pub fn divide(
+        position: &'a mut Position,
+        depth: usize,
+        collect_detailed_data: bool,
+        collect_check_data: bool,
+    ) -> PerftData {
         assert!(depth >= 1);
-        let perft_options = PerftOptions::new(collect_check_data);
+        let perft_options = PerftOptions::new(collect_detailed_data, collect_check_data);
         let mut perft = Self::new(position, perft_options);
         let mut cumulative_nodes: usize = 0;
         let moves = perft.position.generate_moves();
-        for mov in &moves {
-            if !perft.position.legal_move(*mov) {
-                continue;
-            }
-            if depth == 1 {
+        if depth == 1 {
+            perft.handle_leaf(&moves);
+            for mov in &moves {
                 println!("{}: 1", mov);
-                perft.handle_leaf(*mov);
-            } else {
-                perft.position.make_move(*mov);
-                perft.perft_inner(depth - 1);
-                perft.position.unmake_move();
+            }
+        } else {
+            for mov in &moves {
+                perft.recurse(*mov, depth - 1);
                 let new_nodes_for_mov = perft.data.nodes - cumulative_nodes;
                 println!("{}: {}", mov, new_nodes_for_mov.separated_string());
                 cumulative_nodes += new_nodes_for_mov;
@@ -229,33 +238,40 @@ impl<'a> Perft<'a> {
     }
 
     #[inline(always)]
-    fn handle_leaf(&mut self, mov: Move) {
-        self.data.nodes += 1;
-        if mov.is_en_passant() {
-            self.data.en_passant += 1;
-        }
+    fn handle_leaf(&mut self, moves: &MoveList) {
+        if !self.options.detailed && !self.options.checks {
+            self.data.nodes += moves.len();
+        } else {
+            for mov in moves {
+                if self.options.detailed {
+                    if mov.is_en_passant() {
+                        self.data.en_passant += 1;
+                    }
 
-        if mov.is_capture() {
-            self.data.captures += 1;
-        }
+                    if mov.is_capture() {
+                        self.data.captures += 1;
+                    }
 
-        if mov.is_castle() {
-            self.data.castles += 1;
-        }
+                    if mov.is_castle() {
+                        self.data.castles += 1;
+                    }
 
-        if mov.is_promo() {
-            self.data.promotions += 1;
-        }
+                    if mov.is_promo() {
+                        self.data.promotions += 1;
+                    }
+                }
 
-        if self.options.collect_check_data {
-            self.position.make_move(mov);
-            if self.position.in_checkmate() {
-                self.data.checkmate += 1;
+                if self.options.checks {
+                    self.position.make_move(*mov);
+                    if self.position.in_checkmate() {
+                        self.data.checkmate += 1;
+                    }
+                    if self.position.in_double_check() {
+                        self.data.check += 1;
+                    }
+                    self.position.unmake_move();
+                }
             }
-            if self.position.in_double_check() {
-                self.data.check += 1;
-            }
-            self.position.unmake_move();
         }
     }
 
@@ -279,7 +295,7 @@ mod tests {
 
     fn run_perft(fen: &'static str, depth: usize) -> usize {
         let mut pos = Position::from_fen(fen).unwrap();
-        let res = Perft::perft(&mut pos, depth, false, false);
+        let res = Perft::perft(&mut pos, depth, false, false, false);
         res.nodes.unwrap()
     }
 

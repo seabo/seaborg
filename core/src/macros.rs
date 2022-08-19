@@ -68,12 +68,14 @@ macro_rules! impl_indv_bit_ops {
 macro_rules! impl_bit_ops {
     ($t:tt, $b:tt) => {
         impl From<$b> for $t {
+            #[inline]
             fn from(bit_type: $b) -> Self {
                 $t(bit_type)
             }
         }
 
         impl From<$t> for $b {
+            #[inline]
             fn from(it: $t) -> Self {
                 it.0
             }

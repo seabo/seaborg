@@ -69,11 +69,13 @@ impl Move {
         self.ty.contains(MoveType::PROMOTION)
     }
 
+    #[inline(always)]
     pub fn promo_piece_type(&self) -> Option<PieceType> {
         self.promo_piece_type
     }
 
     /// Returns the type of move, according to the `SpecialMove` field.
+    #[inline(always)]
     pub fn move_type(&self) -> MoveType {
         self.ty
     }
@@ -100,10 +102,12 @@ impl Move {
         }
     }
 
+    #[inline(always)]
     pub fn dest(&self) -> Square {
         self.dest
     }
 
+    #[inline(always)]
     pub fn orig(&self) -> Square {
         self.orig
     }

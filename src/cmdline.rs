@@ -1,6 +1,6 @@
 use crate::dev::dev;
-use crate::perft::perft;
-use clap::Parser;
+use crate::perft::{perft, PerftArgs};
+use clap::{Parser, Subcommand};
 use engine::sess::Session;
 
 #[derive(Parser, Debug)]
@@ -14,9 +14,13 @@ pub struct Args {
     #[clap(short, long)]
     dev: bool,
 
-    /// Run perft
-    #[clap(short, long)]
-    perft: Option<u8>,
+    #[clap(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Debug, Subcommand)]
+enum Commands {
+    Perft(PerftArgs),
 }
 
 pub fn cmdline() {
@@ -27,7 +31,12 @@ pub fn cmdline() {
         engine_sess.main_loop();
     } else if args.dev {
         dev();
-    } else if let Some(depth) = args.perft {
-        perft(depth);
+    } else {
+        match &args.command {
+            Some(Commands::Perft(perft_args)) => {
+                perft(perft_args);
+            }
+            None => {}
+        }
     }
 }
