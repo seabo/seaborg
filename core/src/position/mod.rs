@@ -530,16 +530,14 @@ impl Position {
     /// Returns a `Bitboard` of possible attacks to a square with a given occupancy.
     /// Includes pieces from both players.
     pub fn attackers_to(&self, sq: Square) -> Bitboard {
-        (Bitboard(pawn_attacks_from(sq, Player::Black))
-            & self.piece_bb(Player::White, PieceType::Pawn))
-            | (Bitboard(pawn_attacks_from(sq, Player::White)))
-                & self.piece_bb(Player::Black, PieceType::Pawn)
-            | (knight_moves(sq) & self.piece_bb_both_players(PieceType::Knight))
+        (Bitboard(pawn_attacks_from(sq, Player::Black)) & self.bbs[1])
+            | (Bitboard(pawn_attacks_from(sq, Player::White)) & self.bbs[7])
+            | (knight_moves(sq) & (self.bbs[2] | self.bbs[8]))
             | (rook_moves(self.occupied(), sq)
-                & (self.piece_two_bb_both_players(PieceType::Rook, PieceType::Queen)))
+                & (self.bbs[4] | self.bbs[10] | self.bbs[5] | self.bbs[11]))
             | (bishop_moves(self.occupied(), sq)
-                & (self.piece_two_bb_both_players(PieceType::Bishop, PieceType::Queen)))
-            | (king_moves(sq) & (self.piece_bb_both_players(PieceType::King)))
+                & (self.bbs[3] | self.bbs[9] | self.bbs[5] | self.bbs[11]))
+            | (king_moves(sq) & (self.bbs[6] | self.bbs[12]))
     }
 
     #[inline(always)]
