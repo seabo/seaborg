@@ -1,13 +1,13 @@
 #[macro_use]
 mod macros;
 
-mod bb;
 mod bit_twiddles;
 mod masks;
 mod mono_traits;
 mod movegen;
 mod precalc;
 
+pub mod bb;
 pub mod init;
 pub mod mov;
 pub mod movelist;

@@ -53,9 +53,9 @@ pub struct MoveList {
 
 impl fmt::Display for MoveList {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[");
+        write!(f, "[")?;
         for i in 0..self.len() {
-            write!(f, "{}, ", self.inner[i]);
+            write!(f, "{}, ", self.inner[i])?;
         }
         writeln!(f, "]")
     }
