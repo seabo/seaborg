@@ -1,8 +1,8 @@
 use crate::bb::Bitboard;
 use crate::mono_traits::{
     AllGenType, BishopType, BlackType, CapturesGenType, EvasionsGenType, GenTypeTrait, KingType,
-    KnightType, NonEvasionsGenType, PieceTrait, PlayerTrait, QueenType, QuietChecksGenType,
-    QuietsGenType, RookType, WhiteType,
+    KnightType, LegalType, LegalityTrait, NonEvasionsGenType, PieceTrait, PlayerTrait,
+    PseudolegalType, QueenType, QuietChecksGenType, QuietsGenType, RookType, WhiteType,
 };
 use crate::mov::{Move, MoveType};
 use crate::movelist::{MVPushable, MoveList};
@@ -41,6 +41,18 @@ pub enum GenType {
     NonEvasions,
 }
 
+/// Legality of moves to be generated.
+///
+/// `LegalityType::Legal` -> Generate only legal moves.
+///
+/// `LegalityType::Pseudolegal` -> Generate both legal and pseudolegal moves. Pseudolegal moves
+/// include those which cause a discovered check or cause the moving king to land in check.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum LegalityType {
+    Legal,
+    Pseudolegal,
+}
+
 pub struct MoveGen {}
 
 impl MoveGen {
@@ -51,61 +63,17 @@ impl MoveGen {
     /// - Would cause a discovered check (i.e. the moving piece is pinned)
     /// - Would cause the moving king to land in check
     #[inline]
-    pub fn generate<G: GenTypeTrait>(position: &Position) -> MoveList {
+    pub fn generate(position: &Position) -> MoveList {
         let mut movelist = MoveList::default();
-        InnerMoveGen::<MoveList>::generate::<G>(position, &mut movelist);
+        InnerMoveGen::<MoveList>::generate::<AllGenType, LegalType>(position, &mut movelist);
         movelist
     }
 
-    /// Generates pseudo-legal capture moves for the passed position.
-    ///
-    /// This function could return moves which are either:
-    /// - Legal
-    /// - Would cause a discovered check (i.e. the moving piece is pinned)
-    /// - Would cause the moving king to land in check
     #[inline]
-    pub fn generate_pseudolegal_captures(position: &Position) -> MoveList {
-        Self::generate::<CapturesGenType>(position)
-    }
-
-    #[inline]
-    pub fn generate_legal_captures(position: &Position) -> MoveList {
-        let pseudolegal = Self::generate_pseudolegal_captures(position);
-        Self::filter_legal(position, pseudolegal)
-    }
-
-    // TODO: this is just temporary. Should really all happen in `InnerMoveGen` and
-    // be controlled by a monotrait.
-    #[inline]
-    pub fn filter_legal(position: &Position, pseudo_legal: MoveList) -> MoveList {
-        let mut legal: MoveList = Default::default();
-        for mov in &pseudo_legal {
-            if position.legal_move(mov) {
-                legal.push(*mov);
-            }
-        }
-        legal
-    }
-
-    /// Generates legal moves only, by first generating pseudo-legal
-    /// moves with `generate()`, and then filtering through and eliminating
-    /// those which do not pass a legality check.
-    ///
-    /// # Note
-    ///
-    /// TODO: this should usually be used. Ideally, we generate pseudo-legal moves
-    /// and have these held in a special structure implementing `Iterator` which is
-    /// capable of spitting out our moves in a sensible order, and with fast time
-    /// complexity (i.e. by lazily hopping over illegal moves, and so on).
-    pub fn generate_legal(position: &Position) -> MoveList {
-        let pseudo_legal = Self::generate::<AllGenType>(position);
-        let mut legal: MoveList = Default::default();
-        for mov in &pseudo_legal {
-            if position.legal_move(mov) {
-                legal.push(*mov);
-            }
-        }
-        legal
+    pub fn generate_captures(position: &Position) -> MoveList {
+        let mut movelist = MoveList::default();
+        InnerMoveGen::<MoveList>::generate::<CapturesGenType, LegalType>(position, &mut movelist);
+        movelist
     }
 }
 
@@ -126,13 +94,16 @@ where
 {
     /// Generate all pseudo-legal moves in the given position
     #[inline(always)]
-    fn generate<G: GenTypeTrait>(position: &'a Position, movelist: &'a mut MP) -> &'a mut MP {
+    fn generate<G: GenTypeTrait, L: LegalityTrait>(
+        position: &'a Position,
+        movelist: &'a mut MP,
+    ) -> &'a mut MP {
         match position.turn() {
             Player::White => {
-                InnerMoveGen::<MP>::generate_helper::<G, WhiteType>(position, movelist)
+                InnerMoveGen::<MP>::generate_helper::<G, L, WhiteType>(position, movelist)
             }
             Player::Black => {
-                InnerMoveGen::<MP>::generate_helper::<G, BlackType>(position, movelist)
+                InnerMoveGen::<MP>::generate_helper::<G, L, BlackType>(position, movelist)
             }
         }
     }
@@ -149,7 +120,7 @@ where
     }
 
     #[inline(always)]
-    fn generate_helper<G: GenTypeTrait, P: PlayerTrait>(
+    fn generate_helper<G: GenTypeTrait, L: LegalityTrait, P: PlayerTrait>(
         position: &'a Position,
         movelist: &'a mut MP,
     ) -> &'a mut MP {
@@ -157,12 +128,12 @@ where
         let gen_type = G::gen_type();
 
         if gen_type == GenType::Evasions {
-            movegen.generate_evasions::<P>(false);
+            movegen.generate_evasions::<P, L>(false);
         } else if gen_type == GenType::Captures {
             if movegen.position.in_check() {
-                movegen.generate_evasions::<P>(true);
+                movegen.generate_evasions::<P, L>(true);
             } else {
-                movegen.generate_captures::<P>();
+                movegen.generate_captures::<P, L>();
             }
         }
         // else if gen_type == GenType::Quiets {
@@ -174,9 +145,9 @@ where
         // }
         else if gen_type == GenType::All {
             if movegen.position.in_check() {
-                movegen.generate_evasions::<P>(false);
+                movegen.generate_evasions::<P, L>(false);
             } else {
-                movegen.generate_all::<P>();
+                movegen.generate_all::<P, L>();
             }
         }
 
@@ -184,28 +155,28 @@ where
     }
 
     #[inline(always)]
-    fn generate_all<P: PlayerTrait>(&mut self) {
-        self.generate_pawn_moves::<P>(Bitboard::ALL);
-        self.generate_castling::<P>();
-        self.moves_per_piece::<P, KnightType>(Bitboard::ALL);
-        self.moves_per_piece::<P, KingType>(Bitboard::ALL);
-        self.moves_per_piece::<P, RookType>(Bitboard::ALL);
-        self.moves_per_piece::<P, BishopType>(Bitboard::ALL);
-        self.moves_per_piece::<P, QueenType>(Bitboard::ALL);
+    fn generate_all<P: PlayerTrait, L: LegalityTrait>(&mut self) {
+        self.generate_pawn_moves::<P, L>(Bitboard::ALL);
+        self.generate_castling::<P, L>();
+        self.moves_per_piece::<P, KnightType, L>(Bitboard::ALL);
+        self.moves_per_piece::<P, KingType, L>(Bitboard::ALL);
+        self.moves_per_piece::<P, RookType, L>(Bitboard::ALL);
+        self.moves_per_piece::<P, BishopType, L>(Bitboard::ALL);
+        self.moves_per_piece::<P, QueenType, L>(Bitboard::ALL);
     }
 
     #[inline(always)]
-    fn generate_captures<P: PlayerTrait>(&mut self) {
-        self.generate_pawn_moves::<P>(self.them_occ);
-        self.moves_per_piece::<P, KnightType>(self.them_occ);
-        self.moves_per_piece::<P, KingType>(self.them_occ);
-        self.moves_per_piece::<P, RookType>(self.them_occ);
-        self.moves_per_piece::<P, BishopType>(self.them_occ);
-        self.moves_per_piece::<P, QueenType>(self.them_occ);
+    fn generate_captures<P: PlayerTrait, L: LegalityTrait>(&mut self) {
+        self.generate_pawn_moves::<P, L>(self.them_occ);
+        self.moves_per_piece::<P, KnightType, L>(self.them_occ);
+        self.moves_per_piece::<P, KingType, L>(self.them_occ);
+        self.moves_per_piece::<P, RookType, L>(self.them_occ);
+        self.moves_per_piece::<P, BishopType, L>(self.them_occ);
+        self.moves_per_piece::<P, QueenType, L>(self.them_occ);
     }
 
     #[inline(always)]
-    fn generate_evasions<P: PlayerTrait>(&mut self, captures_only: bool) {
+    fn generate_evasions<P: PlayerTrait, L: LegalityTrait>(&mut self, captures_only: bool) {
         debug_assert!(self.position.in_check());
 
         let target_sqs = if captures_only {
@@ -234,8 +205,8 @@ where
         // Separate captures and non-captures
         let mut captures_bb = k_moves & self.them_occ;
         let mut non_captures_bb = k_moves & !self.them_occ;
-        self.move_append_from_bb_flag(&mut captures_bb, ksq, MoveType::CAPTURE);
-        self.move_append_from_bb_flag(&mut non_captures_bb, ksq, MoveType::QUIET);
+        self.move_append_from_bb_flag::<L>(&mut captures_bb, ksq, MoveType::CAPTURE);
+        self.move_append_from_bb_flag::<L>(&mut non_captures_bb, ksq, MoveType::QUIET);
 
         // If there is only one checking square, we can block or capture the piece
         if !(self.position.checkers().more_than_one()) {
@@ -244,28 +215,31 @@ where
             // Squares that allow a block or captures of the sliding piece
             let target =
                 target_sqs & (Bitboard(between_bb(checking_sq, ksq)) | checking_sq.to_bb());
-            self.generate_pawn_moves::<P>(target);
-            self.moves_per_piece::<P, KnightType>(target);
-            self.moves_per_piece::<P, BishopType>(target);
-            self.moves_per_piece::<P, RookType>(target);
-            self.moves_per_piece::<P, QueenType>(target);
+            self.generate_pawn_moves::<P, L>(target);
+            self.moves_per_piece::<P, KnightType, L>(target);
+            self.moves_per_piece::<P, BishopType, L>(target);
+            self.moves_per_piece::<P, RookType, L>(target);
+            self.moves_per_piece::<P, QueenType, L>(target);
         }
     }
 
     #[inline(always)]
-    fn moves_per_piece<PL: PlayerTrait, P: PieceTrait>(&mut self, target: Bitboard) {
+    fn moves_per_piece<PL: PlayerTrait, P: PieceTrait, L: LegalityTrait>(
+        &mut self,
+        target: Bitboard,
+    ) {
         let piece_bb: Bitboard = self.position.piece_bb(PL::player(), P::piece_type());
         for orig in piece_bb {
             let moves_bb: Bitboard = self.moves_bb::<P>(orig) & !self.us_occ & target;
             let mut captures_bb: Bitboard = moves_bb & self.them_occ;
             let mut non_captures_bb: Bitboard = moves_bb & !self.them_occ;
-            self.move_append_from_bb_flag(&mut captures_bb, orig, MoveType::CAPTURE);
-            self.move_append_from_bb_flag(&mut non_captures_bb, orig, MoveType::QUIET);
+            self.move_append_from_bb_flag::<L>(&mut captures_bb, orig, MoveType::CAPTURE);
+            self.move_append_from_bb_flag::<L>(&mut non_captures_bb, orig, MoveType::QUIET);
         }
     }
 
     #[inline(always)]
-    fn generate_pawn_moves<PL: PlayerTrait>(&mut self, target: Bitboard) {
+    fn generate_pawn_moves<PL: PlayerTrait, L: LegalityTrait>(&mut self, target: Bitboard) {
         let (rank_7, rank_3): (Bitboard, Bitboard) = if PL::player() == Player::White {
             (Bitboard::RANK_7, Bitboard::RANK_3)
         } else {
@@ -293,12 +267,12 @@ where
 
         for dest in push_one {
             let orig = PL::down(dest);
-            self.add_move(Move::build(orig, dest, None, MoveType::QUIET));
+            self.add_move::<L>(Move::build(orig, dest, None, MoveType::QUIET));
         }
 
         for dest in push_two {
             let orig = PL::down(PL::down(dest));
-            self.add_move(Move::build(orig, dest, None, MoveType::QUIET));
+            self.add_move::<L>(Move::build(orig, dest, None, MoveType::QUIET));
         }
 
         // Promotions
@@ -309,17 +283,17 @@ where
 
             for dest in no_cap_promo {
                 let orig = PL::down(dest);
-                self.add_all_promo_moves(orig, dest, false);
+                self.add_all_promo_moves::<L>(orig, dest, false);
             }
 
             for dest in left_cap_promo {
                 let orig = PL::down_right(dest);
-                self.add_all_promo_moves(orig, dest, true);
+                self.add_all_promo_moves::<L>(orig, dest, true);
             }
 
             for dest in right_cap_promo {
                 let orig = PL::down_left(dest);
-                self.add_all_promo_moves(orig, dest, true);
+                self.add_all_promo_moves::<L>(orig, dest, true);
             }
         }
 
@@ -329,12 +303,12 @@ where
 
         for dest in left_cap {
             let orig = PL::down_right(dest);
-            self.add_move(Move::build(orig, dest, None, MoveType::CAPTURE));
+            self.add_move::<L>(Move::build(orig, dest, None, MoveType::CAPTURE));
         }
 
         for dest in right_cap {
             let orig = PL::down_left(dest);
-            self.add_move(Move::build(orig, dest, None, MoveType::CAPTURE));
+            self.add_move::<L>(Move::build(orig, dest, None, MoveType::CAPTURE));
         }
 
         if let Some(ep_square) = self.position.ep_square() {
@@ -345,7 +319,7 @@ where
                 pawns_not_rank_7 & Bitboard(pawn_attacks_from(ep_square, PL::opp_player()));
 
             for orig in ep_cap {
-                self.add_move(Move::build(
+                self.add_move::<L>(Move::build(
                     orig,
                     ep_square,
                     None,
@@ -357,14 +331,14 @@ where
 
     // Generates castling for both sides
     #[inline(always)]
-    fn generate_castling<PL: PlayerTrait>(&mut self) {
-        self.castling_side::<PL>(CastleType::Queenside);
-        self.castling_side::<PL>(CastleType::Kingside);
+    fn generate_castling<PL: PlayerTrait, L: LegalityTrait>(&mut self) {
+        self.castling_side::<PL, L>(CastleType::Queenside);
+        self.castling_side::<PL, L>(CastleType::Kingside);
     }
 
     // Generates castling for a single side
     #[inline(always)]
-    fn castling_side<PL: PlayerTrait>(&mut self, side: CastleType) {
+    fn castling_side<PL: PlayerTrait, L: LegalityTrait>(&mut self, side: CastleType) {
         if self.position.can_castle(PL::player(), side)
             && !self.position.castle_impeded(side)
             && self
@@ -375,7 +349,6 @@ where
         {
             let king_side = side == CastleType::Kingside;
             let ksq = self.position.king_sq(PL::player());
-            // let rook_from = self.position.castling_rook_square(side);
             let k_to =
                 PL::player().relative_square(if king_side { Square::G1 } else { Square::C1 });
             let enemies = self.them_occ;
@@ -398,7 +371,7 @@ where
                 s = direction(s);
             }
             if can_castle {
-                self.add_move(Move::build(ksq, k_to, None, MoveType::CASTLE));
+                self.add_move::<L>(Move::build(ksq, k_to, None, MoveType::CASTLE));
             }
         }
     }
@@ -419,29 +392,45 @@ where
     }
 
     #[inline(always)]
-    fn move_append_from_bb_flag(&mut self, bb: &mut Bitboard, orig: Square, ty: MoveType) {
+    fn move_append_from_bb_flag<L: LegalityTrait>(
+        &mut self,
+        bb: &mut Bitboard,
+        orig: Square,
+        ty: MoveType,
+    ) {
         for dest in bb {
             let mov = Move::build(orig, dest, None, ty);
-            self.add_move(mov);
+            self.add_move::<L>(mov);
         }
     }
 
     /// Add the four possible promo moves (`=N`, `=B`, `=R`, `=Q`)
     #[inline(always)]
-    fn add_all_promo_moves(&mut self, orig: Square, dest: Square, is_capture: bool) {
+    fn add_all_promo_moves<L: LegalityTrait>(
+        &mut self,
+        orig: Square,
+        dest: Square,
+        is_capture: bool,
+    ) {
         let move_ty = if is_capture {
             MoveType::PROMOTION | MoveType::CAPTURE
         } else {
             MoveType::PROMOTION
         };
         for piece in PROMO_PIECES {
-            self.add_move(Move::build(orig, dest, Some(piece), move_ty));
+            self.add_move::<L>(Move::build(orig, dest, Some(piece), move_ty));
         }
     }
 
     #[inline(always)]
-    fn add_move(&mut self, mv: Move) {
-        self.movelist.push(mv);
+    fn add_move<L: LegalityTrait>(&mut self, mv: Move) {
+        if L::legality_type() == LegalityType::Legal {
+            if self.position.legal_move(&mv) {
+                self.movelist.push(mv);
+            }
+        } else {
+            self.movelist.push(mv);
+        }
     }
 }
 

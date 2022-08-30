@@ -8,7 +8,6 @@ mod zobrist;
 
 use crate::bb::Bitboard;
 use crate::masks::{CASTLING_PATH, CASTLING_ROOK_START, FILE_BB, PLAYER_CNT, RANK_BB};
-use crate::mono_traits::GenTypeTrait;
 use crate::mov::{Move, MoveType, UndoableMove};
 use crate::movegen::{bishop_moves, rook_moves, MoveGen};
 use crate::movelist::MoveList;
@@ -708,16 +707,12 @@ impl Position {
     // MOVE GENERATION
     // Eventually, we should stabilise to just using this function, with resp.
     // 'trait signature' for each use.
-    pub fn generate<G: GenTypeTrait>(&self) -> MoveList {
-        MoveGen::generate::<G>(&self)
-    }
-
     pub fn generate_moves(&self) -> MoveList {
-        MoveGen::generate_legal(&self)
+        MoveGen::generate(&self)
     }
 
     pub fn generate_captures(&self) -> MoveList {
-        MoveGen::generate_legal_captures(&self)
+        MoveGen::generate_captures(&self)
     }
 
     pub fn random_move(&self) -> Option<Move> {
@@ -732,22 +727,20 @@ impl Position {
     ///
     /// This method does not actually play the move on the board, but uses faster techniques
     /// to determine whether the move is legal.
+    ///
+    /// Note: this function expects the move not to be of type `MoveType::NULL`.
     pub fn legal_move(&self, mov: &Move) -> bool {
-        if mov.is_null() {
-            return false;
-        }
-
-        let us = self.turn();
-        let them = !us;
+        // let us = self.turn();
+        let them = !self.turn();
         let orig = mov.orig();
         let orig_bb = orig.to_bb();
         let dest = mov.dest();
 
         // En passant
         if mov.move_type().contains(MoveType::EN_PASSANT) {
-            let ksq = self.king_sq(us);
+            let ksq = self.king_sq(self.turn());
             let dest_bb = dest.to_bb();
-            let captured_sq = Square((dest.0 as i8).wrapping_sub(us.pawn_push()) as u8);
+            let captured_sq = Square((dest.0 as i8).wrapping_sub(self.turn().pawn_push()) as u8);
             // Work out the occupancy bb resulting from the en passant move
             let occupied = (self.occupied() ^ orig_bb ^ captured_sq.to_bb()) | dest_bb;
 
@@ -756,9 +749,6 @@ impl Position {
         }
 
         let piece = self.piece_at_sq(orig);
-        if piece == Piece::None {
-            return false;
-        }
 
         // If moving the king, check if the destination square is not being attacked
         // Note: castling moves are already checked in movegen.
@@ -769,7 +759,8 @@ impl Position {
 
         // Ensure we are not moving a pinned piece, or if we are, it is remaining staying
         // pinned but moving along the current rank, file, diagonal between the pinner and the king
-        (self.pinned_pieces(us) & orig_bb).is_empty() || aligned(orig, dest, self.king_sq(us))
+        (self.pinned_pieces(self.turn()) & orig_bb).is_empty()
+            || aligned(orig, dest, self.king_sq(self.turn()))
     }
 }
 
