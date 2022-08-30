@@ -14,3 +14,14 @@ clap = { version = "3.0.9", features = ["derive"] }
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_trace"] }
 separator = "0.4"
 simple_logger = {version = "2.1", features = ["stderr"]}
+
+[dev-dependencies]
+criterion = "0.3"
+
+[[bench]]
+name = "perft"
+harness = false
+
+[[bench]]
+name = "movegen"
+harness = false

@@ -130,7 +130,6 @@ name = "core"
 version = "0.1.0"
 dependencies = [
  "bitflags",
- "criterion",
  "log",
  "rand",
  "separator",
@@ -580,6 +579,7 @@ version = "0.1.0"
 dependencies = [
  "clap 3.2.15",
  "core",
+ "criterion",
  "engine",
  "log",
  "separator",
