@@ -116,8 +116,8 @@ impl Move {
         let captured = if self.is_en_passant() {
             let us = position.turn();
             let cap_sq = match us {
-                Player::White => self.dest - Square(8),
-                Player::Black => self.dest + Square(8),
+                Player::WHITE => self.dest - Square(8),
+                Player::BLACK => self.dest + Square(8),
             };
             position.piece_at_sq(cap_sq).type_of()
         } else {

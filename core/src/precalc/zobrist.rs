@@ -72,7 +72,7 @@ pub fn piece_square_key(piece: Piece, square: Square) -> u64 {
 
 #[inline(always)]
 pub fn side_to_move_key(turn: Player) -> u64 {
-    unsafe { *SIDE_TO_MOVE_KEYS.get_unchecked(turn as usize) }
+    unsafe { *SIDE_TO_MOVE_KEYS.get_unchecked(turn.inner() as usize) }
 }
 
 #[inline(always)]

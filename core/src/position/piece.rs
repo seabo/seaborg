@@ -48,25 +48,25 @@ impl Piece {
     pub fn player(&self) -> Player {
         match *self {
             Piece::None => panic!(),
-            Piece::WhitePawn => Player::White,
-            Piece::WhiteKnight => Player::White,
-            Piece::WhiteBishop => Player::White,
-            Piece::WhiteRook => Player::White,
-            Piece::WhiteQueen => Player::White,
-            Piece::WhiteKing => Player::White,
-            Piece::BlackPawn => Player::Black,
-            Piece::BlackKnight => Player::Black,
-            Piece::BlackBishop => Player::Black,
-            Piece::BlackRook => Player::Black,
-            Piece::BlackQueen => Player::Black,
-            Piece::BlackKing => Player::Black,
+            Piece::WhitePawn => Player::WHITE,
+            Piece::WhiteKnight => Player::WHITE,
+            Piece::WhiteBishop => Player::WHITE,
+            Piece::WhiteRook => Player::WHITE,
+            Piece::WhiteQueen => Player::WHITE,
+            Piece::WhiteKing => Player::WHITE,
+            Piece::BlackPawn => Player::BLACK,
+            Piece::BlackKnight => Player::BLACK,
+            Piece::BlackBishop => Player::BLACK,
+            Piece::BlackRook => Player::BLACK,
+            Piece::BlackQueen => Player::BLACK,
+            Piece::BlackKing => Player::BLACK,
         }
     }
 
     /// Return a `Piece` from a `Player` and a `PieceType`.
     pub fn make(player: Player, piece_type: PieceType) -> Self {
         match player {
-            Player::White => match piece_type {
+            Player::WHITE => match piece_type {
                 PieceType::None => Piece::None,
                 PieceType::Pawn => Piece::WhitePawn,
                 PieceType::Knight => Piece::WhiteKnight,
@@ -75,7 +75,7 @@ impl Piece {
                 PieceType::Queen => Piece::WhiteQueen,
                 PieceType::King => Piece::WhiteKing,
             },
-            Player::Black => match piece_type {
+            Player::BLACK => match piece_type {
                 PieceType::None => Piece::None,
                 PieceType::Pawn => Piece::BlackPawn,
                 PieceType::Knight => Piece::BlackKnight,

@@ -75,12 +75,12 @@ pub struct BlackType {}
 impl PlayerTrait for WhiteType {
     #[inline(always)]
     fn player() -> Player {
-        Player::White
+        Player::WHITE
     }
 
     #[inline(always)]
     fn opp_player() -> Player {
-        Player::Black
+        Player::BLACK
     }
 
     #[inline(always)]
@@ -165,12 +165,12 @@ impl PlayerTrait for WhiteType {
 impl PlayerTrait for BlackType {
     #[inline(always)]
     fn player() -> Player {
-        Player::Black
+        Player::BLACK
     }
 
     #[inline(always)]
     fn opp_player() -> Player {
-        Player::White
+        Player::WHITE
     }
 
     #[inline(always)]

@@ -99,10 +99,10 @@ where
         movelist: &'a mut MP,
     ) -> &'a mut MP {
         match position.turn() {
-            Player::White => {
+            Player::WHITE => {
                 InnerMoveGen::<MP>::generate_helper::<G, L, WhiteType>(position, movelist)
             }
-            Player::Black => {
+            Player::BLACK => {
                 InnerMoveGen::<MP>::generate_helper::<G, L, BlackType>(position, movelist)
             }
         }
@@ -240,7 +240,7 @@ where
 
     #[inline(always)]
     fn generate_pawn_moves<PL: PlayerTrait, L: LegalityTrait>(&mut self, target: Bitboard) {
-        let (rank_7, rank_3): (Bitboard, Bitboard) = if PL::player() == Player::White {
+        let (rank_7, rank_3): (Bitboard, Bitboard) = if PL::player() == Player::WHITE {
             (Bitboard::RANK_7, Bitboard::RANK_3)
         } else {
             (Bitboard::RANK_2, Bitboard::RANK_6)

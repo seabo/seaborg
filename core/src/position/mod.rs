@@ -28,19 +28,26 @@ use std::ops::Not;
 pub const PIECE_TYPE_CNT: usize = 13;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum Player {
-    White = 0,
-    Black = 1,
-}
+pub struct Player(bool);
 
 impl Player {
+    pub const WHITE: Self = Self(false);
+    pub const BLACK: Self = Self(true);
+
+    /// Return the inner boolean.
+    #[inline(always)]
+    pub fn inner(&self) -> bool {
+        self.0
+    }
+
     /// Returns if the player is `Player::White`
     #[inline(always)]
     pub fn is_white(&self) -> bool {
-        match self {
-            Player::White => true,
-            Player::Black => false,
-        }
+        !self.0
+        // match self {
+        //     Player::White => true,
+        //     Player::Black => false,
+        // }
     }
 
     /// Returns if the player is `Player::Black`
@@ -52,25 +59,26 @@ impl Player {
     /// Returns the other player.
     #[inline(always)]
     pub fn other_player(&self) -> Self {
-        match self {
-            Player::White => Player::Black,
-            Player::Black => Player::White,
-        }
+        Self(!self.0)
+        // match self {
+        //     Player::White => Player::Black,
+        //     Player::Black => Player::White,
+        // }
     }
 
     /// Returns the relative square from a given square.
     #[inline(always)]
     pub fn relative_square(self, sq: Square) -> Square {
         assert!(sq.is_okay());
-        sq ^ Square((self) as u8 * 56)
+        sq ^ Square((self.0) as u8 * 56)
     }
 
     /// Returns the offset for a single move pawn push.
     #[inline(always)]
     pub fn pawn_push(self) -> i8 {
         match self {
-            Player::White => 8,
-            Player::Black => -8,
+            Player::WHITE => 8,
+            Player::BLACK => -8,
         }
     }
 
@@ -79,9 +87,9 @@ impl Player {
     #[inline(always)]
     pub fn relative_rank(&self, rank: u8) -> u8 {
         debug_assert!(rank <= 7);
-        match self {
-            Player::White => rank,
-            Player::Black => 7 - rank,
+        match self.0 {
+            false => rank,
+            true => 7 - rank,
         }
     }
 }
@@ -96,9 +104,9 @@ impl Not for Player {
 
 impl fmt::Display for Player {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Player::White => write!(f, "White"),
-            Player::Black => write!(f, "Black"),
+        match self.0 {
+            false => write!(f, "White"),
+            true => write!(f, "Black"),
         }
     }
 }
@@ -153,7 +161,7 @@ impl Position {
             bbs: [Bitboard::new(0); PIECE_TYPE_CNT],
             player_occ: [Bitboard::new(0); PLAYER_CNT],
             piece_counts: [0; PLAYER_CNT],
-            turn: Player::White,
+            turn: Player::WHITE,
             castling_rights: CastlingRights::none(),
             ep_square: None,
             half_move_clock: 0,
@@ -228,7 +236,7 @@ impl Position {
 
         // Increment clocks
         self.half_move_clock += 1;
-        if us == Player::Black {
+        if us == Player::BLACK {
             // Black is moving, so the full-move counter will increment
             self.move_number += 1;
         }
@@ -256,8 +264,8 @@ impl Position {
             if captured_piece.type_of() == PieceType::Pawn {
                 if mov.is_en_passant() {
                     match us {
-                        Player::White => cap_sq -= Square(8),
-                        Player::Black => cap_sq += Square(8),
+                        Player::WHITE => cap_sq -= Square(8),
+                        Player::BLACK => cap_sq += Square(8),
                     };
 
                     debug_assert_eq!(moving_piece.type_of(), PieceType::Pawn);
@@ -340,8 +348,8 @@ impl Position {
                     let mut cap_sq = dest;
                     if undoable_move.is_en_passant() {
                         match us {
-                            Player::White => cap_sq -= Square(8),
-                            Player::Black => cap_sq += Square(8),
+                            Player::WHITE => cap_sq -= Square(8),
+                            Player::BLACK => cap_sq += Square(8),
                         };
                     }
                     self.put_piece_c(Piece::make(!us, captured_piece), cap_sq);
@@ -357,7 +365,7 @@ impl Position {
             self.castling_rights = undoable_move.prev_castling_rights;
             self.state = undoable_move.state;
 
-            if us == Player::Black {
+            if us == Player::BLACK {
                 // unmaking a Black move, so decrement the whole move counter
                 self.move_number -= 1;
             }
@@ -461,7 +469,7 @@ impl Position {
         self.bbs[Piece::None as usize] ^= comb_bb;
         self.bbs[piece as usize] ^= comb_bb;
 
-        self.player_occ[player as usize] ^= comb_bb;
+        self.player_occ[player.inner() as usize] ^= comb_bb;
 
         self.board.remove(from);
         self.board.place(to, player, piece_ty);
@@ -483,8 +491,8 @@ impl Position {
         self.bbs[Piece::None as usize] ^= bb;
         self.bbs[piece as usize] ^= bb;
 
-        self.player_occ[player as usize] ^= bb;
-        self.piece_counts[player as usize] -= 1;
+        self.player_occ[player.inner() as usize] ^= bb;
+        self.piece_counts[player.inner() as usize] -= 1;
 
         self.board.remove(square);
 
@@ -503,8 +511,8 @@ impl Position {
         let (player, piece_ty) = piece.player_piece();
         self.bbs[Piece::None as usize] ^= bb;
         self.bbs[piece as usize] ^= bb;
-        self.player_occ[player as usize] ^= bb;
-        self.piece_counts[player as usize] += 1;
+        self.player_occ[player.inner() as usize] ^= bb;
+        self.piece_counts[player.inner() as usize] += 1;
 
         self.board.place(square, player, piece_ty);
 
@@ -529,8 +537,8 @@ impl Position {
     /// Returns a `Bitboard` of possible attacks to a square with a given occupancy.
     /// Includes pieces from both players.
     pub fn attackers_to(&self, sq: Square) -> Bitboard {
-        (Bitboard(pawn_attacks_from(sq, Player::Black)) & self.bbs[1])
-            | (Bitboard(pawn_attacks_from(sq, Player::White)) & self.bbs[7])
+        (Bitboard(pawn_attacks_from(sq, Player::BLACK)) & self.bbs[1])
+            | (Bitboard(pawn_attacks_from(sq, Player::WHITE)) & self.bbs[7])
             | (knight_moves(sq) & (self.bbs[2] | self.bbs[8]))
             | (rook_moves(self.occupied(), sq)
                 & (self.bbs[4] | self.bbs[10] | self.bbs[5] | self.bbs[11]))
@@ -561,17 +569,17 @@ impl Position {
 
     #[inline(always)]
     pub fn get_occupied_player(&self, player: Player) -> Bitboard {
-        self.player_occ[player as usize]
+        self.player_occ[player.inner() as usize]
     }
 
     #[inline(always)]
     pub fn occupied_white(&self) -> Bitboard {
-        self.player_occ[Player::White as usize]
+        self.player_occ[Player::WHITE.inner() as usize]
     }
 
     #[inline(always)]
     pub fn occupied_black(&self) -> Bitboard {
-        self.player_occ[Player::Black as usize]
+        self.player_occ[Player::BLACK.inner() as usize]
     }
 
     /// Outputs the blockers and pinners of a given square in a tuple `(blockers, pinners)`.
@@ -603,7 +611,7 @@ impl Position {
 
     #[inline]
     pub fn piece_bb(&self, player: Player, piece_type: PieceType) -> Bitboard {
-        let idx = 6 * (player as usize) + (piece_type as usize);
+        let idx = 6 * (player.inner() as usize) + (piece_type as usize);
         self.bbs[idx]
     }
     /// Returns the Bitboard of the Queens and Rooks for a given player.
@@ -620,7 +628,7 @@ impl Position {
     /// Returns the combined BitBoard of both players for a given piece.
     #[inline(always)]
     pub fn piece_bb_both_players(&self, piece: PieceType) -> Bitboard {
-        self.piece_bb(Player::White, piece) | self.piece_bb(Player::Black, piece)
+        self.piece_bb(Player::WHITE, piece) | self.piece_bb(Player::BLACK, piece)
     }
 
     #[inline]
@@ -666,7 +674,7 @@ impl Position {
     /// (i.e. ensuring none of the king squares are in check).
     #[inline]
     pub fn castle_impeded(&self, castle_type: CastleType) -> bool {
-        let path = Bitboard(CASTLING_PATH[self.turn as usize][castle_type as usize]);
+        let path = Bitboard(CASTLING_PATH[self.turn.inner() as usize][castle_type as usize]);
         (path & self.occupied()).is_not_empty()
     }
 
@@ -674,11 +682,11 @@ impl Position {
     #[inline]
     pub fn can_castle(&self, player: Player, side: CastleType) -> bool {
         match player {
-            Player::White => match side {
+            Player::WHITE => match side {
                 CastleType::Kingside => self.castling_rights.white_kingside(),
                 CastleType::Queenside => self.castling_rights.white_queenside(),
             },
-            Player::Black => match side {
+            Player::BLACK => match side {
                 CastleType::Kingside => self.castling_rights.black_kingside(),
                 CastleType::Queenside => self.castling_rights.black_queenside(),
             },
@@ -687,7 +695,7 @@ impl Position {
 
     #[inline]
     pub fn castling_rook_square(&self, side: CastleType) -> Square {
-        Square(CASTLING_ROOK_START[self.turn() as usize][side as usize])
+        Square(CASTLING_ROOK_START[self.turn().inner() as usize][side as usize])
     }
 
     /// Returns the king square for the given player.
@@ -701,7 +709,7 @@ impl Position {
     /// Pinned is defined as pinned to the same players king
     #[inline(always)]
     pub fn pinned_pieces(&self, player: Player) -> Bitboard {
-        self.state.blockers[player as usize] & self.get_occupied_player(player)
+        self.state.blockers[player.inner() as usize] & self.get_occupied_player(player)
     }
 
     // MOVE GENERATION
@@ -732,8 +740,8 @@ impl Position {
     pub fn legal_move(&self, mov: &Move) -> bool {
         // let us = self.turn();
         let them = !self.turn();
-        let orig = mov.orig();
-        let orig_bb = orig.to_bb();
+        // let orig = mov.orig();
+        let orig_bb = mov.orig().to_bb();
         let dest = mov.dest();
 
         // En passant
@@ -748,7 +756,7 @@ impl Position {
                 && (bishop_moves(occupied, ksq) & self.diagonal_piece_bb(them)).is_empty();
         }
 
-        let piece = self.piece_at_sq(orig);
+        let piece = self.piece_at_sq(mov.orig());
 
         // If moving the king, check if the destination square is not being attacked
         // Note: castling moves are already checked in movegen.
@@ -760,7 +768,7 @@ impl Position {
         // Ensure we are not moving a pinned piece, or if we are, it is remaining staying
         // pinned but moving along the current rank, file, diagonal between the pinner and the king
         (self.pinned_pieces(self.turn()) & orig_bb).is_empty()
-            || aligned(orig, dest, self.king_sq(self.turn()))
+            || aligned(mov.orig(), dest, self.king_sq(self.turn()))
     }
 }
 
@@ -784,62 +792,62 @@ impl fmt::Debug for Position {
         writeln!(
             f,
             "White Pawns:\n {}",
-            self.piece_bb(Player::White, PieceType::Pawn)
+            self.piece_bb(Player::WHITE, PieceType::Pawn)
         )?;
         writeln!(
             f,
             "White Knights:\n {}",
-            self.piece_bb(Player::White, PieceType::Knight)
+            self.piece_bb(Player::WHITE, PieceType::Knight)
         )?;
         writeln!(
             f,
             "White Bishops:\n {}",
-            self.piece_bb(Player::White, PieceType::Bishop)
+            self.piece_bb(Player::WHITE, PieceType::Bishop)
         )?;
         writeln!(
             f,
             "White Rooks:\n {}",
-            self.piece_bb(Player::White, PieceType::Rook)
+            self.piece_bb(Player::WHITE, PieceType::Rook)
         )?;
         writeln!(
             f,
             "White Queens:\n {}",
-            self.piece_bb(Player::White, PieceType::Queen)
+            self.piece_bb(Player::WHITE, PieceType::Queen)
         )?;
         writeln!(
             f,
             "White King:\n {}",
-            self.piece_bb(Player::White, PieceType::King)
+            self.piece_bb(Player::WHITE, PieceType::King)
         )?;
         writeln!(
             f,
             "Black Pawns:\n {}",
-            self.piece_bb(Player::Black, PieceType::Pawn)
+            self.piece_bb(Player::BLACK, PieceType::Pawn)
         )?;
         writeln!(
             f,
             "Black Knights:\n {}",
-            self.piece_bb(Player::Black, PieceType::Knight)
+            self.piece_bb(Player::BLACK, PieceType::Knight)
         )?;
         writeln!(
             f,
             "Black Bishops:\n {}",
-            self.piece_bb(Player::Black, PieceType::Bishop)
+            self.piece_bb(Player::BLACK, PieceType::Bishop)
         )?;
         writeln!(
             f,
             "Black Rooks:\n {}",
-            self.piece_bb(Player::Black, PieceType::Rook)
+            self.piece_bb(Player::BLACK, PieceType::Rook)
         )?;
         writeln!(
             f,
             "Black Queens:\n {}",
-            self.piece_bb(Player::Black, PieceType::Queen)
+            self.piece_bb(Player::BLACK, PieceType::Queen)
         )?;
         writeln!(
             f,
             "Black King:\n {}",
-            self.piece_bb(Player::Black, PieceType::King)
+            self.piece_bb(Player::BLACK, PieceType::King)
         )?;
         writeln!(f, "White Pieces:\n {}", self.occupied_white())?;
         writeln!(f, "Black Pieces:\n {}", self.occupied_black())?;
@@ -848,8 +856,16 @@ impl fmt::Debug for Position {
         writeln!(f, "{}", self.board)?;
 
         writeln!(f, "PIECE COUNTS\n============\n")?;
-        writeln!(f, "White: {}", self.piece_counts[Player::White as usize])?;
-        writeln!(f, "Black: {}", self.piece_counts[Player::Black as usize])?;
+        writeln!(
+            f,
+            "White: {}",
+            self.piece_counts[Player::WHITE.inner() as usize]
+        )?;
+        writeln!(
+            f,
+            "Black: {}",
+            self.piece_counts[Player::BLACK.inner() as usize]
+        )?;
         writeln!(f)?;
 
         writeln!(f, "INVISIBLE STATE\n===============\n")?;

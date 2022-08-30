@@ -52,16 +52,16 @@ impl State {
     /// blocking, pinners etc.
     pub(crate) fn set_check_info(&mut self, position: &Position) {
         let (white_blockers, white_pinners) =
-            position.slider_blockers(position.occupied_black(), position.king_sq(Player::White));
+            position.slider_blockers(position.occupied_black(), position.king_sq(Player::WHITE));
 
-        self.blockers[Player::White as usize] = white_blockers;
-        self.pinners[Player::White as usize] = white_pinners;
+        self.blockers[Player::WHITE.inner() as usize] = white_blockers;
+        self.pinners[Player::WHITE.inner() as usize] = white_pinners;
 
         let (black_blockers, black_pinners) =
-            position.slider_blockers(position.occupied_white(), position.king_sq(Player::Black));
+            position.slider_blockers(position.occupied_white(), position.king_sq(Player::BLACK));
 
-        self.blockers[Player::Black as usize] = black_blockers;
-        self.pinners[Player::Black as usize] = black_pinners;
+        self.blockers[Player::BLACK.inner() as usize] = black_blockers;
+        self.pinners[Player::BLACK.inner() as usize] = black_pinners;
     }
 }
 
@@ -71,22 +71,22 @@ impl fmt::Display for State {
         writeln!(
             f,
             "Blockers - white:\n {}",
-            self.blockers[Player::White as usize]
+            self.blockers[Player::WHITE.inner() as usize]
         )?;
         writeln!(
             f,
             "Blockers - black:\n {}",
-            self.blockers[Player::Black as usize]
+            self.blockers[Player::BLACK.inner() as usize]
         )?;
         writeln!(
             f,
             "Pinners - white:\n {}",
-            self.pinners[Player::White as usize]
+            self.pinners[Player::WHITE.inner() as usize]
         )?;
         writeln!(
             f,
             "Pinners - black:\n {}",
-            self.pinners[Player::Black as usize]
+            self.pinners[Player::BLACK.inner() as usize]
         )
     }
 }

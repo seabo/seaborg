@@ -179,7 +179,7 @@ pub fn pawn_attacks_from(sq: Square, player: Player) -> u64 {
     debug_assert!(sq.is_okay());
     unsafe {
         *PAWN_ATTACKS_FROM
-            .get_unchecked(player as usize)
+            .get_unchecked(player.inner() as usize)
             .get_unchecked(sq.0 as usize)
     }
 }

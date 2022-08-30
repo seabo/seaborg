@@ -316,8 +316,8 @@ impl Position {
 
     fn parse_side_to_move(side_to_move: &str) -> Result<Player, FenError> {
         match side_to_move {
-            "w" => Ok(Player::White),
-            "b" => Ok(Player::Black),
+            "w" => Ok(Player::WHITE),
+            "b" => Ok(Player::BLACK),
             _ => Err(FenError {
                 ty: FenErrorType::SideToMoveInvalid,
                 msg: format!(

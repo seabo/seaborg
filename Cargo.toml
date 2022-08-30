@@ -8,7 +8,7 @@ authors = ["George Seabridge <georgeseabridge@gmail.com>"]
 edition = "2021"
 
 [profile.release]
-debug = true
+# debug = true
 
 [dependencies]
 core = { path = "./core" }
