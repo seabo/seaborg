@@ -8,6 +8,7 @@ mod zobrist;
 
 use crate::bb::Bitboard;
 use crate::masks::{CASTLING_PATH, CASTLING_ROOK_START, FILE_BB, PLAYER_CNT, RANK_BB};
+use crate::mono_traits::PlayerTrait;
 use crate::mov::{Move, MoveType, UndoableMove};
 use crate::movegen::{bishop_moves, rook_moves, MoveGen};
 use crate::movelist::MoveList;
@@ -568,7 +569,17 @@ impl Position {
     }
 
     #[inline(always)]
-    pub fn get_occupied_player(&self, player: Player) -> Bitboard {
+    pub fn get_occupied<PL: PlayerTrait>(&self) -> Bitboard {
+        self.player_occ[PL::player().inner() as usize]
+    }
+
+    #[inline(always)]
+    pub fn get_occupied_enemy<PL: PlayerTrait>(&self) -> Bitboard {
+        self.player_occ[PL::player().other_player().inner() as usize]
+    }
+
+    #[inline(always)]
+    pub fn get_occupied_player_runtime(&self, player: Player) -> Bitboard {
         self.player_occ[player.inner() as usize]
     }
 
@@ -595,7 +606,7 @@ impl Position {
                     & (self.piece_two_bb_both_players(PieceType::Bishop, PieceType::Queen))));
 
         let player_at = self.board.piece_at_sq(sq).player();
-        let other_occ = self.get_occupied_player(player_at);
+        let other_occ = self.get_occupied_player_runtime(player_at);
         for attacker_sq in attackers {
             let bb = Bitboard(between_bb(sq, attacker_sq)) & occupied;
             if bb.is_not_empty() && !bb.more_than_one() {
@@ -709,7 +720,7 @@ impl Position {
     /// Pinned is defined as pinned to the same players king
     #[inline(always)]
     pub fn pinned_pieces(&self, player: Player) -> Bitboard {
-        self.state.blockers[player.inner() as usize] & self.get_occupied_player(player)
+        self.state.blockers[player.inner() as usize] & self.get_occupied_player_runtime(player)
     }
 
     // MOVE GENERATION
@@ -762,7 +773,7 @@ impl Position {
         // Note: castling moves are already checked in movegen.
         if piece.type_of() == PieceType::King {
             return mov.move_type().contains(MoveType::CASTLE)
-                || (self.attackers_to(dest) & self.get_occupied_player(them)).is_empty();
+                || (self.attackers_to(dest) & self.get_occupied_player_runtime(them)).is_empty();
         }
 
         // Ensure we are not moving a pinned piece, or if we are, it is remaining staying

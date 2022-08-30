@@ -109,31 +109,31 @@ where
     }
 
     #[inline(always)]
-    fn get_self(position: &'a Position, movelist: &'a mut MP) -> Self {
+    fn get_self<PL: PlayerTrait>(position: &'a Position, movelist: &'a mut MP) -> Self {
         InnerMoveGen {
             movelist,
             position,
             occ: position.occupied(),
-            us_occ: position.get_occupied_player(position.turn()),
-            them_occ: position.get_occupied_player(position.turn().other_player()),
+            us_occ: position.get_occupied::<PL>(),
+            them_occ: position.get_occupied_enemy::<PL>(),
         }
     }
 
     #[inline(always)]
-    fn generate_helper<G: GenTypeTrait, L: LegalityTrait, P: PlayerTrait>(
+    fn generate_helper<G: GenTypeTrait, L: LegalityTrait, PL: PlayerTrait>(
         position: &'a Position,
         movelist: &'a mut MP,
     ) -> &'a mut MP {
-        let mut movegen = InnerMoveGen::<MP>::get_self(position, movelist);
+        let mut movegen = InnerMoveGen::<MP>::get_self::<PL>(position, movelist);
         let gen_type = G::gen_type();
 
         if gen_type == GenType::Evasions {
-            movegen.generate_evasions::<P, L>(false);
+            movegen.generate_evasions::<PL, L>(false);
         } else if gen_type == GenType::Captures {
             if movegen.position.in_check() {
-                movegen.generate_evasions::<P, L>(true);
+                movegen.generate_evasions::<PL, L>(true);
             } else {
-                movegen.generate_captures::<P, L>();
+                movegen.generate_captures::<PL, L>();
             }
         }
         // else if gen_type == GenType::Quiets {
@@ -145,9 +145,9 @@ where
         // }
         else if gen_type == GenType::All {
             if movegen.position.in_check() {
-                movegen.generate_evasions::<P, L>(false);
+                movegen.generate_evasions::<PL, L>(false);
             } else {
-                movegen.generate_all::<P, L>();
+                movegen.generate_all::<PL, L>();
             }
         }
 
