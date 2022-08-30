@@ -107,12 +107,18 @@ impl fmt::Display for Perft<'_> {
         let out = self.output();
         writeln!(f)?;
         out.print_nodes(f)?;
-        out.print_captures(f)?;
-        out.print_en_passant(f)?;
-        out.print_castles(f)?;
-        out.print_promotions(f)?;
-        out.print_checkmate(f)?;
-        out.print_check(f)
+
+        if self.options.detailed {
+            out.print_captures(f)?;
+            out.print_en_passant(f)?;
+            out.print_castles(f)?;
+            out.print_promotions(f)?;
+            if self.options.checks {
+                out.print_checkmate(f)?;
+                out.print_check(f)?;
+            }
+        }
+        write!(f, "")
     }
 }
 
