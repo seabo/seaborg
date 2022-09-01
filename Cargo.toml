@@ -7,9 +7,6 @@ version = "0.1.0"
 authors = ["George Seabridge <georgeseabridge@gmail.com>"]
 edition = "2021"
 
-[profile.release]
-# debug = true
-
 [dependencies]
 core = { path = "./core" }
 engine = { path = "./engine" }

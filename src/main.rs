@@ -2,12 +2,16 @@ mod cmdline;
 mod dev;
 mod perft;
 
-use log::info;
+use log::{info, LevelFilter};
 use simple_logger::SimpleLogger;
 
 fn main() {
     // Set up the logger.
-    SimpleLogger::new().init().unwrap();
+    SimpleLogger::new()
+        .with_level(LevelFilter::Error)
+        .env()
+        .init()
+        .unwrap();
 
     info!("logger initialized");
 

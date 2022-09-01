@@ -220,17 +220,18 @@ impl Search {
         // Record the time we started the search
         self.set_start_time();
 
-        for i in 1..MAX_DEPTH_PLY {
+        for i in 1..=MAX_DEPTH_PLY {
             info!("iterative deepening: ply {}", i);
+
+            self.search(i, -10_000, 10_000);
+            self.highest_depth = i;
+
             if self.is_halted() || self.timed_out() {
                 break;
             } else {
                 self.update_best_move();
                 self.report_info();
             }
-
-            self.search(i, -10_000, 10_000);
-            self.highest_depth = i;
         }
 
         let tt_result = self.tt().get(&self.pos());
@@ -315,15 +316,10 @@ impl Search {
         let alpha_orig = alpha;
         self.visited += 1;
 
-        // if self.pos().in_checkmate() {
-        //     return -10_000;
-        // }
-
         // Check if we need to break out of the search because we were halted or
         // ran out of time.
         // Note: to avoid running this at every single node, we only do it at
-        // leaf nodes, because we'll hit leaf nodes very frequently but we can
-        // cut down on time wasted on the checks.
+        // leaf nodes, because we'll hit leaf nodes very frequently.
         if self.is_halted() || self.timed_out() {
             // We need to unwind from the search, transmit the best move found so far
             // through the channel and and return the current evaluation gracefully.
