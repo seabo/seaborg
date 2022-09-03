@@ -1,6 +1,7 @@
 mod board;
 mod castling;
 mod fen;
+mod notation;
 mod piece;
 mod square;
 mod state;

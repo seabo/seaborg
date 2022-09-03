@@ -11,6 +11,15 @@ pub struct Square(pub u8);
 impl_bit_ops!(Square, u8);
 
 impl Square {
+    /// Creates a square from a rank and a file. This is slow because it performs assertions to
+    /// ensure that the rank and file are within bounds. It should never be needed in hot engine
+    /// paths, just in places like parsing notation.
+    pub fn from_rank_file(rank: usize, file: usize) -> Self {
+        assert!(rank <= 7);
+        assert!(file <= 7);
+        Square((rank * 8 + file) as u8)
+    }
+
     #[inline]
     pub const fn is_okay(&self) -> bool {
         self.0 < 64
