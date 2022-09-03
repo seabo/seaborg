@@ -85,6 +85,11 @@ impl Builder {
         Ok(())
     }
 
+    /// Return a reference to the underlying position.
+    pub fn pos(&self) -> Option<&Position> {
+        self.pos.as_ref()
+    }
+
     pub fn set_search_mode(&mut self, search_mode: SearchMode) -> BuilderResult {
         self.search_mode = Some(search_mode);
         Ok(())

@@ -23,6 +23,8 @@ pub enum Req {
     Stop,
     /// Stop the search process and quit the engine.
     Quit,
+    /// Display the board in ascii format.
+    Display,
 }
 
 /// Represents a position to be set on the internal board, either as the
@@ -52,6 +54,7 @@ enum Token<'a> {
 /// engine.
 #[derive(Copy, Clone, Debug)]
 enum Keyword {
+    // Official UCI protocol commands
     Uci,
     Debug,
     On,
@@ -79,6 +82,9 @@ enum Keyword {
     Stop,
     PonderHit,
     Quit,
+
+    // Additional commands
+    Display,
 }
 
 #[derive(Debug)]
@@ -189,6 +195,7 @@ impl<'a> Parser<'a> {
                 Token::Keyword(Keyword::Go) => self.parse_go(),
                 Token::Keyword(Keyword::Stop) => Ok(Req::Stop),
                 Token::Keyword(Keyword::Quit) => Ok(Req::Quit),
+                Token::Keyword(Keyword::Display) => Ok(Req::Display),
                 _ => self.unexpected_token("expected a valid uci command"),
             },
             None => Err(ParseError::NoInput),
@@ -417,6 +424,8 @@ impl<'a> Parser<'a> {
             "stop" => Token::Keyword(Keyword::Stop),
             "ponderhit" => Token::Keyword(Keyword::PonderHit),
             "quit" => Token::Keyword(Keyword::Quit),
+            "d" => Token::Keyword(Keyword::Display),
+            "display" => Token::Keyword(Keyword::Display),
             _ => Token::String(str),
         }
     }

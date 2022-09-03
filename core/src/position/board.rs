@@ -50,6 +50,7 @@ impl Board {
         self.arr[sq.0 as usize] = Piece::make(player, piece_ty);
     }
 
+    /// Return a `String` containing a pretty print of the board.
     pub fn pretty_string(&self) -> String {
         let mut s = String::new();
         let mut squares: [[Piece; 8]; 8] = [[Piece::None; 8]; 8];

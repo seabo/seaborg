@@ -15,6 +15,7 @@ pub enum Command {
     SetPosition((Pos, Option<Vec<String>>)),
     Search(SearchMode),
     Quit,
+    Display,
 }
 
 /// Represents an engine report. This is passed back from the `Engine` to the
@@ -87,6 +88,9 @@ impl Engine {
                         engine_inner.search(Arc::clone(&halt_clone));
                     }
                     Command::Quit => quit = true,
+                    Command::Display => {
+                        engine_inner.display();
+                    }
                 }
             }
         });
@@ -155,6 +159,14 @@ impl EngineInner {
         let result = self.builder.set_position(pos, moves);
 
         self.handle_result(result);
+    }
+
+    /// Display the position in ascii.
+    pub fn display(&self) {
+        match self.builder.pos() {
+            Some(pos) => pos.pretty_print(),
+            None => {}
+        }
     }
 
     pub fn set_search_mode(&mut self, search_mode: SearchMode) {

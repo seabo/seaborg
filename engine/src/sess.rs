@@ -93,6 +93,7 @@ impl Session {
             Req::Go(search_mode) => self.go(search_mode),
             Req::Stop => self.stop(),
             Req::Quit => self.quit_session(),
+            Req::Display => self.display(),
         }
     }
 
@@ -131,6 +132,10 @@ impl Session {
         // searches. But the whole point of UCI is to not have to
         // hold any game state, so we just rely on the set position
         // and go commands to tell us everything we need to know.
+    }
+
+    fn display(&self) {
+        self.engine.send(Command::Display);
     }
 
     /// Tell the engine to set up its internal position with the given

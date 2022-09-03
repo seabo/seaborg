@@ -174,6 +174,11 @@ impl Position {
         }
     }
 
+    /// Pretty print the board to stdout.
+    pub fn pretty_print(&self) {
+        println!("{}", self);
+    }
+
     /// Sets the `State` struct for the current position. Should only be called
     /// when initialising a new `Position`.
     pub fn set_state(&mut self) {
