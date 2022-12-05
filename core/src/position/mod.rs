@@ -46,10 +46,6 @@ impl Player {
     #[inline(always)]
     pub fn is_white(&self) -> bool {
         !self.0
-        // match self {
-        //     Player::White => true,
-        //     Player::Black => false,
-        // }
     }
 
     /// Returns if the player is `Player::Black`
@@ -62,10 +58,6 @@ impl Player {
     #[inline(always)]
     pub fn other_player(&self) -> Self {
         Self(!self.0)
-        // match self {
-        //     Player::White => Player::Black,
-        //     Player::Black => Player::White,
-        // }
     }
 
     /// Returns the relative square from a given square.
@@ -123,9 +115,6 @@ pub struct Position {
     pub(crate) bbs: [Bitboard; PIECE_TYPE_CNT],
     pub(crate) player_occ: [Bitboard; PLAYER_CNT],
 
-    // Piece counts
-    pub(crate) piece_counts: [u8; PLAYER_CNT],
-
     // "Invisible" state
     turn: Player,
     pub(crate) castling_rights: CastlingRights,
@@ -162,7 +151,6 @@ impl Position {
             board: Board::new(),
             bbs: [Bitboard::new(0); PIECE_TYPE_CNT],
             player_occ: [Bitboard::new(0); PLAYER_CNT],
-            piece_counts: [0; PLAYER_CNT],
             turn: Player::WHITE,
             castling_rights: CastlingRights::none(),
             ep_square: None,
@@ -499,7 +487,6 @@ impl Position {
         self.bbs[piece as usize] ^= bb;
 
         self.player_occ[player.inner() as usize] ^= bb;
-        self.piece_counts[player.inner() as usize] -= 1;
 
         self.board.remove(square);
 
@@ -519,7 +506,6 @@ impl Position {
         self.bbs[Piece::None as usize] ^= bb;
         self.bbs[piece as usize] ^= bb;
         self.player_occ[player.inner() as usize] ^= bb;
-        self.piece_counts[player.inner() as usize] += 1;
 
         self.board.place(square, player, piece_ty);
 
@@ -871,19 +857,6 @@ impl fmt::Debug for Position {
 
         writeln!(f, "BOARD ARRAY\n===========\n")?;
         writeln!(f, "{}", self.board)?;
-
-        writeln!(f, "PIECE COUNTS\n============\n")?;
-        writeln!(
-            f,
-            "White: {}",
-            self.piece_counts[Player::WHITE.inner() as usize]
-        )?;
-        writeln!(
-            f,
-            "Black: {}",
-            self.piece_counts[Player::BLACK.inner() as usize]
-        )?;
-        writeln!(f)?;
 
         writeln!(f, "INVISIBLE STATE\n===============\n")?;
         writeln!(f, "Turn: {}", self.turn())?;

@@ -86,7 +86,6 @@ impl Position {
             move_number,
             bbs,
             player_occ,
-            piece_counts: [player_occ[0].popcnt() as u8, player_occ[1].popcnt() as u8],
             state: State::blank(), // Temporary. The real `State` is generated below.
             history: Vec::new(),
             zobrist: Zobrist(0),
