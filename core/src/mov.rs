@@ -128,7 +128,7 @@ impl Move {
             orig: self.orig,
             dest: self.dest,
             promo_piece_type: self.promo_piece_type,
-            captured: captured,
+            captured,
             ty: self.ty,
             prev_castling_rights: position.castling_rights,
             prev_ep_square: position.ep_square,
