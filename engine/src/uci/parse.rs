@@ -1,5 +1,5 @@
 use super::Uci;
-use crate::search::search::SearchMode;
+use crate::search::search::TimingMode;
 use crate::time::TimeControl;
 
 use log::info;
@@ -18,7 +18,7 @@ pub enum Req {
     /// of the tuple.
     SetPosition((Pos, Option<Vec<String>>)),
     /// Commence the search process on the internal board.
-    Go(SearchMode),
+    Go(TimingMode),
     /// Halt the search process, but don't quit the engine.
     Stop,
     /// Stop the search process and quit the engine.
@@ -295,13 +295,13 @@ impl<'a> Parser<'a> {
                 Token::Keyword(Keyword::Winc) => self.parse_time_control(),
                 Token::Keyword(Keyword::Binc) => self.parse_time_control(),
                 Token::Keyword(Keyword::MovesToGo) => self.parse_time_control(),
-                Token::Keyword(Keyword::Depth) => Parser::unsupported_time_control(),
+                Token::Keyword(Keyword::Depth) => self.parse_depth(),
                 Token::Keyword(Keyword::Nodes) => Parser::unsupported_time_control(),
                 Token::Keyword(Keyword::Mate) => Parser::unsupported_time_control(),
                 Token::Keyword(Keyword::MoveTime) => self.parse_move_time(),
                 Token::Keyword(Keyword::Infinite) => {
                     self.advance();
-                    self.expect_end(Ok(Req::Go(SearchMode::Infinite)))
+                    self.expect_end(Ok(Req::Go(TimingMode::Infinite)))
                 }
                 Token::Keyword(Keyword::PonderHit) => Parser::unsupported_time_control(),
                 _ => Err(ParseError::UnexpectedToken(
@@ -325,7 +325,7 @@ impl<'a> Parser<'a> {
             // We found `infnite` after the `go` command. We expect this to be the end
             // of input, so bail here immediately.
             self.advance();
-            return self.expect_end(Ok(Req::Go(SearchMode::Infinite)));
+            return self.expect_end(Ok(Req::Go(TimingMode::Infinite)));
         }
 
         while self.peek().is_some() {
@@ -358,7 +358,7 @@ impl<'a> Parser<'a> {
             return Err(ParseError::IncompleteTimeControl);
         }
 
-        Ok(Req::Go(SearchMode::Timed(TimeControl::new(
+        Ok(Req::Go(TimingMode::Timed(TimeControl::new(
             wtime.unwrap(),
             btime.unwrap(),
             winc,
@@ -373,7 +373,16 @@ impl<'a> Parser<'a> {
 
         let ms: u32 = self.parse_number()?;
 
-        Ok(Req::Go(SearchMode::FixedTime(ms)))
+        Ok(Req::Go(TimingMode::FixedTime(ms)))
+    }
+
+    fn parse_depth(&mut self) -> ParseResult {
+        // Consume the `depth` token.
+        self.advance();
+
+        let d: u8 = self.parse_number()?;
+
+        Ok(Req::Go(TimingMode::Depth(d)))
     }
 
     fn parse_number<T: std::str::FromStr>(&mut self) -> Result<T, ParseError> {

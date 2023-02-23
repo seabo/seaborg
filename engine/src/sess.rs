@@ -19,7 +19,7 @@
 
 use crate::comm::Comm;
 use crate::engine::{Command, Engine, Report};
-use crate::search::search::SearchMode;
+use crate::search::search::TimingMode;
 use crate::uci::{Pos, Req, Res};
 
 use crossbeam_channel::{unbounded, Receiver};
@@ -150,7 +150,7 @@ impl Session {
     }
 
     /// Handle a `go` message from the GUI.
-    fn go(&mut self, search_mode: SearchMode) {
+    fn go(&mut self, search_mode: TimingMode) {
         self.engine.unhalt();
 
         // TODO: everything would probably be clearner if we break this down into two commands.

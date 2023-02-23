@@ -1,4 +1,4 @@
-use crate::search::search::SearchMode;
+use crate::search::search::TimingMode;
 use crate::uci::Pos;
 use core::position::{FenError, Position};
 
@@ -6,7 +6,7 @@ use core::position::{FenError, Position};
 /// available slots, which is approximately 134 million.
 static DEFAULT_TT_CAP: u32 = 27;
 /// Default search mode to use.
-static DEFAULT_SEARCH_MODE: SearchMode = SearchMode::Infinite;
+static DEFAULT_SEARCH_MODE: TimingMode = TimingMode::Infinite;
 
 /// The parameters to be used to run a search.
 #[derive(Clone, Debug)]
@@ -16,8 +16,8 @@ pub struct Params {
     /// The capacity to use for the transposition table. The number of available
     /// transposition table entries will be `2^tt_cap`.
     pub tt_cap: u32,
-    /// The search mode to use.
-    pub search_mode: SearchMode,
+    /// The timing mode to use.
+    pub search_mode: TimingMode,
     // - search type (iterative deepening, fixed depth)
 }
 
@@ -37,7 +37,7 @@ pub struct Builder {
     /// transposition table entries will be `2^tt_cap`.
     tt_cap: Option<u32>,
     /// The search mode to use.
-    search_mode: Option<SearchMode>,
+    search_mode: Option<TimingMode>,
 }
 
 impl Builder {
@@ -90,7 +90,7 @@ impl Builder {
         self.pos.as_ref()
     }
 
-    pub fn set_search_mode(&mut self, search_mode: SearchMode) -> BuilderResult {
+    pub fn set_search_mode(&mut self, search_mode: TimingMode) -> BuilderResult {
         self.search_mode = Some(search_mode);
         Ok(())
     }

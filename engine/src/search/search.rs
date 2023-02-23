@@ -57,13 +57,15 @@ static MAX_DEPTH_PLY: u8 = u8::MAX;
 /// string like `wtime 10000 btime 10000 winc 1000 binc 1000 movestogo 5`
 /// which represents the clock situation in a timed game.
 #[derive(Copy, Clone, Debug)]
-pub enum SearchMode {
+pub enum TimingMode {
     /// Search the position indefinitely, until a `stop` command.
     Infinite,
     /// Contains information representing the clock situation for white and black.
     Timed(TimeControl),
     /// Contains a fixed amount of time, in milliseconds, in which to make the move.
     FixedTime(u32),
+    /// A specific search depth, measured in ply.
+    Depth(u8),
 }
 
 // TODO: make the variants contain the value for cleaner access / manipulation.
@@ -123,6 +125,8 @@ pub struct Search {
     best_so_far: Option<Move>,
     /// Highest depth reached so far in iterative deepening.
     highest_depth: u8,
+    /// The maximum search depth we are allowed to search to.
+    max_depth: Option<u8>,
 }
 
 impl Search {
@@ -136,16 +140,22 @@ impl Search {
         let tt = Rc::new(RefCell::new(Table::with_capacity(params.tt_cap)));
 
         let time_limit = match params.search_mode {
-            SearchMode::Infinite => None,
-            SearchMode::Timed(tc) => {
+            TimingMode::Infinite => None,
+            TimingMode::Timed(tc) => {
                 Some(tc.to_fixed_time(pos.borrow().move_number(), pos.borrow().turn()))
             }
-            SearchMode::FixedTime(t) => Some(t),
+            TimingMode::FixedTime(t) => Some(t),
+            TimingMode::Depth(d) => None,
+        };
+
+        let max_depth = match params.search_mode {
+            TimingMode::Depth(d) => Some(d),
+            _ => None,
         };
 
         info!("setting search time limit to: {:?}", time_limit);
 
-        let search = Search {
+        Search {
             pos,
             tt,
             sender,
@@ -159,9 +169,8 @@ impl Search {
             time_limit,
             best_so_far: None,
             highest_depth: 0,
-        };
-
-        search
+            max_depth,
+        }
     }
 
     #[inline(always)]
@@ -220,7 +229,12 @@ impl Search {
         // Record the time we started the search
         self.set_start_time();
 
-        for i in 1..=MAX_DEPTH_PLY {
+        let target_depth = match self.max_depth {
+            Some(d) => d,
+            None => MAX_DEPTH_PLY,
+        };
+
+        for i in 1..=target_depth {
             info!("iterative deepening: ply {}", i);
 
             self.search(i, -10_000, 10_000);

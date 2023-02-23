@@ -1,5 +1,5 @@
 use crate::search::params::{Builder, BuilderError, BuilderResult, Params};
-use crate::search::search::{Search, SearchMode};
+use crate::search::search::{Search, TimingMode};
 use crate::sess::Message;
 use crate::uci::Pos;
 
@@ -13,7 +13,7 @@ use std::thread::{self, JoinHandle};
 pub enum Command {
     Initialize,
     SetPosition((Pos, Option<Vec<String>>)),
-    Search(SearchMode),
+    Search(TimingMode),
     Quit,
     Display,
 }
@@ -169,7 +169,7 @@ impl EngineInner {
         }
     }
 
-    pub fn set_search_mode(&mut self, search_mode: SearchMode) {
+    pub fn set_search_mode(&mut self, search_mode: TimingMode) {
         info!("setting engine search mode to: {:?}", search_mode);
 
         self.builder
