@@ -54,10 +54,7 @@ fn do_ordering() {
             .unwrap();
     let tt: Table<TTData> = Table::with_capacity(5);
 
-    let ordered_moves = OrderedMoveList::new(
-        std::rc::Rc::new(std::cell::RefCell::new(pos)),
-        std::rc::Rc::new(std::cell::RefCell::new(tt)),
-    );
+    let ordered_moves = OrderedMoveList::new(&pos, std::rc::Rc::new(std::cell::RefCell::new(tt)));
 
     for (mov, phase) in ordered_moves {
         println!("{} -> {}", mov, phase);

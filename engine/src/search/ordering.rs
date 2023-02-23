@@ -18,8 +18,6 @@ use std::rc::Rc;
 /// An `OrderedMoveList` consumes the underlying `MoveList`, so it won't
 /// be available after the iteration.
 pub struct OrderedMoveList {
-    /// A reference to the `Position` struct associated with this `OrderedMoveList`.
-    pos: Rc<RefCell<Position>>,
     /// A reference to the transposition table associated with this `OrderedMoveList`.
     tt: Rc<RefCell<Table<TTData>>>,
     /// The underlying `MoveList`. This gets consumed by the `OrderedMoveList`
@@ -27,8 +25,6 @@ pub struct OrderedMoveList {
     pub move_list: Option<MoveList>,
     /// Parallel array to the `move_list`, containing ordering scores of the associated moves.
     move_scores: Option<[i32; MAX_MOVES]>,
-    /// Boolean flag to indicate if we have prepared for return the full move list yet.
-    prepared: bool,
     /// The transposition table move.
     tt_move: Option<Move>,
     /// Tracks whether we have yielded the transposition table move yet
@@ -36,43 +32,37 @@ pub struct OrderedMoveList {
 }
 
 impl OrderedMoveList {
-    pub fn new(pos: Rc<RefCell<Position>>, tt: Rc<RefCell<Table<TTData>>>) -> Self {
+    pub fn new(pos: &Position, tt: Rc<RefCell<Table<TTData>>>) -> OrderedMoveList {
         let mut list = Self {
-            pos,
             tt,
             move_list: None,
             move_scores: None,
-            prepared: false,
             tt_move: None,
             yielded_tt_move: false,
         };
 
-        let tt_move = list.get_tt_move();
+        let tt_move = list.get_tt_move(pos);
         list.tt_move = tt_move;
+        list.prepare_move_list(pos);
 
         list
-    }
-
-    fn pos(&self) -> Ref<'_, Position> {
-        self.pos.borrow()
     }
 
     fn tt(&self) -> Ref<'_, Table<TTData>> {
         self.tt.borrow()
     }
 
-    fn get_tt_move(&self) -> Option<Move> {
-        match self.tt().get(&self.pos()) {
+    fn get_tt_move(&self, pos: &Position) -> Option<Move> {
+        match self.tt().get(pos) {
             Some(tt_entry) => Some(tt_entry.best_move()),
             None => None,
         }
     }
 
-    fn score_move(&self, mov: Move) -> i32 {
+    fn score_move(&self, mov: Move, pos: &Position) -> i32 {
         if mov.is_null() {
             0
         } else if mov.is_capture() {
-            let pos = self.pos();
             let victim_value = pos.piece_at_sq(mov.dest()).type_of().value();
             let attacker_value = pos.piece_at_sq(mov.orig()).type_of().value();
             10000 + victim_value - attacker_value
@@ -81,8 +71,8 @@ impl OrderedMoveList {
         }
     }
 
-    fn prepare_move_list(&mut self) {
-        let moves = self.pos().generate_moves();
+    fn prepare_move_list(&mut self, pos: &Position) {
+        let moves = pos.generate_moves();
         self.move_list = Some(moves);
 
         // Build a structure with scores for each move in the list.
@@ -95,7 +85,7 @@ impl OrderedMoveList {
                     *move_scores.get_unchecked_mut(i) = 0;
                 }
             }
-            let score = self.score_move(*mov);
+            let score = self.score_move(*mov, pos);
             unsafe {
                 *move_scores.get_unchecked_mut(i) = score;
             }
@@ -105,8 +95,6 @@ impl OrderedMoveList {
 
         // TODO: once killer moves are implemented, remove them from the list
         // killer moves as we'll already be returning them before getting this far.
-
-        self.prepared = true;
     }
 
     fn yield_next(&mut self) -> Option<(Move, OrderingPhase)> {
@@ -167,7 +155,7 @@ impl fmt::Display for OrderingPhase {
     }
 }
 
-impl<'a> Iterator for OrderedMoveList {
+impl Iterator for OrderedMoveList {
     type Item = (Move, OrderingPhase);
     fn next(&mut self) -> Option<Self::Item> {
         if !self.yielded_tt_move {
@@ -178,10 +166,6 @@ impl<'a> Iterator for OrderedMoveList {
                 }
                 None => {}
             }
-        }
-
-        if !self.prepared {
-            self.prepare_move_list();
         }
 
         self.yield_next()

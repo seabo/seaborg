@@ -93,7 +93,7 @@ impl TTData {
 #[derive(Debug)]
 pub struct Search {
     /// The internal board representation used by the search.
-    pos: Rc<RefCell<Position>>,
+    pos: Position,
     /// The transposition table used by the search process.
     tt: Rc<RefCell<Table<TTData>>>,
     /// A channel sender for transmitting messages back to the `Engine`. These messages are
@@ -135,15 +135,13 @@ impl Search {
         sender: Option<Sender<Message>>,
         halt: Arc<RwLock<bool>>,
     ) -> Self {
-        let pos = Rc::new(RefCell::new(params.take_pos()));
+        let pos = params.take_pos();
 
         let tt = Rc::new(RefCell::new(Table::with_capacity(params.tt_cap)));
 
         let time_limit = match params.search_mode {
             TimingMode::Infinite => None,
-            TimingMode::Timed(tc) => {
-                Some(tc.to_fixed_time(pos.borrow().move_number(), pos.borrow().turn()))
-            }
+            TimingMode::Timed(tc) => Some(tc.to_fixed_time(pos.move_number(), pos.turn())),
             TimingMode::FixedTime(t) => Some(t),
             TimingMode::Depth(d) => None,
         };
@@ -174,16 +172,6 @@ impl Search {
     }
 
     #[inline(always)]
-    pub fn pos(&self) -> Ref<'_, Position> {
-        self.pos.borrow()
-    }
-
-    #[inline(always)]
-    pub fn pos_mut(&self) -> RefMut<'_, Position> {
-        self.pos.borrow_mut()
-    }
-
-    #[inline(always)]
     pub fn tt(&self) -> Ref<'_, Table<TTData>> {
         self.tt.borrow()
     }
@@ -200,7 +188,7 @@ impl Search {
     }
 
     pub fn get_tt_move(&mut self) -> Option<Move> {
-        match self.tt().get(&self.pos()) {
+        match self.tt().get(&self.pos) {
             Some(data) => Some(data.best_move),
             None => None,
         }
@@ -211,13 +199,13 @@ impl Search {
         let mut length = 0;
         while let Some(mov) = self.get_tt_move() {
             pv.push(mov);
-            self.pos_mut().make_move(mov);
+            self.pos.make_move(mov);
             length += 1;
         }
 
         while length > 0 {
             length -= 1;
-            self.pos_mut().unmake_move();
+            self.pos.unmake_move();
         }
 
         pv
@@ -248,7 +236,7 @@ impl Search {
             }
         }
 
-        let tt_result = self.tt().get(&self.pos());
+        let tt_result = self.tt().get(&self.pos);
         let score = match tt_result {
             Some(entry) => entry.score,
             None => self.quiesce(-10_000, 10_000),
@@ -260,7 +248,7 @@ impl Search {
                 // TODO: shouldn't really unwrap here, because if we are in checkmate
                 // or stalemate, then there won't be any legal moves and this will
                 // return `None`.
-                self.send_best_move(self.pos().random_move().unwrap());
+                self.send_best_move(self.pos.random_move().unwrap());
             }
         }
 
@@ -345,7 +333,7 @@ impl Search {
             return alpha;
         }
 
-        if let Some(data) = self.tt().get(&self.pos()) {
+        if let Some(data) = self.tt().get(&self.pos) {
             if data.depth >= depth {
                 match data.node_type {
                     NodeType::Exact => return data.score,
@@ -363,11 +351,11 @@ impl Search {
         let mut search_pv = true;
         let mut val = -10_000;
         let mut node_move_count = 0;
-        let ordered_moves = OrderedMoveList::new(self.pos.clone(), self.tt.clone());
+        let ordered_moves = OrderedMoveList::new(&self.pos, self.tt.clone());
         for (mov, ordering_phase) in ordered_moves {
             node_move_count += 1;
             self.moves_visited += 1;
-            self.pos_mut().make_move(mov);
+            self.pos.make_move(mov);
             let mut score: i32;
             if search_pv {
                 score = -self.search(depth - 1, -beta, -alpha);
@@ -378,7 +366,7 @@ impl Search {
                     score = -self.search(depth - 1, -beta, -alpha);
                 }
             }
-            self.pos_mut().unmake_move();
+            self.pos.unmake_move();
 
             if score > val {
                 val = score;
@@ -401,7 +389,7 @@ impl Search {
         if node_move_count == 0 {
             // If this condition is true, then we had no moves in this position. So it's
             // either checkmate or stalemate.
-            if self.pos().in_check() {
+            if self.pos.in_check() {
                 // Checkmate
                 return -10_000;
             } else {
@@ -425,7 +413,7 @@ impl Search {
                 score: val,
                 best_move,
             };
-            self.tt_mut().insert(&self.pos(), tt_entry);
+            self.tt_mut().insert(&self.pos, tt_entry);
         }
         return val;
     }
@@ -440,15 +428,15 @@ impl Search {
             alpha = stand_pat;
         }
 
-        let captures = self.pos().generate_captures();
+        let captures = self.pos.generate_captures();
         let mut score: i32;
 
         let mut node_move_count = 0;
         for mov in &captures {
             node_move_count += 1;
-            self.pos_mut().make_move(*mov);
+            self.pos.make_move(*mov);
             score = -self.quiesce(-beta, -alpha);
-            self.pos_mut().unmake_move();
+            self.pos.unmake_move();
 
             if score >= beta {
                 return beta;
@@ -462,7 +450,7 @@ impl Search {
         if node_move_count == 0 {
             // If this condition is true, then we had no moves in this position. So it's
             // either checkmate or stalemate.
-            if self.pos().in_check() {
+            if self.pos.in_check() {
                 // Checkmate
                 return -10_000;
             } else {
@@ -475,7 +463,7 @@ impl Search {
     }
 
     pub fn evaluate(&mut self) -> i32 {
-        material_eval(&self.pos()) * if self.pos().turn().is_white() { 1 } else { -1 }
+        material_eval(&self.pos) * if self.pos.turn().is_white() { 1 } else { -1 }
     }
 
     fn is_halted(&self) -> bool {
@@ -500,7 +488,7 @@ impl Search {
     }
 
     fn build_info(&self) -> Option<Info> {
-        match self.tt().get(&self.pos()) {
+        match self.tt().get(&self.pos) {
             Some(tt_entry) => {
                 Some(Info {
                     depth: self.highest_depth,
