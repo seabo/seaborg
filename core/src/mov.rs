@@ -141,6 +141,10 @@ impl Move {
     ///
     /// E.g. 'e2e4'
     pub fn to_uci_string(&self) -> String {
+        if self.is_null() {
+            return format!("Null");
+        }
+
         if let Some(promo_piece) = self.promo_piece_type {
             format!("{}{}{:1}", self.orig, self.dest, promo_piece)
         } else {

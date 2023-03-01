@@ -1,4 +1,5 @@
 use super::eval::Evaluation;
+use super::pv_table::PVTable;
 use super::time::TimingMode;
 
 use core::position::{Player, Position};
@@ -9,11 +10,15 @@ pub const INFINITY: i32 = 10_000;
 pub struct Search {
     /// The internal board position.
     pos: Position,
+    pvt: PVTable,
 }
 
 impl Search {
     pub fn new(pos: Position) -> Self {
-        Self { pos }
+        Self {
+            pos,
+            pvt: PVTable::new(8),
+        }
     }
 
     pub fn start_search(mut self, tm: TimingMode) -> (Position, i32) {
@@ -23,8 +28,10 @@ impl Search {
             TimingMode::Timed(_) => todo!(),
             TimingMode::MoveTime(_) => todo!(),
             TimingMode::Depth(d) => {
+                self.pvt = PVTable::new(d);
                 let score = self.negamax(d);
                 println!("result: {}", score);
+                self.pvt.print_pv();
                 (self.pos, score)
             }
             TimingMode::Infinite => todo!(),
@@ -55,6 +62,7 @@ impl Search {
                 self.pos.make_move(*mov);
                 let score = -self.negamax(depth - 1);
                 if score > max {
+                    self.pvt.update_at(depth, *mov);
                     max = score;
                 }
                 self.pos.unmake_move();
