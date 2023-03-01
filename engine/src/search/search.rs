@@ -30,7 +30,7 @@ use super::ordering::{OrderedMoveList, OrderingPhase};
 use super::params::Params;
 
 use crate::engine::{Info, Report};
-use crate::eval::material_eval;
+use crate::eval::Evaluation;
 use crate::sess::Message;
 use crate::tables::Table;
 use crate::time::TimeControl;
@@ -127,6 +127,8 @@ pub struct Search {
     highest_depth: u8,
     /// The maximum search depth we are allowed to search to.
     max_depth: Option<u8>,
+    /// Whether to search with iterative deepening or not.
+    iterative_deepening: bool,
 }
 
 impl Search {
@@ -151,6 +153,8 @@ impl Search {
             _ => None,
         };
 
+        let iterative_deepening = params.iterative_deepening;
+
         info!("setting search time limit to: {:?}", time_limit);
 
         Search {
@@ -168,6 +172,7 @@ impl Search {
             best_so_far: None,
             highest_depth: 0,
             max_depth,
+            iterative_deepening,
         }
     }
 
@@ -222,8 +227,13 @@ impl Search {
             None => MAX_DEPTH_PLY,
         };
 
-        for i in 1..=target_depth {
-            info!("iterative deepening: ply {}", i);
+        let initial_depth = match self.iterative_deepening {
+            true => 1,
+            false => target_depth,
+        };
+
+        for i in initial_depth..=target_depth {
+            info!("commencing search @ ply {}", i);
 
             self.search(i, -10_000, 10_000);
             self.highest_depth = i;
@@ -314,7 +324,6 @@ impl Search {
     }
 
     fn search(&mut self, depth: u8, mut alpha: i32, mut beta: i32) -> i32 {
-        // let is_white = self.pos.turn().is_white();
         let alpha_orig = alpha;
         self.visited += 1;
 
@@ -322,7 +331,7 @@ impl Search {
         // ran out of time.
         // Note: to avoid running this at every single node, we only do it at
         // leaf nodes, because we'll hit leaf nodes very frequently.
-        if self.is_halted() || self.timed_out() {
+        if depth == 0 && (self.is_halted() || self.timed_out()) {
             // We need to unwind from the search, transmit the best move found so far
             // through the channel and and return the current evaluation gracefully.
             // TODO: this isn't right. We can't return the current alpha. This function
@@ -463,7 +472,7 @@ impl Search {
     }
 
     pub fn evaluate(&mut self) -> i32 {
-        material_eval(&self.pos) * if self.pos.turn().is_white() { 1 } else { -1 }
+        &self.pos.eval() * if self.pos.turn().is_white() { 1 } else { -1 }
     }
 
     fn is_halted(&self) -> bool {

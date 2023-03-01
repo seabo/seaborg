@@ -1,4 +1,5 @@
 use super::Uci;
+use crate::engine::EngineOpt;
 use crate::search::search::TimingMode;
 use crate::time::TimeControl;
 
@@ -17,6 +18,8 @@ pub enum Req {
     /// position by playing any additional moves given in the second slot
     /// of the tuple.
     SetPosition((Pos, Option<Vec<String>>)),
+    /// Set engine configuration option.
+    SetOption(EngineOpt),
     /// Commence the search process on the internal board.
     Go(TimingMode),
     /// Halt the search process, but don't quit the engine.
@@ -44,7 +47,7 @@ impl Uci {
 /// The tokens which can be sent by the GUI. We will either have
 /// a reserved keyword, a FEN string, or a number or some other
 /// general string.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 enum Token<'a> {
     Keyword(Keyword),
     String(&'a str),
@@ -52,7 +55,7 @@ enum Token<'a> {
 
 /// The reserved keywords which can be sent from the GUI to the
 /// engine.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 enum Keyword {
     // Official UCI protocol commands
     Uci,
@@ -61,6 +64,8 @@ enum Keyword {
     Off,
     IsReady,
     SetOption,
+    Name,
+    Value,
     UciNewGame,
     Position,
     Fen,
@@ -174,6 +179,18 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn expect_kw(&mut self, kw: Keyword) -> Result<(), ParseError> {
+        println!("{:?}", self.peek());
+        if self.peek() != Some(Token::Keyword(kw)) {
+            Err(ParseError::ExpectedMore(format!(
+                "expected keyword token: {:?}",
+                kw
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
     fn peek(&mut self) -> Option<Token<'a>> {
         if self.cursor < self.toks.len() {
             let next = self.toks[self.cursor].clone();
@@ -189,7 +206,7 @@ impl<'a> Parser<'a> {
                 Token::Keyword(Keyword::Uci) => Ok(Req::Uci),
                 Token::Keyword(Keyword::Debug) => todo!(),
                 Token::Keyword(Keyword::IsReady) => Ok(Req::IsReady),
-                Token::Keyword(Keyword::SetOption) => todo!(),
+                Token::Keyword(Keyword::SetOption) => self.parse_set_option(),
                 Token::Keyword(Keyword::UciNewGame) => Ok(Req::UciNewGame),
                 Token::Keyword(Keyword::Position) => self.parse_position_and_moves(),
                 Token::Keyword(Keyword::Go) => self.parse_go(),
@@ -200,6 +217,12 @@ impl<'a> Parser<'a> {
             },
             None => Err(ParseError::NoInput),
         }
+    }
+
+    fn parse_set_option(&mut self) -> ParseResult {
+        // The next token should be 'name'.
+        self.expect_kw(Keyword::Name)?;
+        Ok(Req::SetOption(EngineOpt::MoveOrdering(true)))
     }
 
     fn parse_position_and_moves(&mut self) -> ParseResult {
@@ -418,6 +441,8 @@ impl<'a> Parser<'a> {
             "startpos" => Token::Keyword(Keyword::Startpos),
             "moves" => Token::Keyword(Keyword::Moves),
             "go" => Token::Keyword(Keyword::Go),
+            "name" => Token::Keyword(Keyword::Name),
+            "value" => Token::Keyword(Keyword::Value),
             "searchmoves" => Token::Keyword(Keyword::SearchMoves),
             "ponder" => Token::Keyword(Keyword::Ponder),
             "wtime" => Token::Keyword(Keyword::Wtime),

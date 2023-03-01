@@ -18,13 +18,23 @@ pub struct Params {
     pub tt_cap: u32,
     /// The timing mode to use.
     pub search_mode: TimingMode,
-    // - search type (iterative deepening, fixed depth)
+    pub iterative_deepening: bool,
+    pub ordering: OrderingScheme,
 }
 
 impl Params {
     pub fn take_pos(&mut self) -> Position {
         std::mem::replace(&mut self.pos, Position::blank())
     }
+}
+
+#[derive(Clone, Debug)]
+pub enum OrderingScheme {
+    /// An `OrderedMoveList` is used to order the moves.
+    Ordered,
+    /// No active ordering scheme used. The moves are searched in the arbitrary order
+    /// the move generator produces them.
+    Unordered,
 }
 
 /// A helper structure to construct `Params` with defaults and methods
@@ -38,6 +48,10 @@ pub struct Builder {
     tt_cap: Option<u32>,
     /// The search mode to use.
     search_mode: Option<TimingMode>,
+    /// If true, sequentially searches lower depth first, before full depth.
+    iterative_deepening: bool,
+    /// Which ordering scheme to use for the search.
+    ordering: OrderingScheme,
 }
 
 impl Builder {
@@ -95,7 +109,12 @@ impl Builder {
         Ok(())
     }
 
-    pub fn build(self) -> Params {
+    pub fn set_iterative_deepening(&mut self, id: bool) -> BuilderResult {
+        self.iterative_deepening = id;
+        Ok(())
+    }
+
+    fn build(self) -> Params {
         let pos = match self.pos {
             Some(pos) => pos,
             None => Default::default(),
@@ -115,6 +134,8 @@ impl Builder {
             pos,
             tt_cap,
             search_mode,
+            iterative_deepening: self.iterative_deepening,
+            ordering: self.ordering,
         }
     }
 }
@@ -125,6 +146,8 @@ impl Default for Builder {
             pos: None,
             tt_cap: None,
             search_mode: None,
+            iterative_deepening: true,
+            ordering: OrderingScheme::Ordered,
         }
     }
 }
@@ -140,5 +163,11 @@ pub enum BuilderError {
 impl From<FenError> for BuilderError {
     fn from(fe: FenError) -> Self {
         BuilderError::IllegalFen(fe)
+    }
+}
+
+impl From<Builder> for Params {
+    fn from(b: Builder) -> Self {
+        b.build()
     }
 }

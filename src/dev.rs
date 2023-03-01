@@ -1,7 +1,6 @@
 use core::init::init_globals;
 use core::position::Position;
-use core::CapturesGenType;
-use engine::eval::material_eval;
+use engine::eval::Evaluation;
 use engine::search::ordering::OrderedMoveList;
 use engine::search::params::Builder;
 use engine::search::perft::Perft;
@@ -91,7 +90,7 @@ fn do_quiesce() {
         .set_position(pos, None)
         .expect("couldn't set position");
     let halt = Arc::new(RwLock::new(false));
-    let mut search = Search::new(params_builder.build(), None, halt);
+    let mut search = Search::new(params_builder.into(), None, halt);
 
     println!("Current material eval: {}", search.evaluate());
     println!("Quiescent eval: {}", search.quiesce(-10_000, 10_000));
@@ -111,7 +110,7 @@ fn do_material_eval() {
     let mut pos = Position::from_fen(mate_in_5);
     match pos {
         Ok(ref mut pos) => {
-            println!("Material eval: {}", material_eval(&pos));
+            println!("Material eval: {}", &pos.eval());
         }
         Err(fen_error) => {
             println!("{}", fen_error.msg);

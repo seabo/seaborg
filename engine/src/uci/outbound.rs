@@ -13,6 +13,7 @@ pub enum Res {
     Uciok,
     Readyok,
     Identify,
+    Option,
     BestMove(String),
     Info(Info),
     Quit,
@@ -28,6 +29,13 @@ impl std::fmt::Display for Res {
                 writeln!(f, "id name {} {}", NAME, VERSION);
                 writeln!(f, "id author {}", AUTHORS)
             }
+            Res::Option => writeln!(
+                f,
+                r#"option name Use iterative deepening type check default true
+option name Use move ordering type check default true
+option name Transposition table type check default true
+                "#
+            ),
             Res::BestMove(uci_move) => writeln!(f, "bestmove {}", uci_move),
             Res::Info(info) => writeln!(
                 f,

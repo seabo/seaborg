@@ -11,8 +11,20 @@ pub const ROOK_VALUE: i32 = 500;
 pub const QUEEN_VALUE: i32 = 900;
 pub const KING_VALUE: i32 = 10000;
 
-pub fn material_eval(pos: &Position) -> i32 {
+fn material_eval(pos: &Position) -> i32 {
     material_eval_single_side::<WhiteType>(pos) - material_eval_single_side::<BlackType>(pos)
+}
+
+/// Provide static evaluation capabilities to a type representing a position.
+pub trait Evaluation {
+    /// Return the static evaluation of the current position.
+    fn eval(&self) -> i32;
+}
+
+impl Evaluation for Position {
+    fn eval(&self) -> i32 {
+        material_eval(self)
+    }
 }
 
 #[inline(always)]

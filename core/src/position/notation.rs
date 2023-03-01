@@ -382,7 +382,7 @@ impl Position {
     /// no ambiguity) we correctly identify the move.
     ///
     /// However, ambiguity is not allowed. If more than one move in the position could conceivably
-    /// match the string, then `None` is retuNrned.
+    /// match the string, then `None` is returned.
     ///
     /// If no move is found which matches the string, `None` is returned.
     pub fn move_from_san(&self, mov: &str) -> Option<Move> {

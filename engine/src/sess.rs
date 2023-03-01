@@ -90,6 +90,7 @@ impl Session {
             Req::IsReady => self.isready(),
             Req::UciNewGame => self.new_game(),
             Req::SetPosition((pos, moves)) => self.set_position(pos, moves),
+            Req::SetOption(engine_opt) => todo!(),
             Req::Go(search_mode) => self.go(search_mode),
             Req::Stop => self.stop(),
             Req::Quit => self.quit_session(),
@@ -116,6 +117,7 @@ impl Session {
 
     fn uci(&self) {
         self.comm.send(Res::Identify);
+        self.comm.send(Res::Option);
         // TODO: send available engine options
         self.comm.send(Res::Uciok);
     }

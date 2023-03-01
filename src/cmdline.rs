@@ -1,7 +1,7 @@
 use crate::dev::dev;
 use crate::perft::{perft, PerftArgs};
 use clap::{Parser, Subcommand};
-use engine::sess::Session;
+use engine2::session::Session;
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -27,8 +27,9 @@ pub fn cmdline() {
     let args = Args::parse();
 
     if args.uci {
-        let mut engine_sess = Session::new();
-        engine_sess.main_loop();
+        Session::new().launch();
+        // let mut engine_sess = Session::new();
+        // engine_sess.main_loop();
     } else if args.dev {
         dev();
     } else {

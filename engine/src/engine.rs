@@ -18,6 +18,17 @@ pub enum Command {
     Display,
 }
 
+#[derive(Clone, Debug)]
+/// Configuration options for the engine.
+pub enum EngineOpt {
+    /// Whether or not the transposition table is turned on.
+    TranspositionTable(bool),
+    /// Whether or not iterative deepening is being used.
+    IterativeDeepening(bool),
+    /// Whether or not move ordering is being used.
+    MoveOrdering(bool),
+}
+
 /// Represents an engine report. This is passed back from the `Engine` to the
 /// `Session`, which then forwards it to the `Comm` module via `comm.send()`.
 /// The `Comm` module then takes responsibility for handling the report, usually
@@ -78,7 +89,9 @@ impl Engine {
 
             // Keep the thread alive until we receive a quit command
             while !quit {
-                let cmd = rx.recv().expect("Error: fatal");
+                let cmd = rx
+                    .recv()
+                    .expect("engine thread unable to receive communications from session thread");
 
                 match cmd {
                     Command::Initialize => engine_inner.init(),
@@ -106,7 +119,7 @@ impl Engine {
     pub fn send(&self, cmd: Command) {
         self.tx
             .send(cmd)
-            .expect("failed to send command into engine thread");
+            .expect("session thread failed to send command into engine thread");
     }
 
     /// Halt the search process.
@@ -184,7 +197,7 @@ impl EngineInner {
         // Ensure globals variables like magic numbers have been initialized.
         core::init::init_globals();
         // Build the search params.
-        let params = self.builder.clone().build();
+        let params = self.builder.clone().into();
 
         let mut search = Search::new(params, Some(self.session_tx.clone()), halt);
 
@@ -197,7 +210,7 @@ impl EngineInner {
 
     fn handle_result(&self, res: BuilderResult) {
         match res {
-            Ok(()) => {}
+            Ok(_) => {}
             Err(be) => match be {
                 BuilderError::IllegalFen(fe) => {
                     self.report_error(format!("illegal FEN string: {}", fe));

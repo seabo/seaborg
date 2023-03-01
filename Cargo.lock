@@ -256,6 +256,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine2"
+version = "0.1.0"
+dependencies = [
+ "core",
+ "crossbeam-channel",
+ "log",
+ "separator",
+]
+
+[[package]]
 name = "fuchsia-cprng"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -582,6 +592,7 @@ dependencies = [
  "core",
  "criterion",
  "engine",
+ "engine2",
  "log",
  "separator",
  "simple_logger",
