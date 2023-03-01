@@ -22,16 +22,20 @@ impl Search {
     }
 
     pub fn start_search(mut self, tm: TimingMode) -> (Position, i32) {
-        println!("timing mode: {:?}", tm);
-
         match tm {
             TimingMode::Timed(_) => todo!(),
             TimingMode::MoveTime(_) => todo!(),
             TimingMode::Depth(d) => {
                 self.pvt = PVTable::new(d);
                 let score = self.negamax(d);
-                println!("result: {}", score);
-                self.pvt.print_pv();
+                println!(
+                    "pv: {}",
+                    self.pvt
+                        .pv()
+                        .map(|m| m.to_uci_string())
+                        .collect::<Vec<String>>()
+                        .join(" ")
+                );
                 (self.pos, score)
             }
             TimingMode::Infinite => todo!(),
@@ -103,6 +107,9 @@ mod tests {
                 ("6k1/8/8/3q4/8/8/P7/1KNB4 w - - 0 1", 4, 400),
                 ("2kr3r/ppp1qpb1/5n2/5b1p/6p1/1PNP4/PBPQBPPP/2KRR3 b - - 6 14", 6, 500),
                 ("7k/2R5/8/8/6q1/7p/7P/7K w - - 0 1", 6, 0),
+
+                // Pawn race
+                ("8/6pk/8/8/8/8/P7/K7 w - - 0 1", 22, 800),
             ]
         };
 

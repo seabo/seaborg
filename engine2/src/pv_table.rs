@@ -61,15 +61,23 @@ impl PVTable {
         self.data[k * m + d - 1] = mov;
     }
 
-    pub fn print_pv(&self) {
-        println!(
-            "pv: {}",
-            self.data[0..self.depth]
-                .iter()
-                .rev()
-                .map(|m| m.to_uci_string())
-                .collect::<Vec<String>>()
-                .join(" ")
-        );
+    /// Get an iterator over the principal variation.
+    pub fn pv(&self) -> PVIter<'_> {
+        PVIter {
+            iter: self.data[0..self.depth].iter().rev(),
+        }
+    }
+}
+
+/// An iterator over the principal variation.
+pub struct PVIter<'a> {
+    iter: std::iter::Rev<std::slice::Iter<'a, Move>>,
+}
+
+impl<'a> Iterator for PVIter<'a> {
+    type Item = &'a Move;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next()
     }
 }
