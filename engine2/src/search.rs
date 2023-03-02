@@ -31,7 +31,7 @@ impl Search {
                 self.pvt = PVTable::new(d);
                 // let score = self.alphabeta(-INFINITY, INFINITY, d);
                 // let score = self.negamax(d);
-                let score = self.negamax_with_mate(d);
+                let score = self.alphabeta_with_mate(Score::InfN, Score::Value(10_000), d);
                 println!(
                     "pv: {}",
                     self.pvt
@@ -45,6 +45,51 @@ impl Search {
                 (self.pos, 0)
             }
             TimingMode::Infinite => todo!(),
+        }
+    }
+
+    fn alphabeta_with_mate(&mut self, mut alpha: Score, beta: Score, depth: u8) -> Score {
+        if depth == 0 {
+            // self.quiesce(alpha, beta)
+            self.evaluate_score()
+        } else {
+            let mut max = Score::InfN;
+
+            let moves = self.pos.generate_moves();
+            if moves.is_empty() {
+                self.pvt.end_of_line_at(depth);
+                return if self.pos.in_check() {
+                    Score::Mate(0)
+                } else {
+                    Score::Value(0)
+                };
+            }
+
+            for mov in &moves {
+                self.pos.make_move(*mov);
+                let score = (-self.alphabeta_with_mate(-beta, -alpha, depth - 1)).inc_mate();
+                self.pos.unmake_move();
+
+                if score >= beta {
+                    self.pvt.update_at(depth, *mov);
+                    return score;
+                }
+
+                if score > max {
+                    max = score;
+                    if score > alpha {
+                        self.pvt.update_at(depth, *mov);
+                        alpha = score;
+                    }
+                }
+                if depth == 5 {
+                    println!(
+                        "trying move: {}; score: {:?}, max -> {:?}",
+                        *mov, score, max
+                    );
+                }
+            }
+            max
         }
     }
 
@@ -93,7 +138,7 @@ impl Search {
         }
     }
 
-    fn negamax_with_mate(&mut self, depth: u8) -> Score {
+    fn negamax(&mut self, depth: u8) -> Score {
         if depth == 0 {
             self.evaluate_score()
         } else {
@@ -111,7 +156,7 @@ impl Search {
 
             for mov in &moves {
                 self.pos.make_move(*mov);
-                let score = (-self.negamax_with_mate(depth - 1)).inc_mate();
+                let score = (-self.negamax(depth - 1)).inc_mate();
                 self.pos.unmake_move();
 
                 if score > max {
@@ -120,43 +165,6 @@ impl Search {
                     self.pvt.update_at(depth, *mov);
                     max = score;
                 }
-            }
-
-            max
-        }
-    }
-
-    fn negamax(&mut self, depth: u8) -> i32 {
-        if depth == 0 {
-            //self.quiesce(-INFINITY, INFINITY)
-            self.evaluate()
-        } else {
-            let mut max = -INFINITY;
-
-            let moves = self.pos.generate_moves();
-            if moves.is_empty() {
-                self.pvt.end_of_line_at(depth);
-                return if self.pos.in_check() { -INFINITY } else { 0 };
-            }
-
-            for mov in &moves {
-                self.pos.make_move(*mov);
-                let score = -self.negamax(depth - 1);
-                self.pos.unmake_move();
-
-                if score > max {
-                    self.pvt.update_at(depth, *mov);
-                    max = score;
-                }
-            }
-
-            // If max is still -infinity, then this position is somewhere in a forced mate
-            // sub-tree. Because we never raised max, we haven't populated any of the PVT.
-            // TODO: the best way to do this would be have the shortest mate written into the PV
-            // table, but that's a bit non-trivial.
-            if max == -INFINITY {
-                self.pvt
-                    .update_at(depth, *moves.first().unwrap_or(&core::mov::Move::null()));
             }
 
             max
@@ -255,6 +263,10 @@ mod tests {
                 ("1r4k1/p3p1bp/5P1r/3p2Q1/5R2/3Bq3/P1P2RP1/6K1 b - - 0 33", 6, INFINITY),
                 ("2q4k/3r3p/2p2P2/p7/2P5/P2Q2P1/5bK1/1R6 w - - 0 36", 6, INFINITY),
                 ("5rk1/rb3ppp/p7/1pn1q3/8/1BP2Q2/PP3PPP/3R1RK1 w - - 7 21", 6, INFINITY),
+                // 6rk/p7/1pq1p2p/4P3/5BrP/P3Qp2/1P1R1K1P/5R2 b - - 0 34
+                // ("6k1/1p2qppp/4p3/8/p2PN3/P5QP/1r4PK/8 w - - 0 40", 5, Score::Mate(5)),
+                // ("2R1bk2/p5pp/5p2/8/3n4/3p1B1P/PP1q1PP1/4R1K1 w - - 0 27", 5, Score::Mate(5)),
+                // ("8/7R/r4pr1/5pkp/1R6/P5P1/5PK1/8 w - - 0 42", 5, Score::Mate(5)),
 
                 // Winning material
                 ("rn1q1rk1/5pp1/pppb4/5Q1p/3P4/3BPP1P/PP3PK1/R1B2R2 b - - 1 15", 6, 300),
