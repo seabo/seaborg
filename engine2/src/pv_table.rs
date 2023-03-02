@@ -33,7 +33,7 @@ impl PVTable {
     /// Called when a move searched at depth `d` improves the score. Copies the current principal
     /// variation from depth `d-1` and copies it into the depth `d` column of the table, appending
     /// the new move to the end.
-    pub fn update_at(&mut self, d: u8, mov: Move) {
+    pub fn copy_to(&mut self, d: u8, mov: Move) {
         match d {
             1 => self.update_leaf(mov),
             n => self.update_internal(n, mov),
@@ -42,7 +42,7 @@ impl PVTable {
 
     /// Called when a move searched at depth `d` turns out to be a checkmate or stalemate position,
     /// meaning that there is no variation following this point, and no move to include.
-    pub fn end_of_line_at(&mut self, d: u8) {
+    pub fn pv_leaf_at(&mut self, d: u8) {
         let m = self.depth;
         let d = d as usize;
         let k = m - d;

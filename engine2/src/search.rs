@@ -2,6 +2,7 @@ use super::eval::Evaluation;
 use super::pv_table::PVTable;
 use super::score::Score;
 use super::time::TimingMode;
+use super::trace::Tracer;
 
 use core::position::{Player, Position};
 
@@ -15,6 +16,8 @@ pub struct Search {
     pos: Position,
     /// Table for tracking the principal variation of the search.
     pvt: PVTable,
+    /// Tracer to track search stats.
+    trace: Tracer,
 }
 
 impl Search {
@@ -22,6 +25,7 @@ impl Search {
         Self {
             pos,
             pvt: PVTable::new(8),
+            trace: Tracer::new(),
         }
     }
 
@@ -30,10 +34,16 @@ impl Search {
             TimingMode::Timed(_) => todo!(),
             TimingMode::MoveTime(_) => todo!(),
             TimingMode::Depth(d) => {
+                // Some bookeeping and prep.
                 self.pvt = PVTable::new(d);
+                self.trace.commence_search();
+
                 // let score = self.alphabeta(-INFINITY, INFINITY, d);
                 // let score = self.negamax(d);
                 let score = self.alphabeta_with_mate(Score::InfN, Score::InfP, d);
+                println!("{} nodes", self.trace.nodes_visited());
+                println!("{} nps", self.trace.nps());
+
                 println!(
                     "pv: {}",
                     self.pvt
@@ -55,11 +65,13 @@ impl Search {
             // self.quiesce(alpha, beta)
             self.evaluate_score()
         } else {
+            self.trace.visit_node();
+
             let mut max = Score::InfN;
 
             let moves = self.pos.generate_moves();
             if moves.is_empty() {
-                self.pvt.end_of_line_at(depth);
+                self.pvt.pv_leaf_at(depth);
                 return if self.pos.in_check() {
                     Score::Mate(0)
                 } else {
@@ -69,7 +81,6 @@ impl Search {
 
             for mov in &moves {
                 self.pos.make_move(*mov);
-
                 let score = self
                     .alphabeta_with_mate(-beta, -alpha, depth - 1)
                     .neg()
@@ -77,14 +88,13 @@ impl Search {
                 self.pos.unmake_move();
 
                 if score >= beta {
-                    self.pvt.update_at(depth, *mov);
                     return score;
                 }
 
                 if score > max {
+                    self.pvt.copy_to(depth, *mov);
                     max = score;
                     if score > alpha {
-                        self.pvt.update_at(depth, *mov);
                         alpha = score;
                     }
                 }
@@ -103,7 +113,7 @@ impl Search {
 
             let moves = self.pos.generate_moves();
             if moves.is_empty() {
-                self.pvt.end_of_line_at(depth);
+                self.pvt.pv_leaf_at(depth);
                 return if self.pos.in_check() { -INFINITY } else { 0 };
             }
 
@@ -113,14 +123,13 @@ impl Search {
                 self.pos.unmake_move();
 
                 if score >= beta {
-                    self.pvt.update_at(depth, *mov);
                     return score; // fail-soft beta-cutoff
                 }
 
                 if score > max {
                     max = score;
                     if score > alpha {
-                        self.pvt.update_at(depth, *mov);
+                        self.pvt.copy_to(depth, *mov);
                         alpha = score;
                     }
                 }
@@ -132,7 +141,7 @@ impl Search {
             // table, but that's a bit non-trivial.
             if max == -INFINITY {
                 self.pvt
-                    .update_at(depth, *moves.first().unwrap_or(&core::mov::Move::null()));
+                    .copy_to(depth, *moves.first().unwrap_or(&core::mov::Move::null()));
             }
 
             max
@@ -147,7 +156,7 @@ impl Search {
 
             let moves = self.pos.generate_moves();
             if moves.is_empty() {
-                self.pvt.end_of_line_at(depth);
+                self.pvt.pv_leaf_at(depth);
                 return if self.pos.in_check() {
                     Score::Mate(0)
                 } else {
@@ -163,7 +172,7 @@ impl Search {
                 if score > max {
                     // Because every move should have a score > InfN, this will always get called
                     // at least once.
-                    self.pvt.update_at(depth, *mov);
+                    self.pvt.copy_to(depth, *mov);
                     max = score;
                 }
             }
@@ -268,6 +277,7 @@ mod tests {
                 // ("6k1/1p2qppp/4p3/8/p2PN3/P5QP/1r4PK/8 w - - 0 40", 5, Score::Mate(5)),
                 // ("2R1bk2/p5pp/5p2/8/3n4/3p1B1P/PP1q1PP1/4R1K1 w - - 0 27", 5, Score::Mate(5)),
                 // ("8/7R/r4pr1/5pkp/1R6/P5P1/5PK1/8 w - - 0 42", 5, Score::Mate(5)),
+                // ("r5k1/2qn2pp/2nN1p2/3pP2Q/3P1p2/5N2/4B1PP/1b4K1 w - - 0 25", 7, Score::Mate(7)),
 
                 // Winning material
                 ("rn1q1rk1/5pp1/pppb4/5Q1p/3P4/3BPP1P/PP3PK1/R1B2R2 b - - 1 15", 6, 300),

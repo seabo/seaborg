@@ -21,12 +21,26 @@ impl Tracer {
         }
     }
 
+    /// To be called immediately before a new search commences. Used for timing of NPS measurements.
     pub fn commence_search(&mut self) {
         self.start_time = Instant::now();
     }
 
+    /// To be called whenever the search visits a new node.
     #[inline(always)]
     pub fn visit_node(&mut self) {
         self.nodes_visited += 1;
+    }
+
+    /// The number of nodes visited.
+    pub fn nodes_visited(&self) -> usize {
+        self.nodes_visited
+    }
+
+    /// The nodes per second (NPS) of the search as of call-time. Calculated as total number of
+    /// nodes visited so far divided by time since commence search was (last) called.
+    pub fn nps(&self) -> usize {
+        let elapsed = self.start_time.elapsed().as_micros();
+        self.nodes_visited * 1_000_000 / (elapsed as usize)
     }
 }
