@@ -1,5 +1,6 @@
 use super::eval::Evaluation;
 use super::pv_table::PVTable;
+use super::score::Score;
 use super::time::TimingMode;
 
 use core::position::{Player, Position};
@@ -29,7 +30,8 @@ impl Search {
             TimingMode::Depth(d) => {
                 self.pvt = PVTable::new(d);
                 // let score = self.alphabeta(-INFINITY, INFINITY, d);
-                let score = self.negamax(d);
+                // let score = self.negamax(d);
+                let score = self.negamax_with_mate(d);
                 println!(
                     "pv: {}",
                     self.pvt
@@ -38,7 +40,9 @@ impl Search {
                         .collect::<Vec<String>>()
                         .join(" ")
                 );
-                (self.pos, score)
+                // (self.pos, score)
+                println!("{:?}", score);
+                (self.pos, 0)
             }
             TimingMode::Infinite => todo!(),
         }
@@ -83,6 +87,39 @@ impl Search {
             if max == -INFINITY {
                 self.pvt
                     .update_at(depth, *moves.first().unwrap_or(&core::mov::Move::null()));
+            }
+
+            max
+        }
+    }
+
+    fn negamax_with_mate(&mut self, depth: u8) -> Score {
+        if depth == 0 {
+            self.evaluate_score()
+        } else {
+            let mut max = Score::InfN;
+
+            let moves = self.pos.generate_moves();
+            if moves.is_empty() {
+                self.pvt.end_of_line_at(depth);
+                return if self.pos.in_check() {
+                    Score::Mate(0)
+                } else {
+                    Score::Value(0)
+                };
+            }
+
+            for mov in &moves {
+                self.pos.make_move(*mov);
+                let score = (-self.negamax_with_mate(depth - 1)).inc_mate();
+                self.pos.unmake_move();
+
+                if score > max {
+                    // Because every move should have a score > InfN, this will always get called
+                    // at least once.
+                    self.pvt.update_at(depth, *mov);
+                    max = score;
+                }
             }
 
             max
@@ -134,6 +171,17 @@ impl Search {
             // TODO: shouldn't we check for stalemate here too?
         } else {
             self.pos.material_eval() * self.pov()
+        }
+    }
+
+    /// Returns the static evaluation, from the perspective of the side to move.
+    #[inline(always)]
+    fn evaluate_score(&mut self) -> Score {
+        if self.pos.in_checkmate() {
+            Score::Mate(0)
+            // TODO: shouldn't we check for stalemate here too?
+        } else {
+            Score::Value(self.pos.material_eval() * self.pov())
         }
     }
 
