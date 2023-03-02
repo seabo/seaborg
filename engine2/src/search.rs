@@ -46,9 +46,11 @@ impl Search {
 
     fn alphabeta(&mut self, mut alpha: i32, beta: i32, depth: u8) -> i32 {
         if depth == 0 {
-            self.quiesce(alpha, beta)
+            // self.quiesce(alpha, beta)
+            self.evaluate()
         } else {
-            let mut best_score = -INFINITY;
+            let mut max = -INFINITY;
+
             let moves = self.pos.generate_moves();
             if moves.is_empty() {
                 self.pvt.end_of_line_at(depth);
@@ -59,25 +61,35 @@ impl Search {
                 self.pos.make_move(*mov);
                 let score = -self.alphabeta(-beta, -alpha, depth - 1);
                 self.pos.unmake_move();
+
                 if score >= beta {
+                    self.pvt.update_at(depth, *mov);
                     return score; // fail-soft beta-cutoff
                 }
-                if score > best_score {
-                    self.pvt.update_at(depth, *mov);
-                    best_score = score;
+
+                if score > max {
+                    max = score;
                     if score > alpha {
+                        self.pvt.update_at(depth, *mov);
                         alpha = score;
                     }
                 }
             }
 
-            best_score
+            // If max is still -infinity, then this position is somewhere in a forced mate
+            // sub-tree. Because we never raised max, we haven't populated any of the PVT.
+            // TODO: the best way to do this would be to have the shortest mate written into the PV
+            // table, but that's a bit non-trivial.
+            if max == -INFINITY {
+                self.pvt
+                    .update_at(depth, *moves.first().unwrap_or(&core::mov::Move::null()));
+            }
+
+            max
         }
     }
 
     fn negamax(&mut self, depth: u8) -> i32 {
-        // Basic negamax search
-
         if depth == 0 {
             //self.quiesce(-INFINITY, INFINITY)
             self.evaluate()
