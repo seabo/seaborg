@@ -5,6 +5,8 @@ use super::time::TimingMode;
 
 use core::position::{Player, Position};
 
+use std::ops::Neg;
+
 pub const INFINITY: i32 = 10_000;
 
 /// Manages the search.
@@ -23,7 +25,7 @@ impl Search {
         }
     }
 
-    pub fn start_search(mut self, tm: TimingMode) -> (Position, i32) {
+    pub fn start_search(mut self, tm: TimingMode) -> Position {
         match tm {
             TimingMode::Timed(_) => todo!(),
             TimingMode::MoveTime(_) => todo!(),
@@ -31,7 +33,7 @@ impl Search {
                 self.pvt = PVTable::new(d);
                 // let score = self.alphabeta(-INFINITY, INFINITY, d);
                 // let score = self.negamax(d);
-                let score = self.alphabeta_with_mate(Score::InfN, Score::Value(10_000), d);
+                let score = self.alphabeta_with_mate(Score::InfN, Score::InfP, d);
                 println!(
                     "pv: {}",
                     self.pvt
@@ -42,7 +44,7 @@ impl Search {
                 );
                 // (self.pos, score)
                 println!("{:?}", score);
-                (self.pos, 0)
+                self.pos
             }
             TimingMode::Infinite => todo!(),
         }
@@ -61,13 +63,17 @@ impl Search {
                 return if self.pos.in_check() {
                     Score::Mate(0)
                 } else {
-                    Score::Value(0)
+                    Score::Cp(0)
                 };
             }
 
             for mov in &moves {
                 self.pos.make_move(*mov);
-                let score = (-self.alphabeta_with_mate(-beta, -alpha, depth - 1)).inc_mate();
+
+                let score = self
+                    .alphabeta_with_mate(-beta, -alpha, depth - 1)
+                    .neg()
+                    .inc_mate();
                 self.pos.unmake_move();
 
                 if score >= beta {
@@ -82,13 +88,8 @@ impl Search {
                         alpha = score;
                     }
                 }
-                if depth == 5 {
-                    println!(
-                        "trying move: {}; score: {:?}, max -> {:?}",
-                        *mov, score, max
-                    );
-                }
             }
+
             max
         }
     }
@@ -150,13 +151,13 @@ impl Search {
                 return if self.pos.in_check() {
                     Score::Mate(0)
                 } else {
-                    Score::Value(0)
+                    Score::Cp(0)
                 };
             }
 
             for mov in &moves {
                 self.pos.make_move(*mov);
-                let score = (-self.negamax(depth - 1)).inc_mate();
+                let score = self.negamax(depth - 1).neg().inc_mate();
                 self.pos.unmake_move();
 
                 if score > max {
@@ -189,7 +190,7 @@ impl Search {
             Score::Mate(0)
             // TODO: shouldn't we check for stalemate here too?
         } else {
-            Score::Value(self.pos.material_eval() * self.pov())
+            Score::Cp(self.pos.material_eval() * self.pov())
         }
     }
 

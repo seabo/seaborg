@@ -5,7 +5,7 @@
 //!
 //! Essentially, we want an order that looks like the following:
 //! -∞, -#1, -#2, ..., -#100, ..., -9,999, -9,998, ..., -2, -1, 0, 1, 2, ..., 9,998, 9,999, ...,
-//! #100, #99, ..., #2, #1.
+//! #100, #99, ..., #2, #1, ∞
 //!
 //! In other words:
 //! * There is a negative infinity, for use comparing against everything else during search
@@ -26,10 +26,13 @@ use std::ops::Neg;
 pub enum Score {
     /// Negative infinity. This is only included to be used as a starting point for when we loop
     /// over the legal moves in a position. We want every move to have a value greater than this,
-    /// so that it can be progressively increased. We do not need positive infinity.
+    /// so that it can be progressively increased.
     InfN,
+    /// Positive infinity. This is need so that we can negate `InfN`, particularly in places like
+    /// recursive alpha-beta calls.
+    InfP,
     /// A centipawn evaluation.
-    Value(i32),
+    Cp(i32),
     /// A mate-in-N position. Here, N refers to _ply_ depth to mate, not _full move_ depth to mate,
     /// as is common in chess literature.
     Mate(i8),
@@ -45,8 +48,9 @@ impl Score {
             Score::Mate(n) if n >= 0 => Score::Mate(n + 1),
             Score::Mate(n) if n < 0 => Score::Mate(n - 1),
             Score::Mate(_) => unreachable!("all variants covered above"),
-            Score::Value(v) => Score::Value(v),
+            Score::Cp(v) => Score::Cp(v),
             Score::InfN => Score::InfN,
+            Score::InfP => Score::InfP,
         }
     }
 }
@@ -62,15 +66,19 @@ impl Ord for Score {
         match (*self, *other) {
             (Score::InfN, Score::InfN) => Ordering::Equal,
             (Score::InfN, _) => Ordering::Less, // InfN is less than everything but itself
-            (Score::Value(_), Score::InfN) => Ordering::Greater,
-            (Score::Value(v1), Score::Value(v2)) => v1.cmp(&v2),
-            (Score::Value(_), Score::Mate(m)) if m > 0 => Ordering::Less,
-            (Score::Value(_), Score::Mate(m)) if m < 0 => Ordering::Greater,
-            (Score::Value(_), Score::Mate(_)) => unreachable!("should never have a Score::Mate(0)"),
+            (Score::InfP, Score::InfP) => Ordering::Equal,
+            (Score::InfP, _) => Ordering::Greater, // InfP is greater than everything but itself
+            (Score::Cp(_), Score::InfN) => Ordering::Greater,
+            (Score::Cp(_), Score::InfP) => Ordering::Less,
+            (Score::Cp(v1), Score::Cp(v2)) => v1.cmp(&v2),
+            (Score::Cp(_), Score::Mate(m)) if m > 0 => Ordering::Less,
+            (Score::Cp(_), Score::Mate(m)) if m < 0 => Ordering::Greater,
+            (Score::Cp(_), Score::Mate(_)) => unreachable!("should never have a Score::Mate(0)"),
             (Score::Mate(_), Score::InfN) => Ordering::Greater,
-            (Score::Mate(m), Score::Value(_)) if m > 0 => Ordering::Greater,
-            (Score::Mate(m), Score::Value(_)) if m < 0 => Ordering::Less,
-            (Score::Mate(_), Score::Value(_)) => unreachable!("should never have a Score::Mate(0)"),
+            (Score::Mate(_), Score::InfP) => Ordering::Less,
+            (Score::Mate(m), Score::Cp(_)) if m > 0 => Ordering::Greater,
+            (Score::Mate(m), Score::Cp(_)) if m < 0 => Ordering::Less,
+            (Score::Mate(_), Score::Cp(_)) => unreachable!("should never have a Score::Mate(0)"),
             (Score::Mate(m1), Score::Mate(m2)) if m1 > 0 && m2 < 0 => Ordering::Greater,
             (Score::Mate(m1), Score::Mate(m2)) if m1 > 0 && m2 > 0 => m2.cmp(&m1),
             (Score::Mate(m1), Score::Mate(m2)) if m1 < 0 && m2 < 0 => m2.cmp(&m1),
@@ -85,8 +93,9 @@ impl Neg for Score {
 
     fn neg(self) -> Self::Output {
         match self {
-            Score::InfN => unreachable!("should never attempt to negate a negative infinity"),
-            Score::Value(v) => Score::Value(-v),
+            Score::InfN => Score::InfP,
+            Score::InfP => Score::InfN,
+            Score::Cp(v) => Score::Cp(-v),
             Score::Mate(n) => Score::Mate(-n),
         }
     }
@@ -98,18 +107,18 @@ mod tests {
 
     #[test]
     fn it_works() {
-        assert!(Score::InfN < Score::Value(-3));
-        assert!(Score::InfN < Score::Value(0));
-        assert!(Score::InfN < Score::Value(999));
-        assert!(Score::Value(999) > Score::InfN);
+        assert!(Score::InfN < Score::Cp(-3));
+        assert!(Score::InfN < Score::Cp(0));
+        assert!(Score::InfN < Score::Cp(999));
+        assert!(Score::Cp(999) > Score::InfN);
         assert!(Score::Mate(-3) < Score::Mate(3));
         assert!(Score::InfN == Score::InfN);
         assert!(Score::Mate(3) == Score::Mate(3));
         assert!(Score::Mate(3) > Score::Mate(4));
         assert!(Score::Mate(-44) > Score::Mate(-2)); // "If we must get mated, it's better for it
                                                      // to take a long time."
-        assert!(Score::Value(-10) > Score::Mate(-4));
-        assert!(Score::Value(-10) < Score::Mate(4));
-        assert!(Score::Mate(1) > Score::Value(300));
+        assert!(Score::Cp(-10) > Score::Mate(-4));
+        assert!(Score::Cp(-10) < Score::Mate(4));
+        assert!(Score::Mate(1) > Score::Cp(300));
     }
 }

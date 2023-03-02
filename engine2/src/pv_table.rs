@@ -87,6 +87,8 @@ impl<'a> Iterator for PVIter<'a> {
     type Item = &'a Move;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next()
+        self.iter
+            .next()
+            .and_then(|m| if m.is_null() { None } else { Some(m) })
     }
 }
