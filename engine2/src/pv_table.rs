@@ -40,6 +40,15 @@ impl PVTable {
         }
     }
 
+    /// Called when a move searched at depth `d` turns out to be a checkmate or stalemate position,
+    /// meaning that there is no variation following this point, and no move to include.
+    pub fn end_of_line_at(&mut self, d: u8) {
+        let m = self.depth;
+        let d = d as usize;
+        let k = m - d;
+        let _ = &mut self.data[(k * m)..(k * m + d)].fill(Move::null());
+    }
+
     #[inline(always)]
     fn update_leaf(&mut self, mov: Move) {
         // Safety: we never mutate `self.depth` after the `PVTable` struct is created, so this

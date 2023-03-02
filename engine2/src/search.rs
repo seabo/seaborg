@@ -10,6 +10,7 @@ pub const INFINITY: i32 = 10_000;
 pub struct Search {
     /// The internal board position.
     pos: Position,
+    /// Table for tracking the principal variation of the search.
     pvt: PVTable,
 }
 
@@ -27,6 +28,7 @@ impl Search {
             TimingMode::MoveTime(_) => todo!(),
             TimingMode::Depth(d) => {
                 self.pvt = PVTable::new(d);
+                // let score = self.alphabeta(-INFINITY, INFINITY, d);
                 let score = self.negamax(d);
                 println!(
                     "pv: {}",
@@ -42,38 +44,133 @@ impl Search {
         }
     }
 
+    fn alphabeta(&mut self, mut alpha: i32, beta: i32, depth: u8) -> i32 {
+        if depth == 0 {
+            self.quiesce(alpha, beta)
+        } else {
+            let mut best_score = -INFINITY;
+            let moves = self.pos.generate_moves();
+            if moves.is_empty() {
+                self.pvt.end_of_line_at(depth);
+                return if self.pos.in_check() { -INFINITY } else { 0 };
+            }
+
+            for mov in &moves {
+                self.pos.make_move(*mov);
+                let score = -self.alphabeta(-beta, -alpha, depth - 1);
+                self.pos.unmake_move();
+                if score >= beta {
+                    return score; // fail-soft beta-cutoff
+                }
+                if score > best_score {
+                    self.pvt.update_at(depth, *mov);
+                    best_score = score;
+                    if score > alpha {
+                        alpha = score;
+                    }
+                }
+            }
+
+            best_score
+        }
+    }
+
     fn negamax(&mut self, depth: u8) -> i32 {
         // Basic negamax search
 
         if depth == 0 {
-            let e = self.pos.material_eval()
-                * if self.pos.turn() == Player::WHITE {
-                    1
-                } else {
-                    -1
-                };
-
-            e
+            //self.quiesce(-INFINITY, INFINITY)
+            self.evaluate()
         } else {
             let mut max = -INFINITY;
 
             let moves = self.pos.generate_moves();
-            if moves.len() == 0 {
+            if moves.is_empty() {
+                self.pvt.end_of_line_at(depth);
                 return if self.pos.in_check() { -INFINITY } else { 0 };
             }
 
             for mov in &moves {
                 self.pos.make_move(*mov);
                 let score = -self.negamax(depth - 1);
+                self.pos.unmake_move();
+
                 if score > max {
                     self.pvt.update_at(depth, *mov);
                     max = score;
                 }
-                self.pos.unmake_move();
+            }
+
+            // If max is still -infinity, then this position is somewhere in a forced mate
+            // sub-tree. Because we never raised max, we haven't populated any of the PVT.
+            // TODO: the best way to do this would be have the shortest mate written into the PV
+            // table, but that's a bit non-trivial.
+            if max == -INFINITY {
+                self.pvt
+                    .update_at(depth, *moves.first().unwrap_or(&core::mov::Move::null()));
             }
 
             max
         }
+    }
+
+    /// Returns the static evaluation, from the perspective of the side to move.
+    #[inline(always)]
+    fn evaluate(&mut self) -> i32 {
+        if self.pos.in_checkmate() {
+            -INFINITY
+            // TODO: shouldn't we check for stalemate here too?
+        } else {
+            self.pos.material_eval() * self.pov()
+        }
+    }
+
+    /// Returns 1 if the player to move is White, -1 if Black. Useful wherever we are using
+    /// evaluation functions in a negamax framework, and have to return the evaluation from the
+    /// perspective of the side to move.
+    #[inline(always)]
+    fn pov(&self) -> i32 {
+        match self.pos.turn() {
+            Player::WHITE => 1,
+            Player::BLACK => -1,
+        }
+    }
+
+    fn quiesce(&mut self, mut alpha: i32, beta: i32) -> i32 {
+        let stand_pat = self.evaluate();
+
+        if stand_pat >= beta {
+            return beta;
+        }
+
+        if alpha < stand_pat {
+            alpha = stand_pat;
+        }
+
+        let captures = self.pos.generate_captures();
+        let mut score: i32;
+
+        if captures.is_empty() {
+            // If we have no captures to look at, we might actually be in checkmate. Return
+            // -infinity if so.
+            return -INFINITY;
+        }
+
+        for mov in &captures {
+            self.pos.make_move(*mov);
+            score = -self.quiesce(-beta, -alpha);
+            self.pos.unmake_move();
+
+            if score >= beta {
+                return beta;
+            }
+
+            if score > alpha {
+                alpha = score;
+            }
+        }
+
+        alpha
     }
 }
 

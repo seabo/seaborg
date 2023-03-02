@@ -7,4 +7,5 @@ pub mod pv_table;
 pub mod search;
 pub mod session;
 pub mod time;
+pub mod trace;
 pub mod uci;
