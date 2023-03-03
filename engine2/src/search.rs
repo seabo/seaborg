@@ -40,7 +40,7 @@ impl Search {
 
                 // let score = self.alphabeta(-INFINITY, INFINITY, d);
                 // let score = self.negamax(d);
-                let score = self.alphabeta_with_mate(Score::InfN, Score::InfP, d);
+                let score = self.alphabeta(Score::InfN, Score::InfP, d);
                 println!("{} nodes", self.trace.nodes_visited());
                 println!("{} nps", self.trace.nps());
 
@@ -60,7 +60,7 @@ impl Search {
         }
     }
 
-    fn alphabeta_with_mate(&mut self, mut alpha: Score, beta: Score, depth: u8) -> Score {
+    fn alphabeta(&mut self, mut alpha: Score, beta: Score, depth: u8) -> Score {
         self.trace.visit_node();
         if depth == 0 {
             // self.quiesce(alpha, beta)
@@ -80,10 +80,7 @@ impl Search {
 
             for mov in &moves {
                 self.pos.make_move(*mov);
-                let score = self
-                    .alphabeta_with_mate(-beta, -alpha, depth - 1)
-                    .neg()
-                    .inc_mate();
+                let score = self.alphabeta(-beta, -alpha, depth - 1).neg().inc_mate();
                 self.pos.unmake_move();
 
                 if score >= beta {
@@ -97,52 +94,6 @@ impl Search {
                         alpha = score;
                     }
                 }
-            }
-
-            max
-        }
-    }
-
-    fn alphabeta(&mut self, mut alpha: i32, beta: i32, depth: u8) -> i32 {
-        self.trace.visit_node();
-
-        if depth == 0 {
-            // self.quiesce(alpha, beta)
-            self.evaluate()
-        } else {
-            let mut max = -INFINITY;
-
-            let moves = self.pos.generate_moves();
-            if moves.is_empty() {
-                self.pvt.pv_leaf_at(depth);
-                return if self.pos.in_check() { -INFINITY } else { 0 };
-            }
-
-            for mov in &moves {
-                self.pos.make_move(*mov);
-                let score = -self.alphabeta(-beta, -alpha, depth - 1);
-                self.pos.unmake_move();
-
-                if score >= beta {
-                    return score; // fail-soft beta-cutoff
-                }
-
-                if score > max {
-                    max = score;
-                    if score > alpha {
-                        self.pvt.copy_to(depth, *mov);
-                        alpha = score;
-                    }
-                }
-            }
-
-            // If max is still -infinity, then this position is somewhere in a forced mate
-            // sub-tree. Because we never raised max, we haven't populated any of the PVT.
-            // TODO: the best way to do this would be to have the shortest mate written into the PV
-            // table, but that's a bit non-trivial.
-            if max == -INFINITY {
-                self.pvt
-                    .copy_to(depth, *moves.first().unwrap_or(&core::mov::Move::null()));
             }
 
             max
@@ -257,18 +208,13 @@ impl Search {
 mod tests {
     use super::*;
 
-    /// A regression test to ensure that our search routine produces the expected results for a
-    /// range of positions.
-    #[test]
-    fn tactics() {
-        core::init::init_globals();
-
+    fn suite() -> Vec<(&'static str, u8, Score)> {
         // Test position tuples have the form:
         // (fen, depth, value from perpsective of side to move)
 
         #[rustfmt::skip]
-        let suite = {
-            [
+        {
+            vec![
                 // Mates
                 ("8/2R2pp1/k3p3/8/5Bn1/6P1/5r1r/1R4K1 w - - 4 3", 6, Score::mate(5)),
                 ("5R2/1p1r2pk/p1n1B2p/2P1q3/2Pp4/P6b/1B1P4/2K3R1 w - - 5 3", 6, Score::mate(5)),
@@ -294,7 +240,16 @@ mod tests {
                 // Pawn race
                 // ("8/6pk/8/8/8/8/P7/K7 w - - 0 1", 22, Score::cp(800)),
             ]
-        };
+        }
+    }
+
+    /// A regression test to ensure that our search routine produces the expected results for a
+    /// range of positions.
+    #[test]
+    fn tactics() {
+        core::init::init_globals();
+
+        let suite = suite();
 
         for (fen, depth, score) in suite {
             let pos = Position::from_fen(fen).unwrap();
