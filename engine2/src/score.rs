@@ -29,10 +29,10 @@ pub struct Score(i32);
 
 impl Score {
     /// Represents negative infinity.
-    pub const InfN: Score = Score(-30_000);
+    pub const INF_N: Score = Score(-30_000);
 
     /// Represents positive infinity.
-    pub const InfP: Score = Score(30_000);
+    pub const INF_P: Score = Score(30_000);
 
     /// Increment the depth to mate if this is a mate score. Otherwise, leave.
     ///
@@ -105,12 +105,12 @@ mod tests {
 
     #[test]
     fn it_works() {
-        assert!(Score::InfN < Score::cp(-3));
-        assert!(Score::InfN < Score::cp(0));
-        assert!(Score::InfN < Score::cp(999));
-        assert!(Score::cp(999) > Score::InfN);
+        assert!(Score::INF_N < Score::cp(-3));
+        assert!(Score::INF_N < Score::cp(0));
+        assert!(Score::INF_N < Score::cp(999));
+        assert!(Score::cp(999) > Score::INF_N);
         assert!(Score::mate(-3) < Score::mate(3));
-        assert!(Score::InfN == Score::InfN);
+        assert!(Score::INF_N == Score::INF_N);
         assert!(Score::mate(3) == Score::mate(3));
         assert!(Score::mate(3) > Score::mate(4));
         assert!(Score::mate(-44) > Score::mate(-2)); // "If we must get mated, it's better for it
@@ -118,7 +118,7 @@ mod tests {
         assert!(Score::cp(-10) > Score::mate(-4));
         assert!(Score::cp(-10) < Score::mate(4));
         assert!(Score::mate(1) > Score::cp(300));
-        assert!(Score::cp(0) > Score::InfN);
-        assert!(Score::cp(0) < Score::InfP);
+        assert!(Score::cp(0) > Score::INF_N);
+        assert!(Score::cp(0) < Score::INF_P);
     }
 }

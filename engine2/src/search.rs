@@ -38,10 +38,18 @@ impl Search {
                 self.pvt = PVTable::new(d);
                 self.trace.commence_search();
 
-                let score = self.negamax(d);
-                // let score = self.alphabeta(Score::InfN, Score::InfP, d);
+                // let score = self.negamax(d);
+                let score = self.alphabeta(Score::INF_N, Score::INF_P, d);
+
+                self.trace.end_search();
+
                 println!("{} nodes", self.trace.nodes_visited());
-                println!("{} nps", self.trace.nps());
+                println!(
+                    "{} nps",
+                    self.trace
+                        .nps()
+                        .expect("`end_search` was called, so this should always work")
+                );
 
                 println!(
                     "pv: {}",
@@ -66,7 +74,7 @@ impl Search {
             // self.quiesce_with_score(alpha, beta)
             self.evaluate()
         } else {
-            let mut max = Score::InfN;
+            let mut max = Score::INF_N;
 
             let moves = self.pos.generate_moves();
             if moves.is_empty() {
@@ -106,7 +114,7 @@ impl Search {
         if depth == 0 {
             self.evaluate()
         } else {
-            let mut max = Score::InfN;
+            let mut max = Score::INF_N;
 
             let moves = self.pos.generate_moves();
             if moves.is_empty() {
@@ -241,7 +249,7 @@ mod tests {
     /// A regression test to ensure that our search routine produces the expected results for a
     /// range of positions.
     #[test]
-    fn tactics() {
+    fn gives_correct_answers() {
         core::init::init_globals();
 
         let suite = suite();
@@ -252,6 +260,32 @@ mod tests {
             let (s, _) = search.start_search(TimingMode::Depth(depth));
 
             assert_eq!(s, score);
+        }
+    }
+
+    /// Ensure that alphabeta search gives identical result to negamax.
+    #[test]
+    fn ab_equals_negamax() {
+        core::init::init_globals();
+
+        let suite = #[rustfmt::skip]
+        {
+            vec![
+                ("2r2k2/pb1q1pp1/1p1b1nB1/3p4/3Nr3/2P1P3/PPQB1PPP/R3K2R w KQ - 3 23", 5, Score::cp(600)),
+                ("1n1r1r1k/pp2Ppbp/6p1/4p3/PP2R3/5N1P/6P1/1RBQ2K1 b - - 0 25", 5, Score::cp(100)),
+                ("r3k2r/ppb2pp1/2pp3p/P4N2/1PP1n2q/7P/2PB1PP1/R2QR1K1 b kq - 3 17", 3, Score::cp(600)),
+                ("r3k2r/1bqp1ppp/p3pn2/1p2n3/1b2P3/2N2B2/PPPBNPPP/R2QR1K1 w kq - 6 12", 5, Score::cp(100)),
+            ]
+        };
+
+        for (fen, depth, score) in suite {
+            let pos = Position::from_fen(fen).unwrap();
+            let mut search = Search::new(pos);
+            let s_negamax = search.negamax(depth);
+            let s_alphabeta = search.alphabeta(Score::INF_N, Score::INF_P, depth);
+
+            assert_eq!(s_negamax, s_alphabeta);
+            assert_eq!(score, s_negamax);
         }
     }
 }
