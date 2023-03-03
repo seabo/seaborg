@@ -77,6 +77,7 @@ impl Score {
 impl Neg for Score {
     type Output = Self;
 
+    #[inline(always)]
     fn neg(self) -> Self::Output {
         Self(-self.0)
     }

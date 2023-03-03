@@ -38,9 +38,8 @@ impl Search {
                 self.pvt = PVTable::new(d);
                 self.trace.commence_search();
 
-                // let score = self.alphabeta(-INFINITY, INFINITY, d);
-                // let score = self.negamax(d);
-                let score = self.alphabeta(Score::InfN, Score::InfP, d);
+                let score = self.negamax(d);
+                // let score = self.alphabeta(Score::InfN, Score::InfP, d);
                 println!("{} nodes", self.trace.nodes_visited());
                 println!("{} nps", self.trace.nps());
 
@@ -62,9 +61,10 @@ impl Search {
 
     fn alphabeta(&mut self, mut alpha: Score, beta: Score, depth: u8) -> Score {
         self.trace.visit_node();
+
         if depth == 0 {
-            // self.quiesce(alpha, beta)
-            self.evaluate_score()
+            // self.quiesce_with_score(alpha, beta)
+            self.evaluate()
         } else {
             let mut max = Score::InfN;
 
@@ -101,8 +101,10 @@ impl Search {
     }
 
     fn negamax(&mut self, depth: u8) -> Score {
+        self.trace.visit_node();
+
         if depth == 0 {
-            self.evaluate_score()
+            self.evaluate()
         } else {
             let mut max = Score::InfN;
 
@@ -135,18 +137,7 @@ impl Search {
 
     /// Returns the static evaluation, from the perspective of the side to move.
     #[inline(always)]
-    fn evaluate(&mut self) -> i32 {
-        if self.pos.in_checkmate() {
-            -INFINITY
-            // TODO: shouldn't we check for stalemate here too?
-        } else {
-            self.pos.material_eval() * self.pov()
-        }
-    }
-
-    /// Returns the static evaluation, from the perspective of the side to move.
-    #[inline(always)]
-    fn evaluate_score(&mut self) -> Score {
+    fn evaluate(&mut self) -> Score {
         if self.pos.in_checkmate() {
             Score::mate(0)
             // TODO: shouldn't we check for stalemate here too?
@@ -166,7 +157,9 @@ impl Search {
         }
     }
 
-    fn quiesce(&mut self, mut alpha: i32, beta: i32) -> i32 {
+    fn quiesce(&mut self, mut alpha: Score, beta: Score) -> Score {
+        self.trace.visit_node();
+
         let stand_pat = self.evaluate();
 
         if stand_pat >= beta {
@@ -178,17 +171,19 @@ impl Search {
         }
 
         let captures = self.pos.generate_captures();
-        let mut score: i32;
+        let mut score: Score;
 
         if captures.is_empty() {
-            // If we have no captures to look at, we might actually be in checkmate. Return
-            // -infinity if so.
-            return -INFINITY;
+            if self.pos.in_checkmate() {
+                return Score::mate(0);
+            }
+            // TODO: we need to deal with stalemate here. If we don't, we might be getting wrong
+            // results?
         }
 
         for mov in &captures {
             self.pos.make_move(*mov);
-            score = -self.quiesce(-beta, -alpha);
+            score = self.quiesce(-beta, -alpha).neg().inc_mate();
             self.pos.unmake_move();
 
             if score >= beta {
