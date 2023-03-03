@@ -103,7 +103,7 @@ impl Engine {
     fn command_go(&mut self, tm: TimingMode) {
         match self.pos.take() {
             Some(pos) => {
-                let pos = Search::new(pos).start_search(tm);
+                let (_score, pos) = Search::new(pos).start_search(tm);
                 self.pos = Some(pos);
             }
             None => unreachable!(

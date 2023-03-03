@@ -29,7 +29,7 @@ impl Search {
         }
     }
 
-    pub fn start_search(mut self, tm: TimingMode) -> Position {
+    pub fn start_search(mut self, tm: TimingMode) -> (Score, Position) {
         match tm {
             TimingMode::Timed(_) => todo!(),
             TimingMode::MoveTime(_) => todo!(),
@@ -54,28 +54,27 @@ impl Search {
                 );
                 // (self.pos, score)
                 println!("{:?}", score);
-                self.pos
+                (score, self.pos)
             }
             TimingMode::Infinite => todo!(),
         }
     }
 
     fn alphabeta_with_mate(&mut self, mut alpha: Score, beta: Score, depth: u8) -> Score {
+        self.trace.visit_node();
         if depth == 0 {
             // self.quiesce(alpha, beta)
             self.evaluate_score()
         } else {
-            self.trace.visit_node();
-
             let mut max = Score::InfN;
 
             let moves = self.pos.generate_moves();
             if moves.is_empty() {
                 self.pvt.pv_leaf_at(depth);
                 return if self.pos.in_check() {
-                    Score::Mate(0)
+                    Score::mate(0)
                 } else {
-                    Score::Cp(0)
+                    Score::cp(0)
                 };
             }
 
@@ -105,6 +104,8 @@ impl Search {
     }
 
     fn alphabeta(&mut self, mut alpha: i32, beta: i32, depth: u8) -> i32 {
+        self.trace.visit_node();
+
         if depth == 0 {
             // self.quiesce(alpha, beta)
             self.evaluate()
@@ -158,9 +159,9 @@ impl Search {
             if moves.is_empty() {
                 self.pvt.pv_leaf_at(depth);
                 return if self.pos.in_check() {
-                    Score::Mate(0)
+                    Score::mate(0)
                 } else {
-                    Score::Cp(0)
+                    Score::cp(0)
                 };
             }
 
@@ -196,10 +197,10 @@ impl Search {
     #[inline(always)]
     fn evaluate_score(&mut self) -> Score {
         if self.pos.in_checkmate() {
-            Score::Mate(0)
+            Score::mate(0)
             // TODO: shouldn't we check for stalemate here too?
         } else {
-            Score::Cp(self.pos.material_eval() * self.pov())
+            Score::cp(self.pos.material_eval() * self.pov())
         }
     }
 
@@ -256,6 +257,8 @@ impl Search {
 mod tests {
     use super::*;
 
+    /// A regression test to ensure that our search routine produces the expected results for a
+    /// range of positions.
     #[test]
     fn tactics() {
         core::init::init_globals();
@@ -267,37 +270,38 @@ mod tests {
         let suite = {
             [
                 // Mates
-                ("8/2R2pp1/k3p3/8/5Bn1/6P1/5r1r/1R4K1 w - - 4 3", 6, INFINITY),
-                ("5R2/1p1r2pk/p1n1B2p/2P1q3/2Pp4/P6b/1B1P4/2K3R1 w - - 5 3", 6, INFINITY),
-                ("1r6/p5pk/1q1p2pp/3P3P/4Q1P1/3p4/PP6/3KR3 w - - 0 36", 6, INFINITY),
-                ("1r4k1/p3p1bp/5P1r/3p2Q1/5R2/3Bq3/P1P2RP1/6K1 b - - 0 33", 6, INFINITY),
-                ("2q4k/3r3p/2p2P2/p7/2P5/P2Q2P1/5bK1/1R6 w - - 0 36", 6, INFINITY),
-                ("5rk1/rb3ppp/p7/1pn1q3/8/1BP2Q2/PP3PPP/3R1RK1 w - - 7 21", 6, INFINITY),
-                // 6rk/p7/1pq1p2p/4P3/5BrP/P3Qp2/1P1R1K1P/5R2 b - - 0 34
-                // ("6k1/1p2qppp/4p3/8/p2PN3/P5QP/1r4PK/8 w - - 0 40", 5, Score::Mate(5)),
-                // ("2R1bk2/p5pp/5p2/8/3n4/3p1B1P/PP1q1PP1/4R1K1 w - - 0 27", 5, Score::Mate(5)),
-                // ("8/7R/r4pr1/5pkp/1R6/P5P1/5PK1/8 w - - 0 42", 5, Score::Mate(5)),
-                // ("r5k1/2qn2pp/2nN1p2/3pP2Q/3P1p2/5N2/4B1PP/1b4K1 w - - 0 25", 7, Score::Mate(7)),
+                ("8/2R2pp1/k3p3/8/5Bn1/6P1/5r1r/1R4K1 w - - 4 3", 6, Score::mate(5)),
+                ("5R2/1p1r2pk/p1n1B2p/2P1q3/2Pp4/P6b/1B1P4/2K3R1 w - - 5 3", 6, Score::mate(5)),
+                ("1r6/p5pk/1q1p2pp/3P3P/4Q1P1/3p4/PP6/3KR3 w - - 0 36", 6, Score::mate(5)),
+                ("1r4k1/p3p1bp/5P1r/3p2Q1/5R2/3Bq3/P1P2RP1/6K1 b - - 0 33", 6, Score::mate(5)),
+                ("2q4k/3r3p/2p2P2/p7/2P5/P2Q2P1/5bK1/1R6 w - - 0 36", 6, Score::mate(5)),
+                ("5rk1/rb3ppp/p7/1pn1q3/8/1BP2Q2/PP3PPP/3R1RK1 w - - 7 21", 6, Score::mate(5)),
+                ("6rk/p7/1pq1p2p/4P3/5BrP/P3Qp2/1P1R1K1P/5R2 b - - 0 34", 7, Score::mate(7)),
+                ("6k1/1p2qppp/4p3/8/p2PN3/P5QP/1r4PK/8 w - - 0 40", 5, Score::mate(5)),
+                ("2R1bk2/p5pp/5p2/8/3n4/3p1B1P/PP1q1PP1/4R1K1 w - - 0 27", 5, Score::mate(5)),
+                ("8/7R/r4pr1/5pkp/1R6/P5P1/5PK1/8 w - - 0 42", 5, Score::mate(5)),
+                ("r5k1/2qn2pp/2nN1p2/3pP2Q/3P1p2/5N2/4B1PP/1b4K1 w - - 0 25", 7, Score::mate(7)),
 
                 // Winning material
-                ("rn1q1rk1/5pp1/pppb4/5Q1p/3P4/3BPP1P/PP3PK1/R1B2R2 b - - 1 15", 6, 300),
-                ("4k3/8/8/4q3/8/8/7P/3K2R1 w - - 0 1", 3, 100),
-                ("6k1/8/3q4/8/8/3B4/2P5/1K1R4 w - - 0 1", 4, 900),
-                ("r5k1/p1P5/8/8/8/8/3RK3/8 w - - 0 1", 6, 800),
-                ("6k1/8/8/3q4/8/8/P7/1KNB4 w - - 0 1", 4, 400),
-                ("2kr3r/ppp1qpb1/5n2/5b1p/6p1/1PNP4/PBPQBPPP/2KRR3 b - - 6 14", 6, 500),
-                ("7k/2R5/8/8/6q1/7p/7P/7K w - - 0 1", 6, 0),
+                ("rn1q1rk1/5pp1/pppb4/5Q1p/3P4/3BPP1P/PP3PK1/R1B2R2 b - - 1 15", 7, Score::cp(300)),
+                ("4k3/8/8/4q3/8/8/7P/3K2R1 w - - 0 1", 3, Score::cp(100)), 
+                ("6k1/8/3q4/8/8/3B4/2P5/1K1R4 w - - 0 1", 3, Score::cp(900)),
+                ("r5k1/p1P5/8/8/8/8/3RK3/8 w - - 0 1", 5, Score::cp(800)),
+                ("6k1/8/8/3q4/8/8/P7/1KNB4 w - - 0 1", 3, Score::cp(400)),
+                ("2kr3r/ppp1qpb1/5n2/5b1p/6p1/1PNP4/PBPQBPPP/2KRR3 b - - 6 14", 5, Score::cp(600)),
+                ("7k/2R5/8/8/6q1/7p/7P/7K w - - 0 1", 5, Score::cp(0)),
 
                 // Pawn race
-                ("8/6pk/8/8/8/8/P7/K7 w - - 0 1", 22, 800),
+                // ("8/6pk/8/8/8/8/P7/K7 w - - 0 1", 22, Score::cp(800)),
             ]
         };
 
-        for (p, d, v) in suite {
-            let (_, res) =
-                Search::new(Position::from_fen(p).unwrap()).start_search(TimingMode::Depth(d));
+        for (fen, depth, score) in suite {
+            let pos = Position::from_fen(fen).unwrap();
+            let search = Search::new(pos);
+            let (s, _) = search.start_search(TimingMode::Depth(depth));
 
-            assert_eq!(res, v);
+            assert_eq!(s, score);
         }
     }
 }

@@ -5,7 +5,6 @@ pub mod eval;
 pub mod options;
 pub mod pv_table;
 pub mod score;
-pub mod score2;
 pub mod search;
 pub mod session;
 pub mod time;
