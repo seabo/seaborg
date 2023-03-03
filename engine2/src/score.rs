@@ -53,6 +53,16 @@ impl Score {
             Score::InfP => Score::InfP,
         }
     }
+
+    /// Construct a `Mate` variant, with parameter `n`.
+    pub fn mate(n: i8) -> Self {
+        Score::mate(n)
+    }
+
+    /// Construct a `Cp` variant, with parameter `x`.
+    pub fn cp(x: i32) -> Self {
+        Score::Cp(x)
+    }
 }
 
 impl PartialOrd for Score {
