@@ -55,9 +55,62 @@ impl Tracer {
         self.nodes_visited * 1_000_000 / (elapsed as usize)
     }
 
+    /// Report the nodes per second (NPS) of the search process any time after it has terminated.
+    /// This requires `end_search` to have been called at some point previously, and will return
+    /// `None` if that is not the case.
     pub fn nps(&self) -> Option<usize> {
         self.elapsed.and_then(|duration| {
             Some(self.nodes_visited * 1_000_000 / (duration.as_micros() as usize))
         })
     }
+
+    /// The effective branching factor of this search. Note, this method uses a Newton-Raphson
+    /// iteration. Although this usually converges in just 2-3 iterations, it is probably best for
+    /// performance to only call this at the end of a search, rather than during.
+    ///
+    /// Calculated as (nodes * (depth - 1) + 1) ^ (1/depth).
+    pub fn eff_branching(&self, depth: u8) -> f32 {
+        let f_depth = Into::<f32>::into(depth + 1);
+        let n = self.nodes_visited as f32;
+
+        // Initial guess taken to be average branching factor for chess.
+        let mut x: f32 = 35.;
+
+        // We will use a delta between successive iterations to
+        // determine when to stop.
+        let mut last_delta;
+
+        // The smallest enough delta between iterations for which we will return.
+        let target_delta: f32 = 1e-1;
+
+        // We should never need many. This converges very fast. Stop at 10 because if we have done
+        // that many, something is going wrong.
+        let max_iterations = 10;
+
+        for _ in 0..max_iterations {
+            let x2 = x - numerator(x, f_depth, n) / denominator(x, f_depth);
+            last_delta = (x2 - x).abs();
+            x = x2;
+
+            if last_delta <= target_delta {
+                return x;
+            }
+        }
+
+        x
+    }
+}
+
+/// Used in Newton-Raphson iteration to calculate effective branching factor.
+///
+/// Represents the numerator in f(x_i)/f'(x_i)
+fn numerator(b: f32, d: f32, n: f32) -> f32 {
+    (b.powf(d) - 1.) / (b - 1.) - n
+}
+
+/// Used in Newton-Raphson iteration to calculate effective branching factor.
+///
+/// Represents the denominator in f(x_i)/f'(x_i)
+fn denominator(b: f32, d: f32) -> f32 {
+    (d * b.powf(d - 1.) * (b - 1.) - b.powf(d) + 1.) / (b - 1.).powf(2.)
 }

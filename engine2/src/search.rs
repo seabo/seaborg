@@ -50,6 +50,7 @@ impl Search {
                         .nps()
                         .expect("`end_search` was called, so this should always work")
                 );
+                println!("eff. branching factor {}", self.trace.eff_branching(d));
 
                 println!(
                     "pv: {}",
