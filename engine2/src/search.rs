@@ -6,6 +6,8 @@ use super::trace::Tracer;
 
 use core::position::{Player, Position};
 
+use separator::Separatable;
+
 use std::ops::Neg;
 
 pub const INFINITY: i32 = 10_000;
@@ -43,17 +45,28 @@ impl Search {
 
                 self.trace.end_search();
 
-                println!("{} nodes", self.trace.nodes_visited());
                 println!(
-                    "{} nps",
+                    "nodes:     {}",
+                    self.trace.all_nodes_visited().separated_string()
+                );
+                println!(
+                    "% q_nodes: {:.2}%",
+                    self.trace.q_nodes_visited() as f32 / self.trace.all_nodes_visited() as f32
+                        * 100.0
+                );
+                println!(
+                    "nps:       {}",
                     self.trace
                         .nps()
                         .expect("`end_search` was called, so this should always work")
+                        .separated_string()
                 );
-                println!("eff. branching factor {}", self.trace.eff_branching(d));
-
                 println!(
-                    "pv: {}",
+                    "eff. bf:   {}",
+                    self.trace.eff_branching(d).separated_string()
+                );
+                println!(
+                    "pv:        {}",
                     self.pvt
                         .pv()
                         .map(|m| m.to_uci_string())
@@ -61,7 +74,7 @@ impl Search {
                         .join(" ")
                 );
                 // (self.pos, score)
-                println!("{:?}", score);
+                println!("score:     {:?}", score);
                 (score, self.pos)
             }
             TimingMode::Infinite => todo!(),
@@ -72,8 +85,8 @@ impl Search {
         self.trace.visit_node();
 
         if depth == 0 {
-            // self.quiesce_with_score(alpha, beta)
-            self.evaluate()
+            self.quiesce(alpha, beta)
+            // self.evaluate()
         } else {
             let mut max = Score::INF_N;
 
@@ -167,7 +180,7 @@ impl Search {
     }
 
     fn quiesce(&mut self, mut alpha: Score, beta: Score) -> Score {
-        self.trace.visit_node();
+        self.trace.visit_q_node();
 
         let stand_pat = self.evaluate();
 

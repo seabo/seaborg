@@ -9,6 +9,8 @@ pub struct Tracer {
     start_time: Instant,
     /// The number of nodes visited during search.
     nodes_visited: usize,
+    /// The number of nodes visited during quiescence search.
+    q_nodes_visited: usize,
     /// Records the duration between start and end of search. Only populated with `Some(duration)`
     /// when `end_search` is called.
     elapsed: Option<Duration>,
@@ -21,6 +23,7 @@ impl Tracer {
             // later with a call to `commence_search()`.
             start_time: Instant::now(),
             nodes_visited: 0,
+            q_nodes_visited: 0,
             elapsed: None,
         }
     }
@@ -41,9 +44,25 @@ impl Tracer {
         self.nodes_visited += 1;
     }
 
-    /// The number of nodes visited.
+    /// To be called whenever the quiescence search visits a new node.
+    #[inline(always)]
+    pub fn visit_q_node(&mut self) {
+        self.q_nodes_visited += 1;
+    }
+
+    /// The number of nodes visited during main search.
     pub fn nodes_visited(&self) -> usize {
         self.nodes_visited
+    }
+
+    /// The number of nodes visited during quiescence search.
+    pub fn q_nodes_visited(&self) -> usize {
+        self.q_nodes_visited
+    }
+
+    /// The total number of nodes (main search _and_ quiescence) visited.
+    pub fn all_nodes_visited(&self) -> usize {
+        self.nodes_visited + self.q_nodes_visited
     }
 
     /// The nodes per second (NPS) of the search as at call-time. Calculated as total number of
