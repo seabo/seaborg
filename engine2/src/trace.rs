@@ -11,6 +11,8 @@ pub struct Tracer {
     nodes_visited: usize,
     /// The number of nodes visited during quiescence search.
     q_nodes_visited: usize,
+    /// The number of nodes we skip due to a failed SEE check.
+    see_skipped_nodes: usize,
     /// Records the duration between start and end of search. Only populated with `Some(duration)`
     /// when `end_search` is called.
     elapsed: Option<Duration>,
@@ -24,6 +26,7 @@ impl Tracer {
             start_time: Instant::now(),
             nodes_visited: 0,
             q_nodes_visited: 0,
+            see_skipped_nodes: 0,
             elapsed: None,
         }
     }
@@ -48,6 +51,17 @@ impl Tracer {
     #[inline(always)]
     pub fn visit_q_node(&mut self) {
         self.q_nodes_visited += 1;
+    }
+
+    /// To be called whenever we skip searching a node because it failed an SEE check.
+    #[inline(always)]
+    pub fn see_skip_node(&mut self) {
+        self.see_skipped_nodes += 1;
+    }
+
+    /// The number of nodes skipped due to SEE check failures during search.
+    pub fn see_skipped_nodes(&self) -> usize {
+        self.see_skipped_nodes
     }
 
     /// The number of nodes visited during main search.
@@ -79,8 +93,15 @@ impl Tracer {
     /// `None` if that is not the case.
     pub fn nps(&self) -> Option<usize> {
         self.elapsed.and_then(|duration| {
-            Some(self.nodes_visited * 1_000_000 / (duration.as_micros() as usize))
+            Some(self.all_nodes_visited() * 1_000_000 / (duration.as_micros() as usize))
         })
+    }
+
+    /// The time elapsed between start and end of the search.
+    ///
+    /// Returns `None` if `end_search` has never been called.
+    pub fn elapsed(&self) -> Option<Duration> {
+        self.elapsed
     }
 
     /// The effective branching factor of this search. Note, this method uses a Newton-Raphson
@@ -90,7 +111,7 @@ impl Tracer {
     /// Calculated as (nodes * (depth - 1) + 1) ^ (1/depth).
     pub fn eff_branching(&self, depth: u8) -> f32 {
         let f_depth = Into::<f32>::into(depth + 1);
-        let n = self.nodes_visited as f32;
+        let n = self.all_nodes_visited() as f32;
 
         // Initial guess taken to be average branching factor for chess.
         let mut x: f32 = 35.;

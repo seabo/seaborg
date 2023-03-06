@@ -62,6 +62,18 @@ impl Search {
                         .separated_string()
                 );
                 println!(
+                    "see skips: {}",
+                    self.trace.see_skipped_nodes().separated_string()
+                );
+                println!(
+                    "time:      {}ms",
+                    self.trace
+                        .elapsed()
+                        .expect("we called `end_search`")
+                        .as_millis()
+                        .separated_string()
+                );
+                println!(
                     "eff. bf:   {}",
                     self.trace.eff_branching(d).separated_string()
                 );
@@ -206,6 +218,19 @@ impl Search {
         }
 
         for mov in &captures {
+            // Evaluate whether the capture is likely to be favourable with SEE.
+            let see_eval = self.see(
+                mov.orig(),
+                mov.dest(),
+                self.pos.piece_at_sq(mov.dest()).type_of(),
+                self.pos.piece_at_sq(mov.orig()).type_of(),
+            );
+
+            if see_eval < Score::cp(0) {
+                self.trace.see_skip_node();
+                continue;
+            }
+
             self.pos.make_move(*mov);
             score = self.quiesce(-beta, -alpha).neg().inc_mate();
             self.pos.unmake_move();
