@@ -1,5 +1,5 @@
 use core::init::init_globals;
-use core::position::Position;
+use core::position::{Position, Square};
 use engine::eval::Evaluation;
 use engine::search::ordering::OrderedMoveList;
 use engine::search::params::Builder;
@@ -26,7 +26,16 @@ pub fn dev() {
     // do_material_eval();
     // do_movegen();
     // do_ordering();
-    do_perf_legal_move();
+    // do_perf_legal_move();
+    do_attadef();
+}
+
+fn do_attadef() {
+    let mut pos =
+        Position::from_fen("1k1r3q/1ppn3p/p4b2/4p3/8/P2N2P1/1PP1R1BP/2K1Q3 w - - 0 1").unwrap();
+
+    let attadef = pos.attack_defend(pos.occupied(), Square::E5);
+    println!("{}", attadef);
 }
 
 fn do_perf_legal_move() {

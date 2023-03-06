@@ -701,6 +701,30 @@ impl Position {
         Square(CASTLING_ROOK_START[self.turn().inner() as usize][side as usize])
     }
 
+    /// Returns a bitboard of pieces attacking and defending a given square.
+    ///
+    /// This method is useful in places like Static Exchange Evaluation (SEE) and checking whether
+    /// hash table moves or killer moves are (pseudo-)legal.
+    ///
+    /// Follows the implementation given [here](https://www.chessprogramming.org/Square_Attacked_By).
+    pub fn attack_defend(&self, occ: Bitboard, sq: Square) -> Bitboard {
+        let knights = self.piece_bb_both_players(PieceType::Knight);
+        let kings = self.piece_bb_both_players(PieceType::King);
+        let mut bishops_queens = self.piece_bb_both_players(PieceType::Queen);
+        let mut rooks_queens = bishops_queens;
+        bishops_queens |= self.piece_bb_both_players(PieceType::Bishop);
+        rooks_queens |= self.piece_bb_both_players(PieceType::Rook);
+
+        (Bitboard(pawn_attacks_from(sq, Player::WHITE))
+            & self.piece_bb(Player::BLACK, PieceType::Pawn))
+            | (Bitboard(pawn_attacks_from(sq, Player::BLACK))
+                & self.piece_bb(Player::WHITE, PieceType::Pawn))
+            | (knight_moves(sq) & knights)
+            | (king_moves(sq) & kings)
+            | (bishop_moves(occ, sq) & bishops_queens)
+            | (rook_moves(occ, sq) & rooks_queens)
+    }
+
     /// Returns the king square for the given player.
     #[inline]
     pub fn king_sq(&self, player: Player) -> Square {
