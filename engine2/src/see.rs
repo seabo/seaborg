@@ -65,8 +65,6 @@ impl Search {
 
         d -= 1;
 
-        println!("{:?}", gain);
-
         while d > 0 {
             gain[d - 1] = -max(-gain[d - 1], gain[d]);
             d -= 1;
