@@ -15,7 +15,7 @@ pub const INFINITY: i32 = 10_000;
 /// Manages the search.
 pub struct Search {
     /// The internal board position.
-    pos: Position,
+    pub(super) pos: Position,
     /// Table for tracking the principal variation of the search.
     pvt: PVTable,
     /// Tracer to track search stats.
@@ -192,6 +192,8 @@ impl Search {
             alpha = stand_pat;
         }
 
+        // TODO: this should look at more than just captures. Checks are important to consider too,
+        // but they are harder, as not self-limiting like captures.
         let captures = self.pos.generate_captures();
         let mut score: Score;
 

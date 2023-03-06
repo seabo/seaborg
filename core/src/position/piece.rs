@@ -104,6 +104,16 @@ pub enum PieceType {
     King = 6,
 }
 
+pub const PIECE_TYPES: [PieceType; 7] = [
+    PieceType::None,
+    PieceType::Pawn,
+    PieceType::Knight,
+    PieceType::Bishop,
+    PieceType::Rook,
+    PieceType::Queen,
+    PieceType::King,
+];
+
 pub const PROMO_PIECES: [PieceType; 4] = [
     PieceType::Knight,
     PieceType::Bishop,

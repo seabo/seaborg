@@ -1,4 +1,4 @@
-use crate::bit_twiddles::more_than_one;
+use crate::bit_twiddles::{lsb, more_than_one};
 use crate::masks::*;
 use crate::position::Square;
 
@@ -48,6 +48,11 @@ impl Bitboard {
     // TODO: rename this to `from()` - OR DELETE?
     pub fn new(bb: u64) -> Self {
         Bitboard(bb)
+    }
+
+    /// The empty bitboard.
+    pub fn empty() -> Self {
+        Bitboard(0)
     }
 
     /// Produces a `Bitboard` with a single bit set at the index provided.
@@ -105,6 +110,14 @@ impl Bitboard {
     pub fn to_square(&self) -> Square {
         debug_assert!(self.popcnt() == 1);
         Square(self.bsf() as u8)
+    }
+
+    /// Returns a Bitboard with a single bit set, corresponding to the lowest set bit in the input.
+    ///
+    /// Calling with an empty bitboard returns an empty bitboard.
+    #[inline(always)]
+    pub fn lsb(&self) -> Self {
+        Self(lsb(self.0))
     }
 
     /// Returns the `Square` and `Bitboard` of the least significant bit and removes
@@ -179,5 +192,23 @@ impl fmt::Display for Bitboard {
         }
         writeln!(f, "   └────────────────────────┘")?;
         writeln!(f, "     a  b  c  d  e  f  g  h ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::position::Square;
+
+    #[test]
+    fn bb_lsb() {
+        let bb = Square::C4.to_bb() | Square::F4.to_bb() | Square::G1.to_bb();
+        assert_eq!(bb.lsb(), Square::G1.to_bb());
+
+        let bb = Square::H8.to_bb() | Square::G8.to_bb() | Square::A8.to_bb();
+        assert_eq!(bb.lsb(), Square::A8.to_bb());
+
+        let bb = Bitboard::empty();
+        assert_eq!(bb.lsb(), Bitboard::empty());
     }
 }

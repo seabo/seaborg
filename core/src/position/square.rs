@@ -1,5 +1,4 @@
 use crate::bb::Bitboard;
-use crate::bit_twiddles::diff;
 use std::fmt;
 use std::ops::*;
 
@@ -27,8 +26,8 @@ impl Square {
 
     #[inline]
     pub fn distance(&self, other: Self) -> u8 {
-        let x = diff(self.rank_idx_of_sq(), other.rank_idx_of_sq());
-        let y = diff(self.file_idx_of_sq(), other.file_idx_of_sq());
+        let x = self.rank_idx_of_sq().abs_diff(other.rank_idx_of_sq());
+        let y = self.file_idx_of_sq().abs_diff(other.file_idx_of_sq());
         if x > y {
             x
         } else {

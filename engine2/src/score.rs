@@ -1,5 +1,5 @@
 use std::cmp::{Eq, Ord, PartialEq, PartialOrd};
-use std::ops::Neg;
+use std::ops::{Add, Neg, Sub};
 
 /// Represents the score of a position.
 ///
@@ -80,6 +80,24 @@ impl Neg for Score {
     #[inline(always)]
     fn neg(self) -> Self::Output {
         Self(-self.0)
+    }
+}
+
+impl Add for Score {
+    type Output = Self;
+
+    #[inline(always)]
+    fn add(self, other: Self) -> Self::Output {
+        Self(self.0 + other.0)
+    }
+}
+
+impl Sub for Score {
+    type Output = Self;
+
+    #[inline(always)]
+    fn sub(self, other: Self) -> Self::Output {
+        Self(self.0 - other.0)
     }
 }
 

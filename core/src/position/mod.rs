@@ -18,7 +18,7 @@ use crate::precalc::boards::{aligned, between_bb, king_moves, knight_moves, pawn
 pub use board::Board;
 pub use castling::{CastleType, CastlingRights};
 pub use fen::{FenError, START_POSITION};
-pub use piece::{Piece, PieceType, PROMO_PIECES};
+pub use piece::{Piece, PieceType, PIECE_TYPES, PROMO_PIECES};
 pub use square::Square;
 pub use state::State;
 pub use zobrist::Zobrist;
@@ -615,7 +615,7 @@ impl Position {
     #[inline]
     pub fn piece_bb(&self, player: Player, piece_type: PieceType) -> Bitboard {
         let idx = 6 * (player.inner() as usize) + (piece_type as usize);
-        self.bbs[idx]
+        unsafe { *self.bbs.get_unchecked(idx) }
     }
     /// Returns the Bitboard of the Queens and Rooks for a given player.
     #[inline(always)]
@@ -723,6 +723,16 @@ impl Position {
             | (king_moves(sq) & kings)
             | (bishop_moves(occ, sq) & bishops_queens)
             | (rook_moves(occ, sq) & rooks_queens)
+    }
+
+    /// Returns a bitboard of sliding pieces attacking and defending a given square.
+    pub fn attack_defend_sliding(&self, occ: Bitboard, sq: Square) -> Bitboard {
+        let mut bishops_queens = self.piece_bb_both_players(PieceType::Queen);
+        let mut rooks_queens = bishops_queens;
+        bishops_queens |= self.piece_bb_both_players(PieceType::Bishop);
+        rooks_queens |= self.piece_bb_both_players(PieceType::Rook);
+
+        (bishop_moves(occ, sq) & bishops_queens) | (rook_moves(occ, sq) & rooks_queens)
     }
 
     /// Returns the king square for the given player.
