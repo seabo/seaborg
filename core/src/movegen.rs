@@ -195,6 +195,9 @@ where
                 .piece_two_bb_both_players(PieceType::Pawn, PieceType::Knight);
 
         // All the squares that are attacked by sliders
+        // TODO[movegen]: make this an iterator - we are doing lots of checks in the method
+        // `pop_some_lsb_and_bit`. It also is potentially inefficient in creating a new bitboard
+        // with `sq.to_bb()`. We should use the bit twiddle `bb & -bb` to isolate the LSB as a bb.
         while let Some((check_sq, check_sq_bb)) = sliders.pop_some_lsb_and_bit() {
             slider_attacks |= Bitboard(line_bb(check_sq, ksq)) ^ check_sq_bb;
         }
