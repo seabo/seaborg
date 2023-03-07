@@ -2,14 +2,14 @@
 use super::search::Search;
 
 use core::mov::Move;
-use core::movelist::BasicMoveList;
+use core::movelist::{MoveList, VecMoveList};
 use core::position::Position;
 
 use num::FromPrimitive;
 use num_derive::FromPrimitive;
 
-pub struct OrderedMoves {
-    moves: BasicMoveList,
+pub struct OrderedMoves<L: MoveList> {
+    moves: L,
     phase: Phase,
     /// Cursor indicating current location in the move list iteration.
     cursor: *mut Move,
@@ -56,10 +56,10 @@ impl Phase {
     }
 }
 
-impl OrderedMoves {
+impl<L: MoveList> OrderedMoves<L> {
     pub fn new() -> Self {
         Self {
-            moves: Default::default(),
+            moves: L::empty(),
             phase: Phase::HashTable,
             cursor: std::ptr::null_mut(),
             end: std::ptr::null_mut(),
@@ -96,7 +96,7 @@ impl OrderedMoves {
     /// only.
     fn load_hash_phase(&mut self, pos: &Position) {
         // For now, we load all moves at hash phase time
-        self.moves = pos.generate_moves();
+        self.moves = pos.generate_moves::<L>();
         if self.moves.len() > 0 {
             self.cursor = &mut self.moves[0] as *mut Move;
         }
@@ -104,7 +104,7 @@ impl OrderedMoves {
     }
 }
 
-impl Iterator for &mut OrderedMoves {
+impl<L: MoveList> Iterator for &mut OrderedMoves<L> {
     type Item = Move;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -138,9 +138,9 @@ mod tests {
 
         fn perft_recurse(&mut self, depth: usize) {
             if depth == 1 {
-                self.count += self.pos.generate_moves().len();
+                self.count += self.pos.generate_moves::<VecMoveList>().len();
             } else {
-                let mut moves = OrderedMoves::new();
+                let mut moves = OrderedMoves::<VecMoveList>::new();
                 while moves.next_phase(&mut self.pos) {
                     for mov in &mut moves {
                         self.pos.make_move(mov);

@@ -63,9 +63,9 @@ impl MoveGen {
     /// - Would cause a discovered check (i.e. the moving piece is pinned)
     /// - Would cause the moving king to land in check
     #[inline]
-    pub fn generate(position: &Position) -> BasicMoveList {
-        let mut movelist = BasicMoveList::default();
-        InnerMoveGen::<BasicMoveList>::generate::<AllGenType, LegalType>(position, &mut movelist);
+    pub fn generate<L: MoveList>(position: &Position) -> L {
+        let mut movelist = L::empty();
+        InnerMoveGen::<L>::generate::<AllGenType, LegalType>(position, &mut movelist);
         movelist
     }
 
@@ -92,8 +92,8 @@ pub struct InnerMoveGen<'a, MP: MoveList + 'a> {
 }
 
 impl<'a, MP: MoveList> InnerMoveGen<'a, MP>
-where
-    <MP as Index<usize>>::Output: Sized,
+// where
+//     <MP as Index<usize>>::Output: Sized,
 {
     /// Generate all pseudo-legal moves in the given position
     #[inline(always)]

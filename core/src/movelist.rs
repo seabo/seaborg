@@ -24,9 +24,13 @@ use crate::mov::Move;
 pub const MAX_MOVES: usize = 254;
 
 /// Trait to generalize operations on structures containing a collection of `Move`s.
-pub trait MoveList: Sized + IndexMut<usize> + Index<usize> + DerefMut {
+pub trait MoveList: Sized + Index<usize, Output = Move> + IndexMut<usize, Output = Move> {
+    /// Create an empty move list.
+    fn empty() -> Self;
     /// Add a `Move` to the end of the list.
     fn push(&mut self, mv: Move);
+    /// The length of the move list.
+    fn len(&self) -> usize;
 }
 
 #[derive(Clone)]
@@ -178,6 +182,11 @@ impl IndexMut<usize> for BasicMoveList {
 }
 
 impl MoveList for BasicMoveList {
+    #[inline(always)]
+    fn empty() -> Self {
+        Default::default()
+    }
+
     #[cfg(debug_assertions)]
     #[inline(always)]
     fn push(&mut self, mv: Move) {
@@ -190,8 +199,57 @@ impl MoveList for BasicMoveList {
             self.unchecked_push_mv(mv);
         }
     }
+
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.len
+    }
 }
 
+/// A type implementing `MoveList` which based on a `Vec`.
+pub struct VecMoveList(Vec<Move>);
+
+impl MoveList for VecMoveList {
+    #[inline(always)]
+    fn empty() -> Self {
+        Self(Vec::new())
+    }
+
+    #[inline(always)]
+    fn push(&mut self, mv: Move) {
+        self.0.push(mv);
+    }
+
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+impl Index<usize> for VecMoveList {
+    type Output = Move;
+
+    #[inline(always)]
+    fn index(&self, index: usize) -> &Move {
+        &*self.0.index(index)
+    }
+}
+
+impl IndexMut<usize> for VecMoveList {
+    #[inline(always)]
+    fn index_mut(&mut self, index: usize) -> &mut Move {
+        &mut *self.0.index_mut(index)
+    }
+}
+
+impl<'a> IntoIterator for &'a VecMoveList {
+    type Item = &'a Move;
+    type IntoIter = std::slice::Iter<'a, Move>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

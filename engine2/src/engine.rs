@@ -116,7 +116,7 @@ impl Engine {
     fn command_perft(&mut self, d: usize) {
         match &mut self.pos {
             Some(pos) => {
-                super::perft::Perft::divide(pos, d, false, false);
+                super::perft::Perft::divide(pos, d, true, false);
             }
             None => unreachable!("This method should never be called when a search is in progress"),
         }

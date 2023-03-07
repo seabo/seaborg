@@ -12,7 +12,7 @@ use crate::masks::{CASTLING_PATH, CASTLING_ROOK_START, FILE_BB, PLAYER_CNT, RANK
 use crate::mono_traits::PlayerTrait;
 use crate::mov::{Move, MoveType, UndoableMove};
 use crate::movegen::{bishop_moves, rook_moves, MoveGen};
-use crate::movelist::BasicMoveList;
+use crate::movelist::{BasicMoveList, MoveList};
 use crate::precalc::boards::{aligned, between_bb, king_moves, knight_moves, pawn_attacks_from};
 
 pub use board::Board;
@@ -438,7 +438,7 @@ impl Position {
     /// Returns `Option<Move>` with `Some(mov)` if the move was legal, and
     /// None if it wasn't.
     pub fn make_uci_move(&mut self, uci: &str) -> Option<Move> {
-        let moves = self.generate_moves();
+        let moves = self.generate_moves::<BasicMoveList>();
 
         for mov in &moves {
             let uci_mov = mov.to_uci_string();
@@ -520,7 +520,7 @@ impl Position {
     }
 
     pub fn in_checkmate(&self) -> bool {
-        self.in_check() && self.generate_moves().is_empty()
+        self.in_check() && self.generate_moves::<BasicMoveList>().is_empty()
     }
 
     pub fn in_double_check(&self) -> bool {
@@ -752,7 +752,7 @@ impl Position {
     // MOVE GENERATION
     // Eventually, we should stabilise to just using this function, with resp.
     // 'trait signature' for each use.
-    pub fn generate_moves(&self) -> BasicMoveList {
+    pub fn generate_moves<L: MoveList>(&self) -> L {
         MoveGen::generate(&self)
     }
 
@@ -761,7 +761,7 @@ impl Position {
     }
 
     pub fn random_move(&self) -> Option<Move> {
-        self.generate_moves().random()
+        self.generate_moves::<BasicMoveList>().random()
     }
 
     // MOVE TESTING

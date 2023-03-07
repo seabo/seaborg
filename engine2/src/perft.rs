@@ -1,10 +1,11 @@
 use core::mov::Move;
-use core::movelist::BasicMoveList;
+use core::movelist::{BasicMoveList, MoveList, VecMoveList};
 use core::position::{Position, START_POSITION};
 
 use separator::Separatable;
 
 use std::fmt;
+use std::time::Instant;
 
 #[derive(Copy, Clone, Eq, PartialEq)]
 pub struct PerftDataInternal {
@@ -199,10 +200,14 @@ impl<'a> Perft<'a> {
     ) -> PerftData {
         let perft_options = PerftOptions::new(collect_detailed_data, collect_check_data);
         let mut perft = Self::new(position, perft_options);
+
+        let start = Instant::now();
         perft.perft_inner(depth);
+        let elapsed = start.elapsed();
 
         if print_data {
             println!("{}", perft);
+            println!("Time: {}ms", elapsed.as_millis());
         }
 
         perft.output()
@@ -225,6 +230,7 @@ impl<'a> Perft<'a> {
         let perft_options = PerftOptions::new(collect_detailed_data, collect_check_data);
         let mut perft = Self::new(position, perft_options);
         let mut cumulative_nodes: usize = 0;
+        let start = Instant::now();
         let moves = perft.position.generate_moves();
         if depth == 1 {
             perft.handle_leaf(&moves);
@@ -239,15 +245,17 @@ impl<'a> Perft<'a> {
                 cumulative_nodes += new_nodes_for_mov;
             }
         }
+        let elapsed = start.elapsed();
         println!("{}", perft);
+        println!("Time: {}ms", elapsed.as_millis());
         perft.output()
     }
 
     #[inline(always)]
-    fn handle_leaf(&mut self, moves: &BasicMoveList) {
-        if !self.options.detailed && !self.options.checks {
-            self.data.nodes += moves.len();
-        } else {
+    fn handle_leaf(&mut self, moves: &VecMoveList) {
+        self.data.nodes += moves.len();
+
+        if self.options.detailed || self.options.checks {
             for mov in moves {
                 if self.options.detailed {
                     if mov.is_en_passant() {

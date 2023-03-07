@@ -5,6 +5,7 @@ use super::score::Score;
 use super::time::TimingMode;
 use super::trace::Tracer;
 
+use core::movelist::{BasicMoveList, VecMoveList};
 use core::position::{Player, Position};
 
 use separator::Separatable;
@@ -104,7 +105,7 @@ impl Search {
             let mut max = Score::INF_N;
 
             // let moves = self.pos.generate_moves();
-            let mut moves = OrderedMoves::new();
+            let mut moves = OrderedMoves::<VecMoveList>::new();
             let mut c: u8 = 0;
 
             while moves.next_phase(&mut self.pos) {
@@ -167,7 +168,7 @@ impl Search {
         } else {
             let mut max = Score::INF_N;
 
-            let moves = self.pos.generate_moves();
+            let moves = self.pos.generate_moves::<BasicMoveList>();
             if moves.is_empty() {
                 self.pvt.pv_leaf_at(depth);
                 return if self.pos.in_check() {

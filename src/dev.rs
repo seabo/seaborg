@@ -1,4 +1,5 @@
 use core::init::init_globals;
+use core::movelist::BasicMoveList;
 use core::position::{Position, Square};
 use engine::eval::Evaluation;
 use engine::search::ordering::OrderedMoveList;
@@ -43,7 +44,7 @@ fn do_perf_legal_move() {
         Position::from_fen("r2k3r/pb1Q1pp1/1pp3N1/b1P3Pn/1n4pq/2N3B1/PPP2PPP/R3K2R b KQ - 1 1")
             .unwrap();
 
-    let moves = pos.generate_moves();
+    let moves = pos.generate_moves::<BasicMoveList>();
 
     let start = std::time::Instant::now();
 
@@ -82,7 +83,7 @@ fn do_movegen() {
     }
 
     let now = Instant::now();
-    let all_moves = pos.generate_moves();
+    let all_moves = pos.generate_moves::<BasicMoveList>();
     println!(
         "{}ns to generate all moves",
         now.elapsed().as_nanos().separated_string()
