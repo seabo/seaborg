@@ -3,6 +3,7 @@
 pub mod engine;
 pub mod eval;
 pub mod options;
+pub mod ordering;
 pub mod perft;
 pub mod pv_table;
 pub mod score;

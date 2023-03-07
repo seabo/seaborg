@@ -1,4 +1,5 @@
 use super::eval::Evaluation;
+use super::ordering::OrderedMoves;
 use super::pv_table::PVTable;
 use super::score::Score;
 use super::time::TimingMode;
@@ -102,33 +103,54 @@ impl Search {
         } else {
             let mut max = Score::INF_N;
 
-            let moves = self.pos.generate_moves();
-            if moves.is_empty() {
-                self.pvt.pv_leaf_at(depth);
-                return if self.pos.in_check() {
-                    Score::mate(0)
-                } else {
-                    Score::cp(0)
-                };
-            }
+            // let moves = self.pos.generate_moves();
+            let mut moves = OrderedMoves::new();
 
-            for mov in &moves {
-                self.pos.make_move(*mov);
-                let score = self.alphabeta(-beta, -alpha, depth - 1).neg().inc_mate();
-                self.pos.unmake_move();
+            // while moves.next_phase(self) {
+            //     for mov in &moves {
+            //         self.pos.make_move(mov);
+            //         let score = self.alphabeta(-beta, -alpha, depth - 1).neg().inc_mate();
+            //         self.pos.unmake_move();
 
-                if score >= beta {
-                    return score;
-                }
+            //         if score >= beta {
+            //             return score;
+            //         }
 
-                if score > max {
-                    self.pvt.copy_to(depth, *mov);
-                    max = score;
-                    if score > alpha {
-                        alpha = score;
-                    }
-                }
-            }
+            //         if score > max {
+            //             max = score;
+            //             if score > alpha {
+            //                 alpha = score;
+            //             }
+            //         }
+            //     }
+            // }
+
+            // if moves.is_empty() {
+            //     self.pvt.pv_leaf_at(depth);
+            //     return if self.pos.in_check() {
+            //         Score::mate(0)
+            //     } else {
+            //         Score::cp(0)
+            //     };
+            // }
+
+            // for mov in &moves {
+            //     self.pos.make_move(*mov);
+            //     let score = self.alphabeta(-beta, -alpha, depth - 1).neg().inc_mate();
+            //     self.pos.unmake_move();
+
+            //     if score >= beta {
+            //         return score;
+            //     }
+
+            //     if score > max {
+            //         self.pvt.copy_to(depth, *mov);
+            //         max = score;
+            //         if score > alpha {
+            //             alpha = score;
+            //         }
+            //     }
+            // }
 
             max
         }
