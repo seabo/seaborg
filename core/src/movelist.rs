@@ -24,7 +24,7 @@ use crate::mov::Move;
 pub const MAX_MOVES: usize = 254;
 
 /// Trait to generalize operations on structures containing a collection of `Move`s.
-pub trait MoveList: Sized + Index<usize, Output = Move> + IndexMut<usize, Output = Move> {
+pub trait MoveList: Index<usize, Output = Move> + IndexMut<usize, Output = Move> {
     /// Create an empty move list.
     fn empty() -> Self;
     /// Add a `Move` to the end of the list.

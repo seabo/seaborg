@@ -252,7 +252,7 @@ impl<'a> Perft<'a> {
     }
 
     #[inline(always)]
-    fn handle_leaf(&mut self, moves: &VecMoveList) {
+    fn handle_leaf(&mut self, moves: &BasicMoveList) {
         self.data.nodes += moves.len();
 
         if self.options.detailed || self.options.checks {
