@@ -12,7 +12,7 @@ use crate::masks::{CASTLING_PATH, CASTLING_ROOK_START, FILE_BB, PLAYER_CNT, RANK
 use crate::mono_traits::PlayerTrait;
 use crate::mov::{Move, MoveType, UndoableMove};
 use crate::movegen::{bishop_moves, rook_moves, MoveGen};
-use crate::movelist::MoveList;
+use crate::movelist::BasicMoveList;
 use crate::precalc::boards::{aligned, between_bb, king_moves, knight_moves, pawn_attacks_from};
 
 pub use board::Board;
@@ -752,11 +752,11 @@ impl Position {
     // MOVE GENERATION
     // Eventually, we should stabilise to just using this function, with resp.
     // 'trait signature' for each use.
-    pub fn generate_moves(&self) -> MoveList {
+    pub fn generate_moves(&self) -> BasicMoveList {
         MoveGen::generate(&self)
     }
 
-    pub fn generate_captures(&self) -> MoveList {
+    pub fn generate_captures(&self) -> BasicMoveList {
         MoveGen::generate_captures(&self)
     }
 

@@ -2,14 +2,14 @@
 use super::search::Search;
 
 use core::mov::Move;
-use core::movelist::MoveList;
+use core::movelist::BasicMoveList;
 use core::position::Position;
 
 use num::FromPrimitive;
 use num_derive::FromPrimitive;
 
 pub struct OrderedMoves {
-    moves: MoveList,
+    moves: BasicMoveList,
     phase: Phase,
     /// Cursor indicating current location in the move list iteration.
     cursor: *mut Move,

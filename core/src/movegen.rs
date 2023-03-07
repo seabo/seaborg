@@ -5,7 +5,7 @@ use crate::mono_traits::{
     PseudolegalType, QueenType, QuietChecksGenType, QuietsGenType, RookType, WhiteType,
 };
 use crate::mov::{Move, MoveType};
-use crate::movelist::{MVPushable, MoveList};
+use crate::movelist::{BasicMoveList, MVPushable};
 use crate::position::{CastleType, PieceType, Player, Position, Square, PROMO_PIECES};
 use crate::precalc::boards::{between_bb, king_moves, knight_moves, line_bb, pawn_attacks_from};
 use crate::precalc::magic;
@@ -63,16 +63,19 @@ impl MoveGen {
     /// - Would cause a discovered check (i.e. the moving piece is pinned)
     /// - Would cause the moving king to land in check
     #[inline]
-    pub fn generate(position: &Position) -> MoveList {
-        let mut movelist = MoveList::default();
-        InnerMoveGen::<MoveList>::generate::<AllGenType, LegalType>(position, &mut movelist);
+    pub fn generate(position: &Position) -> BasicMoveList {
+        let mut movelist = BasicMoveList::default();
+        InnerMoveGen::<BasicMoveList>::generate::<AllGenType, LegalType>(position, &mut movelist);
         movelist
     }
 
     #[inline]
-    pub fn generate_captures(position: &Position) -> MoveList {
-        let mut movelist = MoveList::default();
-        InnerMoveGen::<MoveList>::generate::<CapturesGenType, LegalType>(position, &mut movelist);
+    pub fn generate_captures(position: &Position) -> BasicMoveList {
+        let mut movelist = BasicMoveList::default();
+        InnerMoveGen::<BasicMoveList>::generate::<CapturesGenType, LegalType>(
+            position,
+            &mut movelist,
+        );
         movelist
     }
 }

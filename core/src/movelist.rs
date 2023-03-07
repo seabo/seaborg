@@ -30,12 +30,12 @@ pub trait MVPushable: Sized + IndexMut<usize> + Index<usize> + DerefMut {
 }
 
 #[derive(Clone)]
-pub struct MoveList {
+pub struct BasicMoveList {
     inner: [Move; MAX_MOVES],
     len: usize,
 }
 
-impl fmt::Display for MoveList {
+impl fmt::Display for BasicMoveList {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "[")?;
         for i in 0..self.len() {
@@ -45,32 +45,32 @@ impl fmt::Display for MoveList {
     }
 }
 
-impl Default for MoveList {
+impl Default for BasicMoveList {
     #[inline]
     fn default() -> Self {
-        MoveList {
+        BasicMoveList {
             inner: [Move::null(); MAX_MOVES],
             len: 0,
         }
     }
 }
 
-impl From<Vec<Move>> for MoveList {
+impl From<Vec<Move>> for BasicMoveList {
     fn from(vec: Vec<Move>) -> Self {
-        let mut list = MoveList::default();
+        let mut list = BasicMoveList::default();
         vec.iter().for_each(|m| list.push(*m));
         list
     }
 }
 
-impl Into<Vec<Move>> for MoveList {
+impl Into<Vec<Move>> for BasicMoveList {
     #[inline]
     fn into(self) -> Vec<Move> {
         self.vec()
     }
 }
 
-impl<'a> IntoIterator for &'a MoveList {
+impl<'a> IntoIterator for &'a BasicMoveList {
     type Item = &'a Move;
     type IntoIter = std::slice::Iter<'a, Move>;
 
@@ -79,7 +79,7 @@ impl<'a> IntoIterator for &'a MoveList {
     }
 }
 
-impl MoveList {
+impl BasicMoveList {
     /// Returns true if empty.
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
@@ -144,7 +144,7 @@ impl MoveList {
     }
 }
 
-impl Deref for MoveList {
+impl Deref for BasicMoveList {
     type Target = [Move];
 
     #[inline]
@@ -156,7 +156,7 @@ impl Deref for MoveList {
     }
 }
 
-impl DerefMut for MoveList {
+impl DerefMut for BasicMoveList {
     #[inline]
     fn deref_mut(&mut self) -> &mut [Move] {
         unsafe {
@@ -166,7 +166,7 @@ impl DerefMut for MoveList {
     }
 }
 
-impl Index<usize> for MoveList {
+impl Index<usize> for BasicMoveList {
     type Output = Move;
 
     #[inline(always)]
@@ -175,14 +175,14 @@ impl Index<usize> for MoveList {
     }
 }
 
-impl IndexMut<usize> for MoveList {
+impl IndexMut<usize> for BasicMoveList {
     #[inline(always)]
     fn index_mut(&mut self, index: usize) -> &mut Move {
         &mut (**self)[index]
     }
 }
 
-impl MVPushable for MoveList {
+impl MVPushable for BasicMoveList {
     #[cfg(debug_assertions)]
     #[inline(always)]
     fn push(&mut self, mv: Move) {
@@ -204,6 +204,6 @@ mod tests {
 
     #[test]
     fn move_list_is_1024_bytes() {
-        assert_eq!(mem::size_of::<MoveList>(), 1024);
+        assert_eq!(mem::size_of::<BasicMoveList>(), 1024);
     }
 }

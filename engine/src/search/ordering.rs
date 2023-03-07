@@ -3,7 +3,7 @@ use crate::search::search::TTData;
 use crate::tables::Table;
 
 use core::mov::Move;
-use core::movelist::{MoveList, MAX_MOVES};
+use core::movelist::{BasicMoveList, MAX_MOVES};
 use core::position::Position;
 
 use std::cell::{Ref, RefCell};
@@ -22,7 +22,7 @@ pub struct OrderedMoveList {
     tt: Rc<RefCell<Table<TTData>>>,
     /// The underlying `MoveList`. This gets consumed by the `OrderedMoveList`
     /// and won't be available after the iteration.
-    pub move_list: Option<MoveList>,
+    pub move_list: Option<BasicMoveList>,
     /// Parallel array to the `move_list`, containing ordering scores of the associated moves.
     move_scores: Option<[i32; MAX_MOVES]>,
     /// The transposition table move.
