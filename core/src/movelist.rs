@@ -25,8 +25,7 @@ pub const MAX_MOVES: usize = 254;
 
 /// Trait to generalize operations on structures containing a collection of `Move`s.
 pub trait MVPushable: Sized + IndexMut<usize> + Index<usize> + DerefMut {
-    /// Add a `Move` to the end of the list. Wraps `push_mv` and `unchecked_push_mv`
-    /// and use `cfg(debug_assertions)` to choose which to use at compile-time.
+    /// Add a `Move` to the end of the list.
     fn push(&mut self, mv: Move);
 }
 
