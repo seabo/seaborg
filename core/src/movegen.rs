@@ -5,7 +5,7 @@ use crate::mono_traits::{
     PseudolegalType, QueenType, QuietChecksGenType, QuietsGenType, RookType, WhiteType,
 };
 use crate::mov::{Move, MoveType};
-use crate::movelist::{BasicMoveList, MVPushable};
+use crate::movelist::{BasicMoveList, MoveList};
 use crate::position::{CastleType, PieceType, Player, Position, Square, PROMO_PIECES};
 use crate::precalc::boards::{between_bb, king_moves, knight_moves, line_bb, pawn_attacks_from};
 use crate::precalc::magic;
@@ -80,7 +80,7 @@ impl MoveGen {
     }
 }
 
-pub struct InnerMoveGen<'a, MP: MVPushable + 'a> {
+pub struct InnerMoveGen<'a, MP: MoveList + 'a> {
     movelist: &'a mut MP,
     position: &'a Position,
     /// All occupied squares on the board
@@ -91,7 +91,7 @@ pub struct InnerMoveGen<'a, MP: MVPushable + 'a> {
     them_occ: Bitboard,
 }
 
-impl<'a, MP: MVPushable> InnerMoveGen<'a, MP>
+impl<'a, MP: MoveList> InnerMoveGen<'a, MP>
 where
     <MP as Index<usize>>::Output: Sized,
 {

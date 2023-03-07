@@ -24,7 +24,7 @@ use crate::mov::Move;
 pub const MAX_MOVES: usize = 254;
 
 /// Trait to generalize operations on structures containing a collection of `Move`s.
-pub trait MVPushable: Sized + IndexMut<usize> + Index<usize> + DerefMut {
+pub trait MoveList: Sized + IndexMut<usize> + Index<usize> + DerefMut {
     /// Add a `Move` to the end of the list.
     fn push(&mut self, mv: Move);
 }
@@ -182,7 +182,7 @@ impl IndexMut<usize> for BasicMoveList {
     }
 }
 
-impl MVPushable for BasicMoveList {
+impl MoveList for BasicMoveList {
     #[cfg(debug_assertions)]
     #[inline(always)]
     fn push(&mut self, mv: Move) {
