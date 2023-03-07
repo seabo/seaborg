@@ -28,9 +28,6 @@ pub trait MVPushable: Sized + IndexMut<usize> + Index<usize> + DerefMut {
     /// Add a `Move` to the end of the list. Wraps `push_mv` and `unchecked_push_mv`
     /// and use `cfg(debug_assertions)` to choose which to use at compile-time.
     fn push(&mut self, mv: Move);
-
-    /// Add a `Move` to the end of the list.
-    fn push_mv(&mut self, mv: Move);
 }
 
 #[derive(Clone)]
@@ -138,6 +135,14 @@ impl MoveList {
     pub unsafe fn over_bounds_ptr(&mut self) -> *mut Move {
         self.as_mut_ptr().add(self.len)
     }
+
+    /// Add a `Move` to the end of the list.
+    #[inline(always)]
+    fn push_mv(&mut self, mv: Move) {
+        if self.len() < MAX_MOVES {
+            unsafe { self.unchecked_push_mv(mv) }
+        }
+    }
 }
 
 impl Deref for MoveList {
@@ -189,12 +194,6 @@ impl MVPushable for MoveList {
     fn push(&mut self, mv: Move) {
         unsafe {
             self.unchecked_push_mv(mv);
-        }
-    }
-    #[inline(always)]
-    fn push_mv(&mut self, mv: Move) {
-        if self.len() < MAX_MOVES {
-            unsafe { self.unchecked_push_mv(mv) }
         }
     }
 }
