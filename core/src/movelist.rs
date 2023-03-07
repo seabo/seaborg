@@ -1,5 +1,5 @@
 /// Data structure to store a collection `Move`s. This is used for move generation
-/// and exists to avoid using `Vec<Move>`, which would live on the heap. `MoveList`
+/// and exists to avoid using `Vec<Move>`, which would live on the heap. `BasicMoveList`
 /// uses a fixed size array structure, and so lives on the stack. We can do this
 /// because it is (believed to be) the case that no chess position has more than
 /// 218 legal moves, so we will never overflow the bounds if used correctly.
@@ -19,7 +19,7 @@ use std::slice;
 
 use crate::mov::Move;
 
-/// 254 is chosen so that the total size of the `MoveList` struct is exactly 1024
+/// 254 is chosen so that the total size of the `BasicMoveList` struct is exactly 1024
 /// bytes, taking account of the `len` field.
 pub const MAX_MOVES: usize = 254;
 
@@ -88,12 +88,7 @@ impl BasicMoveList {
 
     /// Create a `Vec<Move>` from this `MoveList`.
     pub fn vec(&self) -> Vec<Move> {
-        let mut vec = Vec::with_capacity(self.len);
-        for mov in self.iter() {
-            vec.push(*mov);
-        }
-        assert_eq!(vec.len(), self.len);
-        vec
+        self.into_iter().map(|m| *m).collect()
     }
 
     /// Return the number of moves inside the list.
