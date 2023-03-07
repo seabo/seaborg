@@ -203,7 +203,7 @@ mod tests {
     use std::mem;
 
     #[test]
-    fn move_list_is_1024_bytes() {
+    fn basic_move_list_is_1024_bytes() {
         assert_eq!(mem::size_of::<BasicMoveList>(), 1024);
     }
 }
