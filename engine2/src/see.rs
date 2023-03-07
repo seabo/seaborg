@@ -128,6 +128,12 @@ mod tests {
                 ("k7/7b/8/5p2/4PK2/8/5N2/8 b - - 0 1", Square::F5, Square::E4, PieceType::Pawn, PieceType::Pawn, Score::cp(0)),
                 ("8/1b6/3k4/3p4/3KP3/8/6B1/8 w - - 0 1", Square::E4, Square::D5, PieceType::Pawn, PieceType::Pawn, Score::cp(100)),
 
+                // TODO: need to reflect the positions and discussion here. Pawns promoting with
+                // capture, or pawns promoting without capture as the first move of SEE need
+                // attention. It might be easiest to use a search extension whenever we have a pawn
+                // on the 7th?
+                // http://www.talkchess.com/forum3/viewtopic.php?f=7&t=77787
+
                 // In these examples, the answer returned is not the true result because of
                 // pruning. The result is nevertheless the same (in terms of whether the initial
                 // capture is deemed favourable).
