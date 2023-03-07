@@ -55,6 +55,7 @@ impl Engine {
             Command::Quit => todo!(),
             Command::Display => self.command_display(),
             Command::Config => self.command_config(),
+            Command::Perft(d) => self.command_perft(d),
         }
     }
 
@@ -109,6 +110,15 @@ impl Engine {
             None => unreachable!(
                 "This method should never be called when a search is already in progress"
             ),
+        }
+    }
+
+    fn command_perft(&mut self, d: usize) {
+        match &mut self.pos {
+            Some(pos) => {
+                super::perft::Perft::divide(pos, d, false, false);
+            }
+            None => unreachable!("This method should never be called when a search is in progress"),
         }
     }
 

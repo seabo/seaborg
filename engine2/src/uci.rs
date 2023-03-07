@@ -26,6 +26,8 @@ pub enum Command {
     Display,
     /// Display the current engine configuration.
     Config,
+    /// Run perft to the given depth.
+    Perft(usize),
 }
 
 /// The reserved keywords which can be sent from the GUI to the engine.
@@ -67,6 +69,8 @@ enum Keyword {
     Display,
     /// Display the current config of the engine.
     Config,
+    /// Run a perft test.
+    Perft,
 }
 
 /// A parsing error.
@@ -202,7 +206,8 @@ impl<'a> Parser<'a> {
                 Token::Kw(Keyword::Quit) => todo!(),
                 Token::Kw(Keyword::Display) => self.parse_display(),
                 Token::Kw(Keyword::Config) => self.parse_config(),
-                Token::String(s) => self.unexpected_token(),
+                Token::Kw(Keyword::Perft) => self.parse_perft(),
+                Token::String(_) => self.unexpected_token(),
 
                 _ => todo!(),
             },
@@ -419,6 +424,11 @@ impl<'a> Parser<'a> {
     fn parse_config(&mut self) -> PResult {
         self.expect_end(Ok(Command::Config))
     }
+
+    fn parse_perft(&mut self) -> PResult {
+        let d = self.parse_integer()?;
+        Ok(Command::Perft(d))
+    }
 }
 
 #[derive(PartialEq)]
@@ -462,6 +472,7 @@ impl<'a> Token<'a> {
             "d" => Token::Kw(Keyword::Display),
             "display" => Token::Kw(Keyword::Display),
             "config" => Token::Kw(Keyword::Config),
+            "perft" => Token::Kw(Keyword::Perft),
             _ => Token::String(t),
         }
     }
