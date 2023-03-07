@@ -31,18 +31,6 @@ pub trait MVPushable: Sized + IndexMut<usize> + Index<usize> + DerefMut {
 
     /// Add a `Move` to the end of the list.
     fn push_mv(&mut self, mv: Move);
-
-    /// Add a `Move` to the end of the list, without checking bounds.
-    unsafe fn unchecked_push_mv(&mut self, mv: Move);
-
-    /// Set the length of the list.
-    unsafe fn unchecked_set_len(&mut self, len: usize);
-
-    /// Return a pointer to the first (0th index) element in the list.
-    unsafe fn list_ptr(&mut self) -> *mut Self::Output;
-
-    /// Return a pointer to the element next to the last element in the list.
-    unsafe fn over_bounds_ptr(&mut self) -> *mut Self::Output;
 }
 
 #[derive(Clone)]
@@ -91,7 +79,7 @@ impl<'a> IntoIterator for &'a MoveList {
     type IntoIter = std::slice::Iter<'a, Move>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.inner[0..self.len].iter()
+        unsafe { self.inner.get_unchecked(0..self.len).iter() }
     }
 }
 
@@ -129,6 +117,26 @@ impl MoveList {
     pub fn random(&self) -> Option<Move> {
         let mut rng = thread_rng();
         rng.choose(self.as_slice()).copied()
+    }
+
+    /// Add a `Move` to the end of the list, without checking bounds.
+    #[inline(always)]
+    pub unsafe fn unchecked_push_mv(&mut self, mv: Move) {
+        let end = self.inner.get_unchecked_mut(self.len);
+        *end = mv;
+        self.len += 1;
+    }
+
+    /// Return a pointer to the first (0th index) element in the list.
+    #[inline(always)]
+    pub unsafe fn list_ptr(&mut self) -> *mut Move {
+        self.as_mut_ptr()
+    }
+
+    /// Return a pointer to the element next to the last element in the list.
+    #[inline(always)]
+    pub unsafe fn over_bounds_ptr(&mut self) -> *mut Move {
+        self.as_mut_ptr().add(self.len)
     }
 }
 
@@ -188,28 +196,6 @@ impl MVPushable for MoveList {
         if self.len() < MAX_MOVES {
             unsafe { self.unchecked_push_mv(mv) }
         }
-    }
-
-    #[inline(always)]
-    unsafe fn unchecked_push_mv(&mut self, mv: Move) {
-        let end = self.inner.get_unchecked_mut(self.len);
-        *end = mv;
-        self.len += 1;
-    }
-
-    #[inline(always)]
-    unsafe fn unchecked_set_len(&mut self, len: usize) {
-        self.len = len
-    }
-
-    #[inline(always)]
-    unsafe fn list_ptr(&mut self) -> *mut Move {
-        self.as_mut_ptr()
-    }
-
-    #[inline(always)]
-    unsafe fn over_bounds_ptr(&mut self) -> *mut Move {
-        self.as_mut_ptr().add(self.len)
     }
 }
 
