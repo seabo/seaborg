@@ -71,13 +71,6 @@ impl OrderedMoves {
     }
 
     pub fn next_phase(&mut self, pos: &mut Position /* search: &mut Search */) -> bool {
-        // match FromPrimitive::from_u8(self.phase as u8 + 1) {
-        //     Some(p) => {
-        //         self.phase = p;
-        //         true
-        //     }
-        //     None => false,
-        // }
         use Phase::*;
         match self.phase {
             HashTable => {
