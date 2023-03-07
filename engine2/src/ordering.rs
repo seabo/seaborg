@@ -2,7 +2,7 @@
 use super::search::Search;
 
 use core::mov::Move;
-use core::movelist::{MoveList, VecMoveList};
+use core::movelist::MoveList;
 use core::position::Position;
 
 use num::FromPrimitive;
@@ -98,7 +98,7 @@ impl<L: MoveList> OrderedMoves<L> {
         // For now, we load all moves at hash phase time
         self.moves = pos.generate_moves::<L>();
         if self.moves.len() > 0 {
-            self.cursor = &mut self.moves[0] as *mut Move;
+            // self.cursor = &mut self.moves[0] as *mut Move;
         }
         self.end = unsafe { self.cursor.offset(self.moves.len() as isize) };
     }

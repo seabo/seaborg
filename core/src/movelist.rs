@@ -14,8 +14,10 @@
 use rand::{thread_rng, Rng};
 
 use std::fmt;
+use std::mem::MaybeUninit;
 use std::ops::{Deref, DerefMut, Index, IndexMut};
 use std::slice;
+use std::slice::Iter;
 
 use crate::mov::Move;
 
@@ -24,7 +26,8 @@ use crate::mov::Move;
 pub const MAX_MOVES: usize = 254;
 
 /// Trait to generalize operations on structures containing a collection of `Move`s.
-pub trait MoveList: Index<usize, Output = Move> + IndexMut<usize, Output = Move> {
+// pub trait MoveList: Index<usize, Output = Move> + IndexMut<usize, Output = Move> {
+pub trait MoveList {
     /// Create an empty move list.
     fn empty() -> Self;
     /// Add a `Move` to the end of the list.
@@ -250,13 +253,184 @@ impl<'a> IntoIterator for &'a VecMoveList {
         self.0.iter()
     }
 }
+
+const MAX_MOVES_FAST: usize = 54;
+
+/// An attempt at a fast `MoveList` implementation which doesn't take too much space.
+pub struct FastMoveList {
+    /// The main move storage. This can hold up to 54 moves, which is almost always enough. In very
+    /// rare case, we need more than this and overflow into an allocated `Vec`.
+    moves: [MaybeUninit<Move>; MAX_MOVES_FAST],
+    /// The size of the total move list, including overflow.
+    len: usize,
+    /// Overflow storage, initialized to zero capacity and rarely used.
+    overflow: MaybeUninit<Vec<Move>>,
+}
+
+impl MoveList for FastMoveList {
+    fn empty() -> Self {
+        FastMoveList {
+            moves: [MaybeUninit::uninit(); MAX_MOVES_FAST],
+            len: 0,
+            overflow: MaybeUninit::uninit(),
+        }
+    }
+
+    fn push(&mut self, mv: Move) {
+        if self.len >= MAX_MOVES_FAST {
+            if self.len == MAX_MOVES_FAST {
+                self.overflow = MaybeUninit::new(Vec::with_capacity(16));
+            } else {
+                // SAFETY: we initialized the `Vec` on the previous `push` in the branch above.
+                unsafe {
+                    (*self.overflow.assume_init_mut()).push(mv);
+                }
+            }
+
+            self.len += 1;
+        } else {
+            // SAFETY: We have already checked that `self.len` is in bounds.
+            unsafe {
+                *self.moves.get_unchecked_mut(self.len) = MaybeUninit::new(mv);
+                self.len += 1;
+            }
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.len
+    }
+}
+
+// impl Index<usize> for FastMoveList {
+//     type Output = Move;
+//
+//     #[inline(always)]
+//     fn index(&self, index: usize) -> &Move {
+//         if index + 1 > self.len {
+//             panic!(
+//                 "index out of bounds; the index is {}, but the length is {}",
+//                 index,
+//                 self.len()
+//             );
+//         } else {
+//             // SAFETY: we have done bounds checking above.
+//             unsafe { (*self.moves.get_unchecked(index)).assume_init_ref() }
+//         }
+//     }
+// }
+//
+// impl IndexMut<usize> for FastMoveList {
+//     #[inline(always)]
+//     fn index_mut(&mut self, index: usize) -> &mut Move {
+//         if index >= MAX_MOVES_FAST {
+//             &mut self.overflow[index - MAX_MOVES_FAST]
+//         } else if index + 1 > self.len {
+//             panic!(
+//                 "index out of bounds; the index is {}, but the length is {}",
+//                 index,
+//                 self.len()
+//             )
+//         } else {
+//             // SAFETY: we have done bounds checking above.
+//             unsafe { (*self.moves.get_unchecked_mut(index)).assume_init_mut() }
+//         }
+//     }
+// }
+
+pub struct FastMoveIter<'a> {
+    movelist: &'a FastMoveList,
+    cursor: *const MaybeUninit<Move>,
+    end: *const MaybeUninit<Move>,
+    overflow_iter: MaybeUninit<Iter<'a, Move>>,
+    in_overflow: bool,
+}
+
+impl<'a> IntoIterator for &'a FastMoveList {
+    type Item = &'a Move;
+    type IntoIter = FastMoveIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        let cursor = (&self.moves).as_ptr();
+
+        let end = if self.len() > MAX_MOVES_FAST {
+            // SAFETY: since the overall move list is longer than the main storage, we can offset
+            // to the end of main storage. We are offsetting one past the end of the array, which
+            // is a bit dangerous, but we will never dereference this.
+            unsafe { cursor.offset(MAX_MOVES_FAST as isize) }
+        } else {
+            // SAFETY: we did a bounds check to ensure that the end is inside the main array
+            // storage, so this pointer offset is valid.
+            unsafe { cursor.offset(self.len() as isize) }
+        };
+
+        FastMoveIter {
+            movelist: &self,
+            cursor,
+            end,
+            overflow_iter: MaybeUninit::uninit(),
+            in_overflow: false,
+        }
+    }
+}
+
+impl<'a> Iterator for FastMoveIter<'a> {
+    type Item = &'a Move;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.in_overflow {
+            unsafe { self.overflow_iter.assume_init_mut().next() }
+        } else {
+            if self.cursor == self.end {
+                if self.movelist.len() > MAX_MOVES_FAST {
+                    // SAFETY: given the bounds check, we know the overflow has been initialized
+                    unsafe {
+                        self.overflow_iter =
+                            MaybeUninit::new(self.movelist.overflow.assume_init_ref().iter());
+                    }
+
+                    self.in_overflow = true;
+
+                    // SAFETY: we have just initialized this above
+                    unsafe { self.overflow_iter.assume_init_mut().next() }
+                } else {
+                    None
+                }
+            } else {
+                // SAFETY: given the bounds check, we can dereference
+                unsafe {
+                    let m = (*self.cursor).assume_init_ref();
+                    self.cursor = self.cursor.offset(1);
+                    Some(m)
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::position::Position;
+
     use std::mem;
 
     #[test]
     fn basic_move_list_is_1024_bytes() {
         assert_eq!(mem::size_of::<BasicMoveList>(), 1024);
+    }
+
+    #[test]
+    fn fast_move_list() {
+        crate::init::init_globals();
+
+        let pos = Position::start_pos();
+
+        let moves = pos.generate_moves::<FastMoveList>();
+
+        for mov in &moves {
+            println!("{}", mov);
+        }
+        println!("len: {}", moves.len());
     }
 }

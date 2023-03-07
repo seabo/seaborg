@@ -1,5 +1,5 @@
 use core::mov::Move;
-use core::movelist::{BasicMoveList, MoveList, VecMoveList};
+use core::movelist::{BasicMoveList, FastMoveList, MoveList, VecMoveList};
 use core::position::{Position, START_POSITION};
 
 use separator::Separatable;
@@ -252,7 +252,7 @@ impl<'a> Perft<'a> {
     }
 
     #[inline(always)]
-    fn handle_leaf(&mut self, moves: &BasicMoveList) {
+    fn handle_leaf(&mut self, moves: &FastMoveList) {
         self.data.nodes += moves.len();
 
         if self.options.detailed || self.options.checks {
