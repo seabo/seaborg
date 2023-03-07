@@ -76,7 +76,10 @@ impl OrderedMoves {
             HashTable => {
                 self.load_hash_phase(pos);
             }
-            QueenPromotions => {}
+            QueenPromotions => {
+                // Skip all the other phases.
+                return false;
+            }
             GoodCaptures => {}
             EqualCaptures => {}
             Killers => {}
