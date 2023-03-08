@@ -143,7 +143,7 @@ mod tests {
                 let mut moves = OrderedMoves::<OverflowingMoveList>::new();
                 while moves.next_phase(&mut self.pos) {
                     for mov in &mut moves {
-                        self.pos.make_move(mov);
+                        self.pos.make_move(&mov);
                         self.perft_recurse(depth - 1);
                         self.pos.unmake_move();
                     }

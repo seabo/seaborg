@@ -1,4 +1,4 @@
-use core::mono_traits::{LegalType, PseudolegalType};
+use core::mono_traits::LegalType;
 use core::mov::Move;
 use core::movelist::BasicMoveList;
 use core::position::{Position, START_POSITION};
@@ -181,11 +181,11 @@ impl<'a> Perft<'a> {
             self.data.nodes += 1;
         }
 
+        let moves = self.position.generate::<_, LegalType>();
+
         if depth == 1 {
-            let moves = self.position.generate::<_, LegalType>();
             self.handle_leaf(&moves);
         } else {
-            let moves = self.position.generate::<BasicMoveList, LegalType>();
             for mov in &moves {
                 self.recurse(mov, depth - 1);
             }
@@ -234,14 +234,14 @@ impl<'a> Perft<'a> {
         let mut cumulative_nodes: usize = 0;
         let start = Instant::now();
 
+        let moves = perft.position.generate::<_, LegalType>();
+
         if depth == 1 {
-            let moves = perft.position.generate::<_, LegalType>();
             perft.handle_leaf(&moves);
             for mov in &moves {
                 println!("{}: 1", mov);
             }
         } else {
-            let moves = perft.position.generate::<BasicMoveList, PseudolegalType>();
             for mov in &moves {
                 perft.recurse(mov, depth - 1);
                 let new_nodes_for_mov = perft.data.nodes - cumulative_nodes;
@@ -296,9 +296,7 @@ impl<'a> Perft<'a> {
     #[inline(always)]
     fn recurse(&mut self, mov: &Move, depth: usize) {
         self.position.make_move(mov);
-        if !self.position.enemy_in_check() {
-            self.perft_inner(depth);
-        }
+        self.perft_inner(depth);
         self.position.unmake_move();
     }
 }
