@@ -9,10 +9,10 @@ mod zobrist;
 
 use crate::bb::Bitboard;
 use crate::masks::{CASTLING_PATH, CASTLING_ROOK_START, FILE_BB, PLAYER_CNT, RANK_BB};
-use crate::mono_traits::PlayerTrait;
+use crate::mono_traits::{LegalityTrait, PlayerTrait};
 use crate::mov::{Move, MoveType, UndoableMove};
 use crate::movegen::{bishop_moves, rook_moves, MoveGen};
-use crate::movelist::{BasicMoveList, MoveList};
+use crate::movelist::{BasicMoveList, Frame, MoveList, MoveStack};
 use crate::precalc::boards::{aligned, between_bb, king_moves, knight_moves, pawn_attacks_from};
 
 pub use board::Board;
@@ -519,6 +519,16 @@ impl Position {
         self.state.checkers.is_not_empty()
     }
 
+    /// Returns if opponent is in check. Such a state can never occur legally in chess. Sometimes
+    /// we generate pseudolegal moves which, when made, cause this state to arise. Use this method
+    /// to check if that has occurred and bail.
+    #[inline(always)]
+    pub fn enemy_in_check(&self) -> bool {
+        (self.attack_defend(self.occupied(), self.king_sq(!self.turn()))
+            & self.get_occupied_player_runtime(self.turn()))
+        .is_empty()
+    }
+
     pub fn in_checkmate(&self) -> bool {
         self.in_check() && self.generate_moves::<BasicMoveList>().is_empty()
     }
@@ -529,6 +539,7 @@ impl Position {
 
     /// Returns a `Bitboard` of possible attacks to a square with a given occupancy.
     /// Includes pieces from both players.
+    // TODO: dedup this and `attack_defend`? which is faster?
     pub fn attackers_to(&self, sq: Square) -> Bitboard {
         (Bitboard(pawn_attacks_from(sq, Player::BLACK)) & self.bbs[1])
             | (Bitboard(pawn_attacks_from(sq, Player::WHITE)) & self.bbs[7])
@@ -754,6 +765,17 @@ impl Position {
     // 'trait signature' for each use.
     pub fn generate_moves<L: MoveList>(&self) -> L {
         MoveGen::generate(&self)
+    }
+
+    pub fn generate<ML: MoveList, L: LegalityTrait>(&self) -> ML {
+        MoveGen::generate_of_legality::<ML, L>(&self)
+    }
+
+    pub fn generate_in<'a: 'p + 'ms, 'ms, 'p, L: LegalityTrait>(
+        &'p self,
+        ms: &'ms mut MoveStack,
+    ) -> Frame<'a> {
+        MoveGen::generate_in_movestack::<'a, 'ms, 'p, L>(&self, ms)
     }
 
     pub fn generate_captures(&self) -> BasicMoveList {

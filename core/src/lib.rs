@@ -3,11 +3,11 @@ mod macros;
 
 mod bit_twiddles;
 mod masks;
-mod mono_traits;
 mod precalc;
 
 pub mod bb;
 pub mod init;
+pub mod mono_traits;
 pub mod mov;
 pub mod movegen;
 pub mod movelist;

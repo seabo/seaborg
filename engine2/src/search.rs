@@ -5,6 +5,7 @@ use super::score::Score;
 use super::time::TimingMode;
 use super::trace::Tracer;
 
+use core::mono_traits::LegalType;
 use core::movegen::MoveGen;
 use core::movelist::{BasicMoveList, MoveStack, OverflowingMoveList};
 use core::position::{Player, Position};
@@ -107,10 +108,7 @@ impl Search {
         } else {
             let mut max = Score::INF_N;
 
-            let moves = MoveGen::generate_in_movestack::<'search, '_, '_>(
-                &mut self.pos,
-                &mut self.movestack,
-            );
+            let moves = self.pos.generate_in::<LegalType>(&mut self.movestack);
 
             // TODO: this ought to be illegal, but is not. We have a pointer to the underlying
             // storage inside `moves`.

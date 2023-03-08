@@ -1,4 +1,5 @@
 use core::init::init_globals;
+use core::mono_traits::{LegalType, PseudolegalType};
 use core::movelist::BasicMoveList;
 use core::position::{Position, Square};
 use engine::eval::Evaluation;
@@ -28,7 +29,32 @@ pub fn dev() {
     // do_movegen();
     // do_ordering();
     // do_perf_legal_move();
-    do_attadef();
+    // do_attadef();
+    do_pseudolegal();
+}
+
+fn do_pseudolegal() {
+    // let mut pos = Position::from_fen("8/3k4/2bb4/8/5R2/6K1/8/8 w - - 0 1").unwrap();
+    let mut pos = Position::from_fen("k7/3b4/8/5Pp1/8/7K/8/8 w - g6 0 1").unwrap();
+
+    let moves = pos.generate::<BasicMoveList, PseudolegalType>();
+    let mut legal_cnt = 0;
+
+    for mov in &moves {
+        pos.make_move(*mov);
+        let enemy_in_check = pos.enemy_in_check();
+
+        if enemy_in_check {
+            legal_cnt += 1;
+            println!("{} LEGAL", *mov);
+        } else {
+            println!("{} ILLEGAL", *mov);
+        }
+        println!("{}", pos);
+        pos.unmake_move();
+    }
+
+    println!("{} pseudolegal moves; {} legal", moves.len(), legal_cnt);
 }
 
 fn do_attadef() {

@@ -1,3 +1,4 @@
+use core::mono_traits::{LegalType, PseudolegalType};
 use core::mov::Move;
 use core::movegen::MoveGen;
 use core::movelist::{BasicMoveList, Frame, MoveList, MoveStack};
@@ -184,8 +185,9 @@ impl<'a> Perft<'a> {
         }
 
         // let moves = self.position.generate_moves();
-        let moves =
-            MoveGen::generate_in_movestack::<'_, '_, '_>(&mut self.position, &mut self.movestack);
+        let moves = self
+            .position
+            .generate_in::<PseudolegalType>(&mut self.movestack);
 
         if depth == 1 {
             self.handle_leaf(&moves);
@@ -239,8 +241,9 @@ impl<'a> Perft<'a> {
         let start = Instant::now();
 
         // let moves = perft.position.generate_moves();
-        let moves =
-            MoveGen::generate_in_movestack::<'_, '_, '_>(&mut perft.position, &mut perft.movestack);
+        let moves = perft
+            .position
+            .generate_in::<PseudolegalType>(&mut perft.movestack);
 
         if depth == 1 {
             perft.handle_leaf(&moves);
