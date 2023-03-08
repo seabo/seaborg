@@ -5,7 +5,7 @@ use super::score::Score;
 use super::time::TimingMode;
 use super::trace::Tracer;
 
-use core::movelist::{BasicMoveList, VecMoveList};
+use core::movelist::{BasicMoveList, OverflowingMoveList};
 use core::position::{Player, Position};
 
 use separator::Separatable;
@@ -104,32 +104,41 @@ impl Search {
         } else {
             let mut max = Score::INF_N;
 
-            // let moves = self.pos.generate_moves();
-            let mut moves = OrderedMoves::<VecMoveList>::new();
-            let mut c: u8 = 0;
+            // let mut moves = OrderedMoves::<OverflowingMoveList>::new();
+            // let mut c: u8 = 0;
 
-            while moves.next_phase(&mut self.pos) {
-                for mov in &mut moves {
-                    c += 1;
-                    self.pos.make_move(mov);
-                    let score = self.alphabeta(-beta, -alpha, depth - 1).neg().inc_mate();
-                    self.pos.unmake_move();
+            // while moves.next_phase(&mut self.pos) {
+            //     for mov in &mut moves {
+            //         c += 1;
+            //         self.pos.make_move(mov);
+            //         let score = self.alphabeta(-beta, -alpha, depth - 1).neg().inc_mate();
+            //         self.pos.unmake_move();
 
-                    if score >= beta {
-                        return score;
-                    }
+            //         if score >= beta {
+            //             return score;
+            //         }
 
-                    if score > max {
-                        self.pvt.copy_to(depth, mov);
-                        max = score;
-                        if score > alpha {
-                            alpha = score;
-                        }
-                    }
-                }
-            }
+            //         if score > max {
+            //             self.pvt.copy_to(depth, mov);
+            //             max = score;
+            //             if score > alpha {
+            //                 alpha = score;
+            //             }
+            //         }
+            //     }
+            // }
 
-            if c == 0 {
+            // if c == 0 {
+            //     self.pvt.pv_leaf_at(depth);
+            //     return if self.pos.in_check() {
+            //         Score::mate(0)
+            //     } else {
+            //         Score::cp(0)
+            //     };
+            // }
+
+            let moves = self.pos.generate_moves::<BasicMoveList>();
+            if moves.is_empty() {
                 self.pvt.pv_leaf_at(depth);
                 return if self.pos.in_check() {
                     Score::mate(0)
@@ -137,24 +146,23 @@ impl Search {
                     Score::cp(0)
                 };
             }
+            for mov in &moves {
+                self.pos.make_move(*mov);
+                let score = self.alphabeta(-beta, -alpha, depth - 1).neg().inc_mate();
+                self.pos.unmake_move();
 
-            // for mov in &moves {
-            //     self.pos.make_move(*mov);
-            //     let score = self.alphabeta(-beta, -alpha, depth - 1).neg().inc_mate();
-            //     self.pos.unmake_move();
+                if score >= beta {
+                    return score;
+                }
 
-            //     if score >= beta {
-            //         return score;
-            //     }
-
-            //     if score > max {
-            //         self.pvt.copy_to(depth, *mov);
-            //         max = score;
-            //         if score > alpha {
-            //             alpha = score;
-            //         }
-            //     }
-            // }
+                if score > max {
+                    self.pvt.copy_to(depth, *mov);
+                    max = score;
+                    if score > alpha {
+                        alpha = score;
+                    }
+                }
+            }
 
             max
         }

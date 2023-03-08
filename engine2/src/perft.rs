@@ -1,5 +1,5 @@
 use core::mov::Move;
-use core::movelist::{BasicMoveList, FastMoveList, MoveList, VecMoveList};
+use core::movelist::BasicMoveList;
 use core::position::{Position, START_POSITION};
 
 use separator::Separatable;

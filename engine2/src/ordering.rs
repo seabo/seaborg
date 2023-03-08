@@ -2,7 +2,7 @@
 use super::search::Search;
 
 use core::mov::Move;
-use core::movelist::MoveList;
+use core::movelist::{MoveList, OverflowingMoveList};
 use core::position::Position;
 
 use num::FromPrimitive;
@@ -138,9 +138,9 @@ mod tests {
 
         fn perft_recurse(&mut self, depth: usize) {
             if depth == 1 {
-                self.count += self.pos.generate_moves::<VecMoveList>().len();
+                self.count += self.pos.generate_moves::<OverflowingMoveList>().len();
             } else {
-                let mut moves = OrderedMoves::<VecMoveList>::new();
+                let mut moves = OrderedMoves::<OverflowingMoveList>::new();
                 while moves.next_phase(&mut self.pos) {
                     for mov in &mut moves {
                         self.pos.make_move(mov);
