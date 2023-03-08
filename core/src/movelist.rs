@@ -26,7 +26,6 @@ use crate::mov::Move;
 pub const MAX_MOVES: usize = 254;
 
 /// Trait to generalize operations on structures containing a collection of `Move`s.
-// pub trait MoveList: Index<usize, Output = Move> + IndexMut<usize, Output = Move> {
 pub trait MoveList {
     /// Create an empty move list.
     fn empty() -> Self;
@@ -210,9 +209,9 @@ impl MoveList for BasicMoveList {
 }
 
 /// A type implementing `MoveList` which based on a `Vec`.
-pub struct VecMoveList(Vec<Move>);
+pub struct OverflowingMoveList(Vec<Move>);
 
-impl MoveList for VecMoveList {
+impl MoveList for OverflowingMoveList {
     #[inline(always)]
     fn empty() -> Self {
         Self(Vec::new())
@@ -229,7 +228,7 @@ impl MoveList for VecMoveList {
     }
 }
 
-impl Index<usize> for VecMoveList {
+impl Index<usize> for OverflowingMoveList {
     type Output = Move;
 
     #[inline(always)]
@@ -238,14 +237,14 @@ impl Index<usize> for VecMoveList {
     }
 }
 
-impl IndexMut<usize> for VecMoveList {
+impl IndexMut<usize> for OverflowingMoveList {
     #[inline(always)]
     fn index_mut(&mut self, index: usize) -> &mut Move {
         &mut *self.0.index_mut(index)
     }
 }
 
-impl<'a> IntoIterator for &'a VecMoveList {
+impl<'a> IntoIterator for &'a OverflowingMoveList {
     type Item = &'a Move;
     type IntoIter = std::slice::Iter<'a, Move>;
 
@@ -301,42 +300,6 @@ impl MoveList for FastMoveList {
         self.len
     }
 }
-
-// impl Index<usize> for FastMoveList {
-//     type Output = Move;
-//
-//     #[inline(always)]
-//     fn index(&self, index: usize) -> &Move {
-//         if index + 1 > self.len {
-//             panic!(
-//                 "index out of bounds; the index is {}, but the length is {}",
-//                 index,
-//                 self.len()
-//             );
-//         } else {
-//             // SAFETY: we have done bounds checking above.
-//             unsafe { (*self.moves.get_unchecked(index)).assume_init_ref() }
-//         }
-//     }
-// }
-//
-// impl IndexMut<usize> for FastMoveList {
-//     #[inline(always)]
-//     fn index_mut(&mut self, index: usize) -> &mut Move {
-//         if index >= MAX_MOVES_FAST {
-//             &mut self.overflow[index - MAX_MOVES_FAST]
-//         } else if index + 1 > self.len {
-//             panic!(
-//                 "index out of bounds; the index is {}, but the length is {}",
-//                 index,
-//                 self.len()
-//             )
-//         } else {
-//             // SAFETY: we have done bounds checking above.
-//             unsafe { (*self.moves.get_unchecked_mut(index)).assume_init_mut() }
-//         }
-//     }
-// }
 
 pub struct FastMoveIter<'a> {
     movelist: &'a FastMoveList,
