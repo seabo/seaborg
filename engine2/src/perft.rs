@@ -1,5 +1,6 @@
 use core::mov::Move;
-use core::movelist::BasicMoveList;
+use core::movegen::MoveGen;
+use core::movelist::{BasicMoveList, Frame, MoveList, MoveStack};
 use core::position::{Position, START_POSITION};
 
 use separator::Separatable;
@@ -138,6 +139,7 @@ impl PerftDataInternal {
 }
 
 pub struct Perft<'a> {
+    movestack: MoveStack,
     options: PerftOptions,
     position: &'a mut Position,
     data: PerftDataInternal,
@@ -146,6 +148,7 @@ pub struct Perft<'a> {
 impl<'a> Perft<'a> {
     fn new(position: &'a mut Position, options: PerftOptions) -> Self {
         Self {
+            movestack: MoveStack::new(),
             options,
             position,
             data: PerftDataInternal::new(),
@@ -180,7 +183,9 @@ impl<'a> Perft<'a> {
             self.data.nodes += 1;
         }
 
-        let moves = self.position.generate_moves();
+        // let moves = self.position.generate_moves();
+        let moves =
+            MoveGen::generate_in_movestack::<'_, '_, '_>(&mut self.position, &mut self.movestack);
 
         if depth == 1 {
             self.handle_leaf(&moves);
@@ -229,9 +234,14 @@ impl<'a> Perft<'a> {
         assert!(depth >= 1);
         let perft_options = PerftOptions::new(collect_detailed_data, collect_check_data);
         let mut perft = Self::new(position, perft_options);
+
         let mut cumulative_nodes: usize = 0;
         let start = Instant::now();
-        let moves = perft.position.generate_moves();
+
+        // let moves = perft.position.generate_moves();
+        let moves =
+            MoveGen::generate_in_movestack::<'_, '_, '_>(&mut perft.position, &mut perft.movestack);
+
         if depth == 1 {
             perft.handle_leaf(&moves);
             for mov in &moves {
@@ -252,7 +262,7 @@ impl<'a> Perft<'a> {
     }
 
     #[inline(always)]
-    fn handle_leaf(&mut self, moves: &BasicMoveList) {
+    fn handle_leaf(&mut self, moves: &Frame) {
         self.data.nodes += moves.len();
 
         if self.options.detailed || self.options.checks {
@@ -319,7 +329,6 @@ pub const TESTS: [(&str, usize, usize); 9] = [
 mod tests {
     use super::*;
     use core::init::init_globals;
-    use core::position::START_POSITION;
 
     fn setup() {
         init_globals();

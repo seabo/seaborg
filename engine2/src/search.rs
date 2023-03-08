@@ -124,7 +124,7 @@ impl Search {
             // the data structure. We _do_ want to enforce that the move iterator cannot live
             // longer than the underlying `MoveStack` storage though.
             for mov in &moves {
-                self.pos.make_move(mov);
+                self.pos.make_move(*mov);
                 let score = self.alphabeta(-beta, -alpha, depth - 1).neg().inc_mate();
                 self.pos.unmake_move();
             }

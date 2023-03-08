@@ -480,7 +480,7 @@ pub struct FrameIter<'a> {
 }
 
 impl<'a, 'b: 'a> IntoIterator for &'b Frame<'a> {
-    type Item = Move;
+    type Item = &'a Move;
     type IntoIter = FrameIter<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -493,13 +493,13 @@ impl<'a, 'b: 'a> IntoIterator for &'b Frame<'a> {
 }
 
 impl<'a, 'b> Iterator for FrameIter<'a> {
-    type Item = Move;
+    type Item = &'a Move;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.cursor >= self.frame.rng.end {
             None
         } else {
-            let m = unsafe { *self.cursor };
+            let m = unsafe { &*self.cursor };
             self.cursor = unsafe { self.cursor.add(1) };
             Some(m)
         }
@@ -560,10 +560,10 @@ mod tests {
         let mut c: usize = 0;
 
         for mov in &moves {
-            pos.make_move(mov);
+            pos.make_move(*mov);
             let ply_2 = MoveGen::generate_in_movestack::<'_, '_, '_>(&mut pos, &mut ms);
             for mov2 in &ply_2 {
-                pos.make_move(mov2);
+                pos.make_move(*mov2);
                 let ply_3 = MoveGen::generate_in_movestack::<'_, '_, '_>(&mut pos, &mut ms);
                 pos.unmake_move();
                 for _ in &ply_3 {
