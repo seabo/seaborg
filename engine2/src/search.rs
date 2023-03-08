@@ -108,7 +108,7 @@ impl Search {
         } else {
             let mut max = Score::INF_N;
 
-            let moves = self.pos.generate_in::<LegalType>(&mut self.movestack);
+            // let moves = self.pos.generate_in::<LegalType>(&mut self.movestack);
 
             // TODO: this ought to be illegal, but is not. We have a pointer to the underlying
             // storage inside `moves`.
@@ -121,41 +121,41 @@ impl Search {
             // in this iterator until the iterator gets dropped, thanks to the invariants upheld in
             // the data structure. We _do_ want to enforce that the move iterator cannot live
             // longer than the underlying `MoveStack` storage though.
-            for mov in &moves {
-                self.pos.make_move(*mov);
-                let score = self.alphabeta(-beta, -alpha, depth - 1).neg().inc_mate();
-                self.pos.unmake_move();
-            }
+            //for mov in &moves {
+            //    self.pos.make_move(*mov);
+            //    let score = self.alphabeta(-beta, -alpha, depth - 1).neg().inc_mate();
+            //    self.pos.unmake_move();
+            //}
 
             // -----------------------------------------------------------------------------------
             // Main implementation, using `BasicMoveList`
             // -----------------------------------------------------------------------------------
-            // let moves = self.pos.generate_moves::<BasicMoveList>();
-            // if moves.is_empty() {
-            //     self.pvt.pv_leaf_at(depth);
-            //     return if self.pos.in_check() {
-            //         Score::mate(0)
-            //     } else {
-            //         Score::cp(0)
-            //     };
-            // }
-            // for mov in &moves {
-            //     self.pos.make_move(*mov);
-            //     let score = self.alphabeta(-beta, -alpha, depth - 1).neg().inc_mate();
-            //     self.pos.unmake_move();
+            let moves = self.pos.generate_moves::<BasicMoveList>();
+            if moves.is_empty() {
+                self.pvt.pv_leaf_at(depth);
+                return if self.pos.in_check() {
+                    Score::mate(0)
+                } else {
+                    Score::cp(0)
+                };
+            }
+            for mov in &moves {
+                self.pos.make_move(mov);
+                let score = self.alphabeta(-beta, -alpha, depth - 1).neg().inc_mate();
+                self.pos.unmake_move();
 
-            //     if score >= beta {
-            //         return score;
-            //     }
+                if score >= beta {
+                    return score;
+                }
 
-            //     if score > max {
-            //         self.pvt.copy_to(depth, *mov);
-            //         max = score;
-            //         if score > alpha {
-            //             alpha = score;
-            //         }
-            //     }
-            // }
+                if score > max {
+                    self.pvt.copy_to(depth, *mov);
+                    max = score;
+                    if score > alpha {
+                        alpha = score;
+                    }
+                }
+            }
 
             max
         }
@@ -180,7 +180,7 @@ impl Search {
             }
 
             for mov in &moves {
-                self.pos.make_move(*mov);
+                self.pos.make_move(mov);
                 let score = self.negamax(depth - 1).neg().inc_mate();
                 self.pos.unmake_move();
 
@@ -258,7 +258,7 @@ impl Search {
                 continue;
             }
 
-            self.pos.make_move(*mov);
+            self.pos.make_move(mov);
             score = self.quiesce(-beta, -alpha).neg().inc_mate();
             self.pos.unmake_move();
 

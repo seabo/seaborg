@@ -41,7 +41,7 @@ fn do_pseudolegal() {
     let mut legal_cnt = 0;
 
     for mov in &moves {
-        pos.make_move(*mov);
+        pos.make_move(mov);
         let enemy_in_check = pos.enemy_in_check();
 
         if !enemy_in_check {

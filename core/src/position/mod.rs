@@ -157,7 +157,7 @@ impl Position {
             half_move_clock: 0,
             move_number: 1,
             state: State::blank(),
-            history: Vec::new(),
+            history: Vec::with_capacity(16),
             zobrist: Zobrist::empty(),
         }
     }
@@ -203,7 +203,7 @@ impl Position {
     ///
     /// The supplied `Move` must be legal in the current position, otherwise a
     /// panic will occur. Legal moves can be generated with `MoveGen::generate_all()`
-    pub fn make_move(&mut self, mov: Move) {
+    pub fn make_move(&mut self, mov: &Move) {
         // In debug mode, check the move isn't somehow null
         debug_assert_ne!(mov.orig(), mov.dest());
 
@@ -443,7 +443,7 @@ impl Position {
         for mov in &moves {
             let uci_mov = mov.to_uci_string();
             if uci == uci_mov {
-                self.make_move(*mov);
+                self.make_move(mov);
                 return Some(*mov);
             }
         }

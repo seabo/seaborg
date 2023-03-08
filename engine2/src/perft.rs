@@ -187,7 +187,7 @@ impl<'a> Perft<'a> {
         } else {
             let moves = self.position.generate::<BasicMoveList, LegalType>();
             for mov in &moves {
-                self.recurse(*mov, depth - 1);
+                self.recurse(mov, depth - 1);
             }
         }
     }
@@ -243,7 +243,7 @@ impl<'a> Perft<'a> {
         } else {
             let moves = perft.position.generate::<BasicMoveList, PseudolegalType>();
             for mov in &moves {
-                perft.recurse(*mov, depth - 1);
+                perft.recurse(mov, depth - 1);
                 let new_nodes_for_mov = perft.data.nodes - cumulative_nodes;
                 println!("{}: {}", mov, new_nodes_for_mov.separated_string());
                 cumulative_nodes += new_nodes_for_mov;
@@ -280,7 +280,7 @@ impl<'a> Perft<'a> {
                 }
 
                 if self.options.checks {
-                    self.position.make_move(*mov);
+                    self.position.make_move(mov);
                     if self.position.in_checkmate() {
                         self.data.checkmate += 1;
                     }
@@ -294,7 +294,7 @@ impl<'a> Perft<'a> {
     }
 
     #[inline(always)]
-    fn recurse(&mut self, mov: Move, depth: usize) {
+    fn recurse(&mut self, mov: &Move, depth: usize) {
         self.position.make_move(mov);
         if !self.position.enemy_in_check() {
             self.perft_inner(depth);

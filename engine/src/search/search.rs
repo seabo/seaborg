@@ -202,8 +202,8 @@ impl Search {
     pub fn recover_pv(&mut self) -> Vec<Move> {
         let mut pv: Vec<Move> = Vec::new();
         let mut length = 0;
-        while let Some(mov) = self.get_tt_move() {
-            pv.push(mov);
+        while let Some(ref mov) = self.get_tt_move() {
+            pv.push(*mov);
             self.pos.make_move(mov);
             length += 1;
         }
@@ -364,7 +364,7 @@ impl Search {
         for (mov, ordering_phase) in ordered_moves {
             node_move_count += 1;
             self.moves_visited += 1;
-            self.pos.make_move(mov);
+            self.pos.make_move(&mov);
             let mut score: i32;
             if search_pv {
                 score = -self.search(depth - 1, -beta, -alpha);
@@ -443,7 +443,7 @@ impl Search {
         let mut node_move_count = 0;
         for mov in &captures {
             node_move_count += 1;
-            self.pos.make_move(*mov);
+            self.pos.make_move(mov);
             score = -self.quiesce(-beta, -alpha);
             self.pos.unmake_move();
 
