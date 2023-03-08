@@ -69,6 +69,7 @@ impl MoveGen {
         movelist
     }
 
+    #[inline]
     pub fn generate_of_legality<ML: MoveList, L: LegalityTrait>(position: &Position) -> ML {
         let mut movelist = ML::empty();
         InnerMoveGen::<ML>::generate::<AllGenType, L>(position, &mut movelist);
@@ -77,15 +78,18 @@ impl MoveGen {
 
     /// Generates moves of type defined by `L: LegalityTrait` and pushes them onto the passed
     /// `MoveList`.
+    #[inline]
     pub fn generate_in<ML: MoveList, L: LegalityTrait>(position: &Position, ms: &mut ML) {
         InnerMoveGen::<ML>::generate::<AllGenType, L>(position, ms);
     }
 
     /// Generates legal moves and pushes them onto the passed `MoveList`.
+    #[inline]
     pub fn generate_legal_in<ML: MoveList>(position: &Position, ms: &mut ML) {
         InnerMoveGen::<ML>::generate::<AllGenType, LegalType>(position, ms);
     }
 
+    #[inline]
     pub fn generate_in_movestack<'a: 'ms + 'p, 'ms, 'p, L: LegalityTrait>(
         position: &'p Position,
         ms: &'ms mut MoveStack,

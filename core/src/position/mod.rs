@@ -526,7 +526,7 @@ impl Position {
     pub fn enemy_in_check(&self) -> bool {
         (self.attack_defend(self.occupied(), self.king_sq(!self.turn()))
             & self.get_occupied_player_runtime(self.turn()))
-        .is_empty()
+        .is_not_empty()
     }
 
     pub fn in_checkmate(&self) -> bool {
@@ -763,14 +763,17 @@ impl Position {
     // MOVE GENERATION
     // Eventually, we should stabilise to just using this function, with resp.
     // 'trait signature' for each use.
+    #[inline]
     pub fn generate_moves<L: MoveList>(&self) -> L {
         MoveGen::generate(&self)
     }
 
+    #[inline]
     pub fn generate<ML: MoveList, L: LegalityTrait>(&self) -> ML {
         MoveGen::generate_of_legality::<ML, L>(&self)
     }
 
+    #[inline]
     pub fn generate_in<'a: 'p + 'ms, 'ms, 'p, L: LegalityTrait>(
         &'p self,
         ms: &'ms mut MoveStack,
@@ -778,10 +781,12 @@ impl Position {
         MoveGen::generate_in_movestack::<'a, 'ms, 'p, L>(&self, ms)
     }
 
+    #[inline]
     pub fn generate_captures(&self) -> BasicMoveList {
         MoveGen::generate_captures(&self)
     }
 
+    #[inline]
     pub fn random_move(&self) -> Option<Move> {
         self.generate_moves::<BasicMoveList>().random()
     }

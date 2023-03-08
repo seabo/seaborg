@@ -44,7 +44,7 @@ fn do_pseudolegal() {
         pos.make_move(*mov);
         let enemy_in_check = pos.enemy_in_check();
 
-        if enemy_in_check {
+        if !enemy_in_check {
             legal_cnt += 1;
             println!("{} LEGAL", *mov);
         } else {
