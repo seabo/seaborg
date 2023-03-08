@@ -553,18 +553,20 @@ mod tests {
 
         let mut moves = MoveGen::generate_in_movestack::<'_, '_, '_>(&mut pos, &mut ms);
 
+        // TODO: we ideally want a way of preventing these while `moves` is alive.
+        // ms = MoveStack::new();
+        // drop(ms);
+
         let mut c: usize = 0;
 
         for mov in &moves {
-            println!("{}", mov);
             pos.make_move(mov);
-            let mut ply_2 = MoveGen::generate_in_movestack::<'_, '_, '_>(&mut pos, &mut ms);
+            let ply_2 = MoveGen::generate_in_movestack::<'_, '_, '_>(&mut pos, &mut ms);
             for mov2 in &ply_2 {
-                println!("    {}", mov2);
                 pos.make_move(mov2);
-                let mut ply_3 = MoveGen::generate_in_movestack::<'_, '_, '_>(&mut pos, &mut ms);
+                let ply_3 = MoveGen::generate_in_movestack::<'_, '_, '_>(&mut pos, &mut ms);
                 pos.unmake_move();
-                for mov3 in &ply_3 {
+                for _ in &ply_3 {
                     c += 1;
                 }
             }
@@ -573,11 +575,6 @@ mod tests {
 
         println!("nodes: {}", c);
 
-        // TODO: we want to test the behaviour when we generate a `Frame` in a position, then make
-        // a move, generate another frame in _that_ position, then drop the first `Frame`.
-        //
-        // This should be handled robustly and never cause UB.
-        //
         // What happens if we drop the `Movestack` before the `Frame`s? This needs to be disallowed
         // by the compiler.
 
