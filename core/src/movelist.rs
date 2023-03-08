@@ -14,8 +14,10 @@
 use rand::{thread_rng, Rng};
 
 use std::fmt;
+use std::marker::PhantomData;
 use std::mem::MaybeUninit;
-use std::ops::{Deref, DerefMut, Index, IndexMut};
+use std::ops::{Deref, DerefMut, Index, IndexMut, Range};
+use std::ptr::addr_of_mut;
 use std::slice;
 use std::slice::Iter;
 
@@ -371,6 +373,148 @@ impl<'a> Iterator for FastMoveIter<'a> {
     }
 }
 
+/// A structure maintaining contiguous memory for many `MoveList`s. Used to provide fast and
+/// reliable move iteration at each ply in a search process, without allocating each time or having
+/// a very large fixed-length array on the program stack.
+#[derive(Debug)]
+pub struct MoveStack {
+    /// Raw storage for the moves.
+    data: Vec<Move>,
+}
+
+impl MoveStack {
+    /// Create a new `MoveStack`.
+    pub fn new() -> Self {
+        Self {
+            data: Vec::with_capacity(1_024),
+        }
+    }
+
+    /// Get a new `Frame` for a `MoveStack`. This represents an empty `MoveList`.
+    ///
+    /// This is the only way to get a `Frame`.
+    pub fn new_frame<'a, 's>(&'s mut self) -> Frame<'a> {
+        let end = self.data.as_mut_ptr_range().end;
+
+        Frame {
+            movestack: self as *mut Self,
+            rng: Range { start: end, end },
+            _marker: PhantomData,
+        }
+    }
+}
+
+/// A window into the `MoveStack`, representing a single iterable collection of moves.
+#[derive(Debug)]
+pub struct Frame<'a> {
+    /// Raw pointer to the underlying `MoveStack`.
+    movestack: *mut MoveStack,
+    /// The raw pointers defining the range of `Move`s in this `Frame`.
+    rng: Range<*mut Move>,
+    _marker: PhantomData<&'a ()>,
+}
+
+impl Frame<'_> {
+    #[inline(always)]
+    fn movestack(&self) -> &mut MoveStack {
+        // SAFETY: well, strictly this isn't safe. It's possible that the MoveStack has gone.
+        // TODO: make sure it is properly safe. This basically means that we have to tie the
+        // lifetime of the `Frame` to the lifetime of the `MoveStack`. In `Search`, we have given
+        // the whole search process a lifetime `'search`. We would like to have the compiler know
+        // that the `MoveStack` field on `Search` will never be reassigned during `'search`. What's
+        // the way to do that?
+        //
+        // I think the way to do it involves having a second lifetime parameter `'ms` on `Frame`
+        // which refers to the lifetime of the underlying movestack. Therefore `'ms: 'a` is a bound.
+        // I think we could then build the `Search` struct by consuming a `&'ms mut MoveStack` from
+        // outside. But this gets a bit ugly since we have no real need to do make the `MoveStack`
+        // separately from the search process. Can we use an `Inner` struct to manage that problem?
+        //
+        // Even if we don't do all the above, for practical purposes in Seaborg, this should never
+        // actually crash because we use `MoveStack` in a limited way here. But it would be nice to
+        // be guaranteed safe so things can be reused freely in the future without remembering
+        // about all this..!
+        unsafe { &mut *self.movestack }
+    }
+}
+
+impl<'a> MoveList for Frame<'a> {
+    fn empty() -> Self {
+        // TODO: it would be nice to remove the requirement for this method from the trait
+        // interface so that we don't need to panic.
+        panic!(
+            "not allowed to create an empty `Frame` without reference to an underlying `MoveStack`"
+        );
+    }
+
+    fn push(&mut self, mv: Move) {
+        // This pushes the move into the underlying `MoveStack`.
+        // We want an invariant like:
+        //   "this has to be the top frame of the stack, otherwise we couldn't have a mutable
+        //   reference to it"
+        //
+        // So when we iterate, we need to iterate over `&Frame`. The iterator's existence means
+        // that we can't push onto that `Frame` until it's dropped. Creating an iterator pushes a
+        // new `Frame` onto the `MoveStack`.
+        self.movestack().data.push(mv);
+        self.rng.end = unsafe { self.rng.end.add(1) };
+    }
+
+    fn len(&self) -> usize {
+        // Look at the start and end pointers on the `MoveStack`
+        unsafe {
+            self.rng
+                .end
+                .offset_from(self.rng.start)
+                .try_into()
+                .expect("we shouldn't have long move lists")
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct FrameIter<'a> {
+    cursor: *mut Move,
+    frame: &'a Frame<'a>,
+    _marker: PhantomData<&'a ()>,
+}
+
+impl<'a, 'b: 'a> IntoIterator for &'b Frame<'a> {
+    type Item = Move;
+    type IntoIter = FrameIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        FrameIter {
+            cursor: self.rng.start,
+            frame: &self,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<'a, 'b> Iterator for FrameIter<'a> {
+    type Item = Move;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.cursor >= self.frame.rng.end {
+            None
+        } else {
+            let m = unsafe { *self.cursor };
+            self.cursor = unsafe { self.cursor.add(1) };
+            Some(m)
+        }
+    }
+}
+
+impl<'a> Drop for Frame<'a> {
+    fn drop(&mut self) {
+        // move the internal vec end cursor to `self.rng.start` and adjust its len
+        let frame_len = self.len();
+        let data_len = self.movestack().data.len();
+        self.movestack().data.truncate(data_len - frame_len);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -395,5 +539,48 @@ mod tests {
             println!("{}", mov);
         }
         println!("len: {}", moves.len());
+    }
+
+    #[test]
+    fn movestack() {
+        use super::*;
+        use crate::movegen::MoveGen;
+
+        crate::init::init_globals();
+
+        let mut ms = MoveStack::new();
+        let mut pos = Position::start_pos();
+
+        let mut moves = MoveGen::generate_in_movestack::<'_, '_, '_>(&mut pos, &mut ms);
+
+        let mut c: usize = 0;
+
+        for mov in &moves {
+            println!("{}", mov);
+            pos.make_move(mov);
+            let mut ply_2 = MoveGen::generate_in_movestack::<'_, '_, '_>(&mut pos, &mut ms);
+            for mov2 in &ply_2 {
+                println!("    {}", mov2);
+                pos.make_move(mov2);
+                let mut ply_3 = MoveGen::generate_in_movestack::<'_, '_, '_>(&mut pos, &mut ms);
+                pos.unmake_move();
+                for mov3 in &ply_3 {
+                    c += 1;
+                }
+            }
+            pos.unmake_move();
+        }
+
+        println!("nodes: {}", c);
+
+        // TODO: we want to test the behaviour when we generate a `Frame` in a position, then make
+        // a move, generate another frame in _that_ position, then drop the first `Frame`.
+        //
+        // This should be handled robustly and never cause UB.
+        //
+        // What happens if we drop the `Movestack` before the `Frame`s? This needs to be disallowed
+        // by the compiler.
+
+        assert!(true);
     }
 }

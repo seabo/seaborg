@@ -5,7 +5,8 @@ use super::score::Score;
 use super::time::TimingMode;
 use super::trace::Tracer;
 
-use core::movelist::{BasicMoveList, OverflowingMoveList};
+use core::movegen::MoveGen;
+use core::movelist::{BasicMoveList, MoveStack, OverflowingMoveList};
 use core::position::{Player, Position};
 
 use separator::Separatable;
@@ -22,6 +23,7 @@ pub struct Search {
     pvt: PVTable,
     /// Tracer to track search stats.
     trace: Tracer,
+    movestack: MoveStack,
 }
 
 impl Search {
@@ -30,6 +32,7 @@ impl Search {
             pos,
             pvt: PVTable::new(8),
             trace: Tracer::new(),
+            movestack: MoveStack::new(),
         }
     }
 
@@ -95,7 +98,7 @@ impl Search {
         }
     }
 
-    fn alphabeta(&mut self, mut alpha: Score, beta: Score, depth: u8) -> Score {
+    fn alphabeta<'search>(&'search mut self, mut alpha: Score, beta: Score, depth: u8) -> Score {
         self.trace.visit_node();
 
         if depth == 0 {
@@ -104,31 +107,33 @@ impl Search {
         } else {
             let mut max = Score::INF_N;
 
-            // let mut moves = OrderedMoves::<OverflowingMoveList>::new();
-            // let mut c: u8 = 0;
+            let moves = MoveGen::generate_in_movestack::<'search, '_, '_>(
+                &mut self.pos,
+                &mut self.movestack,
+            );
 
-            // while moves.next_phase(&mut self.pos) {
-            //     for mov in &mut moves {
-            //         c += 1;
-            //         self.pos.make_move(mov);
-            //         let score = self.alphabeta(-beta, -alpha, depth - 1).neg().inc_mate();
-            //         self.pos.unmake_move();
+            // TODO: this ought to be illegal, but is not. We have a pointer to the underlying
+            // storage inside `moves`.
+            // self.movestack = MoveStack::new();
 
-            //         if score >= beta {
-            //             return score;
-            //         }
+            // It's worried about the borrow because we have a unique reference to movestack and
+            // yet we're trying to mutate it.
+            //
+            // HOWEVER: _we_ know this is allowed, because we cannot write to any of the move slots
+            // in this iterator until the iterator gets dropped, thanks to the invariants upheld in
+            // the data structure. We _do_ want to enforce that the move iterator cannot live
+            // longer than the underlying `MoveStack` storage though.
+            for mov in &moves {
+                self.pos.make_move(mov);
+                let score = self.alphabeta(-beta, -alpha, depth - 1).neg().inc_mate();
+                self.pos.unmake_move();
+            }
 
-            //         if score > max {
-            //             self.pvt.copy_to(depth, mov);
-            //             max = score;
-            //             if score > alpha {
-            //                 alpha = score;
-            //             }
-            //         }
-            //     }
-            // }
-
-            // if c == 0 {
+            // -----------------------------------------------------------------------------------
+            // Main implementation, using `BasicMoveList`
+            // -----------------------------------------------------------------------------------
+            // let moves = self.pos.generate_moves::<BasicMoveList>();
+            // if moves.is_empty() {
             //     self.pvt.pv_leaf_at(depth);
             //     return if self.pos.in_check() {
             //         Score::mate(0)
@@ -136,33 +141,23 @@ impl Search {
             //         Score::cp(0)
             //     };
             // }
+            // for mov in &moves {
+            //     self.pos.make_move(*mov);
+            //     let score = self.alphabeta(-beta, -alpha, depth - 1).neg().inc_mate();
+            //     self.pos.unmake_move();
 
-            let moves = self.pos.generate_moves::<BasicMoveList>();
-            if moves.is_empty() {
-                self.pvt.pv_leaf_at(depth);
-                return if self.pos.in_check() {
-                    Score::mate(0)
-                } else {
-                    Score::cp(0)
-                };
-            }
-            for mov in &moves {
-                self.pos.make_move(*mov);
-                let score = self.alphabeta(-beta, -alpha, depth - 1).neg().inc_mate();
-                self.pos.unmake_move();
+            //     if score >= beta {
+            //         return score;
+            //     }
 
-                if score >= beta {
-                    return score;
-                }
-
-                if score > max {
-                    self.pvt.copy_to(depth, *mov);
-                    max = score;
-                    if score > alpha {
-                        alpha = score;
-                    }
-                }
-            }
+            //     if score > max {
+            //         self.pvt.copy_to(depth, *mov);
+            //         max = score;
+            //         if score > alpha {
+            //             alpha = score;
+            //         }
+            //     }
+            // }
 
             max
         }

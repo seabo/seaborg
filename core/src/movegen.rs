@@ -5,7 +5,7 @@ use crate::mono_traits::{
     PseudolegalType, QueenType, QuietChecksGenType, QuietsGenType, RookType, WhiteType,
 };
 use crate::mov::{Move, MoveType};
-use crate::movelist::{BasicMoveList, MoveList};
+use crate::movelist::{BasicMoveList, Frame, MoveList, MoveStack};
 use crate::position::{CastleType, PieceType, Player, Position, Square, PROMO_PIECES};
 use crate::precalc::boards::{between_bb, king_moves, knight_moves, line_bb, pawn_attacks_from};
 use crate::precalc::magic;
@@ -67,6 +67,20 @@ impl MoveGen {
         let mut movelist = L::empty();
         InnerMoveGen::<L>::generate::<AllGenType, LegalType>(position, &mut movelist);
         movelist
+    }
+
+    /// Generates legal moves and pushes them onto the passed `MoveList`.
+    pub fn generate_in<L: MoveList>(position: &Position, ms: &mut L) {
+        InnerMoveGen::<L>::generate::<AllGenType, LegalType>(position, ms);
+    }
+
+    pub fn generate_in_movestack<'a: 'ms + 'p, 'ms, 'p>(
+        position: &'p Position,
+        ms: &'ms mut MoveStack,
+    ) -> Frame<'a> {
+        let mut frame = ms.new_frame();
+        Self::generate_in(position, &mut frame);
+        frame
     }
 
     #[inline]
