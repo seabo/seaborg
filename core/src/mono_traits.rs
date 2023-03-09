@@ -67,12 +67,12 @@ pub trait Side {
 }
 
 /// Dummy type to represent a `Player::White` which implements `Trait`.
-pub struct WhiteType {}
+pub struct White {}
 
 /// Dummy type to represent a `Player::Black` which implements `Trait`.
-pub struct BlackType {}
+pub struct Black {}
 
-impl Side for WhiteType {
+impl Side for White {
     #[inline(always)]
     fn player() -> Player {
         Player::WHITE
@@ -162,7 +162,7 @@ impl Side for WhiteType {
     }
 }
 
-impl Side for BlackType {
+impl Side for Black {
     #[inline(always)]
     fn player() -> Player {
         Player::BLACK

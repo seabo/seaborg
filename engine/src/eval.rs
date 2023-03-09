@@ -1,7 +1,6 @@
 use core::position::{PieceType, Position};
 use core::{
-    BishopType, BlackType, KingType, KnightType, PawnType, PieceTrait, QueenType, RookType, Side,
-    WhiteType,
+    BishopType, Black, KingType, KnightType, PawnType, PieceTrait, QueenType, RookType, Side, White,
 };
 
 pub const PAWN_VALUE: i32 = 100;
@@ -12,7 +11,7 @@ pub const QUEEN_VALUE: i32 = 900;
 pub const KING_VALUE: i32 = 10000;
 
 fn material_eval(pos: &Position) -> i32 {
-    material_eval_single_side::<WhiteType>(pos) - material_eval_single_side::<BlackType>(pos)
+    material_eval_single_side::<White>(pos) - material_eval_single_side::<Black>(pos)
 }
 
 /// Provide static evaluation capabilities to a type representing a position.

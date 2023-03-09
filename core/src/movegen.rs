@@ -1,8 +1,8 @@
 use crate::bb::Bitboard;
 use crate::mono_traits::{
-    All, BishopType, BlackType, Captures, Evasions, Generate, KingType,
+    All, BishopType, Black, Captures, Evasions, Generate, KingType,
     KnightType, Legal, Legality, NonEvasions, PieceTrait, Side,
-    PseudoLegal, QueenType, QuietChecks, Quiet, RookType, WhiteType,
+    PseudoLegal, QueenType, QuietChecks, Quiet, RookType, White,
 };
 use crate::mov::{Move, MoveType};
 use crate::movelist::{BasicMoveList, Frame, MoveList, MoveStack};
@@ -133,10 +133,10 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP>
     ) -> &'a mut MP {
         match position.turn() {
             Player::WHITE => {
-                InnerMoveGen::<MP>::generate_helper::<G, L, WhiteType>(position, movelist)
+                InnerMoveGen::<MP>::generate_helper::<G, L, White>(position, movelist)
             }
             Player::BLACK => {
-                InnerMoveGen::<MP>::generate_helper::<G, L, BlackType>(position, movelist)
+                InnerMoveGen::<MP>::generate_helper::<G, L, Black>(position, movelist)
             }
         }
     }
