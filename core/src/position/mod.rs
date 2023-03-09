@@ -9,7 +9,7 @@ mod zobrist;
 
 use crate::bb::Bitboard;
 use crate::masks::{CASTLING_PATH, CASTLING_ROOK_START, FILE_BB, PLAYER_CNT, RANK_BB};
-use crate::mono_traits::{Legality, Side};
+use crate::mono_traits::{Generate, Legality, Side};
 use crate::mov::{Move, MoveType, UndoableMove};
 use crate::movegen::{bishop_moves, rook_moves, MoveGen};
 use crate::movelist::{BasicMoveList, Frame, MoveList, MoveStack};
@@ -761,6 +761,19 @@ impl Position {
     }
 
     // MOVE GENERATION
+    /// Generate moves for the current position according to the generic parameters.
+    #[inline]
+    pub fn generate_new<ML: MoveList, G: Generate, L: Legality>(&self) -> ML {
+        MoveGen::generate_new::<ML, G, L>(&self)
+    }
+
+    /// Generate moves for the current position according to the generic parameters. Moves are
+    /// pushed into the passed `MoveList`.
+    #[inline]
+    pub fn generate_in_new<ML: MoveList, G: Generate, L: Legality>(&self, movelist: &mut ML) {
+        MoveGen::generate_in_new::<ML, G, L>(&self, movelist);
+    }
+
     // Eventually, we should stabilise to just using this function, with resp.
     // 'trait signature' for each use.
     #[inline]

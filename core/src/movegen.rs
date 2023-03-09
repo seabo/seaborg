@@ -56,6 +56,22 @@ pub enum LegalityKind {
 pub struct MoveGen {}
 
 impl MoveGen {
+    /// Generate moves for the passed position according to the parameters specified by the dummy
+    /// passed as generic types. 
+    #[inline]
+    pub fn generate_new<ML: MoveList, G: Generate, L: Legality>(position: &Position) -> ML {
+        let mut movelist = ML::empty();
+        InnerMoveGen::<ML>::generate::<G, L>(position, &mut movelist);
+        movelist
+    }
+    
+    /// Generate moves for the passed position according to the parameters specified by the dummy
+    /// passed as generic types. 
+    #[inline]
+    pub fn generate_in_new<ML: MoveList, G: Generate, L: Legality>(position: &Position, movelist: &mut ML) {
+        InnerMoveGen::<ML>::generate::<G, L>(position, movelist);
+    }
+
     /// Generates pseudo-legal moves for the passed position.
     ///
     /// This function could return moves which are either:

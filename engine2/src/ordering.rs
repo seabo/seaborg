@@ -137,6 +137,9 @@ impl OrderedMoves {
                 GoodCaptures => {
                     self.buf.clear();
                     loader.load_captures(&mut self.buf);
+                    for (mov, score) in &mut self.buf {
+                        println!("{} {:?}", mov, score);
+                    }
                 }
                 EqualCaptures => {
                     self.buf.clear();
