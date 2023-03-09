@@ -7,7 +7,7 @@
 /// code reuse. We also inline all the functions in the implementation for speed
 /// in the compiled monomorphized code.
 use crate::bb::Bitboard;
-use crate::movegen::{GenType, LegalityType};
+use crate::movegen::{GenType, LegalityKind};
 use crate::position::{PieceType, Player, Square};
 
 pub trait PlayerTrait {
@@ -386,26 +386,26 @@ impl GenTypeTrait for NonEvasionsGenType {
 /// The `Legality` allows for monomorphizing movegen code to different version based on
 /// whether we want to generate just legal moves, or include pseudolegal moves as well.
 pub trait Legality {
-    /// Returns the `LegalityType`.
-    fn legality_type() -> LegalityType;
+    /// Returns the `LegalityKind`.
+    fn legality_type() -> LegalityKind;
 }
 
-/// Dummy type to represent a `LegalityType::Legal` which implements `Legality`.
+/// Dummy type to represent a `LegalityKind::Legal` which implements `Legality`.
 pub struct LegalType {}
 
-/// Dummy type to represent a `LegalityType::Pseudolegal` which implements `Legality`.
+/// Dummy type to represent a `LegalityKind::Pseudolegal` which implements `Legality`.
 pub struct PseudolegalType {}
 
 impl Legality for LegalType {
     #[inline(always)]
-    fn legality_type() -> LegalityType {
-        LegalityType::Legal
+    fn legality_type() -> LegalityKind {
+        LegalityKind::Legal
     }
 }
 
 impl Legality for PseudolegalType {
     #[inline(always)]
-    fn legality_type() -> LegalityType {
-        LegalityType::Pseudolegal
+    fn legality_type() -> LegalityKind {
+        LegalityKind::Pseudolegal
     }
 }

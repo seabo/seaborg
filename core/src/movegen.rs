@@ -43,12 +43,12 @@ pub enum GenType {
 
 /// Legality of moves to be generated.
 ///
-/// `LegalityType::Legal` -> Generate only legal moves.
+/// `LegalityKind::Legal` -> Generate only legal moves.
 ///
-/// `LegalityType::Pseudolegal` -> Generate both legal and pseudolegal moves. Pseudolegal moves
+/// `LegalityKind::Pseudolegal` -> Generate both legal and pseudolegal moves. Pseudolegal moves
 /// include those which cause a discovered check or cause the moving king to land in check.
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub enum LegalityType {
+pub enum LegalityKind {
     Legal,
     Pseudolegal,
 }
@@ -460,7 +460,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP>
 
     #[inline(always)]
     fn add_move<L: Legality>(&mut self, mv: Move) {
-        if L::legality_type() == LegalityType::Legal {
+        if L::legality_type() == LegalityKind::Legal {
             if self.position.legal_move(&mv) {
                 self.movelist.push(mv);
             }
