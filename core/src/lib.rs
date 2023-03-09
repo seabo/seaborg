@@ -17,5 +17,5 @@ pub mod position;
 
 pub use mono_traits::{
     All, BishopType, BlackType, Captures, Evasions, Generate, KingType, KnightType, NonEvasions,
-    PawnType, PieceTrait, PlayerTrait, QueenType, Quiet, QuietChecks, RookType, WhiteType,
+    PawnType, PieceTrait, QueenType, Quiet, QuietChecks, RookType, Side, WhiteType,
 };

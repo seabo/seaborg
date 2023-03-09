@@ -1,7 +1,7 @@
 use core::position::{PieceType, Position};
 use core::{
-    BishopType, BlackType, KingType, KnightType, PawnType, PieceTrait, PlayerTrait, QueenType,
-    RookType, WhiteType,
+    BishopType, BlackType, KingType, KnightType, PawnType, PieceTrait, QueenType, RookType, Side,
+    WhiteType,
 };
 
 pub const PAWN_VALUE: i32 = 100;
@@ -28,7 +28,7 @@ impl Evaluation for Position {
 }
 
 #[inline(always)]
-pub fn material_eval_single_side<PL: PlayerTrait>(pos: &Position) -> i32 {
+pub fn material_eval_single_side<PL: Side>(pos: &Position) -> i32 {
     material_eval_single_piece::<PL, PawnType>(pos)
         + material_eval_single_piece::<PL, KnightType>(pos)
         + material_eval_single_piece::<PL, BishopType>(pos)
@@ -37,9 +37,7 @@ pub fn material_eval_single_side<PL: PlayerTrait>(pos: &Position) -> i32 {
 }
 
 #[inline(always)]
-pub fn material_eval_single_piece<PL: PlayerTrait, P: Material + PieceTrait>(
-    pos: &Position,
-) -> i32 {
+pub fn material_eval_single_piece<PL: Side, P: Material + PieceTrait>(pos: &Position) -> i32 {
     pos.piece_bb(PL::player(), P::piece_type()).popcnt() as i32 * P::material_val()
 }
 

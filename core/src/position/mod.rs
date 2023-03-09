@@ -9,7 +9,7 @@ mod zobrist;
 
 use crate::bb::Bitboard;
 use crate::masks::{CASTLING_PATH, CASTLING_ROOK_START, FILE_BB, PLAYER_CNT, RANK_BB};
-use crate::mono_traits::{Legality, PlayerTrait};
+use crate::mono_traits::{Legality, Side};
 use crate::mov::{Move, MoveType, UndoableMove};
 use crate::movegen::{bishop_moves, rook_moves, MoveGen};
 use crate::movelist::{BasicMoveList, Frame, MoveList, MoveStack};
@@ -572,12 +572,12 @@ impl Position {
     }
 
     #[inline(always)]
-    pub fn get_occupied<PL: PlayerTrait>(&self) -> Bitboard {
+    pub fn get_occupied<PL: Side>(&self) -> Bitboard {
         self.player_occ[PL::player().inner() as usize]
     }
 
     #[inline(always)]
-    pub fn get_occupied_enemy<PL: PlayerTrait>(&self) -> Bitboard {
+    pub fn get_occupied_enemy<PL: Side>(&self) -> Bitboard {
         self.player_occ[PL::player().other_player().inner() as usize]
     }
 

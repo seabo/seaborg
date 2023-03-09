@@ -1,7 +1,7 @@
 use crate::bb::Bitboard;
 use crate::mono_traits::{
     All, BishopType, BlackType, Captures, Evasions, Generate, KingType,
-    KnightType, Legal, Legality, NonEvasions, PieceTrait, PlayerTrait,
+    KnightType, Legal, Legality, NonEvasions, PieceTrait, Side,
     PseudoLegal, QueenType, QuietChecks, Quiet, RookType, WhiteType,
 };
 use crate::mov::{Move, MoveType};
@@ -142,7 +142,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP>
     }
 
     #[inline(always)]
-    fn get_self<PL: PlayerTrait>(position: &'a Position, movelist: &'a mut MP) -> Self {
+    fn get_self<PL: Side>(position: &'a Position, movelist: &'a mut MP) -> Self {
         InnerMoveGen {
             movelist,
             position,
@@ -153,7 +153,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP>
     }
 
     #[inline(always)]
-    fn generate_helper<G: Generate, L: Legality, PL: PlayerTrait>(
+    fn generate_helper<G: Generate, L: Legality, PL: Side>(
         position: &'a Position,
         movelist: &'a mut MP,
     ) -> &'a mut MP {
@@ -188,7 +188,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP>
     }
 
     #[inline(always)]
-    fn generate_all<P: PlayerTrait, L: Legality>(&mut self) {
+    fn generate_all<P: Side, L: Legality>(&mut self) {
         self.generate_pawn_moves::<P, L>(Bitboard::ALL);
         self.generate_castling::<P, L>();
         self.moves_per_piece::<P, KnightType, L>(Bitboard::ALL);
@@ -199,7 +199,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP>
     }
 
     #[inline(always)]
-    fn generate_captures<P: PlayerTrait, L: Legality>(&mut self) {
+    fn generate_captures<P: Side, L: Legality>(&mut self) {
         self.generate_pawn_moves::<P, L>(self.them_occ);
         self.moves_per_piece::<P, KnightType, L>(self.them_occ);
         self.moves_per_piece::<P, KingType, L>(self.them_occ);
@@ -209,7 +209,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP>
     }
 
     #[inline(always)]
-    fn generate_evasions<P: PlayerTrait, L: Legality>(&mut self, captures_only: bool) {
+    fn generate_evasions<P: Side, L: Legality>(&mut self, captures_only: bool) {
         debug_assert!(self.position.in_check());
 
         let target_sqs = if captures_only {
@@ -260,7 +260,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP>
     }
 
     #[inline(always)]
-    fn moves_per_piece<PL: PlayerTrait, P: PieceTrait, L: Legality>(
+    fn moves_per_piece<PL: Side, P: PieceTrait, L: Legality>(
         &mut self,
         target: Bitboard,
     ) {
@@ -275,7 +275,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP>
     }
 
     #[inline(always)]
-    fn generate_pawn_moves<PL: PlayerTrait, L: Legality>(&mut self, target: Bitboard) {
+    fn generate_pawn_moves<PL: Side, L: Legality>(&mut self, target: Bitboard) {
         let (rank_7, rank_3): (Bitboard, Bitboard) = if PL::player() == Player::WHITE {
             (Bitboard::RANK_7, Bitboard::RANK_3)
         } else {
@@ -367,14 +367,14 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP>
 
     // Generates castling for both sides
     #[inline(always)]
-    fn generate_castling<PL: PlayerTrait, L: Legality>(&mut self) {
+    fn generate_castling<PL: Side, L: Legality>(&mut self) {
         self.castling_side::<PL, L>(CastleType::Queenside);
         self.castling_side::<PL, L>(CastleType::Kingside);
     }
 
     // Generates castling for a single side
     #[inline(always)]
-    fn castling_side<PL: PlayerTrait, L: Legality>(&mut self, side: CastleType) {
+    fn castling_side<PL: Side, L: Legality>(&mut self, side: CastleType) {
         if self.position.can_castle(PL::player(), side)
             && !self.position.castle_impeded(side)
             && self

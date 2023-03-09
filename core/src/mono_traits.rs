@@ -10,7 +10,7 @@ use crate::bb::Bitboard;
 use crate::movegen::{GenType, LegalityKind};
 use crate::position::{PieceType, Player, Square};
 
-pub trait PlayerTrait {
+pub trait Side {
     /// Return the current `Player`.
     fn player() -> Player;
 
@@ -66,13 +66,13 @@ pub trait PlayerTrait {
     fn shift_up_right(bb: Bitboard) -> Bitboard;
 }
 
-/// Dummy type to represent a `Player::White` which implements `PlayerTrait`.
+/// Dummy type to represent a `Player::White` which implements `Trait`.
 pub struct WhiteType {}
 
-/// Dummy type to represent a `Player::Black` which implements `PlayerTrait`.
+/// Dummy type to represent a `Player::Black` which implements `Trait`.
 pub struct BlackType {}
 
-impl PlayerTrait for WhiteType {
+impl Side for WhiteType {
     #[inline(always)]
     fn player() -> Player {
         Player::WHITE
@@ -162,7 +162,7 @@ impl PlayerTrait for WhiteType {
     }
 }
 
-impl PlayerTrait for BlackType {
+impl Side for BlackType {
     #[inline(always)]
     fn player() -> Player {
         Player::BLACK
