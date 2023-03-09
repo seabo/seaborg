@@ -1,5 +1,5 @@
 /// Data structure to store a collection `Move`s. This is used for move generation
-/// and exists to avoid using `Vec<Move>`, which would live on the heap. `BasicMoveList`
+/// and exists to avoid using `Vec<Move>`, which would live on the heap. `ArrayVec`
 /// uses a fixed size array structure, and so lives on the stack. We can do this
 /// because it is (believed to be) the case that no chess position has more than
 /// 218 legal moves, so we will never overflow the bounds if used correctly.
@@ -23,7 +23,7 @@ use std::slice::Iter;
 
 use crate::mov::Move;
 
-/// 254 is chosen so that the total size of the `BasicMoveList` struct is exactly 1024
+/// 254 is chosen so that the total size of the `ArrayVec` struct is exactly 1024
 /// bytes, taking account of the `len` field.
 pub const MAX_MOVES: usize = 254;
 
@@ -39,7 +39,8 @@ pub trait MoveList: Debug {
     fn clear(&mut self);
 }
 
-#[derive(Clone)]
+pub type BasicMoveList = ArrayVec<Move>;
+
 /// A container for `Move`s which lives on the stack and has a fixed maximum size (default 254).
 ///
 /// If you attempt to push more than 254 moves into the list, the `push` will fail silently rather
@@ -53,56 +54,77 @@ pub trait MoveList: Debug {
 /// Note: we do not have any `Drop` implementation, but if `Move` needed to be dropped we would
 /// need to think about this.
 #[derive(Debug)]
-pub struct BasicMoveList {
-    inner: [MaybeUninit<Move>; MAX_MOVES],
+pub struct ArrayVec<T>
+where
+    T: Copy + Debug,
+{
+    inner: [MaybeUninit<T>; MAX_MOVES],
     len: usize,
 }
 
-impl fmt::Display for BasicMoveList {
+impl<T> fmt::Display for ArrayVec<T>
+where
+    T: fmt::Display + Debug + Copy,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "[")?;
-        for mov in self {
-            write!(f, "{}, ", mov)?;
+        for item in self {
+            write!(f, "{}, ", item)?;
         }
         writeln!(f, "]")
     }
 }
 
-impl Default for BasicMoveList {
+impl<T> Default for ArrayVec<T>
+where
+    T: Copy + Debug,
+{
     #[inline]
     fn default() -> Self {
-        BasicMoveList {
+        ArrayVec {
             inner: [MaybeUninit::uninit(); MAX_MOVES],
             len: 0,
         }
     }
 }
 
-impl From<Vec<Move>> for BasicMoveList {
-    fn from(vec: Vec<Move>) -> Self {
-        let mut list = BasicMoveList::default();
-        vec.iter().for_each(|m| list.push(*m));
+impl<T> From<Vec<T>> for ArrayVec<T>
+where
+    T: Copy + Debug,
+{
+    fn from(vec: Vec<T>) -> Self {
+        let mut list = ArrayVec::<T>::default();
+        vec.iter().for_each(|v| list.push_val(*v));
         list
     }
 }
 
-impl Into<Vec<Move>> for BasicMoveList {
+impl<T> Into<Vec<T>> for ArrayVec<T>
+where
+    T: Copy + Debug,
+{
     #[inline]
-    fn into(self) -> Vec<Move> {
+    fn into(self) -> Vec<T> {
         self.vec()
     }
 }
 
-impl<'a> IntoIterator for &'a BasicMoveList {
-    type Item = &'a Move;
-    type IntoIter = std::slice::Iter<'a, Move>;
+impl<'a, T> IntoIterator for &'a ArrayVec<T>
+where
+    T: Copy + Debug,
+{
+    type Item = &'a T;
+    type IntoIter = std::slice::Iter<'a, T>;
 
     fn into_iter(self) -> Self::IntoIter {
         unsafe { MaybeUninit::slice_assume_init_ref(self.inner.get_unchecked(0..self.len)).iter() }
     }
 }
 
-impl BasicMoveList {
+impl<T> ArrayVec<T>
+where
+    T: Copy + Debug,
+{
     /// Returns true if empty.
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
@@ -110,8 +132,8 @@ impl BasicMoveList {
     }
 
     /// Create a `Vec<Move>` from this `MoveList`.
-    pub fn vec(&self) -> Vec<Move> {
-        self.into_iter().map(|m| *m).collect()
+    pub fn vec(&self) -> Vec<T> {
+        self.into_iter().map(|v| *v).collect()
     }
 
     /// Return the number of moves inside the list.
@@ -122,51 +144,54 @@ impl BasicMoveList {
 
     /// Get the `MoveList` as a slice, `&[Move]`.
     #[inline(always)]
-    pub fn as_slice(&self) -> &[Move] {
+    pub fn as_slice(&self) -> &[T] {
         self
     }
 
     /// Return a random move from the list.
     #[inline]
-    pub fn random(&self) -> Option<Move> {
+    pub fn random(&self) -> Option<T> {
         let mut rng = thread_rng();
         rng.choose(self.as_slice()).copied()
     }
 
     /// Add a `Move` to the end of the list, without checking bounds.
     #[inline(always)]
-    pub unsafe fn unchecked_push_mv(&mut self, mv: Move) {
+    pub unsafe fn unchecked_push_mv(&mut self, t: T) {
         let end = self.inner.get_unchecked_mut(self.len);
-        end.write(mv);
+        end.write(t);
         self.len += 1;
     }
 
     /// Return a pointer to the first (0th index) element in the list.
     #[inline(always)]
-    pub unsafe fn list_ptr(&mut self) -> *mut Move {
+    pub unsafe fn list_ptr(&mut self) -> *mut T {
         self.as_mut_ptr()
     }
 
     /// Return a pointer to the element next to the last element in the list.
     #[inline(always)]
-    pub unsafe fn over_bounds_ptr(&mut self) -> *mut Move {
+    pub unsafe fn over_bounds_ptr(&mut self) -> *mut T {
         self.as_mut_ptr().add(self.len)
     }
 
     /// Add a `Move` to the end of the list.
     #[inline(always)]
-    fn push_mv(&mut self, mv: Move) {
+    fn push_val(&mut self, val: T) {
         if self.len() < MAX_MOVES {
-            unsafe { self.unchecked_push_mv(mv) }
+            unsafe { self.unchecked_push_mv(val) }
         }
     }
 }
 
-impl Deref for BasicMoveList {
-    type Target = [Move];
+impl<T> Deref for ArrayVec<T>
+where
+    T: Copy + Debug,
+{
+    type Target = [T];
 
     #[inline]
-    fn deref(&self) -> &[Move] {
+    fn deref(&self) -> &[T] {
         unsafe {
             let p = self.inner.as_ptr();
             MaybeUninit::slice_assume_init_ref(slice::from_raw_parts(p, self.len))
@@ -174,9 +199,12 @@ impl Deref for BasicMoveList {
     }
 }
 
-impl DerefMut for BasicMoveList {
+impl<T> DerefMut for ArrayVec<T>
+where
+    T: Copy + Debug,
+{
     #[inline]
-    fn deref_mut(&mut self) -> &mut [Move] {
+    fn deref_mut(&mut self) -> &mut [T] {
         unsafe {
             let p = self.inner.as_mut_ptr();
             MaybeUninit::slice_assume_init_mut(slice::from_raw_parts_mut(p, self.len))
@@ -184,11 +212,14 @@ impl DerefMut for BasicMoveList {
     }
 }
 
-impl Index<usize> for BasicMoveList {
-    type Output = Move;
+impl<T> Index<usize> for ArrayVec<T>
+where
+    T: Copy + Debug,
+{
+    type Output = T;
 
     #[inline(always)]
-    fn index(&self, index: usize) -> &Move {
+    fn index(&self, index: usize) -> &T {
         if index >= self.len {
             panic!(
                 "index out of bounds; the len is {} but the index is {}",
@@ -201,9 +232,12 @@ impl Index<usize> for BasicMoveList {
     }
 }
 
-impl IndexMut<usize> for BasicMoveList {
+impl<T> IndexMut<usize> for ArrayVec<T>
+where
+    T: Copy + Debug,
+{
     #[inline(always)]
-    fn index_mut(&mut self, index: usize) -> &mut Move {
+    fn index_mut(&mut self, index: usize) -> &mut T {
         if index >= self.len {
             panic!(
                 "index out of bounds; the len is {} but the index is {}",
@@ -216,7 +250,7 @@ impl IndexMut<usize> for BasicMoveList {
     }
 }
 
-impl MoveList for BasicMoveList {
+impl MoveList for ArrayVec<Move> {
     #[inline(always)]
     fn empty() -> Self {
         Default::default()
@@ -225,7 +259,7 @@ impl MoveList for BasicMoveList {
     #[cfg(debug_assertions)]
     #[inline(always)]
     fn push(&mut self, mv: Move) {
-        self.push_mv(mv);
+        self.push_val(mv);
     }
     #[cfg(not(debug_assertions))]
     #[inline(always)]
@@ -589,7 +623,7 @@ mod tests {
 
     #[test]
     fn basic_move_list_is_1024_bytes() {
-        assert_eq!(mem::size_of::<BasicMoveList>(), 1024);
+        assert_eq!(mem::size_of::<ArrayVec<Move>>(), 1024);
     }
 
     #[test]
