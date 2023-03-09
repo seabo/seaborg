@@ -324,61 +324,61 @@ impl PieceTrait for KingType {
 /// over different 'generation types', such as 'captures-only', 'evasions-only'
 /// 'quiet moves only' etc.
 pub trait Generate {
-    /// Returns the `GenType`.
-    fn gen_type() -> Generation;
+    /// Returns the `Generation`.
+    fn kind() -> Generation;
 }
 
-/// Dummy type to represent a `GenType::All` which implements `Generate`.
+/// Dummy type to represent a `Generation::All` which implements `Generate`.
 pub struct All {}
-/// Dummy type to represent a `GenType::Captures` which implements `Generate`.
+/// Dummy type to represent a `Generation::Captures` which implements `Generate`.
 pub struct Captures {}
-/// Dummy type to represent a `GenType::Quiets` which implements `Generate`.
+/// Dummy type to represent a `Generation::Quiets` which implements `Generate`.
 pub struct Quiet {}
-/// Dummy type to represent a `GenType::QuietChecks` which implements `Generate`.
+/// Dummy type to represent a `Generation::QuietChecks` which implements `Generate`.
 pub struct QuietChecks {}
-/// Dummy type to represent a `GenType::Evasions` which implements `Generate`.
+/// Dummy type to represent a `Generation::Evasions` which implements `Generate`.
 pub struct Evasions {}
-/// Dummy type to represent a `GenType::NonEvasions` which implements `Generate`.
+/// Dummy type to represent a `Generation::NonEvasions` which implements `Generate`.
 pub struct NonEvasions {}
 
 impl Generate for All {
     #[inline(always)]
-    fn gen_type() -> Generation {
+    fn kind() -> Generation {
         Generation::All
     }
 }
 
 impl Generate for Captures {
     #[inline(always)]
-    fn gen_type() -> Generation {
+    fn kind() -> Generation {
         Generation::Captures
     }
 }
 
 impl Generate for Quiet {
     #[inline(always)]
-    fn gen_type() -> Generation {
+    fn kind() -> Generation {
         Generation::Quiets
     }
 }
 
 impl Generate for QuietChecks {
     #[inline(always)]
-    fn gen_type() -> Generation {
+    fn kind() -> Generation {
         Generation::QuietChecks
     }
 }
 
 impl Generate for Evasions {
     #[inline(always)]
-    fn gen_type() -> Generation {
+    fn kind() -> Generation {
         Generation::Evasions
     }
 }
 
 impl Generate for NonEvasions {
     #[inline(always)]
-    fn gen_type() -> Generation {
+    fn kind() -> Generation {
         Generation::NonEvasions
     }
 }

@@ -14,23 +14,23 @@ use std::ops::Index;
 
 /// Types of move generating options.
 ///
-/// `GenTypes::All` -> All available moves.
+/// `Generation::All` -> All available moves.
 ///
-/// `GenTypes::Captures` -> All captures.
+/// `Generation::Captures` -> All captures.
 ///
-/// `GenTypes::Quiets` -> All non captures.
+/// `Generation::Quiets` -> All non captures.
 ///
-/// `GenTypes::QuietChecks` -> Moves likely to give check.
+/// `Generation::QuietChecks` -> Moves likely to give check.
 ///
-/// `GenTypes::Evasions` -> Generates evasions for a board in check.
+/// `Generation::Evasions` -> Generates evasions for a board in check.
 ///
-/// `GenTypes::NonEvasions` -> Generates all moves for a board not in check.
+/// `Generation::NonEvasions` -> Generates all moves for a board not in check.
 ///
 /// # Safety
 ///
-/// `GenTypes::QuietChecks` and `GenTypes::NonEvasions` can only be used if the board
-/// if not in check, while `GenTypes::Evasions` can only be used if the the board is
-/// in check. The remaining `GenTypes` can be used legally whenever.
+/// `Generation::QuietChecks` and `Generation::NonEvasions` can only be used if the board
+/// if not in check, while `Generation::Evasions` can only be used if the the board is
+/// in check. The remaining `Generation` can be used legally whenever.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Generation {
     All,
@@ -158,7 +158,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP>
         movelist: &'a mut MP,
     ) -> &'a mut MP {
         let mut movegen = InnerMoveGen::<MP>::get_self::<PL>(position, movelist);
-        let gen_type = G::gen_type();
+        let gen_type = G::kind();
 
         if gen_type == Generation::Evasions {
             movegen.generate_evasions::<PL, L>(false);
@@ -169,7 +169,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP>
                 movegen.generate_captures::<PL, L>();
             }
         }
-        // else if gen_type == GenType::Quiets {
+        // else if gen_type == Generation::Quiets {
         //     if movegen.position.in_check() {
         //         movegen.generate_evasions::<P>()
         //     } else {
