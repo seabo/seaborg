@@ -1,8 +1,8 @@
 use crate::bb::Bitboard;
 use crate::mono_traits::{
-    AllGenType, BishopType, BlackType, CapturesGenType, EvasionsGenType, Generate, KingType,
-    KnightType, Legal, Legality, NonEvasionsGenType, PieceTrait, PlayerTrait,
-    PseudoLegal, QueenType, QuietChecksGenType, QuietsGenType, RookType, WhiteType,
+    All, BishopType, BlackType, Captures, Evasions, Generate, KingType,
+    KnightType, Legal, Legality, NonEvasions, PieceTrait, PlayerTrait,
+    PseudoLegal, QueenType, QuietChecks, Quiet, RookType, WhiteType,
 };
 use crate::mov::{Move, MoveType};
 use crate::movelist::{BasicMoveList, Frame, MoveList, MoveStack};
@@ -65,14 +65,14 @@ impl MoveGen {
     #[inline]
     pub fn generate<L: MoveList>(position: &Position) -> L {
         let mut movelist = L::empty();
-        InnerMoveGen::<L>::generate::<AllGenType, Legal>(position, &mut movelist);
+        InnerMoveGen::<L>::generate::<All, Legal>(position, &mut movelist);
         movelist
     }
 
     #[inline]
     pub fn generate_of_legality<ML: MoveList, L: Legality>(position: &Position) -> ML {
         let mut movelist = ML::empty();
-        InnerMoveGen::<ML>::generate::<AllGenType, L>(position, &mut movelist);
+        InnerMoveGen::<ML>::generate::<All, L>(position, &mut movelist);
         movelist
     }
 
@@ -80,13 +80,13 @@ impl MoveGen {
     /// `MoveList`.
     #[inline]
     pub fn generate_in<ML: MoveList, L: Legality>(position: &Position, ms: &mut ML) {
-        InnerMoveGen::<ML>::generate::<AllGenType, L>(position, ms);
+        InnerMoveGen::<ML>::generate::<All, L>(position, ms);
     }
 
     /// Generates legal moves and pushes them onto the passed `MoveList`.
     #[inline]
     pub fn generate_legal_in<ML: MoveList>(position: &Position, ms: &mut ML) {
-        InnerMoveGen::<ML>::generate::<AllGenType, Legal>(position, ms);
+        InnerMoveGen::<ML>::generate::<All, Legal>(position, ms);
     }
 
     #[inline]
@@ -102,7 +102,7 @@ impl MoveGen {
     #[inline]
     pub fn generate_captures(position: &Position) -> BasicMoveList {
         let mut movelist = BasicMoveList::default();
-        InnerMoveGen::<BasicMoveList>::generate::<CapturesGenType, Legal>(
+        InnerMoveGen::<BasicMoveList>::generate::<Captures, Legal>(
             position,
             &mut movelist,
         );

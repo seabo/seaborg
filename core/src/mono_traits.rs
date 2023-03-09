@@ -329,54 +329,54 @@ pub trait Generate {
 }
 
 /// Dummy type to represent a `GenType::All` which implements `Generate`.
-pub struct AllGenType {}
+pub struct All {}
 /// Dummy type to represent a `GenType::Captures` which implements `Generate`.
-pub struct CapturesGenType {}
+pub struct Captures {}
 /// Dummy type to represent a `GenType::Quiets` which implements `Generate`.
-pub struct QuietsGenType {}
+pub struct Quiet {}
 /// Dummy type to represent a `GenType::QuietChecks` which implements `Generate`.
-pub struct QuietChecksGenType {}
+pub struct QuietChecks {}
 /// Dummy type to represent a `GenType::Evasions` which implements `Generate`.
-pub struct EvasionsGenType {}
+pub struct Evasions {}
 /// Dummy type to represent a `GenType::NonEvasions` which implements `Generate`.
-pub struct NonEvasionsGenType {}
+pub struct NonEvasions {}
 
-impl Generate for AllGenType {
+impl Generate for All {
     #[inline(always)]
     fn gen_type() -> GenType {
         GenType::All
     }
 }
 
-impl Generate for CapturesGenType {
+impl Generate for Captures {
     #[inline(always)]
     fn gen_type() -> GenType {
         GenType::Captures
     }
 }
 
-impl Generate for QuietsGenType {
+impl Generate for Quiet {
     #[inline(always)]
     fn gen_type() -> GenType {
         GenType::Quiets
     }
 }
 
-impl Generate for QuietChecksGenType {
+impl Generate for QuietChecks {
     #[inline(always)]
     fn gen_type() -> GenType {
         GenType::QuietChecks
     }
 }
 
-impl Generate for EvasionsGenType {
+impl Generate for Evasions {
     #[inline(always)]
     fn gen_type() -> GenType {
         GenType::Evasions
     }
 }
 
-impl Generate for NonEvasionsGenType {
+impl Generate for NonEvasions {
     #[inline(always)]
     fn gen_type() -> GenType {
         GenType::NonEvasions
