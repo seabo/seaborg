@@ -782,6 +782,11 @@ impl Position {
     }
 
     #[inline]
+    pub fn generate_in_list<ML: MoveList, L: LegalityTrait>(&self, ml: &mut ML) {
+        MoveGen::generate_in::<ML, L>(self, ml)
+    }
+
+    #[inline]
     pub fn generate_captures(&self) -> BasicMoveList {
         MoveGen::generate_captures(&self)
     }

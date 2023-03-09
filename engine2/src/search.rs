@@ -1,13 +1,14 @@
 use super::eval::Evaluation;
-use super::ordering::OrderedMoves;
+use super::ordering::{Loader, OrderedMoves};
 use super::pv_table::PVTable;
 use super::score::Score;
 use super::time::TimingMode;
 use super::trace::Tracer;
 
 use core::mono_traits::LegalType;
+use core::mov::Move;
 use core::movegen::MoveGen;
-use core::movelist::{BasicMoveList, MoveStack, OverflowingMoveList};
+use core::movelist::{BasicMoveList, MoveList, MoveStack};
 use core::position::{Player, Position};
 
 use separator::Separatable;
@@ -47,7 +48,7 @@ impl Search {
                 self.trace.commence_search();
 
                 // let score = self.negamax(d);
-                let score = self.alphabeta(Score::INF_N, Score::INF_P, d);
+                let score = self.alphabeta_ordered(Score::INF_N, Score::INF_P, d);
 
                 self.trace.end_search();
 
@@ -133,6 +134,57 @@ impl Search {
                         alpha = score;
                     }
                 }
+            }
+
+            max
+        }
+    }
+
+    fn alphabeta_ordered(&mut self, mut alpha: Score, beta: Score, depth: u8) -> Score {
+        self.trace.visit_node();
+
+        if depth == 0 {
+            self.quiesce(alpha, beta)
+            // self.evaluate()
+        } else {
+            let mut max = Score::INF_N;
+
+            let mut moves = OrderedMoves::new();
+            let mut c = 0;
+
+            while moves.load_next_phase(MoveLoader::from(self)) {
+                for mov in &mut moves {
+                    c += 1;
+
+                    self.pos.make_move(mov);
+                    let score = self
+                        .alphabeta_ordered(-beta, -alpha, depth - 1)
+                        .neg()
+                        .inc_mate();
+                    self.pos.unmake_move();
+
+                    if score >= beta {
+                        return score;
+                    }
+
+                    if score > max {
+                        self.pvt.copy_to(depth, *mov);
+                        max = score;
+                        if score > alpha {
+                            alpha = score;
+                        }
+                    }
+                }
+            }
+
+            // If we had no moves.
+            if c == 0 {
+                self.pvt.pv_leaf_at(depth);
+                return if self.pos.in_check() {
+                    Score::mate(0)
+                } else {
+                    Score::cp(0)
+                };
             }
 
             max
@@ -250,6 +302,24 @@ impl Search {
         }
 
         alpha
+    }
+}
+
+pub struct MoveLoader<'a> {
+    search: &'a mut Search,
+}
+
+impl<'a> MoveLoader<'a> {
+    /// Create a `MoveLoader` from the passed `Search`.
+    #[inline(always)]
+    pub fn from(search: &'a mut Search) -> Self {
+        MoveLoader { search }
+    }
+}
+
+impl<'a> Loader for MoveLoader<'a> {
+    fn load_hash(&mut self, movelist: &mut BasicMoveList) {
+        self.search.pos.generate_in_list::<_, LegalType>(movelist);
     }
 }
 

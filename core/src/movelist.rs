@@ -14,6 +14,7 @@
 use rand::{thread_rng, Rng};
 
 use std::fmt;
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::ops::{Deref, DerefMut, Index, IndexMut, Range};
@@ -27,13 +28,15 @@ use crate::mov::Move;
 pub const MAX_MOVES: usize = 254;
 
 /// Trait to generalize operations on structures containing a collection of `Move`s.
-pub trait MoveList {
+pub trait MoveList: Debug {
     /// Create an empty move list.
     fn empty() -> Self;
     /// Add a `Move` to the end of the list.
     fn push(&mut self, mv: Move);
     /// The length of the move list.
     fn len(&self) -> usize;
+    /// Clear the list.
+    fn clear(&mut self);
 }
 
 #[derive(Clone)]
@@ -49,6 +52,7 @@ pub trait MoveList {
 ///
 /// Note: we do not have any `Drop` implementation, but if `Move` needed to be dropped we would
 /// need to think about this.
+#[derive(Debug)]
 pub struct BasicMoveList {
     inner: [MaybeUninit<Move>; MAX_MOVES],
     len: usize,
@@ -235,9 +239,15 @@ impl MoveList for BasicMoveList {
     fn len(&self) -> usize {
         self.len
     }
+
+    #[inline(always)]
+    fn clear(&mut self) {
+        self.len = 0;
+    }
 }
 
 /// A type implementing `MoveList` which based on a `Vec`.
+#[derive(Debug)]
 pub struct OverflowingMoveList(Vec<Move>);
 
 impl MoveList for OverflowingMoveList {
@@ -254,6 +264,11 @@ impl MoveList for OverflowingMoveList {
     #[inline(always)]
     fn len(&self) -> usize {
         self.0.len()
+    }
+
+    #[inline(always)]
+    fn clear(&mut self) {
+        self.0.clear()
     }
 }
 
@@ -285,6 +300,7 @@ impl<'a> IntoIterator for &'a OverflowingMoveList {
 const MAX_MOVES_FAST: usize = 54;
 
 /// An attempt at a fast `MoveList` implementation which doesn't take too much space.
+#[derive(Debug)]
 pub struct FastMoveList {
     /// The main move storage. This can hold up to 54 moves, which is almost always enough. In very
     /// rare case, we need more than this and overflow into an allocated `Vec`.
@@ -296,6 +312,7 @@ pub struct FastMoveList {
 }
 
 impl MoveList for FastMoveList {
+    #[inline(always)]
     fn empty() -> Self {
         FastMoveList {
             moves: [MaybeUninit::uninit(); MAX_MOVES_FAST],
@@ -304,6 +321,7 @@ impl MoveList for FastMoveList {
         }
     }
 
+    #[inline(always)]
     fn push(&mut self, mv: Move) {
         if self.len >= MAX_MOVES_FAST {
             if self.len == MAX_MOVES_FAST {
@@ -325,8 +343,20 @@ impl MoveList for FastMoveList {
         }
     }
 
+    #[inline(always)]
     fn len(&self) -> usize {
         self.len
+    }
+
+    #[inline(always)]
+    fn clear(&mut self) {
+        if self.len() >= MAX_MOVES_FAST {
+            // SAFETY: the bounds check implies that the `Vec` has been initialized.
+            unsafe {
+                self.overflow.assume_init_mut().clear();
+            }
+        }
+        self.len = 0;
     }
 }
 
@@ -466,6 +496,7 @@ impl Frame<'_> {
 }
 
 impl<'a> MoveList for Frame<'a> {
+    #[inline(always)]
     fn empty() -> Self {
         // TODO: it would be nice to remove the requirement for this method from the trait
         // interface so that we don't need to panic.
@@ -474,6 +505,7 @@ impl<'a> MoveList for Frame<'a> {
         );
     }
 
+    #[inline(always)]
     fn push(&mut self, mv: Move) {
         // This pushes the move into the underlying `MoveStack`.
         // We want an invariant like:
@@ -487,6 +519,7 @@ impl<'a> MoveList for Frame<'a> {
         self.rng.end = unsafe { self.rng.end.add(1) };
     }
 
+    #[inline(always)]
     fn len(&self) -> usize {
         // Look at the start and end pointers on the `MoveStack`
         unsafe {
@@ -496,6 +529,11 @@ impl<'a> MoveList for Frame<'a> {
                 .try_into()
                 .expect("we shouldn't have long move lists")
         }
+    }
+
+    #[inline(always)]
+    fn clear(&mut self) {
+        self.rng.end = self.rng.start.clone();
     }
 }
 
