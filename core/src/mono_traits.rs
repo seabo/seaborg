@@ -257,65 +257,65 @@ impl Side for Black {
 /// across each piece type.
 pub trait PieceTrait {
     /// Returns the `PieceType`.
-    fn piece_type() -> PieceType;
+    fn kind() -> PieceType;
 }
 
 /// Dummy type to represent a pawn, which implements `PieceTrait`.
-pub struct PawnType {}
+pub struct Pawn {}
 
 /// Dummy type to represent a pawn, which implements `PieceTrait`.
-pub struct KnightType {}
+pub struct Knight {}
 
 /// Dummy type to represent a pawn, which implements `PieceTrait`.
-pub struct BishopType {}
+pub struct Bishop {}
 
 /// Dummy type to represent a pawn, which implements `PieceTrait`.
-pub struct RookType {}
+pub struct Rook {}
 
 /// Dummy type to represent a pawn, which implements `PieceTrait`.
-pub struct QueenType {}
+pub struct Queen {}
 
 /// Dummy type to represent a pawn, which implements `PieceTrait`.
-pub struct KingType {}
+pub struct King {}
 
-impl PieceTrait for PawnType {
+impl PieceTrait for Pawn {
     #[inline(always)]
-    fn piece_type() -> PieceType {
+    fn kind() -> PieceType {
         PieceType::Pawn
     }
 }
 
-impl PieceTrait for KnightType {
+impl PieceTrait for Knight {
     #[inline(always)]
-    fn piece_type() -> PieceType {
+    fn kind() -> PieceType {
         PieceType::Knight
     }
 }
 
-impl PieceTrait for BishopType {
+impl PieceTrait for Bishop {
     #[inline(always)]
-    fn piece_type() -> PieceType {
+    fn kind() -> PieceType {
         PieceType::Bishop
     }
 }
 
-impl PieceTrait for RookType {
+impl PieceTrait for Rook {
     #[inline(always)]
-    fn piece_type() -> PieceType {
+    fn kind() -> PieceType {
         PieceType::Rook
     }
 }
 
-impl PieceTrait for QueenType {
+impl PieceTrait for Queen {
     #[inline(always)]
-    fn piece_type() -> PieceType {
+    fn kind() -> PieceType {
         PieceType::Queen
     }
 }
 
-impl PieceTrait for KingType {
+impl PieceTrait for King {
     #[inline(always)]
-    fn piece_type() -> PieceType {
+    fn kind() -> PieceType {
         PieceType::King
     }
 }

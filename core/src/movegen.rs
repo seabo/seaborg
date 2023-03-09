@@ -1,8 +1,8 @@
 use crate::bb::Bitboard;
 use crate::mono_traits::{
-    All, BishopType, Black, Captures, Evasions, Generate, KingType,
-    KnightType, Legal, Legality, NonEvasions, PieceTrait, Side,
-    PseudoLegal, QueenType, QuietChecks, Quiet, RookType, White,
+    All, Bishop, Black, Captures, Evasions, Generate, King,
+    Knight, Legal, Legality, NonEvasions, PieceTrait, Side,
+    PseudoLegal, Queen, QuietChecks, Quiet, Rook, White,
 };
 use crate::mov::{Move, MoveType};
 use crate::movelist::{BasicMoveList, Frame, MoveList, MoveStack};
@@ -191,21 +191,21 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP>
     fn generate_all<P: Side, L: Legality>(&mut self) {
         self.generate_pawn_moves::<P, L>(Bitboard::ALL);
         self.generate_castling::<P, L>();
-        self.moves_per_piece::<P, KnightType, L>(Bitboard::ALL);
-        self.moves_per_piece::<P, KingType, L>(Bitboard::ALL);
-        self.moves_per_piece::<P, RookType, L>(Bitboard::ALL);
-        self.moves_per_piece::<P, BishopType, L>(Bitboard::ALL);
-        self.moves_per_piece::<P, QueenType, L>(Bitboard::ALL);
+        self.moves_per_piece::<P, Knight, L>(Bitboard::ALL);
+        self.moves_per_piece::<P, King, L>(Bitboard::ALL);
+        self.moves_per_piece::<P, Rook, L>(Bitboard::ALL);
+        self.moves_per_piece::<P, Bishop, L>(Bitboard::ALL);
+        self.moves_per_piece::<P, Queen, L>(Bitboard::ALL);
     }
 
     #[inline(always)]
     fn generate_captures<P: Side, L: Legality>(&mut self) {
         self.generate_pawn_moves::<P, L>(self.them_occ);
-        self.moves_per_piece::<P, KnightType, L>(self.them_occ);
-        self.moves_per_piece::<P, KingType, L>(self.them_occ);
-        self.moves_per_piece::<P, RookType, L>(self.them_occ);
-        self.moves_per_piece::<P, BishopType, L>(self.them_occ);
-        self.moves_per_piece::<P, QueenType, L>(self.them_occ);
+        self.moves_per_piece::<P, Knight, L>(self.them_occ);
+        self.moves_per_piece::<P, King, L>(self.them_occ);
+        self.moves_per_piece::<P, Rook, L>(self.them_occ);
+        self.moves_per_piece::<P, Bishop, L>(self.them_occ);
+        self.moves_per_piece::<P, Queen, L>(self.them_occ);
     }
 
     #[inline(always)]
@@ -252,10 +252,10 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP>
             let target =
                 target_sqs & (Bitboard(between_bb(checking_sq, ksq)) | checking_sq.to_bb());
             self.generate_pawn_moves::<P, L>(target);
-            self.moves_per_piece::<P, KnightType, L>(target);
-            self.moves_per_piece::<P, BishopType, L>(target);
-            self.moves_per_piece::<P, RookType, L>(target);
-            self.moves_per_piece::<P, QueenType, L>(target);
+            self.moves_per_piece::<P, Knight, L>(target);
+            self.moves_per_piece::<P, Bishop, L>(target);
+            self.moves_per_piece::<P, Rook, L>(target);
+            self.moves_per_piece::<P, Queen, L>(target);
         }
     }
 
@@ -264,7 +264,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP>
         &mut self,
         target: Bitboard,
     ) {
-        let piece_bb: Bitboard = self.position.piece_bb(PL::player(), P::piece_type());
+        let piece_bb: Bitboard = self.position.piece_bb(PL::player(), P::kind());
         for orig in piece_bb {
             let moves_bb: Bitboard = self.moves_bb::<P>(orig) & !self.us_occ & target;
             let mut captures_bb: Bitboard = moves_bb & self.them_occ;
@@ -415,8 +415,8 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP>
     #[inline(always)]
     fn moves_bb<P: PieceTrait>(&mut self, sq: Square) -> Bitboard {
         debug_assert!(sq.is_okay());
-        debug_assert_ne!(P::piece_type(), PieceType::Pawn);
-        match P::piece_type() {
+        debug_assert_ne!(P::kind(), PieceType::Pawn);
+        match P::kind() {
             PieceType::None => panic!(), // TODO
             PieceType::Pawn => panic!(),
             PieceType::Knight => knight_moves(sq),

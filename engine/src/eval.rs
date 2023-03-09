@@ -1,7 +1,5 @@
 use core::position::{PieceType, Position};
-use core::{
-    BishopType, Black, KingType, KnightType, PawnType, PieceTrait, QueenType, RookType, Side, White,
-};
+use core::{Bishop, Black, King, Knight, Pawn, PieceTrait, Queen, Rook, Side, White};
 
 pub const PAWN_VALUE: i32 = 100;
 pub const KNIGHT_VALUE: i32 = 300;
@@ -28,16 +26,16 @@ impl Evaluation for Position {
 
 #[inline(always)]
 pub fn material_eval_single_side<PL: Side>(pos: &Position) -> i32 {
-    material_eval_single_piece::<PL, PawnType>(pos)
-        + material_eval_single_piece::<PL, KnightType>(pos)
-        + material_eval_single_piece::<PL, BishopType>(pos)
-        + material_eval_single_piece::<PL, RookType>(pos)
-        + material_eval_single_piece::<PL, QueenType>(pos)
+    material_eval_single_piece::<PL, Pawn>(pos)
+        + material_eval_single_piece::<PL, Knight>(pos)
+        + material_eval_single_piece::<PL, Bishop>(pos)
+        + material_eval_single_piece::<PL, Rook>(pos)
+        + material_eval_single_piece::<PL, Queen>(pos)
 }
 
 #[inline(always)]
 pub fn material_eval_single_piece<PL: Side, P: Material + PieceTrait>(pos: &Position) -> i32 {
-    pos.piece_bb(PL::player(), P::piece_type()).popcnt() as i32 * P::material_val()
+    pos.piece_bb(PL::player(), P::kind()).popcnt() as i32 * P::material_val()
 }
 
 /// The `PieceTrait` allows for reusing movegen code by monomorphizing
@@ -48,42 +46,42 @@ pub trait Material {
     fn material_val() -> i32;
 }
 
-impl Material for PawnType {
+impl Material for Pawn {
     #[inline(always)]
     fn material_val() -> i32 {
         PAWN_VALUE
     }
 }
 
-impl Material for KnightType {
+impl Material for Knight {
     #[inline(always)]
     fn material_val() -> i32 {
         KNIGHT_VALUE
     }
 }
 
-impl Material for BishopType {
+impl Material for Bishop {
     #[inline(always)]
     fn material_val() -> i32 {
         BISHOP_VALUE
     }
 }
 
-impl Material for RookType {
+impl Material for Rook {
     #[inline(always)]
     fn material_val() -> i32 {
         ROOK_VALUE
     }
 }
 
-impl Material for QueenType {
+impl Material for Queen {
     #[inline(always)]
     fn material_val() -> i32 {
         QUEEN_VALUE
     }
 }
 
-impl Material for KingType {
+impl Material for King {
     #[inline(always)]
     fn material_val() -> i32 {
         KING_VALUE
