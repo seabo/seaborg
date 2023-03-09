@@ -320,63 +320,63 @@ impl PieceTrait for KingType {
     }
 }
 
-/// The `GenTypeTrait` allows for reusing movegen code by monomorphizing
+/// The `Generate` allows for reusing movegen code by monomorphizing
 /// over different 'generation types', such as 'captures-only', 'evasions-only'
 /// 'quiet moves only' etc.
-pub trait GenTypeTrait {
+pub trait Generate {
     /// Returns the `GenType`.
     fn gen_type() -> GenType;
 }
 
-/// Dummy type to represent a `GenType::All` which implements `GenTypeTrait`.
+/// Dummy type to represent a `GenType::All` which implements `Generate`.
 pub struct AllGenType {}
-/// Dummy type to represent a `GenType::Captures` which implements `GenTypeTrait`.
+/// Dummy type to represent a `GenType::Captures` which implements `Generate`.
 pub struct CapturesGenType {}
-/// Dummy type to represent a `GenType::Quiets` which implements `GenTypeTrait`.
+/// Dummy type to represent a `GenType::Quiets` which implements `Generate`.
 pub struct QuietsGenType {}
-/// Dummy type to represent a `GenType::QuietChecks` which implements `GenTypeTrait`.
+/// Dummy type to represent a `GenType::QuietChecks` which implements `Generate`.
 pub struct QuietChecksGenType {}
-/// Dummy type to represent a `GenType::Evasions` which implements `GenTypeTrait`.
+/// Dummy type to represent a `GenType::Evasions` which implements `Generate`.
 pub struct EvasionsGenType {}
-/// Dummy type to represent a `GenType::NonEvasions` which implements `GenTypeTrait`.
+/// Dummy type to represent a `GenType::NonEvasions` which implements `Generate`.
 pub struct NonEvasionsGenType {}
 
-impl GenTypeTrait for AllGenType {
+impl Generate for AllGenType {
     #[inline(always)]
     fn gen_type() -> GenType {
         GenType::All
     }
 }
 
-impl GenTypeTrait for CapturesGenType {
+impl Generate for CapturesGenType {
     #[inline(always)]
     fn gen_type() -> GenType {
         GenType::Captures
     }
 }
 
-impl GenTypeTrait for QuietsGenType {
+impl Generate for QuietsGenType {
     #[inline(always)]
     fn gen_type() -> GenType {
         GenType::Quiets
     }
 }
 
-impl GenTypeTrait for QuietChecksGenType {
+impl Generate for QuietChecksGenType {
     #[inline(always)]
     fn gen_type() -> GenType {
         GenType::QuietChecks
     }
 }
 
-impl GenTypeTrait for EvasionsGenType {
+impl Generate for EvasionsGenType {
     #[inline(always)]
     fn gen_type() -> GenType {
         GenType::Evasions
     }
 }
 
-impl GenTypeTrait for NonEvasionsGenType {
+impl Generate for NonEvasionsGenType {
     #[inline(always)]
     fn gen_type() -> GenType {
         GenType::NonEvasions

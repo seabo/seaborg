@@ -1,6 +1,6 @@
 use crate::bb::Bitboard;
 use crate::mono_traits::{
-    AllGenType, BishopType, BlackType, CapturesGenType, EvasionsGenType, GenTypeTrait, KingType,
+    AllGenType, BishopType, BlackType, CapturesGenType, EvasionsGenType, Generate, KingType,
     KnightType, Legal, Legality, NonEvasionsGenType, PieceTrait, PlayerTrait,
     PseudoLegal, QueenType, QuietChecksGenType, QuietsGenType, RookType, WhiteType,
 };
@@ -127,7 +127,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP>
 {
     /// Generate all pseudo-legal moves in the given position
     #[inline(always)]
-    fn generate<G: GenTypeTrait, L: Legality>(
+    fn generate<G: Generate, L: Legality>(
         position: &'a Position,
         movelist: &'a mut MP,
     ) -> &'a mut MP {
@@ -153,7 +153,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP>
     }
 
     #[inline(always)]
-    fn generate_helper<G: GenTypeTrait, L: Legality, PL: PlayerTrait>(
+    fn generate_helper<G: Generate, L: Legality, PL: PlayerTrait>(
         position: &'a Position,
         movelist: &'a mut MP,
     ) -> &'a mut MP {
