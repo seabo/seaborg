@@ -108,28 +108,6 @@ impl Search {
         } else {
             let mut max = Score::INF_N;
 
-            // let moves = self.pos.generate_in::<LegalType>(&mut self.movestack);
-
-            // TODO: this ought to be illegal, but is not. We have a pointer to the underlying
-            // storage inside `moves`.
-            // self.movestack = MoveStack::new();
-
-            // It's worried about the borrow because we have a unique reference to movestack and
-            // yet we're trying to mutate it.
-            //
-            // HOWEVER: _we_ know this is allowed, because we cannot write to any of the move slots
-            // in this iterator until the iterator gets dropped, thanks to the invariants upheld in
-            // the data structure. We _do_ want to enforce that the move iterator cannot live
-            // longer than the underlying `MoveStack` storage though.
-            //for mov in &moves {
-            //    self.pos.make_move(*mov);
-            //    let score = self.alphabeta(-beta, -alpha, depth - 1).neg().inc_mate();
-            //    self.pos.unmake_move();
-            //}
-
-            // -----------------------------------------------------------------------------------
-            // Main implementation, using `BasicMoveList`
-            // -----------------------------------------------------------------------------------
             let moves = self.pos.generate_moves::<BasicMoveList>();
             if moves.is_empty() {
                 self.pvt.pv_leaf_at(depth);
