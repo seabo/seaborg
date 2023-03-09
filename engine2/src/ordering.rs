@@ -9,6 +9,7 @@ use core::position::Position;
 use num::FromPrimitive;
 use num_derive::FromPrimitive;
 
+use std::mem::MaybeUninit;
 use std::slice::Iter as SliceIter;
 
 pub type ScoredMove = (Move, Score);
@@ -31,6 +32,7 @@ pub struct Scorer<'a> {
 impl<'a> Iterator for Scorer<'a> {
     type Item = &'a mut ScoredMove;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next().map(|entry| &mut entry.sm)
     }
@@ -64,6 +66,62 @@ impl MoveList for ScoredMoveList {
 
     fn clear(&mut self) {
         self.0.clear();
+    }
+}
+
+/// A selection sort over a mutable `Entry` slice.
+///
+/// In move ordering, selection sort is expected to work best, because pre-sorting the entire list
+/// is wasted effort in the many cases where we get an early cutoff. Additionally, for a small list
+/// of elements O(n^2) algorithms can outperform if they have a low constant factor relative to
+/// O(n*log n) algorithms with more constant overhead.
+#[derive(Debug)]
+struct SelectionSort<'a> {
+    segment: &'a mut [Entry],
+}
+
+impl<'a> Iterator for SelectionSort<'a> {
+    type Item = &'a Move;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        // Each time we get a call to next, we want to iterate through the entire list and find the
+        // largest value of `Score` among the entries which have not been yielded.
+        // Then we want to set the `yielded` flag on that entry to `true`, and return a reference
+        // to the move. When we get through the whole list without seeing a `yielded = false`, we
+        // return `None`.
+        let mut max = Score::INF_N;
+        let mut max_entry: MaybeUninit<&mut Entry> = MaybeUninit::uninit();
+        let mut found_one: bool = false;
+
+        for entry in &mut *self.segment {
+            if !entry.yielded && entry.sm.1 > max {
+                max = entry.sm.1;
+                max_entry.write(entry);
+                found_one = true;
+            }
+        }
+
+        if found_one {
+            // SAFETY: we can assume this is initialized because `found_one` was true, which means
+            // we wrote the entry into this.
+            //
+            // We can further transmute the lifetime to `'a` because we know we aren't modifying
+            // the `Move` (only its `yielded` flag).
+            unsafe {
+                let max_entry = max_entry.assume_init();
+                max_entry.yielded = true;
+                Some(std::mem::transmute(max_entry))
+            }
+        } else {
+            None
+        }
+    }
+}
+
+impl<'a> From<&'a mut [Entry]> for SelectionSort<'a> {
+    fn from(segment: &'a mut [Entry]) -> Self {
+        Self { segment }
     }
 }
 
@@ -202,17 +260,9 @@ impl OrderedMoves {
     }
 }
 
-struct HashIter;
-struct QueenPromotionsIter;
-struct GoodCapturesIter;
-struct EqualCapturesIter;
-struct KillersIter;
-struct QuietIter;
-struct BadCapturesIter;
-struct UnderpromotionsIter;
 enum IterInner<'a> {
     Empty(std::iter::Empty<&'a Move>),
-    Hash(HashIter),
+    Hash(SelectionSort<'a>),
     // QueenPromotions(QueenPromotionsIter),
     // GoodCaptures(GoodCapturesIter),
     // EqualCaptures(EqualCapturesIter),
@@ -232,7 +282,7 @@ impl<'a> Iterator for IterInner<'a> {
         use IterInner::*;
         match self {
             Empty(i) => i.next(),
-            Hash(i) => todo!(),
+            Hash(i) => i.next(),
             //QueenPromotions(i) => i.next(),
             //GoodCaptures(i) => i.next(),
             //EqualCaptures(i) => i.next(),
@@ -267,7 +317,7 @@ impl<'a> IntoIterator for &'a mut OrderedMoves {
         use Phase::*;
         let iter = match self.phase {
             Pre => IterInner::Empty(Default::default()),
-            HashTable => IterInner::Hash(todo!()),
+            HashTable => IterInner::Hash(SelectionSort::from(self.current_segment())),
             QueenPromotions => IterInner::Empty(Default::default()),
             GoodCaptures => IterInner::Empty(Default::default()),
             EqualCaptures => IterInner::Empty(Default::default()),
