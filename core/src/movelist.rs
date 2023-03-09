@@ -116,8 +116,24 @@ where
     type Item = &'a T;
     type IntoIter = std::slice::Iter<'a, T>;
 
+    #[inline]
     fn into_iter(self) -> Self::IntoIter {
         unsafe { MaybeUninit::slice_assume_init_ref(self.inner.get_unchecked(0..self.len)).iter() }
+    }
+}
+
+impl<'a, T, const N: usize> IntoIterator for &'a mut ArrayVec<T, N>
+where
+    T: Copy + Debug,
+{
+    type Item = &'a mut T;
+    type IntoIter = std::slice::IterMut<'a, T>;
+
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter {
+        unsafe {
+            MaybeUninit::slice_assume_init_mut(self.inner.get_unchecked_mut(0..self.len)).iter_mut()
+        }
     }
 }
 
@@ -137,31 +153,31 @@ where
         self.len == 0
     }
 
-    /// Create a `Vec<Move>` from this `MoveList`.
+    /// Create a `Vec<T>` from this `ArrayVec`.
     pub fn vec(&self) -> Vec<T> {
         self.into_iter().map(|v| *v).collect()
     }
 
-    /// Return the number of moves inside the list.
+    /// Return the number of elements in the list.
     #[inline(always)]
     pub fn len(&self) -> usize {
         self.len
     }
 
-    /// Get the `MoveList` as a slice, `&[Move]`.
+    /// Get the `ArrayVec` as a slice, `&[T]`.
     #[inline(always)]
     pub fn as_slice(&self) -> &[T] {
         self
     }
 
-    /// Return a random move from the list.
+    /// Return a random element from the list.
     #[inline]
     pub fn random(&self) -> Option<T> {
         let mut rng = thread_rng();
         rng.choose(self.as_slice()).copied()
     }
 
-    /// Add a `Move` to the end of the list, without checking bounds.
+    /// Add a `T` to the end of the list, without checking bounds.
     #[inline(always)]
     pub unsafe fn unchecked_push_mv(&mut self, t: T) {
         let end = self.inner.get_unchecked_mut(self.len);
@@ -181,12 +197,18 @@ where
         self.as_mut_ptr().add(self.len)
     }
 
-    /// Add a `Move` to the end of the list.
+    /// Push a `T` to the end of the list.
     #[inline(always)]
-    fn push_val(&mut self, val: T) {
+    pub fn push_val(&mut self, val: T) {
         if self.len() < MAX_MOVES {
             unsafe { self.unchecked_push_mv(val) }
         }
+    }
+
+    /// Clear the `ArrayVec`.
+    #[inline(always)]
+    pub fn clear(&mut self) {
+        self.len = 0;
     }
 }
 
@@ -282,7 +304,7 @@ impl MoveList for ArrayVec<Move, MAX_MOVES> {
 
     #[inline(always)]
     fn clear(&mut self) {
-        self.len = 0;
+        self.clear();
     }
 }
 

@@ -72,6 +72,11 @@ impl Score {
         debug_assert!(x > -10_000);
         Score(x)
     }
+
+    /// Convenience for `Score::cp(0)`.
+    pub fn zero() -> Self {
+        Self::cp(0)
+    }
 }
 
 impl Neg for Score {

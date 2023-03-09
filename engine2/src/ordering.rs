@@ -3,7 +3,7 @@ use super::score::Score;
 use super::search::Search;
 
 use core::mov::Move;
-use core::movelist::{ArrayVec, BasicMoveList, MoveList};
+use core::movelist::{ArrayVec, BasicMoveList, MoveList, MAX_MOVES};
 use core::position::Position;
 
 use num::FromPrimitive;
@@ -11,11 +11,40 @@ use num_derive::FromPrimitive;
 
 use std::slice::Iter as SliceIter;
 
-pub type ScoreList = ArrayVec<Score, 254>;
+pub type ScoredMove = (Move, Score);
+
+#[derive(Debug)]
+pub struct ScoredMoveList(ArrayVec<ScoredMove, MAX_MOVES>);
+
+impl MoveList for ScoredMoveList {
+    fn empty() -> Self {
+        ScoredMoveList(ArrayVec::new())
+    }
+
+    fn push(&mut self, mv: Move) {
+        self.0.push_val((mv, Score::zero()))
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn clear(&mut self) {
+        self.0.clear();
+    }
+}
+
+impl<'a> IntoIterator for &'a mut ScoredMoveList {
+    type Item = &'a mut ScoredMove;
+    type IntoIter = <&'a mut ArrayVec<ScoredMove, MAX_MOVES> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        (&mut self.0).into_iter()
+    }
+}
 
 pub struct OrderedMoves {
-    buf: BasicMoveList,
-    scores: ScoreList,
+    buf: ScoredMoveList,
     cursor: usize,
     phase: Phase,
 }
@@ -62,26 +91,25 @@ impl Phase {
 
 pub trait Loader {
     /// Load the hash move(s) into the passed `MoveList`.
-    fn load_hash(&mut self, _movelist: &mut BasicMoveList) {}
+    fn load_hash(&mut self, _movelist: &mut ScoredMoveList) {}
 
     /// Load promotions into the passed `MoveList`.
-    fn load_promotions(&mut self, _movelist: &mut BasicMoveList) {}
+    fn load_promotions(&mut self, _movelist: &mut ScoredMoveList) {}
 
     /// Load captures into the passed `MoveList`.
-    fn load_captures(&mut self, _movelist: &mut BasicMoveList) {}
+    fn load_captures(&mut self, _movelist: &mut ScoredMoveList) {}
 
     /// Load killers into the passed `MoveList`.
-    fn load_killers(&mut self, _movelist: &mut BasicMoveList) {}
+    fn load_killers(&mut self, _movelist: &mut ScoredMoveList) {}
 
     /// Load quiet moves into the passed `MoveList`.
-    fn load_quiets(&mut self, _movelist: &mut BasicMoveList) {}
+    fn load_quiets(&mut self, _movelist: &mut ScoredMoveList) {}
 }
 
 impl OrderedMoves {
     pub fn new() -> Self {
         Self {
-            buf: BasicMoveList::empty(),
-            scores: ScoreList::new(),
+            buf: ScoredMoveList::empty(),
             cursor: 0,
             phase: Phase::Pre,
         }
@@ -108,6 +136,7 @@ impl OrderedMoves {
                 }
                 GoodCaptures => {
                     self.buf.clear();
+                    loader.load_captures(&mut self.buf);
                 }
                 EqualCaptures => {
                     self.buf.clear();
@@ -131,7 +160,7 @@ impl OrderedMoves {
     }
 }
 
-struct HashIter<'a>(SliceIter<'a, Move>);
+struct HashIter<'a>(std::iter::Map<SliceIter<'a, ScoredMove>, fn(&'a ScoredMove) -> &'a Move>);
 struct QueenPromotionsIter;
 struct GoodCapturesIter;
 struct EqualCapturesIter;
@@ -155,7 +184,7 @@ pub struct Iter<'a>(IterInner<'a>);
 
 impl<'a> HashIter<'a> {
     pub fn from(om: &'a mut OrderedMoves) -> Self {
-        Self(om.buf.as_slice().into_iter())
+        Self(om.buf.0.as_slice().into_iter().map(|sm| &sm.0))
     }
 }
 
