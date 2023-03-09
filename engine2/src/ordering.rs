@@ -3,7 +3,7 @@ use super::score::Score;
 use super::search::Search;
 
 use core::mov::Move;
-use core::movelist::{BasicMoveList, MoveList};
+use core::movelist::{ArrayVec, BasicMoveList, MoveList};
 use core::position::Position;
 
 use num::FromPrimitive;
@@ -13,6 +13,7 @@ use std::slice::Iter as SliceIter;
 
 pub struct OrderedMoves {
     buf: BasicMoveList,
+    scores: ArrayVec<Score>,
     cursor: usize,
     phase: Phase,
 }
@@ -78,6 +79,7 @@ impl OrderedMoves {
     pub fn new() -> Self {
         Self {
             buf: BasicMoveList::empty(),
+            scores: ArrayVec::<Score>::new(),
             cursor: 0,
             phase: Phase::Pre,
         }

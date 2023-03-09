@@ -41,9 +41,9 @@ pub trait MoveList: Debug {
 
 pub type BasicMoveList = ArrayVec<Move>;
 
-/// A container for `Move`s which lives on the stack and has a fixed maximum size (default 254).
+/// A container for `T: Copy` which lives on the stack and has a fixed maximum size (default 254).
 ///
-/// If you attempt to push more than 254 moves into the list, the `push` will fail silently rather
+/// If you attempt to push more than 254 items into the list, the `push` will fail silently rather
 /// than panic. The idea is that no chess position should ever have so many moves, and if by some
 /// miracle it does, the best move is hopefully already in the first 254(!) so there's no need for
 /// the program to die.
@@ -125,6 +125,12 @@ impl<T> ArrayVec<T>
 where
     T: Copy + Debug,
 {
+    /// Create an empty `ArrayVec`.
+    #[inline(always)]
+    pub fn new() -> Self {
+        Default::default()
+    }
+
     /// Returns true if empty.
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
@@ -253,7 +259,7 @@ where
 impl MoveList for ArrayVec<Move> {
     #[inline(always)]
     fn empty() -> Self {
-        Default::default()
+        Self::new()
     }
 
     #[cfg(debug_assertions)]
