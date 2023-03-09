@@ -9,7 +9,7 @@ mod zobrist;
 
 use crate::bb::Bitboard;
 use crate::masks::{CASTLING_PATH, CASTLING_ROOK_START, FILE_BB, PLAYER_CNT, RANK_BB};
-use crate::mono_traits::{LegalityTrait, PlayerTrait};
+use crate::mono_traits::{Legality, PlayerTrait};
 use crate::mov::{Move, MoveType, UndoableMove};
 use crate::movegen::{bishop_moves, rook_moves, MoveGen};
 use crate::movelist::{BasicMoveList, Frame, MoveList, MoveStack};
@@ -769,12 +769,12 @@ impl Position {
     }
 
     #[inline]
-    pub fn generate<ML: MoveList, L: LegalityTrait>(&self) -> ML {
+    pub fn generate<ML: MoveList, L: Legality>(&self) -> ML {
         MoveGen::generate_of_legality::<ML, L>(&self)
     }
 
     #[inline]
-    pub fn generate_in<'a: 'p + 'ms, 'ms, 'p, L: LegalityTrait>(
+    pub fn generate_in<'a: 'p + 'ms, 'ms, 'p, L: Legality>(
         &'p self,
         ms: &'ms mut MoveStack,
     ) -> Frame<'a> {
@@ -782,7 +782,7 @@ impl Position {
     }
 
     #[inline]
-    pub fn generate_in_list<ML: MoveList, L: LegalityTrait>(&self, ml: &mut ML) {
+    pub fn generate_in_list<ML: MoveList, L: Legality>(&self, ml: &mut ML) {
         MoveGen::generate_in::<ML, L>(self, ml)
     }
 

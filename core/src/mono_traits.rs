@@ -383,27 +383,27 @@ impl GenTypeTrait for NonEvasionsGenType {
     }
 }
 
-/// The `LegalityTrait` allows for monomorphizing movegen code to different version based on
+/// The `Legality` allows for monomorphizing movegen code to different version based on
 /// whether we want to generate just legal moves, or include pseudolegal moves as well.
-pub trait LegalityTrait {
+pub trait Legality {
     /// Returns the `LegalityType`.
     fn legality_type() -> LegalityType;
 }
 
-/// Dummy type to represent a `LegalityType::Legal` which implements `LegalityTrait`.
+/// Dummy type to represent a `LegalityType::Legal` which implements `Legality`.
 pub struct LegalType {}
 
-/// Dummy type to represent a `LegalityType::Pseudolegal` which implements `LegalityTrait`.
+/// Dummy type to represent a `LegalityType::Pseudolegal` which implements `Legality`.
 pub struct PseudolegalType {}
 
-impl LegalityTrait for LegalType {
+impl Legality for LegalType {
     #[inline(always)]
     fn legality_type() -> LegalityType {
         LegalityType::Legal
     }
 }
 
-impl LegalityTrait for PseudolegalType {
+impl Legality for PseudolegalType {
     #[inline(always)]
     fn legality_type() -> LegalityType {
         LegalityType::Pseudolegal
