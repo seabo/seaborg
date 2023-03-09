@@ -1,5 +1,5 @@
 use core::init::init_globals;
-use core::mono_traits::{LegalType, PseudolegalType};
+use core::mono_traits::{Legal, PseudoLegal};
 use core::movelist::BasicMoveList;
 use core::position::{Position, Square};
 use engine::eval::Evaluation;
@@ -37,7 +37,7 @@ fn do_pseudolegal() {
     // let mut pos = Position::from_fen("8/3k4/2bb4/8/5R2/6K1/8/8 w - - 0 1").unwrap();
     let mut pos = Position::from_fen("k7/3b4/8/5Pp1/8/7K/8/8 w - g6 0 1").unwrap();
 
-    let moves = pos.generate::<BasicMoveList, PseudolegalType>();
+    let moves = pos.generate::<BasicMoveList, PseudoLegal>();
     let mut legal_cnt = 0;
 
     for mov in &moves {

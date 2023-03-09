@@ -5,7 +5,7 @@ use super::score::Score;
 use super::time::TimingMode;
 use super::trace::Tracer;
 
-use core::mono_traits::LegalType;
+use core::mono_traits::Legal;
 use core::mov::Move;
 use core::movegen::MoveGen;
 use core::movelist::{BasicMoveList, MoveList, MoveStack};
@@ -319,12 +319,12 @@ impl<'a> MoveLoader<'a> {
 
 impl<'a> Loader for MoveLoader<'a> {
     fn load_hash(&mut self, movelist: &mut ScoredMoveList) {
-        self.search.pos.generate_in_list::<_, LegalType>(movelist);
+        self.search.pos.generate_in_list::<_, Legal>(movelist);
     }
 
     fn load_captures(&mut self, movelist: &mut ScoredMoveList) {
         // First, load them in.
-        self.search.pos.generate_in_list::<_, LegalType>(movelist);
+        self.search.pos.generate_in_list::<_, Legal>(movelist);
 
         // Then iterate them, and add the scores.
         for (mov, mut score) in movelist {

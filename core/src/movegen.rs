@@ -1,8 +1,8 @@
 use crate::bb::Bitboard;
 use crate::mono_traits::{
     AllGenType, BishopType, BlackType, CapturesGenType, EvasionsGenType, GenTypeTrait, KingType,
-    KnightType, LegalType, Legality, NonEvasionsGenType, PieceTrait, PlayerTrait,
-    PseudolegalType, QueenType, QuietChecksGenType, QuietsGenType, RookType, WhiteType,
+    KnightType, Legal, Legality, NonEvasionsGenType, PieceTrait, PlayerTrait,
+    PseudoLegal, QueenType, QuietChecksGenType, QuietsGenType, RookType, WhiteType,
 };
 use crate::mov::{Move, MoveType};
 use crate::movelist::{BasicMoveList, Frame, MoveList, MoveStack};
@@ -65,7 +65,7 @@ impl MoveGen {
     #[inline]
     pub fn generate<L: MoveList>(position: &Position) -> L {
         let mut movelist = L::empty();
-        InnerMoveGen::<L>::generate::<AllGenType, LegalType>(position, &mut movelist);
+        InnerMoveGen::<L>::generate::<AllGenType, Legal>(position, &mut movelist);
         movelist
     }
 
@@ -86,7 +86,7 @@ impl MoveGen {
     /// Generates legal moves and pushes them onto the passed `MoveList`.
     #[inline]
     pub fn generate_legal_in<ML: MoveList>(position: &Position, ms: &mut ML) {
-        InnerMoveGen::<ML>::generate::<AllGenType, LegalType>(position, ms);
+        InnerMoveGen::<ML>::generate::<AllGenType, Legal>(position, ms);
     }
 
     #[inline]
@@ -102,7 +102,7 @@ impl MoveGen {
     #[inline]
     pub fn generate_captures(position: &Position) -> BasicMoveList {
         let mut movelist = BasicMoveList::default();
-        InnerMoveGen::<BasicMoveList>::generate::<CapturesGenType, LegalType>(
+        InnerMoveGen::<BasicMoveList>::generate::<CapturesGenType, Legal>(
             position,
             &mut movelist,
         );

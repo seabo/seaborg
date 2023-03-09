@@ -391,19 +391,19 @@ pub trait Legality {
 }
 
 /// Dummy type to represent a `LegalityKind::Legal` which implements `Legality`.
-pub struct LegalType {}
+pub struct Legal {}
 
 /// Dummy type to represent a `LegalityKind::Pseudolegal` which implements `Legality`.
-pub struct PseudolegalType {}
+pub struct PseudoLegal {}
 
-impl Legality for LegalType {
+impl Legality for Legal {
     #[inline(always)]
     fn legality_type() -> LegalityKind {
         LegalityKind::Legal
     }
 }
 
-impl Legality for PseudolegalType {
+impl Legality for PseudoLegal {
     #[inline(always)]
     fn legality_type() -> LegalityKind {
         LegalityKind::Pseudolegal
