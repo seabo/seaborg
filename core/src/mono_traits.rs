@@ -66,10 +66,10 @@ pub trait Side {
     fn shift_up_right(bb: Bitboard) -> Bitboard;
 }
 
-/// Dummy type to represent a `Player::White` which implements `Trait`.
+/// Dummy type to represent a `Player::White` which implements `Side`.
 pub struct White {}
 
-/// Dummy type to represent a `Player::Black` which implements `Trait`.
+/// Dummy type to represent a `Player::Black` which implements `Side`.
 pub struct Black {}
 
 impl Side for White {
