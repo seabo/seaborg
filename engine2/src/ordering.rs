@@ -13,8 +13,36 @@ use std::slice::Iter as SliceIter;
 
 pub type ScoredMove = (Move, Score);
 
+#[derive(Copy, Clone, Debug)]
+struct Entry {
+    sm: ScoredMove,
+    yielded: bool,
+}
+
+/// An `ArrayVec` containing `ScoredMoves`.
 #[derive(Debug)]
-pub struct ScoredMoveList(ArrayVec<ScoredMove, MAX_MOVES>);
+pub struct ScoredMoveList(ArrayVec<Entry, MAX_MOVES>);
+
+/// An iterator over a `ScoredMoveList` which allows the `Move`s to be inspected and scores mutated.
+pub struct Scorer<'a> {
+    iter: <&'a mut [Entry] as IntoIterator>::IntoIter,
+}
+
+impl<'a> Iterator for Scorer<'a> {
+    type Item = &'a mut ScoredMove;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next().map(|entry| &mut entry.sm)
+    }
+}
+
+impl<'a> From<&'a mut [Entry]> for Scorer<'a> {
+    fn from(val: &'a mut [Entry]) -> Self {
+        Self {
+            iter: val.into_iter(),
+        }
+    }
+}
 
 impl MoveList for ScoredMoveList {
     fn empty() -> Self {
@@ -22,7 +50,12 @@ impl MoveList for ScoredMoveList {
     }
 
     fn push(&mut self, mv: Move) {
-        self.0.push_val((mv, Score::zero()))
+        let entry = Entry {
+            sm: (mv, Score::zero()),
+            yielded: false,
+        };
+
+        self.0.push_val(entry);
     }
 
     fn len(&self) -> usize {
@@ -34,18 +67,13 @@ impl MoveList for ScoredMoveList {
     }
 }
 
-impl<'a> IntoIterator for &'a mut ScoredMoveList {
-    type Item = &'a mut ScoredMove;
-    type IntoIter = <&'a mut ArrayVec<ScoredMove, MAX_MOVES> as IntoIterator>::IntoIter;
-
-    fn into_iter(self) -> Self::IntoIter {
-        (&mut self.0).into_iter()
-    }
-}
-
 pub struct OrderedMoves {
     buf: ScoredMoveList,
-    cursor: usize,
+    /// The index of the start of the current segment. A new segment is created each time the
+    /// `Phase` increments. So in practice, we'll have a segment for the `HashMove`, a segment for
+    /// promotions, a segment for captures, a segment for killer moves, and a segment for quiet
+    /// moves.
+    segment_start: usize,
     phase: Phase,
 }
 
@@ -99,6 +127,10 @@ pub trait Loader {
     /// Load captures into the passed `MoveList`.
     fn load_captures(&mut self, _movelist: &mut ScoredMoveList) {}
 
+    /// Provides an iterator over the capture moves, allowing the `Loader` to provide scores for
+    /// each move.
+    fn score_captures(&mut self, _scorer: Scorer) {}
+
     /// Load killers into the passed `MoveList`.
     fn load_killers(&mut self, _movelist: &mut ScoredMoveList) {}
 
@@ -110,7 +142,7 @@ impl OrderedMoves {
     pub fn new() -> Self {
         Self {
             buf: ScoredMoveList::empty(),
-            cursor: 0,
+            segment_start: 0,
             phase: Phase::Pre,
         }
     }
@@ -137,9 +169,7 @@ impl OrderedMoves {
                 GoodCaptures => {
                     self.buf.clear();
                     loader.load_captures(&mut self.buf);
-                    for (mov, score) in &mut self.buf {
-                        println!("{} {:?}", mov, score);
-                    }
+                    loader.score_captures(self.current_segment().into());
                 }
                 EqualCaptures => {
                     self.buf.clear();
@@ -161,9 +191,18 @@ impl OrderedMoves {
 
         res
     }
+
+    fn current_segment(&mut self) -> &mut [Entry] {
+        // SAFETY: we know that the bounds passed are valid for this buffer.
+        unsafe {
+            self.buf
+                .0
+                .get_slice_mut_unchecked(self.segment_start..self.buf.len())
+        }
+    }
 }
 
-struct HashIter<'a>(std::iter::Map<SliceIter<'a, ScoredMove>, fn(&'a ScoredMove) -> &'a Move>);
+struct HashIter;
 struct QueenPromotionsIter;
 struct GoodCapturesIter;
 struct EqualCapturesIter;
@@ -173,7 +212,7 @@ struct BadCapturesIter;
 struct UnderpromotionsIter;
 enum IterInner<'a> {
     Empty(std::iter::Empty<&'a Move>),
-    Hash(HashIter<'a>),
+    Hash(HashIter),
     // QueenPromotions(QueenPromotionsIter),
     // GoodCaptures(GoodCapturesIter),
     // EqualCaptures(EqualCapturesIter),
@@ -185,21 +224,6 @@ enum IterInner<'a> {
 
 pub struct Iter<'a>(IterInner<'a>);
 
-impl<'a> HashIter<'a> {
-    pub fn from(om: &'a mut OrderedMoves) -> Self {
-        Self(om.buf.0.as_slice().into_iter().map(|sm| &sm.0))
-    }
-}
-
-impl<'a> Iterator for HashIter<'a> {
-    type Item = &'a Move;
-
-    #[inline(always)]
-    fn next(&mut self) -> Option<Self::Item> {
-        self.0.next()
-    }
-}
-
 impl<'a> Iterator for IterInner<'a> {
     type Item = &'a Move;
 
@@ -208,7 +232,7 @@ impl<'a> Iterator for IterInner<'a> {
         use IterInner::*;
         match self {
             Empty(i) => i.next(),
-            Hash(i) => i.next(),
+            Hash(i) => todo!(),
             //QueenPromotions(i) => i.next(),
             //GoodCaptures(i) => i.next(),
             //EqualCaptures(i) => i.next(),
@@ -243,7 +267,7 @@ impl<'a> IntoIterator for &'a mut OrderedMoves {
         use Phase::*;
         let iter = match self.phase {
             Pre => IterInner::Empty(Default::default()),
-            HashTable => IterInner::Hash(HashIter::from(self)),
+            HashTable => IterInner::Hash(todo!()),
             QueenPromotions => IterInner::Empty(Default::default()),
             GoodCaptures => IterInner::Empty(Default::default()),
             EqualCaptures => IterInner::Empty(Default::default()),
@@ -279,7 +303,7 @@ mod tests {
             if depth == 1 {
                 self.count += self.pos.generate_moves::<BasicMoveList>().len();
             } else {
-                let mut moves = OrderedMoves::<BasicMoveList>::new();
+                let mut moves = OrderedMoves::new();
                 // TODO
                 // while moves.next_phase(&mut self.pos) {
                 //     for mov in &mut moves {

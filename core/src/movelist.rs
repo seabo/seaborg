@@ -210,6 +210,30 @@ where
     pub fn clear(&mut self) {
         self.len = 0;
     }
+
+    /// Return a slice over a specified range, without performing bounds checking. Undefined
+    /// behaviour will result if the range is out of bounds, so the caller must ensure it is valid.
+    ///
+    /// This is a faster alternative to using `Index<Range<usize>>` because the latter is a safe
+    /// API and would require bounds checking.
+    #[inline(always)]
+    pub unsafe fn get_slice_unchecked(&self, rng: Range<usize>) -> &[T] {
+        let p = self.inner.as_ptr();
+        let start = p.add(rng.start);
+        MaybeUninit::slice_assume_init_ref(slice::from_raw_parts(start, rng.len()))
+    }
+
+    /// Return a mutable slice over a specified range, without performing bounds checking. Undefined
+    /// behaviour will result if the range is out of bounds, so the caller must ensure it is valid.
+    ///
+    /// This is a faster alternative to using `Index<Range<usize>>` because the latter is a safe
+    /// API and would require bounds checking.
+    #[inline(always)]
+    pub unsafe fn get_slice_mut_unchecked(&mut self, rng: Range<usize>) -> &mut [T] {
+        let p = self.inner.as_mut_ptr();
+        let start = p.add(rng.start);
+        MaybeUninit::slice_assume_init_mut(slice::from_raw_parts_mut(start, rng.len()))
+    }
 }
 
 impl<T, const N: usize> Deref for ArrayVec<T, N>

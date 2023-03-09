@@ -1,5 +1,5 @@
 use super::eval::Evaluation;
-use super::ordering::{Loader, OrderedMoves, ScoredMoveList};
+use super::ordering::{Loader, OrderedMoves, ScoredMoveList, Scorer};
 use super::pv_table::PVTable;
 use super::score::Score;
 use super::time::TimingMode;
@@ -327,9 +327,10 @@ impl<'a> Loader for MoveLoader<'a> {
         self.search
             .pos
             .generate_in_new::<_, Captures, Legal>(movelist);
+    }
 
-        // Then iterate them, and add the scores.
-        for (ref mov, ref mut score) in &mut *movelist {
+    fn score_captures(&mut self, captures: Scorer) {
+        for (ref mov, ref mut score) in captures {
             if mov.is_capture() {
                 *score = self.search.see(
                     mov.orig(),
