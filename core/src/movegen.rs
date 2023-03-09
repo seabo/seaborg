@@ -32,7 +32,7 @@ use std::ops::Index;
 /// if not in check, while `GenTypes::Evasions` can only be used if the the board is
 /// in check. The remaining `GenTypes` can be used legally whenever.
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub enum GenType {
+pub enum Generation {
     All,
     Captures,
     Quiets,
@@ -160,9 +160,9 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP>
         let mut movegen = InnerMoveGen::<MP>::get_self::<PL>(position, movelist);
         let gen_type = G::gen_type();
 
-        if gen_type == GenType::Evasions {
+        if gen_type == Generation::Evasions {
             movegen.generate_evasions::<PL, L>(false);
-        } else if gen_type == GenType::Captures {
+        } else if gen_type == Generation::Captures {
             if movegen.position.in_check() {
                 movegen.generate_evasions::<PL, L>(true);
             } else {
@@ -176,7 +176,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP>
 
         //     }
         // }
-        else if gen_type == GenType::All {
+        else if gen_type == Generation::All {
             if movegen.position.in_check() {
                 movegen.generate_evasions::<PL, L>(false);
             } else {

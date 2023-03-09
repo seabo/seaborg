@@ -7,7 +7,7 @@
 /// code reuse. We also inline all the functions in the implementation for speed
 /// in the compiled monomorphized code.
 use crate::bb::Bitboard;
-use crate::movegen::{GenType, LegalityKind};
+use crate::movegen::{Generation, LegalityKind};
 use crate::position::{PieceType, Player, Square};
 
 pub trait Side {
@@ -325,7 +325,7 @@ impl PieceTrait for KingType {
 /// 'quiet moves only' etc.
 pub trait Generate {
     /// Returns the `GenType`.
-    fn gen_type() -> GenType;
+    fn gen_type() -> Generation;
 }
 
 /// Dummy type to represent a `GenType::All` which implements `Generate`.
@@ -343,43 +343,43 @@ pub struct NonEvasions {}
 
 impl Generate for All {
     #[inline(always)]
-    fn gen_type() -> GenType {
-        GenType::All
+    fn gen_type() -> Generation {
+        Generation::All
     }
 }
 
 impl Generate for Captures {
     #[inline(always)]
-    fn gen_type() -> GenType {
-        GenType::Captures
+    fn gen_type() -> Generation {
+        Generation::Captures
     }
 }
 
 impl Generate for Quiet {
     #[inline(always)]
-    fn gen_type() -> GenType {
-        GenType::Quiets
+    fn gen_type() -> Generation {
+        Generation::Quiets
     }
 }
 
 impl Generate for QuietChecks {
     #[inline(always)]
-    fn gen_type() -> GenType {
-        GenType::QuietChecks
+    fn gen_type() -> Generation {
+        Generation::QuietChecks
     }
 }
 
 impl Generate for Evasions {
     #[inline(always)]
-    fn gen_type() -> GenType {
-        GenType::Evasions
+    fn gen_type() -> Generation {
+        Generation::Evasions
     }
 }
 
 impl Generate for NonEvasions {
     #[inline(always)]
-    fn gen_type() -> GenType {
-        GenType::NonEvasions
+    fn gen_type() -> Generation {
+        Generation::NonEvasions
     }
 }
 
