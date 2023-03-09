@@ -2,7 +2,7 @@
 use super::search::Search;
 
 use core::mov::Move;
-use core::movelist::{MoveList, OverflowingMoveList};
+use core::movelist::MoveList;
 use core::position::Position;
 
 use num::FromPrimitive;

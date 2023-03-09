@@ -17,7 +17,6 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::ops::{Deref, DerefMut, Index, IndexMut, Range};
-use std::ptr::addr_of_mut;
 use std::slice;
 use std::slice::Iter;
 
@@ -38,16 +37,28 @@ pub trait MoveList {
 }
 
 #[derive(Clone)]
+/// A container for `Move`s which lives on the stack and has a fixed maximum size (default 254).
+///
+/// If you attempt to push more than 254 moves into the list, the `push` will fail silently rather
+/// than panic. The idea is that no chess position should ever have so many moves, and if by some
+/// miracle it does, the best move is hopefully already in the first 254(!) so there's no need for
+/// the program to die.
+///
+/// This approach seems to be the fastest way of working with lists of `Move`s because it doesn't
+/// allocate and it doesn't have any handling for
+///
+/// Note: we do not have any `Drop` implementation, but if `Move` needed to be dropped we would
+/// need to think about this.
 pub struct BasicMoveList {
-    inner: [Move; MAX_MOVES],
+    inner: [MaybeUninit<Move>; MAX_MOVES],
     len: usize,
 }
 
 impl fmt::Display for BasicMoveList {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "[")?;
-        for i in 0..self.len() {
-            write!(f, "{}, ", self.inner[i])?;
+        for mov in self {
+            write!(f, "{}, ", mov)?;
         }
         writeln!(f, "]")
     }
@@ -57,7 +68,7 @@ impl Default for BasicMoveList {
     #[inline]
     fn default() -> Self {
         BasicMoveList {
-            inner: [Move::null(); MAX_MOVES],
+            inner: [MaybeUninit::uninit(); MAX_MOVES],
             len: 0,
         }
     }
@@ -83,7 +94,7 @@ impl<'a> IntoIterator for &'a BasicMoveList {
     type IntoIter = std::slice::Iter<'a, Move>;
 
     fn into_iter(self) -> Self::IntoIter {
-        unsafe { self.inner.get_unchecked(0..self.len).iter() }
+        unsafe { MaybeUninit::slice_assume_init_ref(self.inner.get_unchecked(0..self.len)).iter() }
     }
 }
 
@@ -122,7 +133,7 @@ impl BasicMoveList {
     #[inline(always)]
     pub unsafe fn unchecked_push_mv(&mut self, mv: Move) {
         let end = self.inner.get_unchecked_mut(self.len);
-        *end = mv;
+        end.write(mv);
         self.len += 1;
     }
 
@@ -154,7 +165,7 @@ impl Deref for BasicMoveList {
     fn deref(&self) -> &[Move] {
         unsafe {
             let p = self.inner.as_ptr();
-            slice::from_raw_parts(p, self.len)
+            MaybeUninit::slice_assume_init_ref(slice::from_raw_parts(p, self.len))
         }
     }
 }
@@ -164,7 +175,7 @@ impl DerefMut for BasicMoveList {
     fn deref_mut(&mut self) -> &mut [Move] {
         unsafe {
             let p = self.inner.as_mut_ptr();
-            slice::from_raw_parts_mut(p, self.len)
+            MaybeUninit::slice_assume_init_mut(slice::from_raw_parts_mut(p, self.len))
         }
     }
 }
@@ -174,14 +185,30 @@ impl Index<usize> for BasicMoveList {
 
     #[inline(always)]
     fn index(&self, index: usize) -> &Move {
-        &(**self)[index]
+        if index >= self.len {
+            panic!(
+                "index out of bounds; the len is {} but the index is {}",
+                self.len, index
+            );
+        }
+
+        // SAFETY: this is initialized and `Some` given the bounds check above.
+        unsafe { self.inner.get(index).unwrap().assume_init_ref() }
     }
 }
 
 impl IndexMut<usize> for BasicMoveList {
     #[inline(always)]
     fn index_mut(&mut self, index: usize) -> &mut Move {
-        &mut (**self)[index]
+        if index >= self.len {
+            panic!(
+                "index out of bounds; the len is {} but the index is {}",
+                self.len, index
+            );
+        }
+
+        // SAFETY: this is initialized and `Some` given the bounds check above.
+        unsafe { self.inner.get_mut(index).unwrap().assume_init_mut() }
     }
 }
 

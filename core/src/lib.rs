@@ -1,3 +1,5 @@
+#![feature(maybe_uninit_slice)]
+
 #[macro_use]
 mod macros;
 
