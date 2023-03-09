@@ -11,9 +11,11 @@ use num_derive::FromPrimitive;
 
 use std::slice::Iter as SliceIter;
 
+pub type ScoreList = ArrayVec<Score, 254>;
+
 pub struct OrderedMoves {
     buf: BasicMoveList,
-    scores: ArrayVec<Score>,
+    scores: ScoreList,
     cursor: usize,
     phase: Phase,
 }
@@ -79,7 +81,7 @@ impl OrderedMoves {
     pub fn new() -> Self {
         Self {
             buf: BasicMoveList::empty(),
-            scores: ArrayVec::<Score>::new(),
+            scores: ScoreList::new(),
             cursor: 0,
             phase: Phase::Pre,
         }

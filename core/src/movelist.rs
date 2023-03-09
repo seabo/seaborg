@@ -39,7 +39,7 @@ pub trait MoveList: Debug {
     fn clear(&mut self);
 }
 
-pub type BasicMoveList = ArrayVec<Move>;
+pub type BasicMoveList = ArrayVec<Move, MAX_MOVES>;
 
 /// A container for `T: Copy` which lives on the stack and has a fixed maximum size (default 254).
 ///
@@ -54,15 +54,15 @@ pub type BasicMoveList = ArrayVec<Move>;
 /// Note: we do not have any `Drop` implementation, but if `Move` needed to be dropped we would
 /// need to think about this.
 #[derive(Debug)]
-pub struct ArrayVec<T>
+pub struct ArrayVec<T, const N: usize>
 where
     T: Copy + Debug,
 {
-    inner: [MaybeUninit<T>; MAX_MOVES],
+    inner: [MaybeUninit<T>; N],
     len: usize,
 }
 
-impl<T> fmt::Display for ArrayVec<T>
+impl<T, const N: usize> fmt::Display for ArrayVec<T, N>
 where
     T: fmt::Display + Debug + Copy,
 {
@@ -75,31 +75,31 @@ where
     }
 }
 
-impl<T> Default for ArrayVec<T>
+impl<T, const N: usize> Default for ArrayVec<T, N>
 where
     T: Copy + Debug,
 {
     #[inline]
     fn default() -> Self {
         ArrayVec {
-            inner: [MaybeUninit::uninit(); MAX_MOVES],
+            inner: [MaybeUninit::uninit(); N],
             len: 0,
         }
     }
 }
 
-impl<T> From<Vec<T>> for ArrayVec<T>
+impl<T, const N: usize> From<Vec<T>> for ArrayVec<T, N>
 where
     T: Copy + Debug,
 {
     fn from(vec: Vec<T>) -> Self {
-        let mut list = ArrayVec::<T>::default();
+        let mut list = ArrayVec::<T, N>::default();
         vec.iter().for_each(|v| list.push_val(*v));
         list
     }
 }
 
-impl<T> Into<Vec<T>> for ArrayVec<T>
+impl<T, const N: usize> Into<Vec<T>> for ArrayVec<T, N>
 where
     T: Copy + Debug,
 {
@@ -109,7 +109,7 @@ where
     }
 }
 
-impl<'a, T> IntoIterator for &'a ArrayVec<T>
+impl<'a, T, const N: usize> IntoIterator for &'a ArrayVec<T, N>
 where
     T: Copy + Debug,
 {
@@ -121,7 +121,7 @@ where
     }
 }
 
-impl<T> ArrayVec<T>
+impl<T, const N: usize> ArrayVec<T, N>
 where
     T: Copy + Debug,
 {
@@ -190,7 +190,7 @@ where
     }
 }
 
-impl<T> Deref for ArrayVec<T>
+impl<T, const N: usize> Deref for ArrayVec<T, N>
 where
     T: Copy + Debug,
 {
@@ -205,7 +205,7 @@ where
     }
 }
 
-impl<T> DerefMut for ArrayVec<T>
+impl<T, const N: usize> DerefMut for ArrayVec<T, N>
 where
     T: Copy + Debug,
 {
@@ -218,7 +218,7 @@ where
     }
 }
 
-impl<T> Index<usize> for ArrayVec<T>
+impl<T, const N: usize> Index<usize> for ArrayVec<T, N>
 where
     T: Copy + Debug,
 {
@@ -238,7 +238,7 @@ where
     }
 }
 
-impl<T> IndexMut<usize> for ArrayVec<T>
+impl<T, const N: usize> IndexMut<usize> for ArrayVec<T, N>
 where
     T: Copy + Debug,
 {
@@ -256,7 +256,7 @@ where
     }
 }
 
-impl MoveList for ArrayVec<Move> {
+impl MoveList for ArrayVec<Move, MAX_MOVES> {
     #[inline(always)]
     fn empty() -> Self {
         Self::new()
