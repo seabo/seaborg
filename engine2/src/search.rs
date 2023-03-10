@@ -144,8 +144,8 @@ impl Search {
         self.trace.visit_node();
 
         if depth == 0 {
-            // self.quiesce(alpha, beta)
-            self.evaluate()
+            self.quiesce(alpha, beta)
+            // self.evaluate()
         } else {
             let mut max = Score::INF_N;
 
@@ -155,6 +155,9 @@ impl Search {
             while moves.load_next_phase(MoveLoader::from(self)) {
                 for mov in &mut moves {
                     c += 1;
+                    if c > 2 {
+                        break;
+                    }
 
                     self.pos.make_move(mov);
                     let score = self
@@ -163,9 +166,9 @@ impl Search {
                         .inc_mate();
                     self.pos.unmake_move();
 
-                    // if score >= beta {
-                    //     return score;
-                    // }
+                    if score >= beta {
+                        return score;
+                    }
 
                     if score > max {
                         self.pvt.copy_to(depth, *mov);
