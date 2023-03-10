@@ -10,6 +10,7 @@ use num::FromPrimitive;
 use num_derive::FromPrimitive;
 
 use std::mem::MaybeUninit;
+use std::ops::Range;
 use std::slice::Iter as SliceIter;
 
 pub type ScoredMove = (Move, Score);
@@ -22,7 +23,7 @@ struct Entry {
 
 /// An `ArrayVec` containing `ScoredMoves`.
 #[derive(Debug)]
-pub struct ScoredMoveList(ArrayVec<Entry, MAX_MOVES>);
+pub struct ScoredMoveList(ArrayVec<Entry, 254>);
 
 /// An iterator over a `ScoredMoveList` which allows the `Move`s to be inspected and scores mutated.
 pub struct Scorer<'a> {
@@ -125,6 +126,31 @@ impl<'a> From<&'a mut [Entry]> for SelectionSort<'a> {
     }
 }
 
+/// A structure for managing move ordering during search.
+///
+/// Whenever movegen is required, create a new `OrderedMoves`. To use it, the caller must also have
+/// a type which implements `Loader`. This allows `OrderedMoves` to do staged loading of moves, and
+/// to receive scores for captures (usually, the `Loader` will run SEE on the captures) and scores
+/// for quiet moves (usually, the `Loader` will consult a history table).
+///
+/// Moves are generated in phases, so each new phase requires a call to
+/// `OrderedMoves:load_next_phase`, passing a `Loader`. If this returns `true`, then there are move
+/// moves to be yielded. Whenever there are more moves to be generated, `&mut OrderedMoves` is
+/// `IntoIterator` and will yield those moves. The moves will only be yielded _once_, so it is
+/// probably confusing to produce this iterator from `&mut OrderedMoves`. (TODO: We should have a method
+/// which returns it instead, to make clearer that it's a one time thing).
+///
+/// `OrderedMoves` is built on top of an `ArrayVec`, as this appears to be significantly more
+/// performant than any solution involving overflows or allocations, since there is very little
+/// overhead / pointer chasing / bounds checking to manage an `ArrayVec`. However, the downside is
+/// that `OrderedMoves` is a large structure - currently 3KB. We will have one of these at every
+/// ply, so if we are searching deeply we could reach 100KB of data on the stack, just for move
+/// ordering structs.
+///
+/// TODO: one possibility to explore is if there is any merit in attaching a `MoveOrdering` system
+/// to the `Position` itself "at the bottom of the stack", so to speak. We could make this have
+/// enough space to store the moves for every ply in the search in a single `ArrayVec`. It would
+/// get gnarly to implement...
 pub struct OrderedMoves {
     buf: ScoredMoveList,
     /// The index of the start of the current segment. A new segment is created each time the
@@ -132,6 +158,11 @@ pub struct OrderedMoves {
     /// promotions, a segment for captures, a segment for killer moves, and a segment for quiet
     /// moves.
     segment_start: usize,
+    hash_segment: Range<usize>,
+    promo_segment: Range<usize>,
+    capt_segment: Range<usize>,
+    killer_segment: Range<usize>,
+    quiet_segment: Range<usize>,
     phase: Phase,
 }
 
@@ -194,6 +225,10 @@ pub trait Loader {
 
     /// Load quiet moves into the passed `MoveList`.
     fn load_quiets(&mut self, _movelist: &mut ScoredMoveList) {}
+
+    /// Provides an iterator over the quiet moves, allowing the `Loader` to provide scores for
+    /// each move.
+    fn score_quiets(&mut self, _scorer: Scorer) {}
 }
 
 impl OrderedMoves {
@@ -201,12 +236,137 @@ impl OrderedMoves {
         Self {
             buf: ScoredMoveList::empty(),
             segment_start: 0,
+            hash_segment: Range::default(),
+            promo_segment: Range::default(),
+            capt_segment: Range::default(),
+            killer_segment: Range::default(),
+            quiet_segment: Range::default(),
             phase: Phase::Pre,
         }
     }
 
     pub fn next_phase(&self) -> Phase {
         self.phase
+    }
+
+    /// Record the location of the hash move segment in the underlying buffer, assuming that it
+    /// starts at `self.segment_start` and ends at `self.buf.len()`. This method therefore assumes
+    /// that it is being called immediately after the relevant moves have been loaded.
+    fn set_hash_segment(&mut self) {
+        self.hash_segment = Range {
+            start: self.segment_start,
+            end: self.buf.len(),
+        };
+
+        self.segment_start = self.buf.len();
+    }
+
+    /// Record the location of the promotion move segment in the underlying buffer, assuming that it
+    /// starts at `self.segment_start` and ends at `self.buf.len()`. This method therefore assumes
+    /// that it is being called immediately after the relevant moves have been loaded.
+    fn set_promo_segment(&mut self) {
+        self.promo_segment = Range {
+            start: self.segment_start,
+            end: self.buf.len(),
+        };
+
+        self.segment_start = self.buf.len();
+    }
+
+    /// Record the location of the capture move segment in the underlying buffer, assuming that it
+    /// starts at `self.segment_start` and ends at `self.buf.len()`. This method therefore assumes
+    /// that it is being called immediately after the relevant moves have been loaded.
+    fn set_capt_segment(&mut self) {
+        self.capt_segment = Range {
+            start: self.segment_start,
+            end: self.buf.len(),
+        };
+
+        self.segment_start = self.buf.len();
+    }
+
+    /// Record the location of the killer move segment in the underlying buffer, assuming that it
+    /// starts at `self.segment_start` and ends at `self.buf.len()`. This method therefore assumes
+    /// that it is being called immediately after the relevant moves have been loaded.
+    fn set_killer_segment(&mut self) {
+        self.killer_segment = Range {
+            start: self.segment_start,
+            end: self.buf.len(),
+        };
+
+        self.segment_start = self.buf.len();
+    }
+
+    /// Record the location of the quiet move segment in the underlying buffer, assuming that it
+    /// starts at `self.segment_start` and ends at `self.buf.len()`. This method therefore assumes
+    /// that it is being called immediately after the relevant moves have been loaded.
+    fn set_quiet_segment(&mut self) {
+        self.quiet_segment = Range {
+            start: self.segment_start,
+            end: self.buf.len(),
+        };
+
+        self.segment_start = self.buf.len();
+    }
+
+    /// Return the hash segment.
+    #[inline]
+    fn hash_segment(&mut self) -> &mut [Entry] {
+        // SAFETY: the segment `Range` starts as `0..0`, which is always fine for us to get.
+        // We only ever change the `Range` when we know that moves have been placed in that
+        // location, so we are safe to derefence.
+        unsafe { self.segment_from_range(self.hash_segment.clone()) }
+    }
+
+    /// Return the promo segment.
+    #[inline]
+    fn promo_segment(&mut self) -> &mut [Entry] {
+        // SAFETY: the segment `Range` starts as `0..0`, which is always fine for us to get.
+        // We only ever change the `Range` when we know that moves have been placed in that
+        // location, so we are safe to derefence.
+        unsafe { self.segment_from_range(self.promo_segment.clone()) }
+    }
+
+    /// Return the capture segment.
+    #[inline]
+    fn capt_segment(&mut self) -> &mut [Entry] {
+        // SAFETY: the segment `Range` starts as `0..0`, which is always fine for us to get.
+        // We only ever change the `Range` when we know that moves have been placed in that
+        // location, so we are safe to derefence.
+        unsafe { self.segment_from_range(self.capt_segment.clone()) }
+    }
+
+    /// Return the killer segment.
+    #[inline]
+    fn killer_segment(&mut self) -> &mut [Entry] {
+        // SAFETY: the segment `Range` starts as `0..0`, which is always fine for us to get.
+        // We only ever change the `Range` when we know that moves have been placed in that
+        // location, so we are safe to derefence.
+        unsafe { self.segment_from_range(self.killer_segment.clone()) }
+    }
+
+    /// Return the quiet segment.
+    #[inline]
+    fn quiet_segment(&mut self) -> &mut [Entry] {
+        // SAFETY: the segment `Range` starts as `0..0`, which is always fine for us to get.
+        // We only ever change the `Range` when we know that moves have been placed in that
+        // location, so we are safe to derefence.
+        unsafe { self.segment_from_range(self.quiet_segment.clone()) }
+    }
+
+    /// This is unsafe because we do not bounds check the range.
+    #[inline]
+    unsafe fn segment_from_range(&mut self, rng: Range<usize>) -> &mut [Entry] {
+        self.buf.0.get_slice_mut_unchecked(rng)
+    }
+
+    fn current_segment(&mut self) -> &mut [Entry] {
+        // SAFETY: we know that the bounds passed are valid for this buffer.
+        unsafe {
+            self.buf
+                .0
+                .get_slice_mut_unchecked(self.segment_start..self.buf.len())
+        }
     }
 
     pub fn load_next_phase<L: Loader>(&mut self, mut loader: L) -> bool {
@@ -220,43 +380,50 @@ impl OrderedMoves {
                 HashTable => {
                     // No need to clear the buf here, because it is guaranteed to already be empty.
                     loader.load_hash(&mut self.buf);
+
+                    self.set_hash_segment();
                 }
                 QueenPromotions => {
-                    self.buf.clear();
+                    loader.load_promotions(&mut self.buf);
+
+                    self.set_promo_segment();
                 }
                 GoodCaptures => {
-                    self.buf.clear();
                     loader.load_captures(&mut self.buf);
                     loader.score_captures(self.current_segment().into());
+
+                    self.set_capt_segment();
                 }
                 EqualCaptures => {
-                    self.buf.clear();
+                    // TODO: is it inefficient to treat this as a separate phase?
                 }
                 Killers => {
-                    self.buf.clear();
+                    loader.load_killers(&mut self.buf);
+
+                    self.set_killer_segment();
+                    // Iterate through the killers and mark as yielded any which match moves in
+                    // `hash_move_range`.
                 }
                 Quiet => {
-                    self.buf.clear();
+                    loader.load_quiets(&mut self.buf);
+
+                    self.set_quiet_segment();
+
+                    // Create a `Scorer` for the quiet moves, and pass that to `score_quiets`.
+                    //
+                    // Iterate through the quiets and mark as yielded any which match moves in
+                    // `hash_move_range` or `killer_move_range`.
                 }
                 BadCaptures => {
-                    self.buf.clear();
+                    // Nothing to do here?
                 }
                 Underpromotions => {
-                    self.buf.clear();
+                    // Nothing to do here?
                 }
             }
         }
 
         res
-    }
-
-    fn current_segment(&mut self) -> &mut [Entry] {
-        // SAFETY: we know that the bounds passed are valid for this buffer.
-        unsafe {
-            self.buf
-                .0
-                .get_slice_mut_unchecked(self.segment_start..self.buf.len())
-        }
     }
 }
 
@@ -301,10 +468,7 @@ impl<'a> Iterator for Iter<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         match self.0.next() {
             Some(m) => Some(m),
-            None => {
-                // cleanup the `OrderedMoveList` (self.om)
-                None
-            }
+            None => None,
         }
     }
 }
@@ -317,7 +481,7 @@ impl<'a> IntoIterator for &'a mut OrderedMoves {
         use Phase::*;
         let iter = match self.phase {
             Pre => IterInner::Empty(Default::default()),
-            HashTable => IterInner::Hash(SelectionSort::from(self.current_segment())),
+            HashTable => IterInner::Hash(SelectionSort::from(self.hash_segment())),
             QueenPromotions => IterInner::Empty(Default::default()),
             GoodCaptures => IterInner::Empty(Default::default()),
             EqualCaptures => IterInner::Empty(Default::default()),
