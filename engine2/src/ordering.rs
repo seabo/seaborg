@@ -12,6 +12,7 @@ use num_derive::FromPrimitive;
 use std::mem::MaybeUninit;
 use std::ops::Range;
 use std::slice::Iter as SliceIter;
+use std::slice::IterMut as SliceIterMut;
 
 pub type ScoredMove = (Move, Score);
 
@@ -81,6 +82,13 @@ struct SelectionSort<'a> {
     segment: &'a mut [Entry],
 }
 
+impl<'a> SelectionSort<'a> {
+    /// Create a new selection sort iterator from a segment (`&mut [Entry]`).
+    pub fn from(segment: &'a mut [Entry]) -> Self {
+        Self { segment }
+    }
+}
+
 impl<'a> Iterator for SelectionSort<'a> {
     type Item = &'a Move;
 
@@ -123,6 +131,110 @@ impl<'a> Iterator for SelectionSort<'a> {
 impl<'a> From<&'a mut [Entry]> for SelectionSort<'a> {
     fn from(segment: &'a mut [Entry]) -> Self {
         Self { segment }
+    }
+}
+
+/// An iterator over the killer moves. These are not scored, but they must each be checked against
+/// the hash table move to ensure that they haven't already been yielded, to avoid a re-search.
+///
+/// This iterator assumes that all moves in the killer segment are set to `yielded = false` - it
+/// does not check this. (However, `yielded = false` may not reflect that the move has been yielded
+/// during the hash move phase, so it _does_ check for this).
+#[derive(Debug)]
+struct KillerIter<'a> {
+    killer_segment: SliceIterMut<'a, Entry>,
+    hash_segment: &'a mut [Entry],
+}
+
+impl<'a> KillerIter<'a> {
+    /// Create a new killer move iterator from its segment (`&mut [Entry]`) and the segment for the
+    /// hash table move.
+    pub fn from(killer_segment: &'a mut [Entry], hash_segment: &'a mut [Entry]) -> Self {
+        Self {
+            killer_segment: killer_segment.iter_mut(),
+            hash_segment,
+        }
+    }
+}
+
+impl<'a> Iterator for KillerIter<'a> {
+    type Item = &'a Move;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.killer_segment.next() {
+            Some(entry) => {
+                entry.yielded = true;
+
+                // If this move matches one in the hash segment, skip it.
+                for hm in self.hash_segment.iter() {
+                    if entry.sm.0 == hm.sm.0 {
+                        return self.next();
+                    }
+                }
+
+                // Now we are safe to return it.
+                Some(&entry.sm.0)
+            }
+            None => None,
+        }
+    }
+}
+
+/// An iterator over the quiet moves. These are scored and they must each be checked against
+/// the hash table move to ensure that they haven't already been yielded, to avoid a re-search.
+///
+/// This iterator assumes that all moves in the quiet segment are set to `yielded = false` - it
+/// does not check this. (However, `yielded = false` may not reflect that the move has been yielded
+/// during the hash move phase, so it _does_ check for this).
+struct QuietsIter<'a> {
+    quiets_sel_sort: SelectionSort<'a>,
+    hash_segment: &'a mut [Entry],
+    killer_segment: &'a mut [Entry],
+}
+
+impl<'a> QuietsIter<'a> {
+    /// Create a new quiet move iterator from its segment (`&mut [Entry]`) and the segments for the
+    /// hash table move and killer moves.
+    pub fn from(
+        quiets_segment: &'a mut [Entry],
+        hash_segment: &'a mut [Entry],
+        killer_segment: &'a mut [Entry],
+    ) -> Self {
+        Self {
+            quiets_sel_sort: SelectionSort::from(quiets_segment),
+            hash_segment,
+            killer_segment,
+        }
+    }
+}
+
+impl<'a> Iterator for QuietsIter<'a> {
+    type Item = &'a Move;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.quiets_sel_sort.next() {
+            Some(mov) => {
+                // If this move matches one in the hash segment, skip it.
+                for hm in self.hash_segment.iter() {
+                    if *mov == hm.sm.0 {
+                        return self.next();
+                    }
+                }
+
+                // If this move matches one in the killer segment, skip it.
+                for km in self.killer_segment.iter() {
+                    if *mov == km.sm.0 {
+                        return self.next();
+                    }
+                }
+
+                // Now, we are safe to return it.
+                Some(mov)
+            }
+            None => None,
+        }
     }
 }
 
