@@ -74,6 +74,23 @@ impl Move {
         self.promo_piece_type
     }
 
+    /// Returns a clone of `self` with the promo piece type set to the passed value.
+    #[inline(always)]
+    pub fn set_promo_type(&self, promo_type: PieceType) -> Move {
+        debug_assert!(self.is_promo());
+        debug_assert!(&[
+            PieceType::Queen,
+            PieceType::Rook,
+            PieceType::Bishop,
+            PieceType::Knight
+        ]
+        .contains(&promo_type));
+
+        let mut m = self.clone();
+        m.promo_piece_type = Some(promo_type);
+        m
+    }
+
     /// Returns the type of move, according to the `SpecialMove` field.
     #[inline(always)]
     pub fn move_type(&self) -> MoveType {

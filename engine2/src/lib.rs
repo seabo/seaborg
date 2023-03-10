@@ -1,4 +1,5 @@
 #![feature(stmt_expr_attributes)]
+#![feature(slice_from_ptr_range)]
 
 pub mod engine;
 pub mod eval;

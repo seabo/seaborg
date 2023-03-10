@@ -185,16 +185,30 @@ where
         self.len += 1;
     }
 
-    /// Return a pointer to the first (0th index) element in the list.
+    /// Return a mut pointer to the first (0th index) element in the list.
     #[inline(always)]
-    pub unsafe fn list_ptr(&mut self) -> *mut T {
+    pub unsafe fn list_ptr_mut(&mut self) -> *mut T {
         self.as_mut_ptr()
     }
 
-    /// Return a pointer to the element next to the last element in the list.
+    /// Return a const pointer to the first (0th index) element in the list.
     #[inline(always)]
-    pub unsafe fn over_bounds_ptr(&mut self) -> *mut T {
-        self.as_mut_ptr().add(self.len)
+    pub unsafe fn list_ptr(&self) -> *const T {
+        self.as_ptr()
+    }
+
+    /// Return a mut pointer to the element next to the last element in the list.
+    #[inline(always)]
+    pub unsafe fn over_bounds_ptr_mut(&mut self) -> *mut T {
+        MaybeUninit::slice_as_mut_ptr(&mut self.inner).add(self.len)
+        // self.as_mut_ptr().add(self.len)
+    }
+
+    /// Return a const pointer to the element next to the last element in the list.
+    #[inline(always)]
+    pub unsafe fn over_bounds_ptr(&self) -> *const T {
+        MaybeUninit::slice_as_ptr(&self.inner).add(self.len)
+        // self.inner.as_slice().as_ptr().add(self.len)
     }
 
     /// Push a `T` to the end of the list.

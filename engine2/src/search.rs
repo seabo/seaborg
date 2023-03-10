@@ -144,8 +144,8 @@ impl Search {
         self.trace.visit_node();
 
         if depth == 0 {
-            self.quiesce(alpha, beta)
-            // self.evaluate()
+            // self.quiesce(alpha, beta)
+            self.evaluate()
         } else {
             let mut max = Score::INF_N;
 
@@ -163,9 +163,9 @@ impl Search {
                         .inc_mate();
                     self.pos.unmake_move();
 
-                    if score >= beta {
-                        return score;
-                    }
+                    // if score >= beta {
+                    //     return score;
+                    // }
 
                     if score > max {
                         self.pvt.copy_to(depth, *mov);
@@ -323,13 +323,13 @@ impl<'a> Loader for MoveLoader<'a> {
     }
 
     fn load_captures(&mut self, movelist: &mut ScoredMoveList) {
-        self.search
-            .pos
-            .generate_in_new::<_, Captures, Legal>(movelist);
+        // self.search
+        //     .pos
+        //     .generate_in_new::<_, Captures, Legal>(movelist);
     }
 
     fn score_captures(&mut self, captures: Scorer) {
-        for (ref mov, ref mut score) in captures {
+        for (mov, score) in captures {
             if mov.is_capture() {
                 *score = self.search.see(
                     mov.orig(),
