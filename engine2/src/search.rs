@@ -155,9 +155,6 @@ impl Search {
             while moves.load_next_phase(MoveLoader::from(self)) {
                 for mov in &mut moves {
                     c += 1;
-                    if c > 2 {
-                        break;
-                    }
 
                     self.pos.make_move(mov);
                     let score = self

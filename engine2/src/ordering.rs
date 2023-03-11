@@ -1,17 +1,15 @@
 //! Tools for ordering and iterating moves in a search environment.
 use super::score::Score;
-use super::search::Search;
 
 use core::mov::Move;
-use core::movelist::{ArrayVec, BasicMoveList, MoveList, MAX_MOVES};
-use core::position::{PieceType, Position};
+use core::movelist::{ArrayVec, MoveList};
+use core::position::PieceType;
 
 use num::FromPrimitive;
 use num_derive::FromPrimitive;
 
 use std::mem::MaybeUninit;
 use std::ops::Range;
-use std::slice::Iter as SliceIter;
 use std::slice::IterMut as SliceIterMut;
 
 pub type ScoredMove = (Move, Score);
@@ -129,82 +127,6 @@ impl<'a> Iterator for SelectionSort<'a> {
         }
     }
 }
-//
-// struct PromoIter<'a> {
-//     iter: SelectionSort<'a>,
-// }
-//
-// impl<'a> PromoIter<'a> {
-//     fn from(segment: &'a mut [Entry]) -> Self {
-//         // First, score the captures higher than the non-captures. Note that we do not run SEE on
-//         // promotion moves.
-//         let scorer = Scorer::from(&mut *segment);
-//
-//         for (ref mov, ref mut score) in scorer {
-//             if mov.is_capture() {
-//                 *score = Score::cp(1);
-//             }
-//         }
-//
-//         Self {
-//             iter: SelectionSort::from(segment, |_| true),
-//         }
-//     }
-// }
-//
-// impl<'a> Iterator for PromoIter<'a> {
-//     type Item = &'a Move;
-//     fn next(&mut self) -> Option<Self::Item> {
-//         self.iter.next()
-//     }
-// }
-//
-// struct GoodCaptIter<'a> {
-//     iter: SelectionSort<'a>,
-// }
-//
-// impl<'a> Iterator for GoodCaptIter<'a> {
-//     type Item = &'a Move;
-//     fn next(&mut self) -> Option<Self::Item> {
-//         self.iter.next()
-//     }
-// }
-//
-// impl<'a> GoodCaptIter<'a> {
-//     fn from(segment: &'a mut [Entry]) -> Self {
-//         Self {
-//             iter: SelectionSort::from(segment, |sm| sm.1 > Score::zero()),
-//         }
-//     }
-// }
-//
-// struct EqualCaptIter<'a> {
-//     iter: SelectionSort<'a>,
-// }
-//
-// impl<'a> EqualCaptIter<'a> {
-//     fn from(segment: &'a mut [Entry]) -> Self {
-//         Self {
-//             iter: SelectionSort::from(segment, |sm| sm.1 == Score::zero()),
-//         }
-//     }
-// }
-//
-// struct BadCaptIter<'a> {
-//     iter: SelectionSort<'a>,
-// }
-//
-// impl<'a> BadCaptIter<'a> {
-//     fn from(segment: &'a mut [Entry]) -> Self {
-//         Self {
-//             // It's technically fine to have a no-op for the predicate if these are coming
-//             // last, since all the other captures will have been yielded already, and the only ones
-//             // left with `yielded = false` are the bad captures. So we can save an op but be a bit
-//             // less explicit and brittle / less resilient to future changes.
-//             iter: SelectionSort::from(segment, |sm| sm.1 < Score::zero()),
-//         }
-//     }
-// }
 
 /// An iterator over the killer moves. These are not scored, but they must each be checked against
 /// the hash table move to ensure that they haven't already been yielded, to avoid a re-search.
@@ -553,14 +475,6 @@ impl OrderedMoves {
         std::slice::from_mut_ptr_range(Range { start, end })
     }
 
-    fn current_segment(&mut self) -> &mut [Entry] {
-        unsafe {
-            self.buf
-                .0
-                .get_slice_mut_unchecked(self.segment_start..self.buf.len())
-        }
-    }
-
     /// Load the next phase of moves into the buffer.
     ///
     /// This function calls methods on the passed in `loader` to fill the buffer with the moves
@@ -783,6 +697,8 @@ mod tests {
     use super::*;
     use crate::perft::TESTS;
     use core::mono_traits::{All, Legal};
+    use core::movelist::BasicMoveList;
+    use core::position::Position;
 
     struct Perft {
         pos: Position,
