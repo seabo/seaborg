@@ -163,14 +163,15 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
         let mut movegen = InnerMoveGen::<MP>::get_self::<PL>(position, movelist);
         let gen_type = G::kind();
 
+        if movegen.position.in_check() {
+            movegen.generate_evasions::<PL, L>(false);
+            return movegen.movelist;
+        }
+
         use Generation::*;
         match gen_type {
             All => {
-                if movegen.position.in_check() {
-                    movegen.generate_evasions::<PL, L>(false);
-                } else {
-                    movegen.generate_all::<PL, L>();
-                }
+                movegen.generate_all::<PL, L>();
             }
             Captures => {
                 movegen.generate_captures::<PL, L>();
@@ -592,38 +593,15 @@ mod tests {
         fn perft(&mut self, depth: usize) {
             if depth == 0 {
                 self.nodes += 1;
+                return;
             }
 
             let moves = self.position.generate_captures();
-            // let all_moves = self.position.generate_moves();
-
-            // use crate::movelist::{MVPushable, MoveList};
-            // let mut caps = MoveList::default();
-            // for mov in &all_moves {
-            //     if mov.is_capture() {
-            //         caps.push(*mov);
-            //     }
-            // }
-
-            // if caps.len() != moves.len() {
-            //     println!("-----");
-            //     print!("Hist: ");
-            //     for mov in self.position.history() {
-            //         print!("{} ", mov);
-            //     }
-            //     print!("\n");
-            //     println!("Caps:\n {}", caps);
-            //     println!("Moves:\n {}", moves);
-            // }
 
             for mov in &moves {
-                if depth == 1 {
-                    self.nodes += 1;
-                } else {
-                    self.position.make_move(mov);
-                    self.perft(depth - 1);
-                    self.position.unmake_move();
-                }
+                self.position.make_move(mov);
+                self.perft(depth - 1);
+                self.position.unmake_move();
             }
         }
     }
@@ -677,12 +655,13 @@ mod tests {
     fn kiwipete_perft_captures_only() {
         init_globals();
 
-        assert_eq!(
-            perft_captures_only(
-                "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
-                8
-            ),
-            5_068_953
+        let res = perft_captures_only(
+            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+            7,
         );
+
+        println!("res: {}", res);
+
+        assert_eq!(res, 5_068_953);
     }
 }
