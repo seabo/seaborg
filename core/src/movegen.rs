@@ -657,11 +657,11 @@ mod tests {
 
         let res = perft_captures_only(
             "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
-            7,
+            8,
         );
 
         println!("res: {}", res);
 
-        assert_eq!(res, 5_068_953);
+        assert_eq!(res, 4_934_054);
     }
 }
