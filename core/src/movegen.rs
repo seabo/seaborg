@@ -181,7 +181,9 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
             QueenPromotions => {
                 movegen.generate_queen_promotions::<PL, L>();
             }
-            Quiets => {}
+            Quiets => {
+                movegen.generate_quiets::<PL, L>();
+            }
         }
 
         movegen.movelist
@@ -191,11 +193,11 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
     fn generate_all<P: Side, L: Legality>(&mut self) {
         self.generate_pawn_moves::<All, P, L>(Bitboard::ALL);
         self.generate_castling::<P, L>();
-        self.moves_per_piece::<P, Knight, L>(Bitboard::ALL);
-        self.moves_per_piece::<P, King, L>(Bitboard::ALL);
-        self.moves_per_piece::<P, Rook, L>(Bitboard::ALL);
-        self.moves_per_piece::<P, Bishop, L>(Bitboard::ALL);
-        self.moves_per_piece::<P, Queen, L>(Bitboard::ALL);
+        self.moves_per_piece::<All, P, Knight, L>(Bitboard::ALL);
+        self.moves_per_piece::<All, P, King, L>(Bitboard::ALL);
+        self.moves_per_piece::<All, P, Rook, L>(Bitboard::ALL);
+        self.moves_per_piece::<All, P, Bishop, L>(Bitboard::ALL);
+        self.moves_per_piece::<All, P, Queen, L>(Bitboard::ALL);
     }
 
     #[inline(always)]
@@ -211,11 +213,22 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
     #[inline(always)]
     fn generate_captures<P: Side, L: Legality>(&mut self) {
         self.generate_pawn_moves::<Captures, P, L>(self.them_occ);
-        self.moves_per_piece::<P, Knight, L>(self.them_occ);
-        self.moves_per_piece::<P, King, L>(self.them_occ);
-        self.moves_per_piece::<P, Rook, L>(self.them_occ);
-        self.moves_per_piece::<P, Bishop, L>(self.them_occ);
-        self.moves_per_piece::<P, Queen, L>(self.them_occ);
+        self.moves_per_piece::<Captures, P, Knight, L>(self.them_occ);
+        self.moves_per_piece::<Captures, P, King, L>(self.them_occ);
+        self.moves_per_piece::<Captures, P, Rook, L>(self.them_occ);
+        self.moves_per_piece::<Captures, P, Bishop, L>(self.them_occ);
+        self.moves_per_piece::<Captures, P, Queen, L>(self.them_occ);
+    }
+
+    #[inline(always)]
+    fn generate_quiets<P: Side, L: Legality>(&mut self) {
+        self.generate_pawn_moves::<Quiets, P, L>(Bitboard::ALL);
+        self.generate_castling::<P, L>();
+        self.moves_per_piece::<Quiets, P, Knight, L>(Bitboard::ALL);
+        self.moves_per_piece::<Quiets, P, King, L>(Bitboard::ALL);
+        self.moves_per_piece::<Quiets, P, Rook, L>(Bitboard::ALL);
+        self.moves_per_piece::<Quiets, P, Bishop, L>(Bitboard::ALL);
+        self.moves_per_piece::<Quiets, P, Queen, L>(Bitboard::ALL);
     }
 
     #[inline(always)]
@@ -262,22 +275,38 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
             let target =
                 target_sqs & (Bitboard(between_bb(checking_sq, ksq)) | checking_sq.to_bb());
             self.generate_pawn_moves::<All, P, L>(target);
-            self.moves_per_piece::<P, Knight, L>(target);
-            self.moves_per_piece::<P, Bishop, L>(target);
-            self.moves_per_piece::<P, Rook, L>(target);
-            self.moves_per_piece::<P, Queen, L>(target);
+            self.moves_per_piece::<All, P, Knight, L>(target);
+            self.moves_per_piece::<All, P, Bishop, L>(target);
+            self.moves_per_piece::<All, P, Rook, L>(target);
+            self.moves_per_piece::<All, P, Queen, L>(target);
         }
     }
 
+    /// Generate the moves for a `Knight`, `King`, `Rook`, `Bishop` or `Queen`. Generates either
+    /// captures or non-captures, according to the generic parameter `G: Generate`.
+    ///
+    /// * `All` -> both captures and non-captures are generated.
+    /// * `Captures` -> only captures are generated.
+    /// * `Quiets` -> only non-captures are generated.
+    /// * `Promotions` | `QueenPromotions` -> nothing is generated.
     #[inline(always)]
-    fn moves_per_piece<PL: Side, P: PieceTrait, L: Legality>(&mut self, target: Bitboard) {
+    fn moves_per_piece<G: Generate, PL: Side, P: PieceTrait, L: Legality>(
+        &mut self,
+        target: Bitboard,
+    ) {
         let piece_bb: Bitboard = self.position.piece_bb(PL::player(), P::kind());
         for orig in piece_bb {
             let moves_bb: Bitboard = self.moves_bb::<P>(orig) & !self.us_occ & target;
-            let mut captures_bb: Bitboard = moves_bb & self.them_occ;
-            let mut non_captures_bb: Bitboard = moves_bb & !self.them_occ;
-            self.move_append_from_bb_flag::<L>(&mut captures_bb, orig, MoveType::CAPTURE);
-            self.move_append_from_bb_flag::<L>(&mut non_captures_bb, orig, MoveType::QUIET);
+
+            if G::kind() == Generation::All || G::kind() == Generation::Captures {
+                let mut captures_bb: Bitboard = moves_bb & self.them_occ;
+                self.move_append_from_bb_flag::<L>(&mut captures_bb, orig, MoveType::CAPTURE);
+            }
+
+            if G::kind() == Generation::All || G::kind() == Generation::Quiets {
+                let mut non_captures_bb: Bitboard = moves_bb & !self.them_occ;
+                self.move_append_from_bb_flag::<L>(&mut non_captures_bb, orig, MoveType::QUIET);
+            }
         }
     }
 
