@@ -334,6 +334,8 @@ pub struct All {}
 pub struct Captures {}
 /// Dummy type to represent a `Generation::Promomtions` which implements `Generate`.
 pub struct Promotions {}
+/// Dummy type to represent a `Generation::QueenPromomtions` which implements `Generate`.
+pub struct QueenPromotions {}
 /// Dummy type to represent a `Generation::Quiets` which implements `Generate`.
 pub struct Quiets {}
 
@@ -355,6 +357,13 @@ impl Generate for Promotions {
     #[inline(always)]
     fn kind() -> Generation {
         Generation::Promotions
+    }
+}
+
+impl Generate for QueenPromotions {
+    #[inline(always)]
+    fn kind() -> Generation {
+        Generation::QueenPromotions
     }
 }
 

@@ -1,7 +1,7 @@
 use crate::bb::Bitboard;
 use crate::mono_traits::{
-    All, Bishop, Black, Captures, Generate, King, Knight, Legal, Legality, PieceTrait, PseudoLegal,
-    Queen, Quiets, Rook, Side, White,
+    All, Bishop, Black, Captures, Generate, King, Knight, Legal, Legality, PieceTrait, Promotions,
+    PseudoLegal, Queen, QueenPromotions, Quiets, Rook, Side, White,
 };
 use crate::mov::{Move, MoveType};
 use crate::movelist::{BasicMoveList, Frame, MoveList, MoveStack};
@@ -175,8 +175,12 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
             Captures => {
                 movegen.generate_captures::<PL, L>();
             }
-            Promotions => {}
-            QueenPromotions => {}
+            Promotions => {
+                movegen.generate_promotions::<PL, L>();
+            }
+            QueenPromotions => {
+                movegen.generate_queen_promotions::<PL, L>();
+            }
             Quiets => {}
         }
 
@@ -185,7 +189,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
 
     #[inline(always)]
     fn generate_all<P: Side, L: Legality>(&mut self) {
-        self.generate_pawn_moves::<P, L>(Bitboard::ALL);
+        self.generate_pawn_moves::<All, P, L>(Bitboard::ALL);
         self.generate_castling::<P, L>();
         self.moves_per_piece::<P, Knight, L>(Bitboard::ALL);
         self.moves_per_piece::<P, King, L>(Bitboard::ALL);
@@ -195,8 +199,18 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
     }
 
     #[inline(always)]
+    fn generate_promotions<P: Side, L: Legality>(&mut self) {
+        self.generate_pawn_moves::<Promotions, P, L>(Bitboard::ALL);
+    }
+
+    #[inline(always)]
+    fn generate_queen_promotions<P: Side, L: Legality>(&mut self) {
+        self.generate_pawn_moves::<QueenPromotions, P, L>(Bitboard::ALL);
+    }
+
+    #[inline(always)]
     fn generate_captures<P: Side, L: Legality>(&mut self) {
-        self.generate_pawn_moves::<P, L>(self.them_occ);
+        self.generate_pawn_moves::<Captures, P, L>(self.them_occ);
         self.moves_per_piece::<P, Knight, L>(self.them_occ);
         self.moves_per_piece::<P, King, L>(self.them_occ);
         self.moves_per_piece::<P, Rook, L>(self.them_occ);
@@ -247,7 +261,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
             // Squares that allow a block or captures of the sliding piece
             let target =
                 target_sqs & (Bitboard(between_bb(checking_sq, ksq)) | checking_sq.to_bb());
-            self.generate_pawn_moves::<P, L>(target);
+            self.generate_pawn_moves::<All, P, L>(target);
             self.moves_per_piece::<P, Knight, L>(target);
             self.moves_per_piece::<P, Bishop, L>(target);
             self.moves_per_piece::<P, Rook, L>(target);
@@ -268,7 +282,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
     }
 
     #[inline(always)]
-    fn generate_pawn_moves<PL: Side, L: Legality>(&mut self, target: Bitboard) {
+    fn generate_pawn_moves<G: Generate, PL: Side, L: Legality>(&mut self, target: Bitboard) {
         let (rank_7, rank_3): (Bitboard, Bitboard) = if PL::player() == Player::WHITE {
             (Bitboard::RANK_7, Bitboard::RANK_3)
         } else {
@@ -288,72 +302,81 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
         // Single and double pawn moves
         let empty_squares = !self.position.occupied();
 
-        let mut push_one = empty_squares & PL::shift_up(pawns_not_rank_7);
-        let mut push_two = PL::shift_up(push_one & rank_3) & empty_squares;
+        if G::kind() == Generation::All || G::kind() == Generation::Quiets {
+            let mut push_one = empty_squares & PL::shift_up(pawns_not_rank_7);
+            let mut push_two = PL::shift_up(push_one & rank_3) & empty_squares;
 
-        push_one &= target;
-        push_two &= target;
+            push_one &= target;
+            push_two &= target;
 
-        for dest in push_one {
-            let orig = PL::down(dest);
-            self.add_move::<L>(Move::build(orig, dest, None, MoveType::QUIET));
-        }
-
-        for dest in push_two {
-            let orig = PL::down(PL::down(dest));
-            self.add_move::<L>(Move::build(orig, dest, None, MoveType::QUIET));
-        }
-
-        // Promotions
-        if pawns_rank_7.is_not_empty() {
-            let no_cap_promo = target & PL::shift_up(pawns_rank_7) & empty_squares;
-            let left_cap_promo = target & PL::shift_up_left(pawns_rank_7) & enemies;
-            let right_cap_promo = target & PL::shift_up_right(pawns_rank_7) & enemies;
-
-            for dest in no_cap_promo {
+            for dest in push_one {
                 let orig = PL::down(dest);
-                self.add_all_promo_moves::<L>(orig, dest, false);
+                self.add_move::<L>(Move::build(orig, dest, None, MoveType::QUIET));
             }
 
-            for dest in left_cap_promo {
+            for dest in push_two {
+                let orig = PL::down(PL::down(dest));
+                self.add_move::<L>(Move::build(orig, dest, None, MoveType::QUIET));
+            }
+        }
+
+        if G::kind() == Generation::All
+            || G::kind() == Generation::Promotions
+            || G::kind() == Generation::QueenPromotions
+        {
+            // Promotions
+            if pawns_rank_7.is_not_empty() {
+                let no_cap_promo = target & PL::shift_up(pawns_rank_7) & empty_squares;
+                let left_cap_promo = target & PL::shift_up_left(pawns_rank_7) & enemies;
+                let right_cap_promo = target & PL::shift_up_right(pawns_rank_7) & enemies;
+
+                for dest in no_cap_promo {
+                    let orig = PL::down(dest);
+                    self.add_promo_moves::<G, L>(orig, dest, false);
+                }
+
+                for dest in left_cap_promo {
+                    let orig = PL::down_right(dest);
+                    self.add_promo_moves::<G, L>(orig, dest, true);
+                }
+
+                for dest in right_cap_promo {
+                    let orig = PL::down_left(dest);
+                    self.add_promo_moves::<G, L>(orig, dest, true);
+                }
+            }
+        }
+
+        if G::kind() == Generation::All || G::kind() == Generation::Captures {
+            // Captures
+            let left_cap = target & PL::shift_up_left(pawns_not_rank_7) & enemies;
+            let right_cap = target & PL::shift_up_right(pawns_not_rank_7) & enemies;
+
+            for dest in left_cap {
                 let orig = PL::down_right(dest);
-                self.add_all_promo_moves::<L>(orig, dest, true);
+                self.add_move::<L>(Move::build(orig, dest, None, MoveType::CAPTURE));
             }
 
-            for dest in right_cap_promo {
+            for dest in right_cap {
                 let orig = PL::down_left(dest);
-                self.add_all_promo_moves::<L>(orig, dest, true);
+                self.add_move::<L>(Move::build(orig, dest, None, MoveType::CAPTURE));
             }
-        }
 
-        // Captures
-        let left_cap = target & PL::shift_up_left(pawns_not_rank_7) & enemies;
-        let right_cap = target & PL::shift_up_right(pawns_not_rank_7) & enemies;
+            if let Some(ep_square) = self.position.ep_square() {
+                // TODO: add an `assert_eq` to check that the rank of ep_square is 6th
+                // rank from the moving player's perspective
 
-        for dest in left_cap {
-            let orig = PL::down_right(dest);
-            self.add_move::<L>(Move::build(orig, dest, None, MoveType::CAPTURE));
-        }
+                let ep_cap =
+                    pawns_not_rank_7 & Bitboard(pawn_attacks_from(ep_square, PL::opp_player()));
 
-        for dest in right_cap {
-            let orig = PL::down_left(dest);
-            self.add_move::<L>(Move::build(orig, dest, None, MoveType::CAPTURE));
-        }
-
-        if let Some(ep_square) = self.position.ep_square() {
-            // TODO: add an `assert_eq` to check that the rank of ep_square is 6th
-            // rank from the moving player's perspective
-
-            let ep_cap =
-                pawns_not_rank_7 & Bitboard(pawn_attacks_from(ep_square, PL::opp_player()));
-
-            for orig in ep_cap {
-                self.add_move::<L>(Move::build(
-                    orig,
-                    ep_square,
-                    None,
-                    MoveType::EN_PASSANT | MoveType::CAPTURE,
-                ));
+                for orig in ep_cap {
+                    self.add_move::<L>(Move::build(
+                        orig,
+                        ep_square,
+                        None,
+                        MoveType::EN_PASSANT | MoveType::CAPTURE,
+                    ));
+                }
             }
         }
     }
@@ -431,6 +454,35 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
             let mov = Move::build(orig, dest, None, ty);
             self.add_move::<L>(mov);
         }
+    }
+
+    /// Add promotion moves. This may either only queen promotions, or all four possible promotions
+    /// depending on the generation type passed as the `Generate` parameter. If something other
+    /// than `All`, `Promotions` or `QueenPromotions` is passed, this function will panic.
+    #[inline(always)]
+    fn add_promo_moves<G: Generate, L: Legality>(
+        &mut self,
+        orig: Square,
+        dest: Square,
+        is_capture: bool,
+    ) {
+        use Generation::*;
+        match G::kind() {
+            All | Promotions => self.add_all_promo_moves::<L>(orig, dest, is_capture),
+            QueenPromotions => self.add_queen_promo_moves::<L>(orig, dest, is_capture),
+            _ => unreachable!(),
+        }
+    }
+
+    /// Add only queen promotion moves (`=Q`)
+    #[inline(always)]
+    fn add_queen_promo_moves<L: Legality>(&mut self, orig: Square, dest: Square, is_capture: bool) {
+        let move_ty = if is_capture {
+            MoveType::PROMOTION | MoveType::CAPTURE
+        } else {
+            MoveType::PROMOTION
+        };
+        self.add_move::<L>(Move::build(orig, dest, Some(PieceType::Queen), move_ty));
     }
 
     /// Add the four possible promo moves (`=N`, `=B`, `=R`, `=Q`)
