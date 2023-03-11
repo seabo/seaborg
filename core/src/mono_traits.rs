@@ -320,7 +320,7 @@ impl PieceTrait for King {
     }
 }
 
-/// The `Generate` allows for reusing movegen code by monomorphizing
+/// The `Generate` trait allows for reusing movegen code by monomorphizing
 /// over different 'generation types', such as 'captures-only', 'evasions-only'
 /// 'quiet moves only' etc.
 pub trait Generate {
