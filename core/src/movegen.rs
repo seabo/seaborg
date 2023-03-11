@@ -682,6 +682,10 @@ mod tests {
 
         println!("res: {}", res);
 
-        assert_eq!(res, 4_934_054);
+        // The result below is for 'captures' as defined in Seaborg. This means moves which are
+        // captures but not promotions. Promotion captures are generated as part of the promotion
+        // generation phase, and to avoid complexity deduplicating, they are not generated as part
+        // of the capture phase.
+        assert_eq!(res, 4_224_543);
     }
 }
