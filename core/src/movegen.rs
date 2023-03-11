@@ -164,7 +164,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
         let gen_type = G::kind();
 
         if movegen.position.in_check() {
-            movegen.generate_evasions::<PL, L>(false);
+            movegen.generate_evasions::<G, PL, L>(false);
             return movegen.movelist;
         }
 
@@ -233,40 +233,57 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
     }
 
     #[inline(always)]
-    fn generate_evasions<P: Side, L: Legality>(&mut self, captures_only: bool) {
+    fn generate_evasions<G: Generate, P: Side, L: Legality>(&mut self, captures_only: bool) {
         debug_assert!(self.position.in_check());
 
-        let target_sqs = if captures_only {
+        let target_sqs = if G::kind() == Generation::Captures {
             self.them_occ
+        } else if G::kind() == Generation::Quiets {
+            !self.them_occ
         } else {
             Bitboard::ALL
         };
 
+        // let target_sqs = if captures_only {
+        //     self.them_occ
+        // } else {
+        //     Bitboard::ALL
+        // };
+
         let ksq = self.position.king_sq(P::player());
-        let mut slider_attacks = Bitboard(0);
 
-        // Pieces that could possibly attack the king with sliding attacks
-        let mut sliders = self.position.checkers()
-            & !self
-                .position
-                .piece_two_bb_both_players(PieceType::Pawn, PieceType::Knight);
+        // Only generate the king escapes if we are _not_ doing promotion moves.
+        if G::kind() != Generation::Promotions && G::kind() != Generation::QueenPromotions {
+            let mut slider_attacks = Bitboard(0);
 
-        // All the squares that are attacked by sliders
-        // TODO[movegen]: make this an iterator - we are doing lots of checks in the method
-        // `pop_some_lsb_and_bit`. It also is potentially inefficient in creating a new bitboard
-        // with `sq.to_bb()`. We should use the bit twiddle `bb & -bb` to isolate the LSB as a bb.
-        while let Some((check_sq, check_sq_bb)) = sliders.pop_some_lsb_and_bit() {
-            slider_attacks |= Bitboard(line_bb(check_sq, ksq)) ^ check_sq_bb;
+            // Pieces that could possibly attack the king with sliding attacks
+            let mut sliders = self.position.checkers()
+                & !self
+                    .position
+                    .piece_two_bb_both_players(PieceType::Pawn, PieceType::Knight);
+
+            // All the squares that are attacked by sliders
+            // TODO[movegen]: make this an iterator - we are doing lots of checks in the method
+            // `pop_some_lsb_and_bit`. It also is potentially inefficient in creating a new bitboard
+            // with `sq.to_bb()`. We should use the bit twiddle `bb & -bb` to isolate the LSB as a bb.
+            while let Some((check_sq, check_sq_bb)) = sliders.pop_some_lsb_and_bit() {
+                slider_attacks |= Bitboard(line_bb(check_sq, ksq)) ^ check_sq_bb;
+            }
+
+            // Possible king moves, where the king cannot move into a slider / own pieces
+            let k_moves = king_moves(ksq) & !slider_attacks & !self.us_occ & target_sqs;
+
+            // Separate captures and non-captures
+            if G::kind() == Generation::All || G::kind() == Generation::Captures {
+                let mut captures_bb = k_moves & self.them_occ;
+                self.move_append_from_bb_flag::<L>(&mut captures_bb, ksq, MoveType::CAPTURE);
+            }
+
+            if G::kind() != Generation::Captures {
+                let mut non_captures_bb = k_moves & !self.them_occ;
+                self.move_append_from_bb_flag::<L>(&mut non_captures_bb, ksq, MoveType::QUIET);
+            }
         }
-
-        // Possible king moves, where the king cannot move into a slider / own pieces
-        let k_moves = king_moves(ksq) & !slider_attacks & !self.us_occ & target_sqs;
-
-        // Separate captures and non-captures
-        let mut captures_bb = k_moves & self.them_occ;
-        let mut non_captures_bb = k_moves & !self.them_occ;
-        self.move_append_from_bb_flag::<L>(&mut captures_bb, ksq, MoveType::CAPTURE);
-        self.move_append_from_bb_flag::<L>(&mut non_captures_bb, ksq, MoveType::QUIET);
 
         // If there is only one checking square, we can block or capture the piece
         if !(self.position.checkers().more_than_one()) {
@@ -275,11 +292,14 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
             // Squares that allow a block or captures of the sliding piece
             let target =
                 target_sqs & (Bitboard(between_bb(checking_sq, ksq)) | checking_sq.to_bb());
-            self.generate_pawn_moves::<All, P, L>(target);
-            self.moves_per_piece::<All, P, Knight, L>(target);
-            self.moves_per_piece::<All, P, Bishop, L>(target);
-            self.moves_per_piece::<All, P, Rook, L>(target);
-            self.moves_per_piece::<All, P, Queen, L>(target);
+            self.generate_pawn_moves::<G, P, L>(target);
+
+            if G::kind() != Generation::Promotions && G::kind() != Generation::QueenPromotions {
+                self.moves_per_piece::<G, P, Knight, L>(target);
+                self.moves_per_piece::<G, P, Bishop, L>(target);
+                self.moves_per_piece::<G, P, Rook, L>(target);
+                self.moves_per_piece::<G, P, Queen, L>(target);
+            }
         }
     }
 
