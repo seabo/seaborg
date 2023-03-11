@@ -683,7 +683,6 @@ impl<'a> Drop for Frame<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::position::Position;
 
     use std::mem;
 
@@ -691,54 +690,4 @@ mod tests {
     fn basic_move_list_is_1024_bytes() {
         assert_eq!(mem::size_of::<ArrayVec<Move, 254>>(), 1024);
     }
-
-    // #[test]
-    // fn fast_move_list() {
-    //     crate::init::init_globals();
-
-    //     let pos = Position::start_pos();
-
-    //     let moves = pos.generate_moves::<FastMoveList>();
-
-    //     for mov in &moves {
-    //         println!("{}", mov);
-    //     }
-    //     println!("len: {}", moves.len());
-    // }
-
-    // #[test]
-    // fn movestack() {
-    //     use super::*;
-    //     use crate::movegen::MoveGen;
-
-    //     crate::init::init_globals();
-
-    //     let mut ms = MoveStack::new();
-    //     let mut pos = Position::start_pos();
-
-    //     let mut moves = MoveGen::generate_in_movestack::<'_, '_, '_>(&mut pos, &mut ms);
-
-    //     let mut c: usize = 0;
-
-    //     for mov in &moves {
-    //         pos.make_move(mov);
-    //         let ply_2 = MoveGen::generate_in_movestack::<'_, '_, '_>(&mut pos, &mut ms);
-    //         for mov2 in &ply_2 {
-    //             pos.make_move(mov2);
-    //             let ply_3 = MoveGen::generate_in_movestack::<'_, '_, '_>(&mut pos, &mut ms);
-    //             pos.unmake_move();
-    //             for _ in &ply_3 {
-    //                 c += 1;
-    //             }
-    //         }
-    //         pos.unmake_move();
-    //     }
-
-    //     println!("nodes: {}", c);
-
-    //     // What happens if we drop the `Movestack` before the `Frame`s? This needs to be disallowed
-    //     // by the compiler.
-
-    //     assert!(true);
-    // }
 }
