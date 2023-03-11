@@ -5,10 +5,8 @@ use super::score::Score;
 use super::time::TimingMode;
 use super::trace::Tracer;
 
-use core::mono_traits::{All, Captures, Legal};
-use core::mov::Move;
-use core::movegen::MoveGen;
-use core::movelist::{BasicMoveList, MoveList, MoveStack};
+use core::mono_traits::{All, Captures, Legal, QueenPromotions, Quiets};
+use core::movelist::BasicMoveList;
 use core::position::{Player, Position};
 
 use separator::Separatable;
@@ -25,7 +23,6 @@ pub struct Search {
     pvt: PVTable,
     /// Tracer to track search stats.
     trace: Tracer,
-    movestack: MoveStack,
 }
 
 impl Search {
@@ -34,7 +31,6 @@ impl Search {
             pos,
             pvt: PVTable::new(8),
             trace: Tracer::new(),
-            movestack: MoveStack::new(),
         }
     }
 
@@ -163,9 +159,9 @@ impl Search {
                         .inc_mate();
                     self.pos.unmake_move();
 
-                    // if score >= beta {
-                    //     return score;
-                    // }
+                    if score >= beta {
+                        return score;
+                    }
 
                     if score > max {
                         self.pvt.copy_to(depth, *mov);
@@ -319,20 +315,28 @@ impl<'a> MoveLoader<'a> {
 
 impl<'a> Loader for MoveLoader<'a> {
     fn load_hash(&mut self, movelist: &mut ScoredMoveList) {
-        self.search.pos.generate_in_new::<_, All, Legal>(movelist);
+        // self.search.pos.generate_in_new::<_, All, Legal>(movelist);
     }
 
-    fn load_promotions(&mut self, movelist: &mut ScoredMoveList) {}
+    fn load_promotions(&mut self, movelist: &mut ScoredMoveList) {
+        self.search
+            .pos
+            .generate_in_new::<_, QueenPromotions, Legal>(movelist);
+    }
 
     fn load_captures(&mut self, movelist: &mut ScoredMoveList) {
-        // self.search
-        //     .pos
-        //     .generate_in_new::<_, Captures, Legal>(movelist);
+        self.search
+            .pos
+            .generate_in_new::<_, Captures, Legal>(movelist);
     }
 
     fn load_killers(&mut self, movelist: &mut ScoredMoveList) {}
 
-    fn load_quiets(&mut self, movelist: &mut ScoredMoveList) {}
+    fn load_quiets(&mut self, movelist: &mut ScoredMoveList) {
+        self.search
+            .pos
+            .generate_in_new::<_, Quiets, Legal>(movelist);
+    }
 
     fn score_captures(&mut self, captures: Scorer) {
         for (mov, score) in captures {
