@@ -1,8 +1,7 @@
 use crate::bb::Bitboard;
 use crate::mono_traits::{
-    All, Bishop, Black, Captures, Evasions, Generate, King,
-    Knight, Legal, Legality, NonEvasions, PieceTrait, Side,
-    PseudoLegal, Queen, QuietChecks, Quiet, Rook, White,
+    All, Bishop, Black, Captures, Generate, King, Knight, Legal, Legality, PieceTrait, PseudoLegal,
+    Queen, Quiets, Rook, Side, White,
 };
 use crate::mov::{Move, MoveType};
 use crate::movelist::{BasicMoveList, Frame, MoveList, MoveStack};
@@ -10,21 +9,17 @@ use crate::position::{CastleType, PieceType, Player, Position, Square, PROMO_PIE
 use crate::precalc::boards::{between_bb, king_moves, knight_moves, line_bb, pawn_attacks_from};
 use crate::precalc::magic;
 
-use std::ops::Index;
-
 /// Types of move generating options.
 ///
 /// `Generation::All` -> All available moves.
 ///
-/// `Generation::Captures` -> All captures.
+/// `Generation::Captures` -> All captures which are not also promotions.
 ///
-/// `Generation::Quiets` -> All non captures.
+/// `Generation::Promotions` -> All promotions.
 ///
-/// `Generation::QuietChecks` -> Moves likely to give check.
+/// `Generation::QueenPromotions` -> All promotions to a queen only (i.e. no underpromotions).
 ///
-/// `Generation::Evasions` -> Generates evasions for a board in check.
-///
-/// `Generation::NonEvasions` -> Generates all moves for a board not in check.
+/// `Generation::Quiets` -> All moves which are not promotions or captures.
 ///
 /// # Safety
 ///
@@ -35,10 +30,9 @@ use std::ops::Index;
 pub enum Generation {
     All,
     Captures,
+    Promotions,
+    QueenPromotions,
     Quiets,
-    QuietChecks,
-    Evasions,
-    NonEvasions,
 }
 
 /// Legality of moves to be generated.
@@ -57,18 +51,21 @@ pub struct MoveGen {}
 
 impl MoveGen {
     /// Generate moves for the passed position according to the parameters specified by the dummy
-    /// passed as generic types. 
+    /// passed as generic types.
     #[inline]
     pub fn generate_new<ML: MoveList, G: Generate, L: Legality>(position: &Position) -> ML {
         let mut movelist = ML::empty();
         InnerMoveGen::<ML>::generate::<G, L>(position, &mut movelist);
         movelist
     }
-    
+
     /// Generate moves for the passed position according to the parameters specified by the dummy
-    /// passed as generic types. 
+    /// passed as generic types.
     #[inline]
-    pub fn generate_in_new<ML: MoveList, G: Generate, L: Legality>(position: &Position, movelist: &mut ML) {
+    pub fn generate_in_new<ML: MoveList, G: Generate, L: Legality>(
+        position: &Position,
+        movelist: &mut ML,
+    ) {
         InnerMoveGen::<ML>::generate::<G, L>(position, movelist);
     }
 
@@ -118,10 +115,7 @@ impl MoveGen {
     #[inline]
     pub fn generate_captures(position: &Position) -> BasicMoveList {
         let mut movelist = BasicMoveList::default();
-        InnerMoveGen::<BasicMoveList>::generate::<Captures, Legal>(
-            position,
-            &mut movelist,
-        );
+        InnerMoveGen::<BasicMoveList>::generate::<Captures, Legal>(position, &mut movelist);
         movelist
     }
 }
@@ -137,10 +131,7 @@ pub struct InnerMoveGen<'a, MP: MoveList + 'a> {
     them_occ: Bitboard,
 }
 
-impl<'a, MP: MoveList> InnerMoveGen<'a, MP>
-// where
-//     <MP as Index<usize>>::Output: Sized,
-{
+impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
     /// Generate all pseudo-legal moves in the given position
     #[inline(always)]
     fn generate<G: Generate, L: Legality>(
@@ -148,12 +139,8 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP>
         movelist: &'a mut MP,
     ) -> &'a mut MP {
         match position.turn() {
-            Player::WHITE => {
-                InnerMoveGen::<MP>::generate_helper::<G, L, White>(position, movelist)
-            }
-            Player::BLACK => {
-                InnerMoveGen::<MP>::generate_helper::<G, L, Black>(position, movelist)
-            }
+            Player::WHITE => InnerMoveGen::<MP>::generate_helper::<G, L, White>(position, movelist),
+            Player::BLACK => InnerMoveGen::<MP>::generate_helper::<G, L, Black>(position, movelist),
         }
     }
 
@@ -176,28 +163,21 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP>
         let mut movegen = InnerMoveGen::<MP>::get_self::<PL>(position, movelist);
         let gen_type = G::kind();
 
-        if gen_type == Generation::Evasions {
-            movegen.generate_evasions::<PL, L>(false);
-        } else if gen_type == Generation::Captures {
-            if movegen.position.in_check() {
-                movegen.generate_evasions::<PL, L>(true);
-            } else {
+        use Generation::*;
+        match gen_type {
+            All => {
+                if movegen.position.in_check() {
+                    movegen.generate_evasions::<PL, L>(false);
+                } else {
+                    movegen.generate_all::<PL, L>();
+                }
+            }
+            Captures => {
                 movegen.generate_captures::<PL, L>();
             }
-        }
-        // else if gen_type == Generation::Quiets {
-        //     if movegen.position.in_check() {
-        //         movegen.generate_evasions::<P>()
-        //     } else {
-
-        //     }
-        // }
-        else if gen_type == Generation::All {
-            if movegen.position.in_check() {
-                movegen.generate_evasions::<PL, L>(false);
-            } else {
-                movegen.generate_all::<PL, L>();
-            }
+            Promotions => {}
+            QueenPromotions => {}
+            Quiets => {}
         }
 
         movegen.movelist
@@ -276,10 +256,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP>
     }
 
     #[inline(always)]
-    fn moves_per_piece<PL: Side, P: PieceTrait, L: Legality>(
-        &mut self,
-        target: Bitboard,
-    ) {
+    fn moves_per_piece<PL: Side, P: PieceTrait, L: Legality>(&mut self, target: Bitboard) {
         let piece_bb: Bitboard = self.position.piece_bb(PL::player(), P::kind());
         for orig in piece_bb {
             let moves_bb: Bitboard = self.moves_bb::<P>(orig) & !self.us_occ & target;
@@ -458,12 +435,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP>
 
     /// Add the four possible promo moves (`=N`, `=B`, `=R`, `=Q`)
     #[inline(always)]
-    fn add_all_promo_moves<L: Legality>(
-        &mut self,
-        orig: Square,
-        dest: Square,
-        is_capture: bool,
-    ) {
+    fn add_all_promo_moves<L: Legality>(&mut self, orig: Square, dest: Square, is_capture: bool) {
         let move_ty = if is_capture {
             MoveType::PROMOTION | MoveType::CAPTURE
         } else {
@@ -567,7 +539,7 @@ mod tests {
                 if depth == 1 {
                     self.nodes += 1;
                 } else {
-                    self.position.make_move(*mov);
+                    self.position.make_move(mov);
                     self.perft(depth - 1);
                     self.position.unmake_move();
                 }
@@ -584,11 +556,11 @@ mod tests {
 
     /// Ensure that `generate_captures()` returns the right number of capture moves
     /// for a suite of test positions.
-    #[rustfmt::skip]
     #[test]
+    #[rustfmt::skip]
     fn correct_capture_counts() {
         init_globals();
-        
+
         assert_eq!(number_of_captures("r1bqk1r1/1p1p1n2/p1n2pN1/2p1b2Q/2P1Pp2/1PN5/PB4PP/R4RK1 w q - 0 1"), 4);
         assert_eq!(number_of_captures("r1n2N1k/2n2K1p/3pp3/5Pp1/b5R1/8/1PPP4/8 w - - 0 1"), 5);
         assert_eq!(number_of_captures("r1b1r1k1/1pqn1pbp/p2pp1p1/P7/1n1NPP1Q/2NBBR2/1PP3PP/R6K w - - 0 1"), 3);

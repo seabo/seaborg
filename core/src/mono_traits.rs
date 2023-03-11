@@ -332,14 +332,10 @@ pub trait Generate {
 pub struct All {}
 /// Dummy type to represent a `Generation::Captures` which implements `Generate`.
 pub struct Captures {}
+/// Dummy type to represent a `Generation::Promomtions` which implements `Generate`.
+pub struct Promotions {}
 /// Dummy type to represent a `Generation::Quiets` which implements `Generate`.
-pub struct Quiet {}
-/// Dummy type to represent a `Generation::QuietChecks` which implements `Generate`.
-pub struct QuietChecks {}
-/// Dummy type to represent a `Generation::Evasions` which implements `Generate`.
-pub struct Evasions {}
-/// Dummy type to represent a `Generation::NonEvasions` which implements `Generate`.
-pub struct NonEvasions {}
+pub struct Quiets {}
 
 impl Generate for All {
     #[inline(always)]
@@ -355,31 +351,17 @@ impl Generate for Captures {
     }
 }
 
-impl Generate for Quiet {
+impl Generate for Promotions {
+    #[inline(always)]
+    fn kind() -> Generation {
+        Generation::Promotions
+    }
+}
+
+impl Generate for Quiets {
     #[inline(always)]
     fn kind() -> Generation {
         Generation::Quiets
-    }
-}
-
-impl Generate for QuietChecks {
-    #[inline(always)]
-    fn kind() -> Generation {
-        Generation::QuietChecks
-    }
-}
-
-impl Generate for Evasions {
-    #[inline(always)]
-    fn kind() -> Generation {
-        Generation::Evasions
-    }
-}
-
-impl Generate for NonEvasions {
-    #[inline(always)]
-    fn kind() -> Generation {
-        Generation::NonEvasions
     }
 }
 
