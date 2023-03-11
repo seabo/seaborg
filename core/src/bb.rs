@@ -211,4 +211,18 @@ mod tests {
         let bb = Bitboard::empty();
         assert_eq!(bb.lsb(), Bitboard::empty());
     }
+
+    #[test]
+    fn pop_lsb_works() {
+        let mut bb = Bitboard(4415494823944);
+        #[rustfmt::skip]
+        {
+            assert_eq!(bb.pop_some_lsb_and_bit(), Some((Square(3), Bitboard(8))));
+            assert_eq!(bb.pop_some_lsb_and_bit(), Some((Square(13), Bitboard(8192))));
+            assert_eq!(bb.pop_some_lsb_and_bit(), Some((Square(28), Bitboard(268435456))));
+            assert_eq!(bb.pop_some_lsb_and_bit(), Some((Square(34), Bitboard(17179869184))));
+            assert_eq!(bb.pop_some_lsb_and_bit(), Some((Square(42), Bitboard(4398046511104))));
+            assert_eq!(bb.pop_some_lsb_and_bit(), None);
+        }
+    }
 }

@@ -1,3 +1,4 @@
+#![feature(stmt_expr_attributes)]
 #![feature(maybe_uninit_slice)]
 
 #[macro_use]

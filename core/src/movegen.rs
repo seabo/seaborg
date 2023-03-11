@@ -164,7 +164,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
         let gen_type = G::kind();
 
         if movegen.position.in_check() {
-            movegen.generate_evasions::<G, PL, L>(false);
+            movegen.generate_evasions::<G, PL, L>();
             return movegen.movelist;
         }
 
@@ -233,7 +233,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
     }
 
     #[inline(always)]
-    fn generate_evasions<G: Generate, P: Side, L: Legality>(&mut self, captures_only: bool) {
+    fn generate_evasions<G: Generate, P: Side, L: Legality>(&mut self) {
         debug_assert!(self.position.in_check());
 
         let target_sqs = if G::kind() == Generation::Captures {
@@ -263,9 +263,6 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
                     .piece_two_bb_both_players(PieceType::Pawn, PieceType::Knight);
 
             // All the squares that are attacked by sliders
-            // TODO[movegen]: make this an iterator - we are doing lots of checks in the method
-            // `pop_some_lsb_and_bit`. It also is potentially inefficient in creating a new bitboard
-            // with `sq.to_bb()`. We should use the bit twiddle `bb & -bb` to isolate the LSB as a bb.
             while let Some((check_sq, check_sq_bb)) = sliders.pop_some_lsb_and_bit() {
                 slider_attacks |= Bitboard(line_bb(check_sq, ksq)) ^ check_sq_bb;
             }
