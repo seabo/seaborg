@@ -602,6 +602,7 @@ impl OrderedMoves {
                 yielded: false,
             }
         }
+
         for e in self.promo_segment() {
             // SAFETY: it's safe to write to the end of the buffer
             unsafe {
@@ -679,12 +680,12 @@ impl<'a> IntoIterator for &'a mut OrderedMoves {
         let iter = match self.phase {
             Pre => IterInner::Empty(Default::default()),
             HashTable => IterInner::Hash(self.hash_iter()),
-            QueenPromotions => IterInner::Empty(Default::default()),
-            GoodCaptures => IterInner::Empty(Default::default()),
-            EqualCaptures => IterInner::Empty(Default::default()),
-            Killers => IterInner::Empty(Default::default()),
-            Quiet => IterInner::Empty(Default::default()),
-            BadCaptures => IterInner::Empty(Default::default()),
+            QueenPromotions => IterInner::QueenPromotions(self.promo_iter()),
+            GoodCaptures => IterInner::GoodCaptures(self.good_capt_iter()),
+            EqualCaptures => IterInner::EqualCaptures(self.equal_capt_iter()),
+            Killers => IterInner::Killers(self.killer_iter()),
+            Quiet => IterInner::Quiet(self.quiets_iter()),
+            BadCaptures => IterInner::BadCaptures(self.bad_capt_iter()),
             Underpromotions => IterInner::Underpromotions(self.underpromo_iter()),
         };
 

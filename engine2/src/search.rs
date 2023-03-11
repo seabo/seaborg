@@ -144,8 +144,8 @@ impl Search {
         self.trace.visit_node();
 
         if depth == 0 {
-            self.quiesce(alpha, beta)
-            // self.evaluate()
+            // self.quiesce(alpha, beta)
+            self.evaluate()
         } else {
             let mut max = Score::INF_N;
 
@@ -163,9 +163,9 @@ impl Search {
                         .inc_mate();
                     self.pos.unmake_move();
 
-                    if score >= beta {
-                        return score;
-                    }
+                    // if score >= beta {
+                    //     return score;
+                    // }
 
                     if score > max {
                         self.pvt.copy_to(depth, *mov);
@@ -322,11 +322,17 @@ impl<'a> Loader for MoveLoader<'a> {
         self.search.pos.generate_in_new::<_, All, Legal>(movelist);
     }
 
+    fn load_promotions(&mut self, movelist: &mut ScoredMoveList) {}
+
     fn load_captures(&mut self, movelist: &mut ScoredMoveList) {
         // self.search
         //     .pos
         //     .generate_in_new::<_, Captures, Legal>(movelist);
     }
+
+    fn load_killers(&mut self, movelist: &mut ScoredMoveList) {}
+
+    fn load_quiets(&mut self, movelist: &mut ScoredMoveList) {}
 
     fn score_captures(&mut self, captures: Scorer) {
         for (mov, score) in captures {
