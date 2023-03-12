@@ -85,12 +85,15 @@ impl<T, const N: usize> Default for ArrayVec<T, N> {
 impl<T, const N: usize> From<Vec<T>> for ArrayVec<T, N> {
     fn from(vec: Vec<T>) -> Self {
         let mut list = ArrayVec::<T, N>::default();
-        vec.iter().for_each(|v| list.push_val(*v));
+        vec.into_iter().for_each(|v| list.push_val(v));
         list
     }
 }
 
-impl<T, const N: usize> Into<Vec<T>> for ArrayVec<T, N> {
+impl<T, const N: usize> Into<Vec<T>> for ArrayVec<T, N>
+where
+    T: Copy,
+{
     #[inline]
     fn into(self) -> Vec<T> {
         self.vec()
@@ -130,11 +133,6 @@ impl<T, const N: usize> ArrayVec<T, N> {
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.len == 0
-    }
-
-    /// Create a `Vec<T>` from this `ArrayVec`.
-    pub fn vec(&self) -> Vec<T> {
-        self.into_iter().map(|v| *v).collect()
     }
 
     /// Return the number of elements in the list.
@@ -226,6 +224,16 @@ impl<T, const N: usize> ArrayVec<T, N> {
         let p = self.inner.as_mut_ptr();
         let start = p.add(rng.start);
         MaybeUninit::slice_assume_init_mut(slice::from_raw_parts_mut(start, rng.len()))
+    }
+}
+
+impl<T, const N: usize> ArrayVec<T, N>
+where
+    T: Copy,
+{
+    /// Create a `Vec<T>` from this `ArrayVec`.
+    pub fn vec(&self) -> Vec<T> {
+        self.into_iter().map(|v| *v).collect()
     }
 }
 
