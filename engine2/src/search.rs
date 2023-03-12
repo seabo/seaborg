@@ -142,8 +142,8 @@ impl Search {
         self.trace.visit_node();
 
         if depth == 0 {
-            let score = self.evaluate();
-            // let score = self.quiesce(alpha, beta);
+            // let score = self.evaluate();
+            let score = self.quiesce(alpha, beta);
             if score == Score::mate(0) {
                 self.pvt.copy_to(
                     1,
@@ -179,7 +179,6 @@ impl Search {
                     }
 
                     if score > max {
-                        use core::position::Square;
                         self.pvt.copy_to(depth, *mov);
                         max = score;
                         if score > alpha {
@@ -330,7 +329,7 @@ impl<'a> MoveLoader<'a> {
 }
 
 impl<'a> Loader for MoveLoader<'a> {
-    fn load_hash(&mut self, movelist: &mut ScoredMoveList) {
+    fn load_hash(&mut self, _movelist: &mut ScoredMoveList) {
         // self.search.pos.generate_in_new::<_, All, Legal>(movelist);
     }
 
@@ -346,7 +345,7 @@ impl<'a> Loader for MoveLoader<'a> {
             .generate_in_new::<_, Captures, Legal>(movelist);
     }
 
-    fn load_killers(&mut self, movelist: &mut ScoredMoveList) {}
+    fn load_killers(&mut self, _movelist: &mut ScoredMoveList) {}
 
     fn load_quiets(&mut self, movelist: &mut ScoredMoveList) {
         self.search

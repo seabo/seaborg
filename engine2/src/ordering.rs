@@ -8,25 +8,32 @@ use core::position::PieceType;
 use num::FromPrimitive;
 use num_derive::FromPrimitive;
 
+use std::cell::UnsafeCell;
 use std::mem::MaybeUninit;
 use std::ops::Range;
-use std::slice::IterMut as SliceIterMut;
+use std::slice::Iter as SliceIter;
 
 pub type ScoredMove = (Move, Score);
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Debug)]
 struct Entry {
     sm: ScoredMove,
-    yielded: bool,
+    yielded: UnsafeCell<bool>,
 }
 
 /// An `ArrayVec` containing `ScoredMoves`.
 #[derive(Debug)]
 pub struct ScoredMoveList(ArrayVec<Entry, 254>);
 
+/// A slice of `Entry`'s.
+type Segment<'a> = &'a [Entry];
+
+/// A mutable slice of `Entry`'s.
+type SegmentMut<'a> = &'a mut [Entry];
+
 /// An iterator over a `ScoredMoveList` which allows the `Move`s to be inspected and scores mutated.
 pub struct Scorer<'a> {
-    iter: <&'a mut [Entry] as IntoIterator>::IntoIter,
+    iter: <SegmentMut<'a> as IntoIterator>::IntoIter,
 }
 
 impl<'a> Iterator for Scorer<'a> {
@@ -38,7 +45,7 @@ impl<'a> Iterator for Scorer<'a> {
     }
 }
 
-impl<'a> From<&'a mut [Entry]> for Scorer<'a> {
+impl<'a> From<SegmentMut<'a>> for Scorer<'a> {
     fn from(val: &'a mut [Entry]) -> Self {
         Self {
             iter: val.into_iter(),
@@ -54,7 +61,7 @@ impl MoveList for ScoredMoveList {
     fn push(&mut self, mv: Move) {
         let entry = Entry {
             sm: (mv, Score::zero()),
-            yielded: false,
+            yielded: UnsafeCell::new(false),
         };
 
         self.0.push_val(entry);
@@ -76,7 +83,7 @@ impl MoveList for ScoredMoveList {
 /// of elements O(n^2) algorithms can outperform if they have a low constant factor relative to
 /// O(n*log n) algorithms with more constant overhead.
 struct SelectionSort<'a> {
-    segment: &'a mut [Entry],
+    segment: Segment<'a>,
     pred: fn(&ScoredMove) -> bool,
 }
 
@@ -84,7 +91,7 @@ impl<'a> SelectionSort<'a> {
     /// Create a new selection sort iterator from a segment (`&mut [Entry]`) and a function
     /// representing a predicate on each `ScoredMove`. If the predicate returns `true` it is
     /// yielded, otherwise it is skipped (and its `yielded` flag remains unset).
-    fn from(segment: &'a mut [Entry], pred: fn(&ScoredMove) -> bool) -> Self {
+    fn from(segment: Segment<'a>, pred: fn(&ScoredMove) -> bool) -> Self {
         Self { segment, pred }
     }
 }
@@ -100,11 +107,13 @@ impl<'a> Iterator for SelectionSort<'a> {
         // to the move. When we get through the whole list without seeing a `yielded = false`, we
         // return `None`.
         let mut max = Score::INF_N;
-        let mut max_entry: MaybeUninit<&mut Entry> = MaybeUninit::uninit();
+        let mut max_entry: MaybeUninit<&Entry> = MaybeUninit::uninit();
         let mut found_one: bool = false;
 
-        for entry in &mut *self.segment {
-            if !entry.yielded && entry.sm.1 > max && (self.pred)(&entry.sm) {
+        for entry in self.segment {
+            // SAFETY: we can read the private `yielded` flag here.
+            let yielded = unsafe { *entry.yielded.get() };
+            if !yielded && entry.sm.1 > max && (self.pred)(&entry.sm) {
                 max = entry.sm.1;
                 max_entry.write(entry);
                 found_one = true;
@@ -119,8 +128,8 @@ impl<'a> Iterator for SelectionSort<'a> {
             // the `Move` (only its `yielded` flag).
             unsafe {
                 let max_entry = max_entry.assume_init();
-                max_entry.yielded = true;
-                Some(std::mem::transmute(max_entry))
+                *max_entry.yielded.get() = true;
+                Some(&max_entry.sm.0)
             }
         } else {
             None
@@ -136,8 +145,8 @@ impl<'a> Iterator for SelectionSort<'a> {
 /// during the hash move phase, so it _does_ check for this).
 #[derive(Debug)]
 struct KillerIter<'a> {
-    killer_segment: SliceIterMut<'a, Entry>,
-    hash_segment: &'a mut [Entry],
+    killer_segment: SliceIter<'a, Entry>,
+    hash_segment: Segment<'a>,
 }
 
 impl<'a> Iterator for KillerIter<'a> {
@@ -147,7 +156,11 @@ impl<'a> Iterator for KillerIter<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         match self.killer_segment.next() {
             Some(entry) => {
-                entry.yielded = true;
+                // SAFETY: we can set the private `yielded` flag. Nobody on the outside can have a
+                // reference to it.
+                unsafe {
+                    *entry.yielded.get() = true;
+                }
 
                 // If this move matches one in the hash segment, skip it.
                 for hm in self.hash_segment.iter() {
@@ -172,8 +185,8 @@ impl<'a> Iterator for KillerIter<'a> {
 /// during the hash move phase, so it _does_ check for this).
 struct QuietsIter<'a> {
     quiets_sel_sort: SelectionSort<'a>,
-    hash_segment: &'a mut [Entry],
-    killer_segment: &'a mut [Entry],
+    hash_segment: Segment<'a>,
+    killer_segment: Segment<'a>,
 }
 
 impl<'a> Iterator for QuietsIter<'a> {
@@ -225,11 +238,6 @@ impl<'a> Iterator for QuietsIter<'a> {
 /// that `OrderedMoves` is a large structure - currently 3KB. We will have one of these at every
 /// ply, so if we are searching deeply we could reach 100KB of data on the stack, just for move
 /// ordering structs.
-///
-/// TODO: one possibility to explore is if there is any merit in attaching a `MoveOrdering` system
-/// to the `Position` itself "at the bottom of the stack", so to speak. We could make this have
-/// enough space to store the moves for every ply in the search in a single `ArrayVec`. It would
-/// get gnarly to implement...
 pub struct OrderedMoves {
     buf: ScoredMoveList,
     /// The index of the start of the current segment. A new segment is created each time the
@@ -409,7 +417,7 @@ impl OrderedMoves {
 
     /// Return the hash segment.
     #[inline]
-    fn hash_segment(&self) -> &mut [Entry] {
+    fn hash_segment(&self) -> Segment<'_> {
         // SAFETY: the segment `Range` starts as `0..0`, which is always fine for us to get.
         // We only ever change the `Range` when we know that moves have been placed in that
         // location, so we are safe to derefence.
@@ -418,7 +426,7 @@ impl OrderedMoves {
 
     /// Return the promo segment.
     #[inline]
-    fn promo_segment(&self) -> &mut [Entry] {
+    fn promo_segment(&self) -> Segment<'_> {
         // SAFETY: the segment `Range` starts as `0..0`, which is always fine for us to get.
         // We only ever change the `Range` when we know that moves have been placed in that
         // location, so we are safe to derefence.
@@ -427,7 +435,7 @@ impl OrderedMoves {
 
     /// Return the capture segment.
     #[inline]
-    fn capt_segment(&self) -> &mut [Entry] {
+    fn capt_segment(&self) -> Segment<'_> {
         // SAFETY: the segment `Range` starts as `0..0`, which is always fine for us to get.
         // We only ever change the `Range` when we know that moves have been placed in that
         // location, so we are safe to derefence.
@@ -436,7 +444,7 @@ impl OrderedMoves {
 
     /// Return the killer segment.
     #[inline]
-    fn killer_segment(&self) -> &mut [Entry] {
+    fn killer_segment(&self) -> Segment<'_> {
         // SAFETY: the segment `Range` starts as `0..0`, which is always fine for us to get.
         // We only ever change the `Range` when we know that moves have been placed in that
         // location, so we are safe to derefence.
@@ -445,7 +453,7 @@ impl OrderedMoves {
 
     /// Return the quiet segment.
     #[inline]
-    fn quiets_segment(&self) -> &mut [Entry] {
+    fn quiets_segment(&self) -> Segment<'_> {
         // SAFETY: the segment `Range` starts as `0..0`, which is always fine for us to get.
         // We only ever change the `Range` when we know that moves have been placed in that
         // location, so we are safe to derefence.
@@ -454,11 +462,65 @@ impl OrderedMoves {
 
     /// Return the underpromo segment.
     #[inline]
-    fn underpromo_segment(&self) -> &mut [Entry] {
+    fn underpromo_segment(&self) -> Segment<'_> {
         // SAFETY: the segment `Range` starts as `0..0`, which is always fine for us to get.
         // We only ever change the `Range` when we know that moves have been placed in that
         // location, so we are safe to derefence.
         unsafe { self.segment_from_range(self.underpromo_segment.clone()) }
+    }
+
+    /// Return the hash segment.
+    #[inline]
+    fn hash_segment_mut(&mut self) -> SegmentMut<'_> {
+        // SAFETY: the segment `Range` starts as `0..0`, which is always fine for us to get.
+        // We only ever change the `Range` when we know that moves have been placed in that
+        // location, so we are safe to derefence.
+        unsafe { self.segment_from_range_mut(self.hash_segment.clone()) }
+    }
+
+    /// Return the promo segment.
+    #[inline]
+    fn promo_segment_mut(&mut self) -> SegmentMut<'_> {
+        // SAFETY: the segment `Range` starts as `0..0`, which is always fine for us to get.
+        // We only ever change the `Range` when we know that moves have been placed in that
+        // location, so we are safe to derefence.
+        unsafe { self.segment_from_range_mut(self.promo_segment.clone()) }
+    }
+
+    /// Return the capture segment.
+    #[inline]
+    fn capt_segment_mut(&mut self) -> SegmentMut<'_> {
+        // SAFETY: the segment `Range` starts as `0..0`, which is always fine for us to get.
+        // We only ever change the `Range` when we know that moves have been placed in that
+        // location, so we are safe to derefence.
+        unsafe { self.segment_from_range_mut(self.capt_segment.clone()) }
+    }
+
+    /// Return the killer segment.
+    #[inline]
+    fn killer_segment_mut(&mut self) -> SegmentMut<'_> {
+        // SAFETY: the segment `Range` starts as `0..0`, which is always fine for us to get.
+        // We only ever change the `Range` when we know that moves have been placed in that
+        // location, so we are safe to derefence.
+        unsafe { self.segment_from_range_mut(self.killer_segment.clone()) }
+    }
+
+    /// Return the quiet segment.
+    #[inline]
+    fn quiets_segment_mut(&mut self) -> SegmentMut<'_> {
+        // SAFETY: the segment `Range` starts as `0..0`, which is always fine for us to get.
+        // We only ever change the `Range` when we know that moves have been placed in that
+        // location, so we are safe to derefence.
+        unsafe { self.segment_from_range_mut(self.quiet_segment.clone()) }
+    }
+
+    /// Return the underpromo segment.
+    #[inline]
+    fn underpromo_segment_mut(&mut self) -> SegmentMut<'_> {
+        // SAFETY: the segment `Range` starts as `0..0`, which is always fine for us to get.
+        // We only ever change the `Range` when we know that moves have been placed in that
+        // location, so we are safe to derefence.
+        unsafe { self.segment_from_range_mut(self.underpromo_segment.clone()) }
     }
 
     /// This is very unsafe. First, we do not bounds check the range. Even more unsafe is that we
@@ -467,8 +529,22 @@ impl OrderedMoves {
     /// be called when we know that nobody has an mutable reference over the `Move`s. Since our
     /// public interface never gives these out, we are fine.
     #[inline]
-    unsafe fn segment_from_range(&self, rng: Range<usize>) -> &mut [Entry] {
-        let ptr = self.buf.0.list_ptr() as *mut Entry;
+    unsafe fn segment_from_range(&self, rng: Range<usize>) -> Segment<'_> {
+        let ptr = self.buf.0.list_ptr();
+        let start = ptr.add(rng.start);
+        let end = ptr.add(rng.end);
+
+        std::slice::from_ptr_range(Range { start, end })
+    }
+
+    /// This is very unsafe. First, we do not bounds check the range. Even more unsafe is that we
+    /// take an immutable reference to `self` and get a mutable reference into the underlying
+    /// buffer from it. This is accomplished with a `std::mem::transmute`. This function must only
+    /// be called when we know that nobody has an mutable reference over the `Move`s. Since our
+    /// public interface never gives these out, we are fine.
+    #[inline]
+    unsafe fn segment_from_range_mut(&mut self, rng: Range<usize>) -> SegmentMut<'_> {
+        let ptr = self.buf.0.list_ptr_mut();
         let start = ptr.add(rng.start);
         let end = ptr.add(rng.end);
 
@@ -499,7 +575,7 @@ impl OrderedMoves {
                     loader.load_captures(&mut self.buf);
                     self.set_capt_segment();
 
-                    loader.score_captures(self.capt_segment().into());
+                    loader.score_captures(self.capt_segment_mut().into());
                 }
                 EqualCaptures => { /* Nothing to do here */ }
                 Killers => {
@@ -510,7 +586,7 @@ impl OrderedMoves {
                     loader.load_quiets(&mut self.buf);
                     self.set_quiet_segment();
 
-                    loader.score_quiets(self.quiets_segment().into());
+                    loader.score_quiets(self.quiets_segment_mut().into());
                 }
                 BadCaptures => { /* Nothing to do here */ }
                 Underpromotions => { /* Nothing to do here */ }
@@ -530,7 +606,7 @@ impl OrderedMoves {
     }
 
     fn promo_iter<'a>(&'a mut self) -> SelectionSort<'a> {
-        let segment = self.promo_segment();
+        let segment = self.promo_segment_mut();
 
         // First, score the captures higher than the non-captures. Note that we do not run SEE on
         // promotion moves.
@@ -559,7 +635,7 @@ impl OrderedMoves {
 
     #[inline]
     fn killer_iter<'a>(&'a mut self) -> KillerIter<'a> {
-        let killer_segment = self.killer_segment().iter_mut();
+        let killer_segment = self.killer_segment().iter();
         let hash_segment = self.hash_segment();
 
         KillerIter {
@@ -599,7 +675,7 @@ impl OrderedMoves {
         fn entry(mov: &Entry, pt: PieceType) -> Entry {
             Entry {
                 sm: (mov.sm.0.set_promo_type(pt), Score::zero()),
-                yielded: false,
+                yielded: UnsafeCell::new(false),
             }
         }
 
