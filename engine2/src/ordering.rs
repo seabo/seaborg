@@ -572,27 +572,32 @@ impl OrderedMoves {
                 QueenPromotions => {
                     loader.load_promotions(&mut self.buf);
                     self.set_promo_segment();
+                    self.dedup_segments(self.promo_segment(), self.hash_segment());
                 }
                 GoodCaptures => {
                     loader.load_captures(&mut self.buf);
                     self.set_capt_segment();
 
                     loader.score_captures(self.capt_segment_mut().into());
+                    self.dedup_segments(self.capt_segment(), self.hash_segment());
                 }
                 EqualCaptures => { /* Nothing to do here */ }
                 Killers => {
                     loader.load_killers(&mut self.buf);
                     self.set_killer_segment();
+                    self.dedup_segments(self.killer_segment(), self.hash_segment());
                 }
                 Quiet => {
                     loader.load_quiets(&mut self.buf);
                     self.set_quiet_segment();
 
                     loader.score_quiets(self.quiets_segment_mut().into());
+                    self.dedup_segments(self.quiets_segment(), self.hash_segment());
                 }
                 BadCaptures => { /* Nothing to do here */ }
                 Underpromotions => {
                     self.prepare_underpromotions();
+                    self.dedup_segments(self.underpromo_segment(), self.hash_segment());
                 }
             }
         }
@@ -602,6 +607,22 @@ impl OrderedMoves {
 
     pub fn phase(&self) -> Phase {
         self.phase
+    }
+
+    /// Iterates through the `target` segment, marking any moves which match moves in the i
+    /// `src` segment as already yielded.
+    fn dedup_segments(&self, tgt: Segment<'_>, src: Segment<'_>) {
+        for tgt_entry in tgt {
+            for src_entry in src {
+                if tgt_entry.sm.0 == src_entry.sm.0 {
+                    // SAFETY: we can mark entries as yielded, since no-one outside the API has a
+                    // reference to the `yielded` flag.
+                    unsafe {
+                        *tgt_entry.yielded.get() = true;
+                    }
+                }
+            }
+        }
     }
 
     fn prepare_underpromotions(&mut self) {
@@ -625,6 +646,12 @@ impl OrderedMoves {
                 ptr.write(entry(e, PieceType::Bishop));
                 ptr = ptr.add(1);
             }
+        }
+
+        // SAFETY: we need to update the buffer's length to maintain the invariant.
+        unsafe {
+            let added: usize = self.promo_segment().len() * 3;
+            self.buf.0.set_len(self.buf.0.len() + added);
         }
 
         self.set_underpromo_segment();
@@ -769,9 +796,11 @@ impl<'a> IntoIterator for &'a OrderedMoves {
 mod tests {
     use super::*;
     use crate::perft::TESTS;
-    use core::mono_traits::{All, Legal};
+    use core::mono_traits::{All, Captures, Legal, QueenPromotions, Quiets};
     use core::movelist::BasicMoveList;
     use core::position::Position;
+
+    use rand::*;
 
     struct Perft {
         pos: Position,
@@ -782,22 +811,45 @@ mod tests {
         pub fn perft(pos: Position, depth: usize) -> usize {
             let mut p = Perft { pos, count: 0 };
 
-            p.perft_recurse(depth);
+            // Divide perft output for debugging.
+            let mut moves = OrderedMoves::new();
+            let mut c: usize = 0;
+            while moves.load_next_phase(TestLoader::from(&mut p.pos)) {
+                println!("{:?}", moves.phase());
+                for mov in &moves {
+                    c += 1;
+                    p.pos.make_move(&mov);
+                    let child_count = if depth == 1 {
+                        1
+                    } else {
+                        p.perft_recurse(depth - 1)
+                    };
+                    println!("{}: {}", mov, child_count);
+                    p.pos.unmake_move();
+                }
+            }
+            println!("{} moves in the passed position", c);
+
+            // p.perft_recurse(depth);
             p.count
         }
 
-        fn perft_recurse(&mut self, depth: usize) {
+        fn perft_recurse(&mut self, depth: usize) -> usize {
             if depth == 1 {
-                self.count += self.pos.generate_moves::<BasicMoveList>().len();
+                let c = self.pos.generate_moves::<BasicMoveList>().len();
+                self.count += c;
+                c
             } else {
                 let mut moves = OrderedMoves::new();
+                let mut c: usize = 0;
                 while moves.load_next_phase(TestLoader::from(&mut self.pos)) {
                     for mov in &moves {
                         self.pos.make_move(&mov);
-                        self.perft_recurse(depth - 1);
+                        c += self.perft_recurse(depth - 1);
                         self.pos.unmake_move();
                     }
                 }
+                c
             }
         }
     }
@@ -814,7 +866,74 @@ mod tests {
 
     impl<'a> Loader for TestLoader<'a> {
         fn load_hash(&mut self, movelist: &mut ScoredMoveList) {
-            self.pos.generate_in_new::<_, All, Legal>(movelist);
+            match self
+                .pos
+                .generate_new::<BasicMoveList, All, Legal>()
+                .random()
+            {
+                Some(mv) => {
+                    movelist.push(*mv);
+                }
+                None => {}
+            }
+        }
+
+        fn load_promotions(&mut self, movelist: &mut ScoredMoveList) {
+            self.pos
+                .generate_in_new::<_, QueenPromotions, Legal>(movelist);
+        }
+
+        fn load_captures(&mut self, movelist: &mut ScoredMoveList) {
+            self.pos.generate_in_new::<_, Captures, Legal>(movelist);
+        }
+
+        fn load_killers(&mut self, movelist: &mut ScoredMoveList) {
+            // Insert two random moves into the killer segment.
+            let all_moves = self.pos.generate_new::<BasicMoveList, Quiets, Legal>();
+
+            if all_moves.len() == 1 {
+                movelist.push(*all_moves.first().unwrap());
+            } else if all_moves.len() > 1 {
+                let first = *all_moves.random().unwrap();
+                let second;
+
+                loop {
+                    let tmp = *all_moves.random().unwrap();
+                    if tmp != first {
+                        second = tmp;
+                        break;
+                    }
+                }
+
+                movelist.push(first);
+                movelist.push(second);
+            }
+        }
+
+        fn load_quiets(&mut self, movelist: &mut ScoredMoveList) {
+            self.pos.generate_in_new::<_, Quiets, Legal>(movelist);
+        }
+
+        fn score_captures(&mut self, captures: Scorer) {
+            let mut rng = rand::thread_rng();
+
+            for (mov, score) in captures {
+                if mov.is_capture() {
+                    // Assign a random number from -10_000 to +10_000.
+                    *score = Score::cp(rng.gen_range(-10_000..10_000));
+                }
+            }
+        }
+
+        fn score_quiets(&mut self, quiets: Scorer) {
+            let mut rng = rand::thread_rng();
+
+            for (mov, score) in quiets {
+                if mov.is_capture() {
+                    // Assign a random number from -10_000 to +10_000.
+                    *score = Score::cp(rng.gen_range(-10_000..10_000));
+                }
+            }
         }
     }
 

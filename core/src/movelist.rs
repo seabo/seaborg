@@ -141,6 +141,14 @@ impl<T, const N: usize> ArrayVec<T, N> {
         self.len
     }
 
+    /// Unsafely set the length to `len`. This is unsafe because no invariants are checked. The
+    /// caller must ensure that any use of this function maintains the invariant that all values
+    /// up to `len` are properly initialized.
+    #[inline(always)]
+    pub unsafe fn set_len(&mut self, len: usize) {
+        self.len = len;
+    }
+
     /// Get the `ArrayVec` as a slice, `&[T]`.
     #[inline(always)]
     pub fn as_slice(&self) -> &[T] {
