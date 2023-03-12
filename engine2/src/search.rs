@@ -98,7 +98,7 @@ impl Search {
         }
     }
 
-    fn alphabeta<'search>(&'search mut self, mut alpha: Score, beta: Score, depth: u8) -> Score {
+    fn alphabeta(&mut self, mut alpha: Score, beta: Score, depth: u8) -> Score {
         self.trace.visit_node();
 
         if depth == 0 {
