@@ -54,17 +54,14 @@ pub type BasicMoveList = ArrayVec<Move, MAX_MOVES>;
 /// Note: we do not have any `Drop` implementation, but if `Move` needed to be dropped we would
 /// need to think about this.
 #[derive(Debug)]
-pub struct ArrayVec<T, const N: usize>
-where
-    T: Copy + Debug,
-{
+pub struct ArrayVec<T, const N: usize> {
     inner: [MaybeUninit<T>; N],
     len: usize,
 }
 
 impl<T, const N: usize> fmt::Display for ArrayVec<T, N>
 where
-    T: fmt::Display + Debug + Copy,
+    T: fmt::Display,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "[")?;
@@ -75,23 +72,17 @@ where
     }
 }
 
-impl<T, const N: usize> Default for ArrayVec<T, N>
-where
-    T: Copy + Debug,
-{
+impl<T, const N: usize> Default for ArrayVec<T, N> {
     #[inline]
     fn default() -> Self {
         ArrayVec {
-            inner: [MaybeUninit::uninit(); N],
+            inner: MaybeUninit::uninit_array(),
             len: 0,
         }
     }
 }
 
-impl<T, const N: usize> From<Vec<T>> for ArrayVec<T, N>
-where
-    T: Copy + Debug,
-{
+impl<T, const N: usize> From<Vec<T>> for ArrayVec<T, N> {
     fn from(vec: Vec<T>) -> Self {
         let mut list = ArrayVec::<T, N>::default();
         vec.iter().for_each(|v| list.push_val(*v));
@@ -99,20 +90,14 @@ where
     }
 }
 
-impl<T, const N: usize> Into<Vec<T>> for ArrayVec<T, N>
-where
-    T: Copy + Debug,
-{
+impl<T, const N: usize> Into<Vec<T>> for ArrayVec<T, N> {
     #[inline]
     fn into(self) -> Vec<T> {
         self.vec()
     }
 }
 
-impl<'a, T, const N: usize> IntoIterator for &'a ArrayVec<T, N>
-where
-    T: Copy + Debug,
-{
+impl<'a, T, const N: usize> IntoIterator for &'a ArrayVec<T, N> {
     type Item = &'a T;
     type IntoIter = std::slice::Iter<'a, T>;
 
@@ -122,10 +107,7 @@ where
     }
 }
 
-impl<'a, T, const N: usize> IntoIterator for &'a mut ArrayVec<T, N>
-where
-    T: Copy + Debug,
-{
+impl<'a, T, const N: usize> IntoIterator for &'a mut ArrayVec<T, N> {
     type Item = &'a mut T;
     type IntoIter = std::slice::IterMut<'a, T>;
 
@@ -137,10 +119,7 @@ where
     }
 }
 
-impl<T, const N: usize> ArrayVec<T, N>
-where
-    T: Copy + Debug,
-{
+impl<T, const N: usize> ArrayVec<T, N> {
     /// Create an empty `ArrayVec`.
     #[inline(always)]
     pub fn new() -> Self {
@@ -172,9 +151,9 @@ where
 
     /// Return a random element from the list.
     #[inline]
-    pub fn random(&self) -> Option<T> {
+    pub fn random(&self) -> Option<&T> {
         let mut rng = thread_rng();
-        rng.choose(self.as_slice()).copied()
+        rng.choose(self.as_slice())
     }
 
     /// Add a `T` to the end of the list, without checking bounds.
@@ -250,10 +229,7 @@ where
     }
 }
 
-impl<T, const N: usize> Deref for ArrayVec<T, N>
-where
-    T: Copy + Debug,
-{
+impl<T, const N: usize> Deref for ArrayVec<T, N> {
     type Target = [T];
 
     #[inline]
@@ -265,10 +241,7 @@ where
     }
 }
 
-impl<T, const N: usize> DerefMut for ArrayVec<T, N>
-where
-    T: Copy + Debug,
-{
+impl<T, const N: usize> DerefMut for ArrayVec<T, N> {
     #[inline]
     fn deref_mut(&mut self) -> &mut [T] {
         unsafe {
@@ -278,10 +251,7 @@ where
     }
 }
 
-impl<T, const N: usize> Index<usize> for ArrayVec<T, N>
-where
-    T: Copy + Debug,
-{
+impl<T, const N: usize> Index<usize> for ArrayVec<T, N> {
     type Output = T;
 
     #[inline(always)]
@@ -298,10 +268,7 @@ where
     }
 }
 
-impl<T, const N: usize> IndexMut<usize> for ArrayVec<T, N>
-where
-    T: Copy + Debug,
-{
+impl<T, const N: usize> IndexMut<usize> for ArrayVec<T, N> {
     #[inline(always)]
     fn index_mut(&mut self, index: usize) -> &mut T {
         if index >= self.len {

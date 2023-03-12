@@ -1,5 +1,6 @@
 #![feature(stmt_expr_attributes)]
 #![feature(maybe_uninit_slice)]
+#![feature(maybe_uninit_uninit_array)]
 
 #[macro_use]
 mod macros;

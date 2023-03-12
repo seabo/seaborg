@@ -806,7 +806,7 @@ impl Position {
 
     #[inline]
     pub fn random_move(&self) -> Option<Move> {
-        self.generate_moves::<BasicMoveList>().random()
+        self.generate_moves::<BasicMoveList>().random().copied()
     }
 
     // MOVE TESTING
