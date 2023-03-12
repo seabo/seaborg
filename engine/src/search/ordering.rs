@@ -2,6 +2,7 @@ use crate::eval::Value;
 use crate::search::search::TTData;
 use crate::tables::Table;
 
+use core::mono_traits::{All, Legal};
 use core::mov::Move;
 use core::movelist::{BasicMoveList, MAX_MOVES};
 use core::position::Position;
@@ -72,7 +73,7 @@ impl OrderedMoveList {
     }
 
     fn prepare_move_list(&mut self, pos: &Position) {
-        let moves = pos.generate_moves();
+        let moves = pos.generate::<BasicMoveList, All, Legal>();
         self.move_list = Some(moves);
 
         // Build a structure with scores for each move in the list.

@@ -53,7 +53,7 @@ impl MoveGen {
     /// Generate moves for the passed position according to the parameters specified by the dummy
     /// passed as generic types.
     #[inline]
-    pub fn generate_new<ML: MoveList, G: Generate, L: Legality>(position: &Position) -> ML {
+    pub fn generate<ML: MoveList, G: Generate, L: Legality>(position: &Position) -> ML {
         let mut movelist = ML::empty();
         InnerMoveGen::<ML>::generate::<G, L>(position, &mut movelist);
         movelist
@@ -62,61 +62,11 @@ impl MoveGen {
     /// Generate moves for the passed position according to the parameters specified by the dummy
     /// passed as generic types.
     #[inline]
-    pub fn generate_in_new<ML: MoveList, G: Generate, L: Legality>(
+    pub fn generate_in<ML: MoveList, G: Generate, L: Legality>(
         position: &Position,
         movelist: &mut ML,
     ) {
         InnerMoveGen::<ML>::generate::<G, L>(position, movelist);
-    }
-
-    /// Generates pseudo-legal moves for the passed position.
-    ///
-    /// This function could return moves which are either:
-    /// - Legal
-    /// - Would cause a discovered check (i.e. the moving piece is pinned)
-    /// - Would cause the moving king to land in check
-    #[inline]
-    pub fn generate<L: MoveList>(position: &Position) -> L {
-        let mut movelist = L::empty();
-        InnerMoveGen::<L>::generate::<All, Legal>(position, &mut movelist);
-        movelist
-    }
-
-    #[inline]
-    pub fn generate_of_legality<ML: MoveList, L: Legality>(position: &Position) -> ML {
-        let mut movelist = ML::empty();
-        InnerMoveGen::<ML>::generate::<All, L>(position, &mut movelist);
-        movelist
-    }
-
-    /// Generates moves of type defined by `L: Legality` and pushes them onto the passed
-    /// `MoveList`.
-    #[inline]
-    pub fn generate_in<ML: MoveList, L: Legality>(position: &Position, ms: &mut ML) {
-        InnerMoveGen::<ML>::generate::<All, L>(position, ms);
-    }
-
-    /// Generates legal moves and pushes them onto the passed `MoveList`.
-    #[inline]
-    pub fn generate_legal_in<ML: MoveList>(position: &Position, ms: &mut ML) {
-        InnerMoveGen::<ML>::generate::<All, Legal>(position, ms);
-    }
-
-    #[inline]
-    pub fn generate_in_movestack<'a: 'ms + 'p, 'ms, 'p, L: Legality>(
-        position: &'p Position,
-        ms: &'ms mut MoveStack,
-    ) -> Frame<'a> {
-        let mut frame = ms.new_frame();
-        Self::generate_in::<_, L>(position, &mut frame);
-        frame
-    }
-
-    #[inline]
-    pub fn generate_captures(position: &Position) -> BasicMoveList {
-        let mut movelist = BasicMoveList::default();
-        InnerMoveGen::<BasicMoveList>::generate::<Captures, Legal>(position, &mut movelist);
-        movelist
     }
 }
 
@@ -588,12 +538,13 @@ pub fn queen_moves(occupied: Bitboard, sq: Square) -> Bitboard {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::init::init_globals;
     use crate::position::Position;
 
     fn number_of_captures(fen: &str) -> usize {
         let pos = Position::from_fen(fen).unwrap();
-        let captures = pos.generate_captures();
+        let captures = pos.generate::<BasicMoveList, Captures, Legal>();
         captures.len()
     }
 
@@ -613,7 +564,7 @@ mod tests {
                 return;
             }
 
-            let moves = self.position.generate_captures();
+            let moves = self.position.generate::<BasicMoveList, Captures, Legal>();
 
             for mov in &moves {
                 self.position.make_move(mov);

@@ -9,7 +9,7 @@ mod zobrist;
 
 use crate::bb::Bitboard;
 use crate::masks::{CASTLING_PATH, CASTLING_ROOK_START, FILE_BB, PLAYER_CNT, RANK_BB};
-use crate::mono_traits::{Generate, Legality, Side};
+use crate::mono_traits::{All, Generate, Legal, Legality, Side};
 use crate::mov::{Move, MoveType, UndoableMove};
 use crate::movegen::{bishop_moves, rook_moves, MoveGen};
 use crate::movelist::{BasicMoveList, Frame, MoveList, MoveStack};
@@ -438,7 +438,7 @@ impl Position {
     /// Returns `Option<Move>` with `Some(mov)` if the move was legal, and
     /// None if it wasn't.
     pub fn make_uci_move(&mut self, uci: &str) -> Option<Move> {
-        let moves = self.generate_moves::<BasicMoveList>();
+        let moves = self.generate::<BasicMoveList, All, Legal>();
 
         for mov in &moves {
             let uci_mov = mov.to_uci_string();
@@ -529,8 +529,12 @@ impl Position {
         .is_not_empty()
     }
 
+    /// Whether the player to move is in checkmate in this position.
+    ///
+    /// TODO: this should really switch `Generation` type to `Evasions`? Need to thoroughly check
+    /// correctness when making that change.
     pub fn in_checkmate(&self) -> bool {
-        self.in_check() && self.generate_moves::<BasicMoveList>().is_empty()
+        self.in_check() && self.generate::<BasicMoveList, All, Legal>().is_empty()
     }
 
     pub fn in_double_check(&self) -> bool {
@@ -763,50 +767,22 @@ impl Position {
     // MOVE GENERATION
     /// Generate moves for the current position according to the generic parameters.
     #[inline]
-    pub fn generate_new<ML: MoveList, G: Generate, L: Legality>(&self) -> ML {
-        MoveGen::generate_new::<ML, G, L>(&self)
+    pub fn generate<ML: MoveList, G: Generate, L: Legality>(&self) -> ML {
+        MoveGen::generate::<ML, G, L>(&self)
     }
 
     /// Generate moves for the current position according to the generic parameters. Moves are
     /// pushed into the passed `MoveList`.
     #[inline]
-    pub fn generate_in_new<ML: MoveList, G: Generate, L: Legality>(&self, movelist: &mut ML) {
-        MoveGen::generate_in_new::<ML, G, L>(&self, movelist);
-    }
-
-    // Eventually, we should stabilise to just using this function, with resp.
-    // 'trait signature' for each use.
-    #[inline]
-    pub fn generate_moves<L: MoveList>(&self) -> L {
-        MoveGen::generate(&self)
-    }
-
-    #[inline]
-    pub fn generate<ML: MoveList, L: Legality>(&self) -> ML {
-        MoveGen::generate_of_legality::<ML, L>(&self)
-    }
-
-    #[inline]
-    pub fn generate_in<'a: 'p + 'ms, 'ms, 'p, L: Legality>(
-        &'p self,
-        ms: &'ms mut MoveStack,
-    ) -> Frame<'a> {
-        MoveGen::generate_in_movestack::<'a, 'ms, 'p, L>(&self, ms)
-    }
-
-    #[inline]
-    pub fn generate_in_list<ML: MoveList, L: Legality>(&self, ml: &mut ML) {
-        MoveGen::generate_in::<ML, L>(self, ml)
-    }
-
-    #[inline]
-    pub fn generate_captures(&self) -> BasicMoveList {
-        MoveGen::generate_captures(&self)
+    pub fn generate_in<ML: MoveList, G: Generate, L: Legality>(&self, movelist: &mut ML) {
+        MoveGen::generate_in::<ML, G, L>(&self, movelist);
     }
 
     #[inline]
     pub fn random_move(&self) -> Option<Move> {
-        self.generate_moves::<BasicMoveList>().random().copied()
+        self.generate::<BasicMoveList, All, Legal>()
+            .random()
+            .copied()
     }
 
     // MOVE TESTING

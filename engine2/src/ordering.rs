@@ -836,7 +836,7 @@ mod tests {
 
         fn perft_recurse(&mut self, depth: usize) -> usize {
             if depth == 1 {
-                let c = self.pos.generate_moves::<BasicMoveList>().len();
+                let c = self.pos.generate::<BasicMoveList, All, Legal>().len();
                 self.count += c;
                 c
             } else {
@@ -866,11 +866,7 @@ mod tests {
 
     impl<'a> Loader for TestLoader<'a> {
         fn load_hash(&mut self, movelist: &mut ScoredMoveList) {
-            match self
-                .pos
-                .generate_new::<BasicMoveList, All, Legal>()
-                .random()
-            {
+            match self.pos.generate::<BasicMoveList, All, Legal>().random() {
                 Some(mv) => {
                     movelist.push(*mv);
                 }
@@ -879,17 +875,16 @@ mod tests {
         }
 
         fn load_promotions(&mut self, movelist: &mut ScoredMoveList) {
-            self.pos
-                .generate_in_new::<_, QueenPromotions, Legal>(movelist);
+            self.pos.generate_in::<_, QueenPromotions, Legal>(movelist);
         }
 
         fn load_captures(&mut self, movelist: &mut ScoredMoveList) {
-            self.pos.generate_in_new::<_, Captures, Legal>(movelist);
+            self.pos.generate_in::<_, Captures, Legal>(movelist);
         }
 
         fn load_killers(&mut self, movelist: &mut ScoredMoveList) {
             // Insert two random moves into the killer segment.
-            let all_moves = self.pos.generate_new::<BasicMoveList, Quiets, Legal>();
+            let all_moves = self.pos.generate::<BasicMoveList, Quiets, Legal>();
 
             if all_moves.len() == 1 {
                 movelist.push(*all_moves.first().unwrap());
@@ -911,7 +906,7 @@ mod tests {
         }
 
         fn load_quiets(&mut self, movelist: &mut ScoredMoveList) {
-            self.pos.generate_in_new::<_, Quiets, Legal>(movelist);
+            self.pos.generate_in::<_, Quiets, Legal>(movelist);
         }
 
         fn score_captures(&mut self, captures: Scorer) {

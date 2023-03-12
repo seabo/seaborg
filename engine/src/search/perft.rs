@@ -1,3 +1,4 @@
+use core::mono_traits::{All, Legal};
 use core::mov::Move;
 use core::movelist::BasicMoveList;
 use core::position::Position;
@@ -179,7 +180,7 @@ impl<'a> Perft<'a> {
             self.data.nodes += 1;
         }
 
-        let moves = self.position.generate_moves();
+        let moves = self.position.generate::<BasicMoveList, All, Legal>();
 
         if depth == 1 {
             self.handle_leaf(&moves);
@@ -225,7 +226,7 @@ impl<'a> Perft<'a> {
         let perft_options = PerftOptions::new(collect_detailed_data, collect_check_data);
         let mut perft = Self::new(position, perft_options);
         let mut cumulative_nodes: usize = 0;
-        let moves = perft.position.generate_moves();
+        let moves = perft.position.generate::<BasicMoveList, All, Legal>();
         if depth == 1 {
             perft.handle_leaf(&moves);
             for mov in &moves {

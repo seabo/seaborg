@@ -107,7 +107,7 @@ impl Search {
         } else {
             let mut max = Score::INF_N;
 
-            let moves = self.pos.generate_moves::<BasicMoveList>();
+            let moves = self.pos.generate::<BasicMoveList, All, Legal>();
             if moves.is_empty() {
                 self.pvt.pv_leaf_at(depth);
                 return if self.pos.in_check() {
@@ -210,7 +210,7 @@ impl Search {
         } else {
             let mut max = Score::INF_N;
 
-            let moves = self.pos.generate_moves::<BasicMoveList>();
+            let moves = self.pos.generate::<BasicMoveList, All, Legal>();
             if moves.is_empty() {
                 self.pvt.pv_leaf_at(depth);
                 return if self.pos.in_check() {
@@ -274,7 +274,7 @@ impl Search {
 
         // TODO: this should look at more than just captures. Checks are important to consider too,
         // but they are harder, as not self-limiting like captures.
-        let captures = self.pos.generate_captures();
+        let captures = self.pos.generate::<BasicMoveList, Captures, Legal>();
         let mut score: Score;
 
         if captures.is_empty() {
@@ -329,28 +329,22 @@ impl<'a> MoveLoader<'a> {
 }
 
 impl<'a> Loader for MoveLoader<'a> {
-    fn load_hash(&mut self, _movelist: &mut ScoredMoveList) {
-        // self.search.pos.generate_in_new::<_, All, Legal>(movelist);
-    }
+    fn load_hash(&mut self, _movelist: &mut ScoredMoveList) {}
 
     fn load_promotions(&mut self, movelist: &mut ScoredMoveList) {
         self.search
             .pos
-            .generate_in_new::<_, QueenPromotions, Legal>(movelist);
+            .generate_in::<_, QueenPromotions, Legal>(movelist);
     }
 
     fn load_captures(&mut self, movelist: &mut ScoredMoveList) {
-        self.search
-            .pos
-            .generate_in_new::<_, Captures, Legal>(movelist);
+        self.search.pos.generate_in::<_, Captures, Legal>(movelist);
     }
 
     fn load_killers(&mut self, _movelist: &mut ScoredMoveList) {}
 
     fn load_quiets(&mut self, movelist: &mut ScoredMoveList) {
-        self.search
-            .pos
-            .generate_in_new::<_, Quiets, Legal>(movelist);
+        self.search.pos.generate_in::<_, Quiets, Legal>(movelist);
     }
 
     fn score_captures(&mut self, captures: Scorer) {

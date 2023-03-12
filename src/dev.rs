@@ -1,5 +1,5 @@
 use core::init::init_globals;
-use core::mono_traits::{Legal, PseudoLegal};
+use core::mono_traits::{All, Captures, Legal, PseudoLegal};
 use core::movelist::BasicMoveList;
 use core::position::{Position, Square};
 use engine::eval::Evaluation;
@@ -37,7 +37,7 @@ fn do_pseudolegal() {
     // let mut pos = Position::from_fen("8/3k4/2bb4/8/5R2/6K1/8/8 w - - 0 1").unwrap();
     let mut pos = Position::from_fen("k7/3b4/8/5Pp1/8/7K/8/8 w - g6 0 1").unwrap();
 
-    let moves = pos.generate::<BasicMoveList, PseudoLegal>();
+    let moves = pos.generate::<BasicMoveList, All, PseudoLegal>();
     let mut legal_cnt = 0;
 
     for mov in &moves {
@@ -70,7 +70,7 @@ fn do_perf_legal_move() {
         Position::from_fen("r2k3r/pb1Q1pp1/1pp3N1/b1P3Pn/1n4pq/2N3B1/PPP2PPP/R3K2R b KQ - 1 1")
             .unwrap();
 
-    let moves = pos.generate_moves::<BasicMoveList>();
+    let moves = pos.generate::<BasicMoveList, All, Legal>();
 
     let start = std::time::Instant::now();
 
@@ -99,7 +99,7 @@ fn do_ordering() {
 fn do_movegen() {
     let mut pos = Position::from_fen("k3n3/5P2/8/8/8/8/4R3/K7 w - - 0 1").unwrap();
     let now = Instant::now();
-    let captures = pos.generate_captures();
+    let captures = pos.generate::<BasicMoveList, Captures, Legal>();
     println!(
         "{}ns to generate captures",
         now.elapsed().as_nanos().separated_string()
@@ -109,7 +109,7 @@ fn do_movegen() {
     }
 
     let now = Instant::now();
-    let all_moves = pos.generate_moves::<BasicMoveList>();
+    let all_moves = pos.generate::<BasicMoveList, All, Legal>();
     println!(
         "{}ns to generate all moves",
         now.elapsed().as_nanos().separated_string()
@@ -208,19 +208,3 @@ fn do_perft() {
         }
     }
 }
-
-// fn do_ordered_moves() {
-//     let pos = Position::from_fen("4b3/4B1bq/p2Q2pp/4pp2/8/8/p7/k1K5 w - - 0 1").unwrap();
-//     let move_list = pos.generate_moves();
-//     for mov in &move_list {
-//         println!("{}", mov);
-//     }
-
-//     println!("====");
-
-//     let ordered_move_list = OrderedMoveList::new(move_list, None);
-
-//     for mov in ordered_move_list {
-//         println!("{}", mov);
-//     }
-// }

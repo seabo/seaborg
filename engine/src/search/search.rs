@@ -35,7 +35,9 @@ use crate::sess::Message;
 use crate::tables::Table;
 use crate::time::TimeControl;
 
+use core::mono_traits::{Captures, Legal};
 use core::mov::Move;
+use core::movelist::BasicMoveList;
 use core::position::Position;
 
 use crossbeam_channel::Sender;
@@ -437,7 +439,7 @@ impl Search {
             alpha = stand_pat;
         }
 
-        let captures = self.pos.generate_captures();
+        let captures = self.pos.generate::<BasicMoveList, Captures, Legal>();
         let mut score: i32;
 
         let mut node_move_count = 0;

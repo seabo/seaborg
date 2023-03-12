@@ -1,4 +1,5 @@
 use super::{PieceType, Position, Square};
+use crate::mono_traits::{All, Legal};
 use crate::mov::Move;
 use crate::movelist::BasicMoveList;
 use std::iter::Peekable;
@@ -399,7 +400,7 @@ impl Position {
         //    `None`; if we reach the end of the list and only one matched, then we return that.
         match SanParser::parse(mov) {
             Ok(move_details) => {
-                let legal_moves = self.generate_moves::<BasicMoveList>();
+                let legal_moves = self.generate::<BasicMoveList, All, Legal>();
                 let mut matched: bool = false;
                 let mut res: Option<Move> = None;
                 for mov in &legal_moves {
