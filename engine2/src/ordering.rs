@@ -9,6 +9,7 @@ use num::FromPrimitive;
 use num_derive::FromPrimitive;
 
 use std::cell::UnsafeCell;
+use std::iter::Chain;
 use std::mem::MaybeUninit;
 use std::ops::Range;
 use std::slice::Iter as SliceIter;
@@ -76,7 +77,7 @@ impl MoveList for ScoredMoveList {
     }
 }
 
-/// A selection sort over a mutable `Entry` slice.
+/// A selection sort over a `Segment`.
 ///
 /// In move ordering, selection sort is expected to work best, because pre-sorting the entire list
 /// is wasted effort in the many cases where we get an early cutoff. Additionally, for a small list
@@ -88,7 +89,7 @@ struct SelectionSort<'a> {
 }
 
 impl<'a> SelectionSort<'a> {
-    /// Create a new selection sort iterator from a segment (`&mut [Entry]`) and a function
+    /// Create a new selection sort iterator from a `Segment` and a function
     /// representing a predicate on each `ScoredMove`. If the predicate returns `true` it is
     /// yielded, otherwise it is skipped (and its `yielded` flag remains unset).
     fn from(segment: Segment<'a>, pred: fn(&ScoredMove) -> bool) -> Self {
@@ -136,6 +137,8 @@ impl<'a> Iterator for SelectionSort<'a> {
         }
     }
 }
+
+type PromotionsIter<'a> = Chain<SelectionSort<'a>, SelectionSort<'a>>;
 
 /// An iterator over the killer moves. These are not scored, but they must each be checked against
 /// the hash table move to ensure that they haven't already been yielded, to avoid a re-search.
@@ -229,8 +232,7 @@ impl<'a> Iterator for QuietsIter<'a> {
 /// `OrderedMoves:load_next_phase`, passing a `Loader`. If this returns `true`, then there are move
 /// moves to be yielded. Whenever there are more moves to be generated, `&mut OrderedMoves` is
 /// `IntoIterator` and will yield those moves. The moves will only be yielded _once_, so it is
-/// probably confusing to produce this iterator from `&mut OrderedMoves`. (TODO: We should have a method
-/// which returns it instead, to make clearer that it's a one time thing).
+/// probably confusing to produce this iterator from `&mut OrderedMoves`.
 ///
 /// `OrderedMoves` is built on top of an `ArrayVec`, as this appears to be significantly more
 /// performant than any solution involving overflows or allocations, since there is very little
@@ -589,7 +591,9 @@ impl OrderedMoves {
                     loader.score_quiets(self.quiets_segment_mut().into());
                 }
                 BadCaptures => { /* Nothing to do here */ }
-                Underpromotions => { /* Nothing to do here */ }
+                Underpromotions => {
+                    self.prepare_underpromotions();
+                }
             }
         }
 
@@ -600,76 +604,8 @@ impl OrderedMoves {
         self.phase
     }
 
-    #[inline]
-    fn hash_iter<'a>(&'a mut self) -> SelectionSort<'a> {
-        SelectionSort::from(self.hash_segment(), |_| true)
-    }
-
-    fn promo_iter<'a>(&'a mut self) -> SelectionSort<'a> {
-        let segment = self.promo_segment_mut();
-
-        // First, score the captures higher than the non-captures. Note that we do not run SEE on
-        // promotion moves.
-        let scorer = Scorer::from(&mut *segment);
-
-        for (mov, score) in scorer {
-            if mov.is_capture() {
-                *score = Score::cp(1);
-            }
-        }
-
-        SelectionSort::from(segment, |_| true)
-    }
-
-    #[inline]
-    fn good_capt_iter<'a>(&'a mut self) -> SelectionSort<'a> {
-        let segment = self.capt_segment();
-        SelectionSort::from(segment, |sm| sm.1 > Score::zero())
-    }
-
-    #[inline]
-    fn equal_capt_iter<'a>(&'a mut self) -> SelectionSort<'a> {
-        let segment = self.capt_segment();
-        SelectionSort::from(segment, |sm| sm.1 == Score::zero())
-    }
-
-    #[inline]
-    fn killer_iter<'a>(&'a mut self) -> KillerIter<'a> {
-        let killer_segment = self.killer_segment().iter();
-        let hash_segment = self.hash_segment();
-
-        KillerIter {
-            killer_segment,
-            hash_segment,
-        }
-    }
-
-    #[inline]
-    fn quiets_iter<'a>(&'a mut self) -> QuietsIter<'a> {
-        let hash_segment = self.hash_segment();
-        let killer_segment = self.killer_segment();
-        let quiets_segment = self.quiets_segment();
-
-        QuietsIter {
-            quiets_sel_sort: SelectionSort::from(quiets_segment, |_| true),
-            hash_segment,
-            killer_segment,
-        }
-    }
-
-    #[inline]
-    fn bad_capt_iter<'a>(&'a mut self) -> SelectionSort<'a> {
-        let segment = self.capt_segment();
-
-        // It's technically fine to have a no-op for the predicate if these are coming
-        // last, since all the other captures will have been yielded already, and the only ones
-        // left with `yielded = false` are the bad captures. So we can save an op but be a bit
-        // less explicit and brittle / less resilient to future changes.
-        SelectionSort::from(segment, |sm| sm.1 < Score::zero())
-    }
-
-    fn underpromo_iter<'a>(&'a mut self) -> SelectionSort<'a> {
-        let mut ptr = unsafe { self.buf.0.over_bounds_ptr_mut() };
+    fn prepare_underpromotions(&mut self) {
+        let mut ptr = unsafe { self.buf.0.over_bounds_ptr() as *mut Entry };
 
         #[inline]
         fn entry(mov: &Entry, pt: PieceType) -> Entry {
@@ -692,28 +628,88 @@ impl OrderedMoves {
         }
 
         self.set_underpromo_segment();
-        let underpromo_segment = self.underpromo_segment();
+    }
 
-        // Note that the captures will already be scored to come ahead of the non-captures, since
-        // we copied the entries from the set of queen promotions, which got scored during their
-        // phase.
-        SelectionSort::from(underpromo_segment, |_| true)
+    #[inline]
+    fn hash_iter<'a>(&'a self) -> SelectionSort<'a> {
+        SelectionSort::from(self.hash_segment(), |_| true)
+    }
+
+    #[inline]
+    fn promo_iter<'a>(&'a self) -> PromotionsIter<'a> {
+        let segment = self.promo_segment();
+        SelectionSort::from(segment, |m| m.0.is_capture())
+            .chain(SelectionSort::from(segment, |_| true))
+    }
+
+    #[inline]
+    fn good_capt_iter<'a>(&'a self) -> SelectionSort<'a> {
+        let segment = self.capt_segment();
+        SelectionSort::from(segment, |sm| sm.1 > Score::zero())
+    }
+
+    #[inline]
+    fn equal_capt_iter<'a>(&'a self) -> SelectionSort<'a> {
+        let segment = self.capt_segment();
+        SelectionSort::from(segment, |sm| sm.1 == Score::zero())
+    }
+
+    #[inline]
+    fn killer_iter<'a>(&'a self) -> KillerIter<'a> {
+        let killer_segment = self.killer_segment().iter();
+        let hash_segment = self.hash_segment();
+
+        KillerIter {
+            killer_segment,
+            hash_segment,
+        }
+    }
+
+    #[inline]
+    fn quiets_iter<'a>(&'a self) -> QuietsIter<'a> {
+        let hash_segment = self.hash_segment();
+        let killer_segment = self.killer_segment();
+        let quiets_segment = self.quiets_segment();
+
+        QuietsIter {
+            quiets_sel_sort: SelectionSort::from(quiets_segment, |_| true),
+            hash_segment,
+            killer_segment,
+        }
+    }
+
+    #[inline]
+    fn bad_capt_iter<'a>(&'a self) -> SelectionSort<'a> {
+        let segment = self.capt_segment();
+
+        // It's technically fine to have a no-op for the predicate if these are coming
+        // last, since all the other captures will have been yielded already, and the only ones
+        // left with `yielded = false` are the bad captures. So we can save an op but be a bit
+        // less explicit and brittle / less resilient to future changes.
+        SelectionSort::from(segment, |sm| sm.1 < Score::zero())
+    }
+
+    fn underpromo_iter<'a>(&'a self) -> PromotionsIter<'a> {
+        let segment = self.underpromo_segment();
+
+        SelectionSort::from(segment, |m| m.0.is_capture())
+            .chain(SelectionSort::from(segment, |_| true))
     }
 }
 
 enum IterInner<'a> {
     Empty(std::iter::Empty<&'a Move>),
     Hash(SelectionSort<'a>),
-    QueenPromotions(SelectionSort<'a>),
+    QueenPromotions(PromotionsIter<'a>),
     GoodCaptures(SelectionSort<'a>),
     EqualCaptures(SelectionSort<'a>),
     Killers(KillerIter<'a>),
     Quiet(QuietsIter<'a>),
     BadCaptures(SelectionSort<'a>),
-    Underpromotions(SelectionSort<'a>),
+    Underpromotions(PromotionsIter<'a>),
 }
 
-pub struct Iter<'a>(IterInner<'a>);
+pub struct PhaseIter<'a>(IterInner<'a>);
 
 impl<'a> Iterator for IterInner<'a> {
     type Item = &'a Move;
@@ -735,7 +731,7 @@ impl<'a> Iterator for IterInner<'a> {
     }
 }
 
-impl<'a> Iterator for Iter<'a> {
+impl<'a> Iterator for PhaseIter<'a> {
     type Item = &'a Move;
 
     #[inline(always)]
@@ -747,9 +743,9 @@ impl<'a> Iterator for Iter<'a> {
     }
 }
 
-impl<'a> IntoIterator for &'a mut OrderedMoves {
+impl<'a> IntoIterator for &'a OrderedMoves {
     type Item = &'a Move;
-    type IntoIter = Iter<'a>;
+    type IntoIter = PhaseIter<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
         use Phase::*;
@@ -765,7 +761,7 @@ impl<'a> IntoIterator for &'a mut OrderedMoves {
             Underpromotions => IterInner::Underpromotions(self.underpromo_iter()),
         };
 
-        Iter(iter)
+        PhaseIter(iter)
     }
 }
 
@@ -796,7 +792,7 @@ mod tests {
             } else {
                 let mut moves = OrderedMoves::new();
                 while moves.load_next_phase(TestLoader::from(&mut self.pos)) {
-                    for mov in &mut moves {
+                    for mov in &moves {
                         self.pos.make_move(&mov);
                         self.perft_recurse(depth - 1);
                         self.pos.unmake_move();

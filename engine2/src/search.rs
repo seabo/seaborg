@@ -164,7 +164,7 @@ impl Search {
             let mut c = 0;
 
             while moves.load_next_phase(MoveLoader::from(self)) {
-                for mov in &mut moves {
+                for mov in &moves {
                     c += 1;
 
                     self.pos.make_move(mov);
