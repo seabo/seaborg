@@ -228,6 +228,16 @@ impl UndoableMove {
             format!("{}{}", self.orig, self.dest)
         }
     }
+
+    /// Convert an `UndoableMove` into the equivalent `Move`.
+    pub fn to_move(&self) -> Move {
+        Move {
+            orig: self.orig,
+            dest: self.dest,
+            promo_piece_type: self.promo_piece_type,
+            ty: self.ty,
+        }
+    }
 }
 
 impl fmt::Display for UndoableMove {

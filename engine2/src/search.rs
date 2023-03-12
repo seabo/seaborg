@@ -39,6 +39,9 @@ impl Search {
             TimingMode::Timed(_) => todo!(),
             TimingMode::MoveTime(_) => todo!(),
             TimingMode::Depth(d) => {
+                // TODO: turn this into a proper use error.
+                assert!(d > 0);
+
                 // Some bookeeping and prep.
                 self.pvt = PVTable::new(d);
                 self.trace.commence_search();
@@ -88,7 +91,6 @@ impl Search {
                         .collect::<Vec<String>>()
                         .join(" ")
                 );
-                // (self.pos, score)
                 println!("score:     {:?}", score);
                 (score, self.pos)
             }
@@ -140,8 +142,21 @@ impl Search {
         self.trace.visit_node();
 
         if depth == 0 {
-            // self.quiesce(alpha, beta)
-            self.evaluate()
+            let score = self.evaluate();
+            // let score = self.quiesce(alpha, beta);
+            if score == Score::mate(0) {
+                self.pvt.copy_to(
+                    1,
+                    self.pos
+                        .history()
+                        .last()
+                        .expect(
+                            "we cannot search to depth 0, so there must be a move in the history",
+                        )
+                        .to_move(),
+                );
+            }
+            score
         } else {
             let mut max = Score::INF_N;
 
@@ -164,6 +179,7 @@ impl Search {
                     }
 
                     if score > max {
+                        use core::position::Square;
                         self.pvt.copy_to(depth, *mov);
                         max = score;
                         if score > alpha {
