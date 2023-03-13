@@ -252,7 +252,7 @@ impl Search {
     /// evaluation functions in a negamax framework, and have to return the evaluation from the
     /// perspective of the side to move.
     #[inline(always)]
-    fn pov(&self) -> i32 {
+    fn pov(&self) -> i16 {
         match self.pos.turn() {
             Player::WHITE => 1,
             Player::BLACK => -1,
