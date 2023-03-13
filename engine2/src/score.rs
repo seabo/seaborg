@@ -12,7 +12,7 @@ use std::ops::{Add, Neg, Sub};
 /// We had to write a rather complex custom implementation of `std::cmp::Ord` for this data
 /// structure, in order to use it effectively as a score. This involved a match statement with lots
 /// of arms to handle the full cartesian product of variants. This is too expensive for a structure
-/// on the hot path. We can instead implement the whole thing with a single i32 and some judicious
+/// on the hot path. We can instead implement the whole thing with a single i16 and some judicious
 /// choices of value.
 ///
 /// * -10_000 - 10_000 -> centipawn evaluations
@@ -25,7 +25,7 @@ use std::ops::{Add, Neg, Sub};
 /// * -30_000 -> negative infinity
 /// * 30_000 -> positive infinity
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Score(i32);
+pub struct Score(i16);
 
 impl Score {
     /// Represents negative infinity.
@@ -60,14 +60,14 @@ impl Score {
         debug_assert!(n.abs() <= 100);
 
         if n > 0 {
-            Score(20_100 - n as i32)
+            Score(20_100 - n as i16)
         } else {
-            Score(-20_100 - n as i32)
+            Score(-20_100 - n as i16)
         }
     }
 
     /// Construct a score representing a `x` centipawns.
-    pub fn cp(x: i32) -> Self {
+    pub fn cp(x: i16) -> Self {
         debug_assert!(x < 10_000);
         debug_assert!(x > -10_000);
         Score(x)
