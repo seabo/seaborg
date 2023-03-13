@@ -13,4 +13,5 @@ pub mod see;
 pub mod session;
 pub mod time;
 pub mod trace;
+pub mod tt;
 pub mod uci;
