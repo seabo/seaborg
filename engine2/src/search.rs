@@ -161,20 +161,11 @@ impl Search {
             Empty(_) => {}
         }
 
-        if depth == 0 {
+        if depth == 1 {
             // let score = self.evaluate();
             let score = self.quiesce(alpha, beta);
             if score == Score::mate(0) {
-                self.pvt.copy_to(
-                    1,
-                    self.pos
-                        .history()
-                        .last()
-                        .expect(
-                            "we cannot search to depth 0, so there must be a move in the history",
-                        )
-                        .to_move(),
-                );
+                self.pvt.pv_leaf_at(0);
             }
             score
         } else {
@@ -186,10 +177,8 @@ impl Search {
             let hash_move = tt_entry.and_then(|tte| {
                 let mov = tte.read().mov.to_move(&self.pos);
                 if self.pos.valid_move(&mov) {
-                    // println!("hash hit");
                     Some(mov)
                 } else {
-                    // println!("key collision");
                     None
                 }
             });
