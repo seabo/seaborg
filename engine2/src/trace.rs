@@ -13,6 +13,12 @@ pub struct Tracer {
     q_nodes_visited: usize,
     /// The number of nodes we skip due to a failed SEE check.
     see_skipped_nodes: usize,
+    /// The number of times we had a hash hit which was useable to return immediately.
+    hash_hits: usize,
+    /// The number of times we had a hash collision.
+    hash_collisions: usize,
+    /// The number of times we had a hash clash (same table slot, different position).
+    hash_clashes: usize,
     /// Records the duration between start and end of search. Only populated with `Some(duration)`
     /// when `end_search` is called.
     elapsed: Option<Duration>,
@@ -27,6 +33,9 @@ impl Tracer {
             nodes_visited: 0,
             q_nodes_visited: 0,
             see_skipped_nodes: 0,
+            hash_hits: 0,
+            hash_collisions: 0,
+            hash_clashes: 0,
             elapsed: None,
         }
     }
@@ -59,9 +68,42 @@ impl Tracer {
         self.see_skipped_nodes += 1;
     }
 
+    /// Record a hash hit.
+    #[inline(always)]
+    pub fn hash_hit(&mut self) {
+        self.hash_hits += 1;
+    }
+
+    /// Record a hash collisions.
+    #[inline(always)]
+    pub fn hash_collision(&mut self) {
+        self.hash_collisions += 1;
+    }
+
+    /// Record a hash clash.
+    #[inline(always)]
+    pub fn hash_clash(&mut self) {
+        self.hash_clashes += 1;
+    }
+
     /// The number of nodes skipped due to SEE check failures during search.
     pub fn see_skipped_nodes(&self) -> usize {
         self.see_skipped_nodes
+    }
+
+    /// The number of hash hits recorded during search.
+    pub fn hash_hits(&self) -> usize {
+        self.hash_hits
+    }
+
+    /// The number of hash collisions recorded during search.
+    pub fn hash_collisions(&self) -> usize {
+        self.hash_collisions
+    }
+
+    /// The number of hash clashes recorded during search.
+    pub fn hash_clashes(&self) -> usize {
+        self.hash_clashes
     }
 
     /// The number of nodes visited during main search.
