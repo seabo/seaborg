@@ -19,6 +19,11 @@ pub enum Piece {
 }
 
 impl Piece {
+    #[inline(always)]
+    pub fn is_none(&self) -> bool {
+        *self as u8 == 0
+    }
+
     /// Returns the type of the given piece.
     pub fn type_of(&self) -> PieceType {
         match *self {
@@ -45,6 +50,7 @@ impl Piece {
     /// Panics if the given `Piece` is `Piece::None`. This function
     /// should only be used when the `Piece` is guaranteed to not be
     /// `Piece::None`.
+    // TODO: this can be converted to a single arithmetic op using the underlying representation.
     pub fn player(&self) -> Player {
         match *self {
             Piece::None => panic!(),

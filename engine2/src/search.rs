@@ -4,9 +4,11 @@ use super::pv_table::PVTable;
 use super::score::Score;
 use super::time::TimingMode;
 use super::trace::Tracer;
+use super::tt::{Bound, Table, WritableEntry};
 
 use core::mono_traits::{All, Captures, Legal, QueenPromotions, Quiets};
-use core::movelist::BasicMoveList;
+use core::mov::Move;
+use core::movelist::{BasicMoveList, MoveList};
 use core::position::{Player, Position};
 
 use separator::Separatable;
@@ -23,6 +25,8 @@ pub struct Search {
     pvt: PVTable,
     /// Tracer to track search stats.
     trace: Tracer,
+    /// The transposition table.
+    tt: Table,
 }
 
 impl Search {
@@ -31,6 +35,7 @@ impl Search {
             pos,
             pvt: PVTable::new(8),
             trace: Tracer::new(),
+            tt: Table::new(1024),
         }
     }
 
@@ -141,6 +146,21 @@ impl Search {
     fn alphabeta_ordered(&mut self, mut alpha: Score, beta: Score, depth: u8) -> Score {
         self.trace.visit_node();
 
+        let mut tt_entry: Option<WritableEntry<'_>> = None;
+        use super::tt::Probe::*;
+        match self.tt.probe(&self.pos) {
+            Hit(entry) => {
+                let e = entry.read();
+                if e.depth >= depth && e.bound() == Bound::Exact {
+                    return e.score;
+                } else {
+                    tt_entry = Some(entry);
+                }
+            }
+            Clash(_) => {}
+            Empty(_) => {}
+        }
+
         if depth == 0 {
             // let score = self.evaluate();
             let score = self.quiesce(alpha, beta);
@@ -162,8 +182,19 @@ impl Search {
 
             let mut moves = OrderedMoves::new();
             let mut c = 0;
+            let mut did_raise_alpha = false;
+            let hash_move = tt_entry.and_then(|tte| {
+                let mov = tte.read().mov.to_move(&self.pos);
+                if self.pos.valid_move(&mov) {
+                    // println!("hash hit");
+                    Some(mov)
+                } else {
+                    // println!("key collision");
+                    None
+                }
+            });
 
-            while moves.load_next_phase(MoveLoader::from(self)) {
+            while moves.load_next_phase(MoveLoader::from(self, hash_move)) {
                 for mov in &moves {
                     c += 1;
 
@@ -175,6 +206,13 @@ impl Search {
                     self.pos.unmake_move();
 
                     if score >= beta {
+                        self.tt.probe(&self.pos).into_inner().write(
+                            &self.pos,
+                            score,
+                            depth,
+                            Bound::Lower,
+                            mov,
+                        );
                         return score;
                     }
 
@@ -182,6 +220,7 @@ impl Search {
                         self.pvt.copy_to(depth, *mov);
                         max = score;
                         if score > alpha {
+                            did_raise_alpha = true;
                             alpha = score;
                         }
                     }
@@ -191,11 +230,38 @@ impl Search {
             // If we had no moves.
             if c == 0 {
                 self.pvt.pv_leaf_at(depth);
-                return if self.pos.in_check() {
+
+                let score = if self.pos.in_check() {
                     Score::mate(0)
                 } else {
                     Score::cp(0)
                 };
+
+                self.tt.probe(&self.pos).into_inner().write(
+                    &self.pos,
+                    score,
+                    depth,
+                    Bound::Exact,
+                    &core::mov::Move::null(),
+                );
+            }
+
+            if did_raise_alpha {
+                self.tt.probe(&self.pos).into_inner().write(
+                    &self.pos,
+                    max,
+                    depth,
+                    Bound::Exact,
+                    &core::mov::Move::null(),
+                );
+            } else {
+                self.tt.probe(&self.pos).into_inner().write(
+                    &self.pos,
+                    max,
+                    depth,
+                    Bound::Upper,
+                    &core::mov::Move::null(),
+                );
             }
 
             max
@@ -318,18 +384,25 @@ impl Search {
 
 pub struct MoveLoader<'a> {
     search: &'a mut Search,
+    hash_move: Option<Move>,
 }
 
 impl<'a> MoveLoader<'a> {
     /// Create a `MoveLoader` from the passed `Search`.
     #[inline(always)]
-    pub fn from(search: &'a mut Search) -> Self {
-        MoveLoader { search }
+    pub fn from(search: &'a mut Search, hash_move: Option<Move>) -> Self {
+        MoveLoader { search, hash_move }
     }
 }
 
 impl<'a> Loader for MoveLoader<'a> {
-    fn load_hash(&mut self, _movelist: &mut ScoredMoveList) {}
+    #[inline]
+    fn load_hash(&mut self, movelist: &mut ScoredMoveList) {
+        match self.hash_move {
+            Some(mv) => movelist.push(mv),
+            None => {}
+        }
+    }
 
     fn load_promotions(&mut self, movelist: &mut ScoredMoveList) {
         self.search

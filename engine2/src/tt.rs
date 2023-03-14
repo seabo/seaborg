@@ -10,8 +10,6 @@ use num_traits::FromPrimitive;
 use std::cell::UnsafeCell;
 use std::marker::PhantomData;
 
-const ZOBRIST_MASK: u64 = 0xFFFF;
-
 /// The validity of a stored `Score`.
 ///
 /// Sometimes, we will store exact values in the transposition table. Other times, a node will
@@ -99,17 +97,17 @@ impl TTMove {
     /// In the case that `TTMove` is a pawn promotion, the returned move will have the promotion
     /// piece type set to `Queen`.
     pub fn to_move(&self, _pos: &Position) -> Move {
-        //    let is_promotion;
-        //    let is_en_passant;
-        //    let is_castle;
-        //    let is_capture;
-        //    let is_quiet;
+        //  let is_promotion;
+        //  let is_en_passant;
+        //  let is_castle;
+        //  let is_capture;
+        //  let is_quiet;
 
-        //    let bitflags = todo!(); // but together the bit flags
+        //  let bitflags = todo!(); // but together the bit flags
 
-        //    if is_promotion {
-        //        // use queen promotion
-        //    }
+        //  if is_promotion {
+        //      // use queen promotion
+        //  }
 
         Move::build(self.orig, self.dest, None, MoveType::QUIET)
     }
@@ -128,11 +126,11 @@ impl Default for TTMove {
 #[derive(Clone, Debug, Default)]
 #[repr(align(8))]
 pub struct Entry {
-    sig: u16,
-    depth: u8,
-    gen_bound: GenBound,
-    score: i16,
-    mov: TTMove,
+    pub sig: u16,
+    pub depth: u8,
+    pub gen_bound: GenBound,
+    pub score: Score,
+    pub mov: TTMove,
 }
 
 impl Entry {
@@ -177,8 +175,8 @@ impl<'a> WritableEntry<'a> {
 
     /// Write data to the entry.
     #[inline]
-    pub fn write(&self, pos: &Position, _score: Score, depth: u8, _bound: Bound, mov: &Move) {
-        let sig = (pos.zobrist().0 & ZOBRIST_MASK) as u16;
+    pub fn write(&self, pos: &Position, score: Score, depth: u8, _bound: Bound, mov: &Move) {
+        let sig = (pos.zobrist().0 >> 48) as u16;
 
         // SAFETY: we know that the `'a` reference will be outlived by the table, so we can never
         // end up writing to a completely unrelated address. However, this may well be racy or
@@ -189,7 +187,7 @@ impl<'a> WritableEntry<'a> {
                 sig,
                 depth,
                 gen_bound: GenBound::from_raw_parts(43, Bound::Exact),
-                score: 240,
+                score,
                 mov: mov.into(),
             }
         }
@@ -277,7 +275,7 @@ impl Table {
     #[inline(always)]
     pub fn probe<'a>(&'a self, pos: &Position) -> Probe<'a> {
         let idx = self.idx(pos.zobrist().0);
-        let sig = (pos.zobrist().0 & ZOBRIST_MASK) as u16;
+        let sig = (pos.zobrist().0 >> 48) as u16;
 
         // We don't need to bounds check `idx` because it is guaranteed to be in bounds.
         let entry = unsafe { self.data.get_unchecked(idx).get() };
@@ -315,6 +313,27 @@ pub enum Probe<'a> {
     /// Represents finding an as-yet-unwritten slot in the table. The caller can safely write new
     /// data to it without checking any replacement conditions.
     Empty(WritableEntry<'a>),
+}
+
+impl<'a> Probe<'a> {
+    #[inline(always)]
+    pub fn into_inner(self) -> WritableEntry<'a> {
+        use Probe::*;
+        match self {
+            Hit(e) => e,
+            Clash(e) => e,
+            Empty(e) => e,
+        }
+    }
+
+    #[inline(always)]
+    pub fn is_hit(&self) -> bool {
+        use Probe::*;
+        match self {
+            Hit(_) => true,
+            _ => false,
+        }
+    }
 }
 
 #[cfg(test)]

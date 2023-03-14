@@ -1,7 +1,7 @@
 use crate::bb::Bitboard;
 use crate::mono_traits::{
-    All, Bishop, Black, Captures, Generate, King, Knight, Legal, Legality, PieceTrait, Promotions,
-    PseudoLegal, Queen, QueenPromotions, Quiets, Rook, Side, White,
+    All, Bishop, Black, Captures, Generate, King, Knight, Legal, Legality, Pawn, PieceTrait,
+    Promotions, PseudoLegal, Queen, QueenPromotions, Quiets, Rook, Side, White,
 };
 use crate::mov::{Move, MoveType};
 use crate::movelist::{BasicMoveList, Frame, MoveList, MoveStack};
@@ -68,6 +68,13 @@ impl MoveGen {
     ) {
         InnerMoveGen::<ML>::generate::<G, L>(position, movelist);
     }
+
+    /// Determine whether the passed move is a valid pseudolegal move in the given position. This
+    /// means that the move may leave the king in check. Use this to determine if a move retrieved
+    /// from transposition table or killer tables etc. are actually valid for the position.
+    pub fn valid_move(position: &Position, mov: &Move) -> bool {
+        InnerMoveGen::<DummyMoveList>::valid_move::<All, Legal>(position, mov, &mut DummyMoveList)
+    }
 }
 
 pub struct InnerMoveGen<'a, MP: MoveList + 'a> {
@@ -81,7 +88,74 @@ pub struct InnerMoveGen<'a, MP: MoveList + 'a> {
     them_occ: Bitboard,
 }
 
+#[derive(Debug)]
+struct DummyMoveList;
+impl MoveList for DummyMoveList {
+    fn len(&self) -> usize {
+        0
+    }
+
+    fn push(&mut self, _mv: Move) {}
+    fn empty() -> Self {
+        Self
+    }
+    fn clear(&mut self) {}
+}
+
 impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
+    /// Determine whether the passed move is a valid pseudolegal move in the given position.
+    fn valid_move<G: Generate, L: Legality>(
+        position: &'a Position,
+        mov: &'a Move,
+        movelist: &mut MP,
+    ) -> bool {
+        match position.turn() {
+            Player::WHITE => {
+                InnerMoveGen::<MP>::valid_move_helper::<G, L, White>(position, mov, movelist)
+            }
+            Player::BLACK => {
+                InnerMoveGen::<MP>::valid_move_helper::<G, L, Black>(position, mov, movelist)
+            }
+        }
+    }
+
+    fn valid_move_helper<G: Generate, L: Legality, PL: Side>(
+        position: &'a Position,
+        mov: &'a Move,
+        movelist: &'a mut MP,
+    ) -> bool {
+        let piece = position.piece_at_sq(mov.orig());
+        let orig = mov.orig();
+        let dest_bb = mov.dest().to_bb();
+        let mut movegen = Self::get_self::<PL>(position, movelist);
+
+        if movegen.position.in_check() {
+            if piece.is_none() || piece.player() != movegen.position.turn() {
+                return false;
+            }
+
+            return match piece.type_of() {
+                PieceType::None => false,
+                PieceType::Pawn => movegen.valid_evasion::<G, PL, L, Pawn>(dest_bb, orig),
+                PieceType::Rook => movegen.valid_evasion::<G, PL, L, Rook>(dest_bb, orig),
+                PieceType::Knight => movegen.valid_evasion::<G, PL, L, Knight>(dest_bb, orig),
+                PieceType::Bishop => movegen.valid_evasion::<G, PL, L, Bishop>(dest_bb, orig),
+                PieceType::Queen => movegen.valid_evasion::<G, PL, L, Queen>(dest_bb, orig),
+                PieceType::King => movegen.valid_evasion::<G, PL, L, King>(dest_bb, orig),
+            };
+        }
+
+        match piece.type_of() {
+            PieceType::None => false,
+            PieceType::Pawn => movegen.valid_pawn_move::<G, PL, L>(dest_bb, orig.to_bb()),
+            PieceType::Rook => movegen.valid_move_per_piece::<G, PL, Rook, L>(dest_bb, orig),
+            PieceType::Knight => movegen.valid_move_per_piece::<G, PL, Knight, L>(dest_bb, orig),
+            PieceType::Bishop => movegen.valid_move_per_piece::<G, PL, Bishop, L>(dest_bb, orig),
+            PieceType::Queen => movegen.valid_move_per_piece::<G, PL, Queen, L>(dest_bb, orig),
+            PieceType::King => movegen.valid_move_per_piece::<G, PL, King, L>(dest_bb, orig),
+        }
+    }
+
     /// Generate all pseudo-legal moves in the given position
     #[inline(always)]
     fn generate<G: Generate, L: Legality>(
@@ -194,12 +268,6 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
             Bitboard::ALL
         };
 
-        // let target_sqs = if captures_only {
-        //     self.them_occ
-        // } else {
-        //     Bitboard::ALL
-        // };
-
         let ksq = self.position.king_sq(P::player());
 
         // Only generate the king escapes if we are _not_ doing promotion moves.
@@ -250,6 +318,67 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
         }
     }
 
+    #[inline(always)]
+    fn valid_evasion<G: Generate, PL: Side, L: Legality, P: PieceTrait>(
+        &mut self,
+        target: Bitboard,
+        orig: Square,
+    ) -> bool {
+        debug_assert!(self.position.in_check());
+
+        let ksq = self.position.king_sq(PL::player());
+
+        if P::kind() == PieceType::King {
+            if ksq != orig {
+                return false;
+            }
+
+            // Only generate the king escapes if we are _not_ doing promotion moves.
+            if G::kind() != Generation::Promotions && G::kind() != Generation::QueenPromotions {
+                let mut slider_attacks = Bitboard(0);
+
+                // Pieces that could possibly attack the king with sliding attacks
+                let mut sliders = self.position.checkers()
+                    & !self
+                        .position
+                        .piece_two_bb_both_players(PieceType::Pawn, PieceType::Knight);
+
+                // All the squares that are attacked by sliders
+                while let Some((check_sq, check_sq_bb)) = sliders.pop_some_lsb_and_bit() {
+                    slider_attacks |= Bitboard(line_bb(check_sq, ksq)) ^ check_sq_bb;
+                }
+
+                // Possible king moves, where the king cannot move into a slider / own pieces
+                let k_moves = king_moves(ksq) & !slider_attacks & !self.us_occ & target;
+
+                // Separate captures and non-captures
+                if k_moves.is_not_empty() {
+                    return true;
+                }
+            }
+        } else {
+            // If there is only one checking square, we can block or capture the piece
+            if !(self.position.checkers().more_than_one()) {
+                let checking_sq = Square(self.position.checkers().bsf() as u8);
+
+                // Squares that allow a block or captures of the sliding piece
+                let tgt = target & (Bitboard(between_bb(checking_sq, ksq)) | checking_sq.to_bb());
+
+                return match P::kind() {
+                    PieceType::None => unreachable!(), // checked for this earlier
+                    PieceType::Pawn => self.valid_pawn_move::<G, PL, L>(tgt, orig.to_bb()),
+                    PieceType::Rook => self.valid_move_per_piece::<G, PL, Rook, L>(tgt, orig),
+                    PieceType::Knight => self.valid_move_per_piece::<G, PL, Knight, L>(tgt, orig),
+                    PieceType::Bishop => self.valid_move_per_piece::<G, PL, Bishop, L>(tgt, orig),
+                    PieceType::Queen => self.valid_move_per_piece::<G, PL, Queen, L>(tgt, orig),
+                    PieceType::King => self.valid_move_per_piece::<G, PL, King, L>(tgt, orig),
+                };
+            }
+        }
+
+        false
+    }
+
     /// Generate the moves for a `Knight`, `King`, `Rook`, `Bishop` or `Queen`. Generates either
     /// captures or non-captures, according to the generic parameter `G: Generate`.
     ///
@@ -275,6 +404,29 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
                 let mut non_captures_bb: Bitboard = moves_bb & !self.them_occ;
                 self.move_append_from_bb_flag::<L>(&mut non_captures_bb, orig, MoveType::QUIET);
             }
+        }
+    }
+
+    #[inline(always)]
+    fn valid_move_per_piece<G: Generate, PL: Side, P: PieceTrait, L: Legality>(
+        &mut self,
+        target: Bitboard,
+        orig: Square,
+    ) -> bool {
+        let piece_bb = self.position.piece_bb(PL::player(), P::kind()) & orig.to_bb();
+        if piece_bb.is_empty() {
+            return false;
+        }
+
+        let moves_bb = self.moves_bb::<P>(orig) & !self.us_occ & target;
+
+        if G::kind() == Generation::All || G::kind() == Generation::Captures {
+            (moves_bb & self.them_occ).is_not_empty()
+        } else if G::kind() == Generation::All || G::kind() == Generation::Quiets {
+            (moves_bb & !self.them_occ).is_not_empty()
+        } else {
+            // We don't call this function for other generation types.
+            unreachable!()
         }
     }
 
@@ -376,6 +528,100 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
                 }
             }
         }
+    }
+
+    #[inline(always)]
+    fn valid_pawn_move<G: Generate, PL: Side, L: Legality>(
+        &mut self,
+        target: Bitboard,
+        orig: Bitboard,
+    ) -> bool {
+        let (rank_7, rank_3): (Bitboard, Bitboard) = if PL::player() == Player::WHITE {
+            (Bitboard::RANK_7, Bitboard::RANK_3)
+        } else {
+            (Bitboard::RANK_2, Bitboard::RANK_6)
+        };
+
+        let pawn = self.position.piece_bb(PL::player(), PieceType::Pawn) & orig;
+
+        // Separated out for promotion moves
+        let pawns_rank_7: Bitboard = pawn & rank_7;
+
+        // Separated out for non promotion moves
+        let pawns_not_rank_7: Bitboard = pawn & !rank_7;
+
+        let enemies = self.them_occ;
+
+        // Single and double pawn moves
+        let empty_squares = !self.position.occupied();
+
+        if G::kind() == Generation::All || G::kind() == Generation::Quiets {
+            let mut push_one = empty_squares & PL::shift_up(pawns_not_rank_7);
+            let mut push_two = PL::shift_up(push_one & rank_3) & empty_squares;
+
+            push_one &= target;
+            push_two &= target;
+
+            if push_one.is_not_empty() {
+                return true;
+            }
+
+            if push_two.is_not_empty() {
+                return true;
+            }
+        }
+
+        if G::kind() == Generation::All
+            || G::kind() == Generation::Promotions
+            || G::kind() == Generation::QueenPromotions
+        {
+            // Promotions
+            if pawns_rank_7.is_not_empty() {
+                let no_cap_promo = target & PL::shift_up(pawns_rank_7) & empty_squares;
+                let left_cap_promo = target & PL::shift_up_left(pawns_rank_7) & enemies;
+                let right_cap_promo = target & PL::shift_up_right(pawns_rank_7) & enemies;
+
+                if no_cap_promo.is_not_empty() {
+                    return true;
+                }
+
+                if left_cap_promo.is_not_empty() {
+                    return true;
+                }
+
+                if right_cap_promo.is_not_empty() {
+                    return true;
+                }
+            }
+        }
+
+        if G::kind() == Generation::All || G::kind() == Generation::Captures {
+            // Captures
+            let left_cap = target & PL::shift_up_left(pawns_not_rank_7) & enemies;
+            let right_cap = target & PL::shift_up_right(pawns_not_rank_7) & enemies;
+
+            if left_cap.is_not_empty() {
+                return true;
+            }
+
+            if right_cap.is_not_empty() {
+                return true;
+            }
+
+            if let Some(ep_square) = self.position.ep_square() {
+                // TODO: add an `assert_eq` to check that the rank of ep_square is 6th
+                // rank from the moving player's perspective
+
+                let ep_cap =
+                    pawns_not_rank_7 & Bitboard(pawn_attacks_from(ep_square, PL::opp_player()));
+
+                if ep_cap.is_not_empty() {
+                    return true;
+                }
+            }
+        }
+
+        false
     }
 
     // Generates castling for both sides

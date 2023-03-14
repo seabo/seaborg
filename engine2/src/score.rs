@@ -24,7 +24,7 @@ use std::ops::{Add, Neg, Sub};
 ///   to mate is better.
 /// * -30_000 -> negative infinity
 /// * 30_000 -> positive infinity
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Copy, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Score(i16);
 
 impl Score {

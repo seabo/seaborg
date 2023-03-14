@@ -16,6 +16,7 @@ use std::slice::Iter as SliceIter;
 
 pub type ScoredMove = (Move, Score);
 
+/// An entry in the move ordering `ArrayVec` buffer.
 #[derive(Debug)]
 struct Entry {
     sm: ScoredMove,

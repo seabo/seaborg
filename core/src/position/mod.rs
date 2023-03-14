@@ -11,7 +11,7 @@ use crate::bb::Bitboard;
 use crate::masks::{CASTLING_PATH, CASTLING_ROOK_START, FILE_BB, PLAYER_CNT, RANK_BB};
 use crate::mono_traits::{All, Generate, Legal, Legality, Side};
 use crate::mov::{Move, MoveType, UndoableMove};
-use crate::movegen::{bishop_moves, rook_moves, MoveGen};
+use crate::movegen::{bishop_moves, queen_moves, rook_moves, MoveGen};
 use crate::movelist::{BasicMoveList, Frame, MoveList, MoveStack};
 use crate::precalc::boards::{aligned, between_bb, king_moves, knight_moves, pawn_attacks_from};
 
@@ -793,12 +793,8 @@ impl Position {
     ///
     /// This method does not actually play the move on the board, but uses faster techniques
     /// to determine whether the move is legal.
-    ///
-    /// Note: this function expects the move not to be of type `MoveType::NULL`.
     pub fn legal_move(&self, mov: &Move) -> bool {
-        // let us = self.turn();
         let them = !self.turn();
-        // let orig = mov.orig();
         let orig_bb = mov.orig().to_bb();
         let dest = mov.dest();
 
@@ -827,6 +823,17 @@ impl Position {
         // pinned but moving along the current rank, file, diagonal between the pinner and the king
         (self.pinned_pieces(self.turn()) & orig_bb).is_empty()
             || aligned(mov.orig(), dest, self.king_sq(self.turn()))
+    }
+
+    /// Tests if a move applies to the current position. This is useful when checking transposition
+    /// table or killer table moves, when the stored result could possibly be completely wrong for
+    /// the current position.
+    ///
+    /// This checks that the board has a piece of the correct colour at the origin square, and that
+    /// that piece is able to move to the destination square. If so, it calls `self.legal_move` to
+    /// further test for legality.
+    pub fn valid_move(&self, mov: &Move) -> bool {
+        MoveGen::valid_move(self, mov) && self.legal_move(mov)
     }
 }
 
