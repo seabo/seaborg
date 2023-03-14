@@ -35,7 +35,7 @@ impl Search {
             pos,
             pvt: PVTable::new(8),
             trace: Tracer::new(),
-            tt: Table::new(1024),
+            tt: Table::new(512),
         }
     }
 
@@ -88,6 +88,28 @@ impl Search {
                     "eff. bf:   {}",
                     self.trace.eff_branching(d).separated_string()
                 );
+                println!("tt stats ----------------");
+                println!(
+                    " size: {}MB, entries: {}",
+                    self.tt.capacity_mb(),
+                    self.tt.capacity_entries().separated_string()
+                );
+                println!(
+                    " hits:       {:>8} ({:.1}%)",
+                    self.trace.hash_hits(),
+                    self.trace.hash_hits() as f64 / self.trace.hash_probes() as f64 * 100.
+                );
+                println!(
+                    " collisions: {:>8} ({:.1}%)",
+                    self.trace.hash_collisions(),
+                    self.trace.hash_collisions() as f64 / self.trace.hash_probes() as f64 * 100.
+                );
+                println!(
+                    " clashes:    {:>8} ({:.1}%)",
+                    self.trace.hash_clashes(),
+                    self.trace.hash_clashes() as f64 / self.trace.hash_probes() as f64 * 100.
+                );
+                println!("-------------------------");
                 println!(
                     "pv:        {}",
                     self.pvt
@@ -149,20 +171,22 @@ impl Search {
         let mut tt_entry: Option<WritableEntry<'_>> = None;
         use super::tt::Probe::*;
 
-        // Probe table.
-        // -- If entry `Hit` returned, check if it is a valid move.
-        // -- -- If so, record a hash hit.
-        // -- -- Check if we can use this value to early return, and do so.
-        // -- -- If not, record a hash collision.
-        // -- If clash returned, record a clash.
-
         match self.tt.probe(&self.pos) {
             Hit(entry) => {
                 let e = entry.read();
-                if e.depth >= depth && e.bound() == Bound::Exact {
-                    return e.score;
+                if self.pos.valid_move(&e.mov.to_move(&self.pos)) {
+                    self.trace.hash_hit();
+                    tt_entry = Some(entry)
                 } else {
-                    tt_entry = Some(entry);
+                    let mov = &e.mov.to_move(&self.pos);
+                    if (&self.pos.generate::<BasicMoveList, All, Legal>()).contains(&mov) {
+                        println!(
+                            "move was found not valid, but it is; {}: {}",
+                            mov,
+                            self.pos.print_history()
+                        );
+                    }
+                    self.trace.hash_collision();
                 }
             }
             Clash(_) => self.trace.hash_clash(),
@@ -177,6 +201,16 @@ impl Search {
             }
             score
         } else {
+            match tt_entry {
+                Some(ref we) => {
+                    let entry = we.read();
+                    if entry.depth >= depth && entry.bound() == Bound::Exact {
+                        return entry.score;
+                    }
+                }
+                None => {}
+            }
+
             let mut max = Score::INF_N;
 
             let mut moves = OrderedMoves::new();
@@ -234,34 +268,34 @@ impl Search {
                     Score::cp(0)
                 };
 
-                self.tt.probe(&self.pos).into_inner().write(
-                    &self.pos,
-                    score,
-                    depth,
-                    Bound::Exact,
-                    &core::mov::Move::null(),
-                );
+                //self.tt.probe(&self.pos).into_inner().write(
+                //    &self.pos,
+                //    score,
+                //    depth,
+                //    Bound::Exact,
+                //    &core::mov::Move::null(),
+                //);
 
                 return score;
             }
 
-            if did_raise_alpha {
-                self.tt.probe(&self.pos).into_inner().write(
-                    &self.pos,
-                    max,
-                    depth,
-                    Bound::Exact,
-                    &core::mov::Move::null(),
-                );
-            } else {
-                self.tt.probe(&self.pos).into_inner().write(
-                    &self.pos,
-                    max,
-                    depth,
-                    Bound::Upper,
-                    &core::mov::Move::null(),
-                );
-            }
+            //if did_raise_alpha {
+            //    self.tt.probe(&self.pos).into_inner().write(
+            //        &self.pos,
+            //        max,
+            //        depth,
+            //        Bound::Exact,
+            //        &core::mov::Move::null(),
+            //    );
+            //} else {
+            //    self.tt.probe(&self.pos).into_inner().write(
+            //        &self.pos,
+            //        max,
+            //        depth,
+            //        Bound::Upper,
+            //        &core::mov::Move::null(),
+            //    );
+            //}
 
             max
         }

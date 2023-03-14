@@ -833,6 +833,7 @@ impl Position {
     /// that piece is able to move to the destination square. If so, it calls `self.legal_move` to
     /// further test for legality.
     pub fn valid_move(&self, mov: &Move) -> bool {
+        // TODO: believe we can kill the second check
         MoveGen::valid_move(self, mov) && self.legal_move(mov)
     }
 }

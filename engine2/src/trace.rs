@@ -106,6 +106,12 @@ impl Tracer {
         self.hash_clashes
     }
 
+    /// The total number of hash probes, calculated as the sum of hits, collisions and clashes
+    /// recorded.
+    pub fn hash_probes(&self) -> usize {
+        self.hash_hits + self.hash_collisions + self.hash_clashes
+    }
+
     /// The number of nodes visited during main search.
     pub fn nodes_visited(&self) -> usize {
         self.nodes_visited

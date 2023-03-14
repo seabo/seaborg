@@ -175,7 +175,7 @@ impl<'a> WritableEntry<'a> {
 
     /// Write data to the entry.
     #[inline]
-    pub fn write(&self, pos: &Position, score: Score, depth: u8, _bound: Bound, mov: &Move) {
+    pub fn write(&self, pos: &Position, score: Score, depth: u8, bound: Bound, mov: &Move) {
         let sig = (pos.zobrist().0 >> 48) as u16;
 
         // SAFETY: we know that the `'a` reference will be outlived by the table, so we can never
@@ -186,7 +186,7 @@ impl<'a> WritableEntry<'a> {
             *self.ptr = Entry {
                 sig,
                 depth,
-                gen_bound: GenBound::from_raw_parts(43, Bound::Exact),
+                gen_bound: GenBound::from_raw_parts(1, bound),
                 score,
                 mov: mov.into(),
             }

@@ -420,7 +420,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
 
         let moves_bb = self.moves_bb::<P>(orig) & !self.us_occ & target;
 
-        if G::kind() == Generation::All || G::kind() == Generation::Captures {
+        if G::kind() == Generation::Captures {
             (moves_bb & self.them_occ).is_not_empty()
         } else if G::kind() == Generation::All || G::kind() == Generation::Quiets {
             (moves_bb & !self.them_occ).is_not_empty()
