@@ -144,7 +144,7 @@ mod tests {
 
         for (fen, from, to, target, attacker, score) in suite {
             let pos = Position::from_fen(fen).unwrap();
-            let mut search = Search::new(pos);
+            let mut search = Search::new(pos, Default::default());
             let see = search.see(from, to, target, attacker);
             assert_eq!(see, score);
         }

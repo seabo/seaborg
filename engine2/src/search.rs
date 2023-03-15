@@ -614,7 +614,7 @@ mod tests {
 
         for (fen, depth, score) in suite {
             let pos = Position::from_fen(fen).unwrap();
-            let mut search = Search::new(pos);
+            let mut search = Search::new(pos, Default::default());
             let s = search.start_search(TimingMode::Depth(depth));
 
             assert_eq!(s, score);
@@ -639,7 +639,7 @@ mod tests {
 
         for (fen, depth, score) in suite {
             let pos = Position::from_fen(fen).unwrap();
-            let mut search = Search::new(pos);
+            let mut search = Search::new(pos, Default::default());
             let s_negamax = search.negamax(depth);
             let s_alphabeta = search.alphabeta(Score::INF_N, Score::INF_P, depth);
 
