@@ -79,11 +79,12 @@ impl Search {
                 assert!(d > 0);
 
                 // Some bookeeping and prep.
-                self.pvt = PVTable::new(d);
+                // self.pvt = PVTable::new(d);
                 self.trace.commence_search();
 
                 // let score = self.negamax(d);
-                let score = self.alphabeta_ordered(Score::INF_N, Score::INF_P, d);
+                // let score = self.alphabeta_ordered(Score::INF_N, Score::INF_P, d);
+                let score = self.iterative_deepening(d);
 
                 self.trace.end_search();
                 self.report_info(d, score);
@@ -141,6 +142,17 @@ impl Search {
 
             max
         }
+    }
+
+    fn iterative_deepening(&mut self, depth: u8) -> Score {
+        let mut score = Score::INF_N;
+        for d in 2..=depth {
+            self.pvt = PVTable::new(d);
+            score = self.alphabeta_ordered(Score::INF_N, Score::INF_P, d);
+            self.report_info(d, score);
+        }
+
+        score
     }
 
     fn alphabeta_ordered(&mut self, mut alpha: Score, beta: Score, depth: u8) -> Score {

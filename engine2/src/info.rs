@@ -25,7 +25,6 @@ impl std::fmt::Display for Info {
         write!(f, "nps {} ", self.nps)?;
         write!(f, "hashfull {} ", self.hashfull)?;
         write!(f, "time {} ", self.time)?;
-        write!(f, "pv {}", self.pv)?;
-        writeln!(f)
+        write!(f, "pv {}", self.pv)
     }
 }
