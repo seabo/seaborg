@@ -423,7 +423,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
         if G::kind() == Generation::Captures {
             (moves_bb & self.them_occ).is_not_empty()
         } else if G::kind() == Generation::All || G::kind() == Generation::Quiets {
-            (moves_bb & !self.them_occ).is_not_empty()
+            moves_bb.is_not_empty()
         } else {
             // We don't call this function for other generation types.
             unreachable!()
