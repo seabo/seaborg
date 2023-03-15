@@ -7,6 +7,9 @@ use core::position::Position;
 
 use crossbeam_channel::{Receiver, Sender};
 
+use std::env;
+use std::sync::{Arc, Mutex};
+
 /// Manages the search and related configuration. This runs in a separate thread from the main
 /// process.
 pub struct Engine {
@@ -15,7 +18,7 @@ pub struct Engine {
     /// Receiver of messages from the Session thread.
     pub(super) rx: Receiver<Command>,
     /// Current configuration of the engine.
-    pub(super) config: Config,
+    pub(super) config: Arc<Mutex<Config>>,
     /// The internal board position.
     pub(super) search: Search,
 }
@@ -27,11 +30,26 @@ impl Engine {
         // elsewhere.
         core::init::init_globals();
 
+        let search_tx = tx.clone();
+        let config: Arc<Mutex<Config>> = Default::default();
+
+        match env::var("SEABORG_DEBUG") {
+            Ok(v) => {
+                if v == "true" || v == "True" {
+                    match config.lock() {
+                        Ok(mut c) => c.set_option(EngineOpt::DebugMode(true)),
+                        _ => {}
+                    }
+                }
+            }
+            Err(_) => {}
+        }
+
         Self {
             tx,
             rx,
-            config: Default::default(),
-            search: Search::new_stoppable(Position::start_pos(), rx_search),
+            config: config.clone(),
+            search: Search::new_with_channels(Position::start_pos(), config, search_tx, rx_search),
         }
     }
 
@@ -69,11 +87,14 @@ impl Engine {
     }
 
     fn command_config(&self) {
-        println!("{:#?}", self.config);
+        match self.config.lock() {
+            Ok(c) => println!("{:#?}", c),
+            Err(_) => println!("config error"),
+        }
     }
 
     fn command_isready(&self) {
-        self.tx.send(Resp::ReadyOk);
+        let _ = self.tx.send(Resp::ReadyOk);
     }
 
     fn command_ucinewgame(&self) {}
@@ -83,7 +104,7 @@ impl Engine {
             Ok(mut pos) => {
                 for mov in moves {
                     if pos.make_uci_move(&mov).is_none() {
-                        self.tx.send(Resp::UciParseError(Error::InvalidMove));
+                        let _ = self.tx.send(Resp::UciParseError(Error::InvalidMove));
                     }
                 }
 
@@ -94,7 +115,10 @@ impl Engine {
     }
 
     fn command_set_option(&mut self, o: EngineOpt) {
-        self.config.set_option(o);
+        match self.config.lock() {
+            Ok(mut c) => c.set_option(o),
+            _ => {}
+        }
     }
 
     fn command_go(&mut self, tm: TimingMode) {
@@ -106,6 +130,6 @@ impl Engine {
     }
 
     fn report(&mut self, resp: Resp) {
-        self.tx.send(resp);
+        let _ = self.tx.send(resp);
     }
 }

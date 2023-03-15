@@ -5,10 +5,12 @@ pub struct Config {
     debug_mode: bool,
     /// Transposition table configuration.
     hash: HashConfig,
-    /// Whether iterative deepening is turned on.
-    iterative_deepening: bool,
-    /// Configuration of move ordering settings.
-    move_ordering: MoveOrderingConfig,
+}
+
+impl Config {
+    pub fn debug_mode(&self) -> bool {
+        self.debug_mode
+    }
 }
 
 impl Default for Config {
@@ -16,8 +18,6 @@ impl Default for Config {
         Self {
             debug_mode: false,
             hash: Default::default(),
-            iterative_deepening: true,
-            move_ordering: Default::default(),
         }
     }
 }
@@ -52,7 +52,6 @@ impl Config {
     pub fn set_option(&mut self, o: EngineOpt) {
         match o {
             EngineOpt::Hash(v) => self.hash.set_size(v),
-            EngineOpt::IterativeDeepening(b) => self.iterative_deepening = b,
             EngineOpt::DebugMode(b) => self.debug_mode = b,
         }
     }
@@ -63,8 +62,6 @@ impl Config {
 pub enum EngineOpt {
     /// The size in MB of the hash table.
     Hash(usize),
-    /// Whether iterative deepening is turned on.
-    IterativeDeepening(bool),
     /// Whether debug mode is turned on.
     DebugMode(bool),
 }

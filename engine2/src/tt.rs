@@ -297,6 +297,25 @@ impl Table {
             }
         }
     }
+
+    /// Calculate an approximation of the transposition table usage.
+    ///
+    /// Works by iterating the first 1000 entries and counting how many are empty.
+    ///
+    /// This is used in info reports to the GUI via UCI, among others.
+    pub fn hashfull(&self) -> u16 {
+        let mut c = 0;
+        for e in &self.data[0..1000] {
+            // SAFETY: we are just reading the value. Not emitting a reference to safe code, nor
+            // mutating the value.
+            let entry = unsafe { &*e.get() };
+            if entry.is_empty() {
+                c += 1;
+            }
+        }
+
+        1000 - c
+    }
 }
 
 /// The result of probing the table.

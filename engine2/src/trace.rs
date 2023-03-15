@@ -152,6 +152,12 @@ impl Tracer {
         self.elapsed
     }
 
+    /// The time elapsed since the start of the search; for use when the search is still in
+    /// progress.
+    pub fn live_elapsed(&self) -> Duration {
+        self.start_time.elapsed()
+    }
+
     /// The effective branching factor of this search. Note, this method uses a Newton-Raphson
     /// iteration. Although this often converges in a small number of iterations, it is probably
     /// best for performance to only call this at the end of a search, rather than during.

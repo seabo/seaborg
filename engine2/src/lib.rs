@@ -1,8 +1,10 @@
 #![feature(stmt_expr_attributes)]
 #![feature(slice_from_ptr_range)]
+#![feature(iter_intersperse)]
 
 pub mod engine;
 pub mod eval;
+pub mod info;
 pub mod options;
 pub mod ordering;
 pub mod perft;

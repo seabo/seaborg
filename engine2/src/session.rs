@@ -1,4 +1,5 @@
 use super::engine::Engine;
+use super::info::Info;
 use super::uci::{self, Command};
 
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
@@ -11,7 +12,7 @@ pub enum Resp {
     Id,
     OptionsList,
     ReadyOk,
-    Info,
+    Info(Info),
     BestMove,
     UciParseError(uci::Error),
 }
@@ -110,7 +111,7 @@ impl Session {
             Resp::Id => Self::id(),
             Resp::OptionsList => Self::options_list(),
             Resp::ReadyOk => Self::readyok(),
-            Resp::Info => todo!(),
+            Resp::Info(i) => Self::report_info(i),
             Resp::BestMove => todo!(),
             Resp::UciParseError(err) => Self::uci_parse_error(err),
         }
@@ -127,7 +128,6 @@ impl Session {
 
     fn options_list() {
         println!("option name Hash type spin default 32 min 0 max 4096");
-        println!("option name Iterative_Deepening type check default true");
     }
 
     fn readyok() {
@@ -136,5 +136,9 @@ impl Session {
 
     fn uci_parse_error(err: uci::Error) {
         println!("{:?}", err);
+    }
+
+    fn report_info(i: Info) {
+        println!("{}", i);
     }
 }

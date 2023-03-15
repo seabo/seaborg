@@ -122,6 +122,34 @@ impl std::fmt::Debug for Score {
     }
 }
 
+impl std::fmt::Display for Score {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0 == 30_000 {
+            write!(f, "+∞")
+        } else if self.0 == -30_000 {
+            write!(f, "-∞")
+        } else if self.0 < -20_000 {
+            let plies_to_mate = self.0 + 20_100;
+            let moves_to_mate = plies_to_mate / 2;
+
+            debug_assert!(plies_to_mate % 2 == 0); // When negative, the side to move is getting mated,
+                                                   // so this should always be an even number of plies.
+
+            write!(f, "mate -{}", moves_to_mate)
+        } else if self.0 > 20_000 {
+            let plies_to_mate = 20_100 - self.0;
+            let moves_to_mate = (plies_to_mate + 1) / 2;
+
+            debug_assert!(plies_to_mate % 2 == 1); // When positive, the opponent is getting mated,
+                                                   // so this should always be an odd number of plies.
+
+            write!(f, "mate {}", moves_to_mate)
+        } else {
+            write!(f, "cp {}", self.0)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,7 +163,8 @@ mod tests {
         assert!(Score::mate(-3) < Score::mate(3));
         assert!(Score::INF_N == Score::INF_N);
         assert!(Score::mate(3) == Score::mate(3));
-        assert!(Score::mate(3) > Score::mate(4));
+        assert!(Score::mate(3) > Score::mate(4)); // "It's better to mate the opponent in fewer
+                                                  // moves"
         assert!(Score::mate(-44) > Score::mate(-2)); // "If we must get mated, it's better for it
                                                      // to take a long time."
         assert!(Score::cp(-10) > Score::mate(-4));

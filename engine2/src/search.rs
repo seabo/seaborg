@@ -1,7 +1,10 @@
 use super::eval::Evaluation;
+use super::info::Info;
+use super::options::Config;
 use super::ordering::{Loader, OrderedMoves, ScoredMoveList, Scorer};
 use super::pv_table::PVTable;
 use super::score::Score;
+use super::session::Resp;
 use super::time::TimingMode;
 use super::trace::Tracer;
 use super::tt::{Bound, Table, WritableEntry};
@@ -11,10 +14,11 @@ use core::mov::Move;
 use core::movelist::{BasicMoveList, MoveList};
 use core::position::{Player, Position};
 
-use crossbeam_channel::Receiver;
+use crossbeam_channel::{Receiver, Sender};
 use separator::Separatable;
 
 use std::ops::Neg;
+use std::sync::{Arc, Mutex};
 
 pub const INFINITY: i32 = 10_000;
 
@@ -28,30 +32,45 @@ pub struct Search {
     trace: Tracer,
     /// The transposition table.
     tt: Table,
+    /// Channel transmitter to send info to the GUI.
+    tx: Option<Sender<Resp>>,
     /// A channel receiver to be informed that the search should stop.
     stop_rx: Option<Receiver<()>>,
+    /// Flag to indicate when the search should start unwinding due to user intervention.
     stopping: bool,
+    /// Config governing the current engine session.
+    config: Arc<Mutex<Config>>,
 }
 
 impl Search {
-    pub fn new(pos: Position) -> Self {
+    pub fn new(pos: Position, config: Arc<Mutex<Config>>) -> Self {
         Self {
             pos,
+            config,
             pvt: PVTable::new(8),
             trace: Tracer::new(),
-            tt: Table::new(1024),
+            tt: Table::new(16),
+            tx: None,
             stop_rx: None,
             stopping: false,
         }
     }
 
-    pub fn new_stoppable(pos: Position, stop_rx: Receiver<()>) -> Self {
-        let mut s = Search::new(pos);
+    pub fn new_with_channels(
+        pos: Position,
+        config: Arc<Mutex<Config>>,
+        tx: Sender<Resp>,
+        stop_rx: Receiver<()>,
+    ) -> Self {
+        let mut s = Search::new(pos, config);
+        s.tx = Some(tx);
         s.stop_rx = Some(stop_rx);
         s
     }
 
     pub fn start_search(&mut self, tm: TimingMode) -> Score {
+        self.trace = Tracer::new();
+
         match tm {
             TimingMode::Timed(_) => todo!(),
             TimingMode::MoveTime(_) => todo!(),
@@ -67,70 +86,16 @@ impl Search {
                 let score = self.alphabeta_ordered(Score::INF_N, Score::INF_P, d);
 
                 self.trace.end_search();
+                self.report_info(d, score);
 
-                println!(
-                    "nodes:     {}",
-                    self.trace.all_nodes_visited().separated_string()
-                );
-                println!(
-                    "% q_nodes: {:.2}%",
-                    self.trace.q_nodes_visited() as f32 / self.trace.all_nodes_visited() as f32
-                        * 100.0
-                );
-                println!(
-                    "nps:       {}",
-                    self.trace
-                        .nps()
-                        .expect("`end_search` was called, so this should always work")
-                        .separated_string()
-                );
-                println!(
-                    "see skips: {}",
-                    self.trace.see_skipped_nodes().separated_string()
-                );
-                println!(
-                    "time:      {}ms",
-                    self.trace
-                        .elapsed()
-                        .expect("we called `end_search`")
-                        .as_millis()
-                        .separated_string()
-                );
-                println!(
-                    "eff. bf:   {}",
-                    self.trace.eff_branching(d).separated_string()
-                );
-                println!("tt stats ----------------");
-                println!(
-                    " size: {}MB, slots: {}",
-                    self.tt.capacity_mb(),
-                    self.tt.capacity_entries().separated_string()
-                );
-                println!(
-                    " hits:       {:>8} ({:.1}%)",
-                    self.trace.hash_hits().separated_string(),
-                    self.trace.hash_hits() as f64 / self.trace.hash_probes() as f64 * 100.
-                );
-                println!(
-                    " collisions: {:>8} ({:.1}%)",
-                    self.trace.hash_collisions().separated_string(),
-                    self.trace.hash_collisions() as f64 / self.trace.hash_probes() as f64 * 100.
-                );
-                println!(
-                    " clashes:    {:>8} ({:.1}%)",
-                    self.trace.hash_clashes().separated_string(),
-                    self.trace.hash_clashes() as f64 / self.trace.hash_probes() as f64 * 100.
-                );
-                println!("-------------------------");
-                println!(
-                    "pv:        {}",
-                    self.pvt
-                        .pv()
-                        .map(|m| m.to_uci_string())
-                        .collect::<Vec<String>>()
-                        .join(" ")
-                );
-                println!("score:     {:?}", score);
+                match self.config.lock() {
+                    Ok(c) => {
+                        if c.debug_mode() {
+                            self.report_telemetry(d, score);
+                        }
+                    }
+                    _ => {}
+                }
 
                 score
             }
@@ -288,13 +253,13 @@ impl Search {
                     Score::cp(0)
                 };
 
-                // self.tt.probe(&self.pos).into_inner().write(
-                //     &self.pos,
-                //     score,
-                //     depth,
-                //     Bound::Exact,
-                //     &core::mov::Move::null(),
-                // );
+                self.tt.probe(&self.pos).into_inner().write(
+                    &self.pos,
+                    score,
+                    depth,
+                    Bound::Exact,
+                    &core::mov::Move::null(),
+                );
 
                 return score;
             }
@@ -308,13 +273,13 @@ impl Search {
                     &best_move,
                 );
             } else {
-                //self.tt.probe(&self.pos).into_inner().write(
-                //    &self.pos,
-                //    max,
-                //    depth,
-                //    Bound::Upper,
-                //    &core::mov::Move::null(),
-                //);
+                self.tt.probe(&self.pos).into_inner().write(
+                    &self.pos,
+                    max,
+                    depth,
+                    Bound::Upper,
+                    &core::mov::Move::null(),
+                );
             }
 
             max
@@ -444,6 +409,94 @@ impl Search {
             },
             _ => {}
         }
+    }
+
+    fn report_info(&self, depth: u8, score: Score) {
+        match &self.tx {
+            Some(tx) => {
+                let _ = tx.send(Resp::Info(Info {
+                    depth,
+                    score,
+                    time: self.trace.live_elapsed().as_millis() as usize,
+                    nodes: self.trace.nodes_visited(),
+                    pv: self
+                        .pvt
+                        .pv()
+                        .map(|m| format!("{}", m))
+                        .intersperse(" ".to_string())
+                        .collect::<String>(),
+                    hashfull: self.tt.hashfull(),
+                    nps: self.trace.live_nps() as u32,
+                }));
+            }
+            None => {}
+        }
+    }
+
+    /// Detailed debug info about the search, printed after the end of search in debug mode.
+    fn report_telemetry(&self, depth: u8, score: Score) {
+        println!(
+            "nodes:     {}",
+            self.trace.all_nodes_visited().separated_string()
+        );
+        println!(
+            "% q_nodes: {:.2}%",
+            self.trace.q_nodes_visited() as f32 / self.trace.all_nodes_visited() as f32 * 100.0
+        );
+        println!(
+            "nps:       {}",
+            self.trace
+                .nps()
+                .expect("`end_search` was called, so this should always work")
+                .separated_string()
+        );
+        println!(
+            "see skips: {}",
+            self.trace.see_skipped_nodes().separated_string()
+        );
+        println!(
+            "time:      {}ms",
+            self.trace
+                .elapsed()
+                .expect("we called `end_search`")
+                .as_millis()
+                .separated_string()
+        );
+        println!(
+            "eff. bf:   {}",
+            self.trace.eff_branching(depth).separated_string()
+        );
+        println!("tt stats ----------------");
+        println!(
+            " size: {}MB, slots: {}",
+            self.tt.capacity_mb(),
+            self.tt.capacity_entries().separated_string()
+        );
+        println!(
+            " hits:       {:>8} ({:.1}%)",
+            self.trace.hash_hits().separated_string(),
+            self.trace.hash_hits() as f64 / self.trace.hash_probes() as f64 * 100.
+        );
+        println!(
+            " collisions: {:>8} ({:.1}%)",
+            self.trace.hash_collisions().separated_string(),
+            self.trace.hash_collisions() as f64 / self.trace.hash_probes() as f64 * 100.
+        );
+        println!(
+            " clashes:    {:>8} ({:.1}%)",
+            self.trace.hash_clashes().separated_string(),
+            self.trace.hash_clashes() as f64 / self.trace.hash_probes() as f64 * 100.
+        );
+        println!("-------------------------");
+        println!(
+            "pv:        {}",
+            self.pvt
+                .pv()
+                .map(|m| m.to_uci_string())
+                .collect::<Vec<String>>()
+                .join(" ")
+        );
+        println!("score:     {:?}", score);
     }
 }
 

@@ -404,7 +404,6 @@ impl<'a> Parser<'a> {
 
         match self.parse_string()? {
             "Hash" => self.parse_hash(),
-            "Iterative_Deepening" => self.parse_iterative_deepening(),
             _ => Err(Error::InvalidOption),
         }
     }
@@ -415,14 +414,6 @@ impl<'a> Parser<'a> {
         let v = self.parse_integer()?;
 
         Ok(Command::SetOption(EngineOpt::Hash(v)))
-    }
-
-    fn parse_iterative_deepening(&mut self) -> PResult {
-        self.expect_kw(Keyword::Value)?;
-
-        let b = self.parse_bool()?;
-
-        Ok(Command::SetOption(EngineOpt::IterativeDeepening(b)))
     }
 
     fn parse_display(&mut self) -> PResult {
