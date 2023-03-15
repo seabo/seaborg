@@ -2,7 +2,7 @@
 
 use super::score::Score;
 use core::mov::{Move, MoveType};
-use core::position::{Position, Square};
+use core::position::{PieceType, Position, Square};
 
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
@@ -66,64 +66,104 @@ impl GenBound {
 /// for the possible promotion type (queen, rook, bishop, knight), and a final byte with flags
 /// indicating features of the move (promotion, en passant, castling, capture, quiet).
 ///
-/// In the transposition table, we don't need this detail. From/to squares are enough to suffice in
-/// reality. The bitflags don't really matter as these can be reconstructed when the position
-/// context is known. The promotion type is also only relevent in the very small subset of moves
-/// which actually _are_ promotions, and even then we can narrow down that the best move is one of
-/// the four possible promotions. In practically every case, queen promotion is best, so it's
-/// likely we can just try that and if it proves bad, try the others next.
+/// In the transposition table, we don't need this detail. We can just record the origin square (6
+/// bits), the destination square (6 bits), the promotion piece if applicable (3 bits) and a flag
+/// for whether the move is null (because in some cases we want to store an entry without a move).
 ///
-/// For the purposes of actually playing the move on the board without generating _all_ moves to
-/// see which one matches the `TTMove`, we have a relatively quick routine to reconstitute the full
-/// `Move` struct from a `TTMove` and a `Position`.
+/// The null flag is inverted - 0 means non-null, 1 means null. This is so that we can represent a
+/// null move with PackedMove(0_u16) which feels cleanest.
+///
+/// The scheme is, reading from LSB to MSB:
+///
+/// 0 0 0 0   0 0 0 0   0 0 0 0   0 0 0 0
+/// ^ |---|   |-----------| |-----------|
+/// |   ^           ^          ^
+/// |   |           |          |___ orig square
+/// |   |           |___ dest square
+/// |   |___ promotion piece
+/// |___ null flag
 #[derive(Clone, Debug)]
-pub struct TTMove {
-    orig: Square,
-    dest: Square,
-}
+pub struct PackedMove(u16);
 
-impl From<&Move> for TTMove {
-    fn from(mov: &Move) -> Self {
-        Self {
-            orig: mov.orig(),
-            dest: mov.dest(),
+const ORIG_MASK: u16 = 0x3F;
+const DEST_MASK: u16 = 0x0FC0;
+const PROMO_MASK: u16 = 0x7000;
+
+impl PackedMove {
+    /// Create a `PackedMove` from a `Move`.
+    pub fn from_move(mov: &Move) -> Self {
+        if mov.is_null() {
+            PackedMove(0)
+        } else {
+            let null = 1 << 15;
+            let orig = mov.orig().0 as u16;
+            let dest = (mov.dest().0 as u16) << 6;
+            let promo = match mov.promo_piece_type() {
+                Some(p) => ((p as u8 - 1) as u16) << 12,
+                None => 0,
+            };
+
+            PackedMove(null ^ orig ^ dest ^ promo)
         }
     }
-}
 
-impl TTMove {
-    /// Reconstitute a full `Move` struct from a condensened `TTMove` and the associated position.
-    ///
-    /// In the case that `TTMove` is a pawn promotion, the returned move will have the promotion
-    /// piece type set to `Queen`.
-    pub fn to_move(&self, _pos: &Position) -> Move {
-        //  let is_promotion;
-        //  let is_en_passant;
-        //  let is_castle;
-        //  let is_capture;
-        //  let is_quiet;
+    pub fn to_move(&self, pos: &Position) -> Move {
+        let orig = Square((self.0 & ORIG_MASK) as u8);
+        let dest = Square(((self.0 & DEST_MASK) >> 6) as u8);
+        let promo = ((self.0 & PROMO_MASK) >> 12) as u8;
+        let mut move_type = MoveType::empty();
+        let promo_piece = if promo == 0 {
+            None
+        } else {
+            move_type |= MoveType::PROMOTION;
+            Some(FromPrimitive::from_u8(promo + 1).expect("should never fail"))
+        };
 
-        //  let bitflags = todo!(); // but together the bit flags
+        if !pos.piece_at_sq(dest).is_none() {
+            move_type |= MoveType::CAPTURE;
+        }
 
-        //  if is_promotion {
-        //      // use queen promotion
-        //  }
+        let piece = pos.piece_at_sq(orig);
 
-        Move::build(self.orig, self.dest, None, MoveType::QUIET)
+        match pos.ep_square() {
+            Some(ep) => {
+                if ep == dest && piece.type_of() == PieceType::Pawn {
+                    move_type |= MoveType::EN_PASSANT | MoveType::CAPTURE;
+                }
+            }
+            None => {}
+        }
+
+        if piece.type_of() == PieceType::King {
+            match (orig, dest) {
+                (Square::E1, Square::G1) => move_type |= MoveType::CASTLE,
+                (Square::E1, Square::C1) => move_type |= MoveType::CASTLE,
+                (Square::E8, Square::G8) => move_type |= MoveType::CASTLE,
+                (Square::E8, Square::C8) => move_type |= MoveType::CASTLE,
+                _ => {}
+            }
+        }
+
+        if move_type.is_empty() {
+            move_type = MoveType::QUIET;
+        }
+
+        Move::build(orig, dest, promo_piece, move_type)
     }
 
-    /// Check if this move is null.
     pub fn is_null(&self) -> bool {
-        !(self.orig.is_okay() && self.dest.is_okay())
+        ((self.0 >> 15) & 1) == 0
+    }
+
+    /// Create a null move.
+    pub fn null() -> Self {
+        PackedMove(0)
     }
 }
 
-impl Default for TTMove {
+impl Default for PackedMove {
     fn default() -> Self {
-        Self {
-            orig: Square(64),
-            dest: Square(64),
-        }
+        Self::null()
     }
 }
 
@@ -135,7 +175,7 @@ pub struct Entry {
     pub depth: u8,
     pub gen_bound: GenBound,
     pub score: Score,
-    pub mov: TTMove,
+    pub mov: PackedMove,
 }
 
 impl Entry {
@@ -193,7 +233,7 @@ impl<'a> WritableEntry<'a> {
                 depth,
                 gen_bound: GenBound::from_raw_parts(1, bound),
                 score,
-                mov: mov.into(),
+                mov: PackedMove::from_move(mov),
             }
         }
     }

@@ -224,6 +224,19 @@ impl Search {
                             Bound::Lower,
                             mov,
                         );
+
+                        let retrieved = self
+                            .tt
+                            .probe(&self.pos)
+                            .into_inner()
+                            .read()
+                            .mov
+                            .to_move(&self.pos);
+                        if retrieved != *mov {
+                            println!("stored {:?}; retrieved {:?}", mov, retrieved);
+                            panic!();
+                        }
+
                         return score;
                     }
 

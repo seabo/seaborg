@@ -1,4 +1,6 @@
 use super::Player;
+use num_derive::FromPrimitive;
+
 use std::fmt;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -99,7 +101,8 @@ impl Piece {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, FromPrimitive, PartialEq)]
+#[repr(u8)]
 pub enum PieceType {
     None = 0,
     Pawn = 1,
