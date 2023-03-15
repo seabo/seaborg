@@ -202,8 +202,8 @@ impl<'a> Parser<'a> {
                 Token::Kw(Keyword::UciNewGame) => self.parse_ucinewgame(),
                 Token::Kw(Keyword::Position) => self.parse_position_and_moves(),
                 Token::Kw(Keyword::Go) => self.parse_go(),
-                Token::Kw(Keyword::Stop) => todo!(),
-                Token::Kw(Keyword::Quit) => todo!(),
+                Token::Kw(Keyword::Stop) => self.parse_stop(),
+                Token::Kw(Keyword::Quit) => self.parse_quit(),
                 Token::Kw(Keyword::Display) => self.parse_display(),
                 Token::Kw(Keyword::Config) => self.parse_config(),
                 Token::Kw(Keyword::Perft) => self.parse_perft(),
@@ -330,6 +330,14 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_stop(&mut self) -> PResult {
+        Ok(Command::Stop)
+    }
+
+    fn parse_quit(&mut self) -> PResult {
+        Ok(Command::Quit)
+    }
+
     fn parse_time_control(&mut self) -> PResult {
         let mut wtime: Option<usize> = None;
         let mut btime: Option<usize> = None;
@@ -454,6 +462,7 @@ impl<'a> Token<'a> {
             "go" => Token::Kw(Keyword::Go),
             "name" => Token::Kw(Keyword::Name),
             "value" => Token::Kw(Keyword::Value),
+            "register" => Token::Kw(Keyword::Register),
             "searchmoves" => Token::Kw(Keyword::SearchMoves),
             "ponder" => Token::Kw(Keyword::Ponder),
             "wtime" => Token::Kw(Keyword::Wtime),

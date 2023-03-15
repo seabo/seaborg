@@ -3,7 +3,6 @@ use super::search::Search;
 use super::session::Resp;
 use super::time::TimingMode;
 use super::uci::{Command, Error};
-
 use core::position::Position;
 
 use crossbeam_channel::{Receiver, Sender};
@@ -18,11 +17,11 @@ pub struct Engine {
     /// Current configuration of the engine.
     pub(super) config: Config,
     /// The internal board position.
-    pub(super) pos: Option<Position>,
+    pub(super) search: Search,
 }
 
 impl Engine {
-    pub fn new(tx: Sender<Resp>, rx: Receiver<Command>) -> Self {
+    pub fn new(tx: Sender<Resp>, rx: Receiver<Command>, rx_search: Receiver<()>) -> Self {
         // Since we are creating the engine, which includes a `Position`, we need to ensure that
         // the globals are initialised first. This is inexpensive if it has already been called
         // elsewhere.
@@ -32,7 +31,7 @@ impl Engine {
             tx,
             rx,
             config: Default::default(),
-            pos: Some(Default::default()),
+            search: Search::new_stoppable(Position::start_pos(), rx_search),
         }
     }
 
@@ -66,10 +65,7 @@ impl Engine {
     }
 
     fn command_display(&self) {
-        match &self.pos {
-            Some(pos) => pos.pretty_print(),
-            None => {}
-        }
+        self.search.pos.pretty_print();
     }
 
     fn command_config(&self) {
@@ -91,7 +87,7 @@ impl Engine {
                     }
                 }
 
-                self.pos = Some(pos)
+                self.search.pos = pos
             }
             Err(err) => self.report(Resp::UciParseError(Error::InvalidPosition(err))),
         }
@@ -102,24 +98,11 @@ impl Engine {
     }
 
     fn command_go(&mut self, tm: TimingMode) {
-        match self.pos.take() {
-            Some(pos) => {
-                let (_score, pos) = Search::new(pos).start_search(tm);
-                self.pos = Some(pos);
-            }
-            None => unreachable!(
-                "This method should never be called when a search is already in progress"
-            ),
-        }
+        let _score = self.search.start_search(tm);
     }
 
     fn command_perft(&mut self, d: usize) {
-        match &mut self.pos {
-            Some(pos) => {
-                super::perft::Perft::divide(pos, d, true, false);
-            }
-            None => unreachable!("This method should never be called when a search is in progress"),
-        }
+        super::perft::Perft::divide(&mut self.search.pos, d, true, false);
     }
 
     fn report(&mut self, resp: Resp) {

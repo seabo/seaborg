@@ -11,6 +11,7 @@ use core::mov::Move;
 use core::movelist::{BasicMoveList, MoveList};
 use core::position::{Player, Position};
 
+use crossbeam_channel::Receiver;
 use separator::Separatable;
 
 use std::ops::Neg;
@@ -27,6 +28,9 @@ pub struct Search {
     trace: Tracer,
     /// The transposition table.
     tt: Table,
+    /// A channel receiver to be informed that the search should stop.
+    stop_rx: Option<Receiver<()>>,
+    stopping: bool,
 }
 
 impl Search {
@@ -36,10 +40,18 @@ impl Search {
             pvt: PVTable::new(8),
             trace: Tracer::new(),
             tt: Table::new(1024),
+            stop_rx: None,
+            stopping: false,
         }
     }
 
-    pub fn start_search(mut self, tm: TimingMode) -> (Score, Position) {
+    pub fn new_stoppable(pos: Position, stop_rx: Receiver<()>) -> Self {
+        let mut s = Search::new(pos);
+        s.stop_rx = Some(stop_rx);
+        s
+    }
+
+    pub fn start_search(&mut self, tm: TimingMode) -> Score {
         match tm {
             TimingMode::Timed(_) => todo!(),
             TimingMode::MoveTime(_) => todo!(),
@@ -119,7 +131,8 @@ impl Search {
                         .join(" ")
                 );
                 println!("score:     {:?}", score);
-                (score, self.pos)
+
+                score
             }
             TimingMode::Infinite => todo!(),
         }
@@ -187,6 +200,9 @@ impl Search {
         }
 
         if depth == 1 {
+            // Only perform this check at leaf nodes, to prevent doing it too often.
+            self.check_should_stop();
+
             // let score = self.evaluate();
             let score = self.quiesce(alpha, beta);
             if score == Score::mate(0) {
@@ -231,6 +247,10 @@ impl Search {
                         .inc_mate();
                     self.pos.unmake_move();
 
+                    if self.stopping {
+                        break;
+                    }
+
                     if score >= beta {
                         self.tt.probe(&self.pos).into_inner().write(
                             &self.pos,
@@ -251,6 +271,10 @@ impl Search {
                             alpha = score;
                         }
                     }
+                }
+
+                if self.stopping {
+                    return Score::cp(0);
                 }
             }
 
@@ -409,6 +433,18 @@ impl Search {
 
         alpha
     }
+
+    fn check_should_stop(&mut self) {
+        match &self.stop_rx {
+            Some(rx) => match rx.try_recv() {
+                Ok(()) => {
+                    self.stopping = true;
+                }
+                Err(_) => {}
+            },
+            _ => {}
+        }
+    }
 }
 
 pub struct MoveLoader<'a> {
@@ -512,8 +548,8 @@ mod tests {
 
         for (fen, depth, score) in suite {
             let pos = Position::from_fen(fen).unwrap();
-            let search = Search::new(pos);
-            let (s, _) = search.start_search(TimingMode::Depth(depth));
+            let mut search = Search::new(pos);
+            let s = search.start_search(TimingMode::Depth(depth));
 
             assert_eq!(s, score);
         }

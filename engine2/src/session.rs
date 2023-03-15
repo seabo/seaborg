@@ -1,7 +1,7 @@
 use super::engine::Engine;
-use super::uci;
+use super::uci::{self, Command};
 
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 use std::{io, thread};
 
 /// A response to the GUI.
@@ -26,6 +26,9 @@ pub struct Session {
     /// Channel for transmitting stdin messages from the dedicated stdin thread to the Session
     /// thread.
     stdin_to_sess: (Sender<String>, Receiver<String>),
+    /// A separate channel for informing the search process to stop immediately. This has capacity
+    /// one, and sends no data beyond `()` to inform `Search` that it should stop.
+    stop_search: (Sender<()>, Receiver<()>),
 }
 
 impl Session {
@@ -34,12 +37,14 @@ impl Session {
             sess_to_eng: unbounded::<uci::Command>(),
             eng_to_sess: unbounded::<Resp>(),
             stdin_to_sess: unbounded::<String>(),
+            stop_search: bounded::<()>(1),
         }
     }
 
     pub fn launch(&mut self) {
         let tx = self.eng_to_sess.0.clone();
         let rx = self.sess_to_eng.1.clone();
+        let rx_search = self.stop_search.1.clone();
 
         let stdin_tx = self.stdin_to_sess.0.clone();
 
@@ -57,7 +62,7 @@ impl Session {
 
         // Launch the engine thread.
         thread::spawn(move || {
-            let mut engine = Engine::new(tx, rx);
+            let mut engine = Engine::new(tx, rx, rx_search);
             engine.launch();
         });
 
@@ -75,9 +80,17 @@ impl Session {
     fn poll_input(&mut self) {
         match self.stdin_to_sess.1.try_recv() {
             Ok(s) => match uci::Parser::parse(&s) {
-                Ok(cmd) => {
-                    self.sess_to_eng.0.send(cmd);
-                }
+                Ok(cmd) => match cmd {
+                    Command::Stop => {
+                        self.stop_search.0.send(());
+                    }
+                    Command::Quit => {
+                        self.stop_search.0.send(());
+                    }
+                    _ => {
+                        self.sess_to_eng.0.send(cmd);
+                    }
+                },
                 Err(err) => eprintln!("error: {:?}", err),
             },
             Err(_) => {}
