@@ -111,6 +111,11 @@ impl TTMove {
 
         Move::build(self.orig, self.dest, None, MoveType::QUIET)
     }
+
+    /// Check if this move is null.
+    pub fn is_null(&self) -> bool {
+        !(self.orig.is_okay() && self.dest.is_okay())
+    }
 }
 
 impl Default for TTMove {

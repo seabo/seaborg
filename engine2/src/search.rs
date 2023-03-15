@@ -35,7 +35,7 @@ impl Search {
             pos,
             pvt: PVTable::new(8),
             trace: Tracer::new(),
-            tt: Table::new(512),
+            tt: Table::new(1024),
         }
     }
 
@@ -90,23 +90,23 @@ impl Search {
                 );
                 println!("tt stats ----------------");
                 println!(
-                    " size: {}MB, entries: {}",
+                    " size: {}MB, slots: {}",
                     self.tt.capacity_mb(),
                     self.tt.capacity_entries().separated_string()
                 );
                 println!(
                     " hits:       {:>8} ({:.1}%)",
-                    self.trace.hash_hits(),
+                    self.trace.hash_hits().separated_string(),
                     self.trace.hash_hits() as f64 / self.trace.hash_probes() as f64 * 100.
                 );
                 println!(
                     " collisions: {:>8} ({:.1}%)",
-                    self.trace.hash_collisions(),
+                    self.trace.hash_collisions().separated_string(),
                     self.trace.hash_collisions() as f64 / self.trace.hash_probes() as f64 * 100.
                 );
                 println!(
                     " clashes:    {:>8} ({:.1}%)",
-                    self.trace.hash_clashes(),
+                    self.trace.hash_clashes().separated_string(),
                     self.trace.hash_clashes() as f64 / self.trace.hash_probes() as f64 * 100.
                 );
                 println!("-------------------------");
@@ -174,18 +174,11 @@ impl Search {
         match self.tt.probe(&self.pos) {
             Hit(entry) => {
                 let e = entry.read();
-                if self.pos.valid_move(&e.mov.to_move(&self.pos)) {
+                if e.mov.is_null() {
+                } else if self.pos.valid_move(&e.mov.to_move(&self.pos)) {
                     self.trace.hash_hit();
                     tt_entry = Some(entry)
                 } else {
-                    let mov = &e.mov.to_move(&self.pos);
-                    if (&self.pos.generate::<BasicMoveList, All, Legal>()).contains(&mov) {
-                        println!(
-                            "move was found not valid, but it is; {}: {}",
-                            mov,
-                            self.pos.print_history()
-                        );
-                    }
                     self.trace.hash_collision();
                 }
             }
@@ -212,6 +205,7 @@ impl Search {
             }
 
             let mut max = Score::INF_N;
+            let mut best_move = Move::null();
 
             let mut moves = OrderedMoves::new();
             let mut c = 0;
@@ -230,6 +224,7 @@ impl Search {
                     c += 1;
 
                     self.pos.make_move(mov);
+
                     let score = self
                         .alphabeta_ordered(-beta, -alpha, depth - 1)
                         .neg()
@@ -250,6 +245,7 @@ impl Search {
                     if score > max {
                         self.pvt.copy_to(depth, *mov);
                         max = score;
+                        best_move = mov.clone();
                         if score > alpha {
                             did_raise_alpha = true;
                             alpha = score;
@@ -268,34 +264,34 @@ impl Search {
                     Score::cp(0)
                 };
 
-                //self.tt.probe(&self.pos).into_inner().write(
-                //    &self.pos,
-                //    score,
-                //    depth,
-                //    Bound::Exact,
-                //    &core::mov::Move::null(),
-                //);
+                // self.tt.probe(&self.pos).into_inner().write(
+                //     &self.pos,
+                //     score,
+                //     depth,
+                //     Bound::Exact,
+                //     &core::mov::Move::null(),
+                // );
 
                 return score;
             }
 
-            //if did_raise_alpha {
-            //    self.tt.probe(&self.pos).into_inner().write(
-            //        &self.pos,
-            //        max,
-            //        depth,
-            //        Bound::Exact,
-            //        &core::mov::Move::null(),
-            //    );
-            //} else {
-            //    self.tt.probe(&self.pos).into_inner().write(
-            //        &self.pos,
-            //        max,
-            //        depth,
-            //        Bound::Upper,
-            //        &core::mov::Move::null(),
-            //    );
-            //}
+            if did_raise_alpha {
+                self.tt.probe(&self.pos).into_inner().write(
+                    &self.pos,
+                    max,
+                    depth,
+                    Bound::Exact,
+                    &best_move,
+                );
+            } else {
+                //self.tt.probe(&self.pos).into_inner().write(
+                //    &self.pos,
+                //    max,
+                //    depth,
+                //    Bound::Upper,
+                //    &core::mov::Move::null(),
+                //);
+            }
 
             max
         }
