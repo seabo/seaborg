@@ -153,36 +153,38 @@ impl Tracer {
     }
 
     /// The effective branching factor of this search. Note, this method uses a Newton-Raphson
-    /// iteration. Although this usually converges in just 2-3 iterations, it is probably best for
-    /// performance to only call this at the end of a search, rather than during.
+    /// iteration. Although this often converges in a small number of iterations, it is probably
+    /// best for performance to only call this at the end of a search, rather than during.
     ///
-    /// Calculated as (nodes * (depth - 1) + 1) ^ (1/depth).
+    /// If branching factor is x, and depth is d, and nodes searched is N, then the quantities
+    /// satisfy (x^d - 1)/(x-1) = N. To solve this for x, we have to use a numerical method as
+    /// there is no closed form rearrangement in terms of x.
     pub fn eff_branching(&self, depth: u8) -> f32 {
-        let f_depth = Into::<f32>::into(depth + 1);
+        let f_depth = Into::<f32>::into(depth);
         let n = self.all_nodes_visited() as f32;
 
         // Initial guess taken to be average branching factor for chess.
-        let mut x: f32 = 35.;
+        let mut x: f32 = 38.;
 
         // We will use a delta between successive iterations to
         // determine when to stop.
         let mut last_delta;
 
         // The smallest enough delta between iterations for which we will return.
-        let target_delta: f32 = 1e-1;
+        let target_delta: f32 = 1e-3;
 
-        // We should never need many. This converges very fast. Stop at 10 because if we have done
-        // that many, something is going wrong.
-        let max_iterations = 10;
+        // Sometimes, it can take a while to converge..
+        let max_iterations = 100;
 
         for _ in 0..max_iterations {
             let x2 = x - numerator(x, f_depth, n) / denominator(x, f_depth);
             last_delta = (x2 - x).abs();
-            x = x2;
 
             if last_delta <= target_delta {
                 return x;
             }
+
+            x = x2;
         }
 
         x
@@ -193,12 +195,12 @@ impl Tracer {
 ///
 /// Represents the numerator in f(x_i)/f'(x_i)
 fn numerator(b: f32, d: f32, n: f32) -> f32 {
-    (b.powf(d) - 1.) / (b - 1.) - n
+    ((b.powf(d) - 1.) / (b - 1.)) - n
 }
 
 /// Used in Newton-Raphson iteration to calculate effective branching factor.
 ///
 /// Represents the denominator in f(x_i)/f'(x_i)
 fn denominator(b: f32, d: f32) -> f32 {
-    (d * b.powf(d - 1.) * (b - 1.) - b.powf(d) + 1.) / (b - 1.).powf(2.)
+    ((d * b.powf(d - 1.) - 1.) * (b - 1.) - (b.powf(d) - 1.)) / (b - 1.).powf(2.)
 }
