@@ -155,7 +155,7 @@ impl Search {
         score
     }
 
-    fn alphabeta_ordered(&mut self, mut alpha: Score, beta: Score, depth: u8) -> Score {
+    fn alphabeta_ordered(&mut self, mut alpha: Score, mut beta: Score, depth: u8) -> Score {
         self.trace.visit_node();
 
         let mut tt_entry: Option<WritableEntry<'_>> = None;
@@ -192,6 +192,18 @@ impl Search {
                     let entry = we.read();
                     if entry.depth >= depth && entry.bound() == Bound::Exact {
                         return entry.score;
+                    } else if entry.depth >= depth && entry.bound() == Bound::Lower {
+                        if entry.score > beta {
+                            return entry.score; // guaranteed beta-cutoff
+                        } else if entry.score > alpha {
+                            alpha = entry.score; // can narrow window
+                        }
+                    } else if entry.depth >= depth && entry.bound() == Bound::Upper {
+                        if entry.score < alpha {
+                            return entry.score; // guaranteed all-node
+                        } else if entry.score < beta {
+                            beta = entry.score; // can narrow window
+                        }
                     }
                 }
                 None => {}
