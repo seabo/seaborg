@@ -57,7 +57,7 @@ impl Session {
                 buf.clear();
                 io::stdin().read_line(&mut buf).expect("couldn't read line");
 
-                stdin_tx.send(buf.clone());
+                let _ = stdin_tx.send(buf.clone());
             }
         });
 
@@ -83,13 +83,13 @@ impl Session {
             Ok(s) => match uci::Parser::parse(&s) {
                 Ok(cmd) => match cmd {
                     Command::Stop => {
-                        self.stop_search.0.send(());
+                        let _ = self.stop_search.0.send(());
                     }
                     Command::Quit => {
-                        self.stop_search.0.send(());
+                        let _ = self.stop_search.0.send(());
                     }
                     _ => {
-                        self.sess_to_eng.0.send(cmd);
+                        let _ = self.sess_to_eng.0.send(cmd);
                     }
                 },
                 Err(err) => eprintln!("error: {:?}", err),

@@ -1,6 +1,7 @@
 //! Utility for efficiently tracing data about the progress of a search, such as node visit counts
 //! and nodes per second.
 
+use std::ops::AddAssign;
 use std::time::{Duration, Instant};
 
 /// Object responsible for tracing data about the search.
@@ -22,6 +23,8 @@ pub struct Tracer {
     /// Records the duration between start and end of search. Only populated with `Some(duration)`
     /// when `end_search` is called.
     elapsed: Option<Duration>,
+    pub killers_per_node: Averager<u32>,
+    pub hash_found: Averager<u32>,
 }
 
 impl Tracer {
@@ -37,6 +40,8 @@ impl Tracer {
             hash_collisions: 0,
             hash_clashes: 0,
             elapsed: None,
+            killers_per_node: Averager::new(0),
+            hash_found: Averager::new(0),
         }
     }
 
@@ -209,4 +214,39 @@ fn numerator(b: f32, d: f32, n: f32) -> f32 {
 /// Represents the denominator in f(x_i)/f'(x_i)
 fn denominator(b: f32, d: f32) -> f32 {
     ((d * b.powf(d - 1.) - 1.) * (b - 1.) - (b.powf(d) - 1.)) / (b - 1.).powf(2.)
+}
+
+/// Type for maintaining running averages of a quantity.
+#[derive(Debug)]
+pub struct Averager<T> {
+    cum: T,
+    cnt: usize,
+}
+
+impl<T> Averager<T>
+where
+    T: AddAssign + Into<f64> + Copy,
+{
+    /// Create a new `Averager` with initial value `init`.
+    pub fn new(init: T) -> Self {
+        Self { cum: init, cnt: 0 }
+    }
+
+    /// Push a `T` into the `Averager`.
+    pub fn push(&mut self, val: T) {
+        self.cum += val;
+        self.cnt += 1;
+    }
+
+    /// Push multiple instances of `T` into the `Averager`. The function accepts the cumulative
+    /// value of all the instances, and the number of instances.
+    pub fn push_many(&mut self, val: T, cnt: usize) {
+        self.cum += val;
+        self.cnt += cnt;
+    }
+
+    /// Read the current average value from the `Averager`.
+    pub fn avg(&self) -> f64 {
+        Into::<f64>::into(self.cum) / (self.cnt as f64)
+    }
 }

@@ -1,5 +1,5 @@
 use super::eval::Evaluation;
-use super::info::Info;
+use super::info::{CurrMoveInfo, Info, PvInfo};
 use super::killer::KillerTable;
 use super::options::Config;
 use super::ordering::{Loader, OrderedMoves, ScoredMoveList, Scorer};
@@ -94,7 +94,7 @@ impl Search {
                 let score = self.iterative_deepening(d);
 
                 self.trace.end_search();
-                self.report_info(d, score);
+                self.report_pv(d, score);
 
                 match self.config.lock() {
                     Ok(c) => {
@@ -118,7 +118,7 @@ impl Search {
             self.search_depth = d;
             score = self.alphabeta(Score::INF_N, Score::INF_P, d);
             // score = self.pvs(Score::INF_N, Score::INF_P, d);
-            self.report_info(d, score);
+            self.report_pv(d, score);
         }
 
         score
@@ -126,6 +126,7 @@ impl Search {
 
     fn alphabeta(&mut self, mut alpha: Score, mut beta: Score, depth: u8) -> Score {
         self.trace.visit_node();
+        let draft = self.search_depth - depth;
 
         let (tt_entry, tt_mov) = {
             use super::tt::Probe::*;
@@ -192,9 +193,14 @@ impl Search {
         let mut did_raise_alpha = false;
 
         // Iterate the moves.
-        while moves.load_next_phase(MoveLoader::from(self, tt_mov, self.search_depth - depth)) {
+        while moves.load_next_phase(MoveLoader::from(self, tt_mov, draft)) {
             for mov in &moves {
                 c += 1;
+
+                // Start reporting which move we're considering after 2 seconds have elapsed.
+                if draft == 0 && self.trace.live_elapsed().as_millis() > 2000 {
+                    self.report_curr_move(depth, &mov, c);
+                }
 
                 self.pos.make_move(mov);
                 let score = self.alphabeta(-beta, -alpha, depth - 1).neg().inc_mate();
@@ -209,7 +215,7 @@ impl Search {
 
                     if mov.is_quiet_or_castle() {
                         // This is a killer move. It's quiet and caused a beta-cutoff.
-                        self.kt.store(*mov, self.search_depth - depth);
+                        self.kt.store(*mov, draft);
                     }
 
                     return score;
@@ -380,10 +386,10 @@ impl Search {
         }
     }
 
-    fn report_info(&self, depth: u8, score: Score) {
+    fn report_pv(&self, depth: u8, score: Score) {
         match &self.tx {
             Some(tx) => {
-                let _ = tx.send(Resp::Info(Info {
+                let _ = tx.send(Resp::Info(Info::Pv(PvInfo {
                     depth,
                     score,
                     time: self.trace.live_elapsed().as_millis() as usize,
@@ -396,7 +402,20 @@ impl Search {
                         .collect::<String>(),
                     hashfull: self.tt.hashfull(),
                     nps: self.trace.live_nps() as u32,
-                }));
+                })));
+            }
+            None => {}
+        }
+    }
+
+    fn report_curr_move(&self, depth: u8, mov: &Move, num: u8) {
+        match &self.tx {
+            Some(tx) => {
+                let _ = tx.send(Resp::Info(Info::CurrMove(CurrMoveInfo {
+                    depth,
+                    currmove: *mov,
+                    number: num,
+                })));
             }
             None => {}
         }
@@ -466,6 +485,14 @@ impl Search {
                 .join(" ")
         );
         println!("score:     {:?}", score);
+        println!(
+            "tt move found at {:.2}% of nodes",
+            self.trace.hash_found.avg() * 100_f64
+        );
+        println!(
+            "killers found per node: {:.2}",
+            self.trace.killers_per_node.avg() * 2_f64
+        );
     }
 }
 
@@ -491,8 +518,13 @@ impl<'a> Loader for MoveLoader<'a> {
     #[inline]
     fn load_hash(&mut self, movelist: &mut ScoredMoveList) {
         match self.hash_move {
-            Some(mv) => movelist.push(mv),
-            None => {}
+            Some(mv) => {
+                self.search.trace.hash_found.push(1);
+                movelist.push(mv)
+            }
+            None => {
+                self.search.trace.hash_found.push(0);
+            }
         }
     }
 
@@ -508,12 +540,16 @@ impl<'a> Loader for MoveLoader<'a> {
 
     fn load_killers(&mut self, movelist: &mut ScoredMoveList) {
         let (km1, km2) = self.search.kt.probe(self.draft, &self.search.pos);
+        let mut cnt = 0;
         if km1.is_some() {
+            cnt += 1;
             movelist.push(km1.expect("checked above"));
         }
         if km2.is_some() {
+            cnt += 1;
             movelist.push(km2.expect("checked above"));
         }
+        self.search.trace.killers_per_node.push_many(cnt, 2);
     }
 
     fn load_quiets(&mut self, movelist: &mut ScoredMoveList) {

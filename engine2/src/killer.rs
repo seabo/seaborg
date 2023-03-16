@@ -35,6 +35,10 @@ impl KillerTable {
     /// Probe the killer table for moves at `draft` distance from the root. Only returns moves
     /// which are valid and legal in the given position.
     pub fn probe(&mut self, draft: u8, pos: &Position) -> (Option<Move>, Option<Move>) {
+        if draft as usize >= self.data.len() {
+            return (None, None);
+        }
+
         let entry = &mut self.data[draft as usize];
         let mut ret1 = (None, 0);
         let mut ret2 = (None, 0);
@@ -57,6 +61,10 @@ impl KillerTable {
     }
 
     pub fn store(&mut self, killer: Move, draft: u8) {
+        if draft as usize >= self.data.len() {
+            return;
+        }
+
         let entry = &mut self.data[draft as usize];
 
         if entry.mov_a.0 == killer || entry.mov_b.0 == killer {
