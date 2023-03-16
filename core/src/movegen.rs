@@ -104,6 +104,7 @@ impl MoveList for DummyMoveList {
 
 impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
     /// Determine whether the passed move is a valid pseudolegal move in the given position.
+    #[inline]
     fn valid_move<G: Generate, L: Legality>(
         position: &'a Position,
         mov: &'a Move,
@@ -119,6 +120,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
         }
     }
 
+    #[inline]
     fn valid_move_helper<G: Generate, L: Legality, PL: Side>(
         position: &'a Position,
         mov: &'a Move,
@@ -611,6 +613,10 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
             if let Some(ep_square) = self.position.ep_square() {
                 // TODO: add an `assert_eq` to check that the rank of ep_square is 6th
                 // rank from the moving player's perspective
+
+                if (ep_square.to_bb() & target).is_empty() {
+                    return false;
+                }
 
                 let ep_cap =
                     pawns_not_rank_7 & Bitboard(pawn_attacks_from(ep_square, PL::opp_player()));

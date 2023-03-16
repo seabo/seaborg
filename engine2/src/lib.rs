@@ -5,6 +5,7 @@
 pub mod engine;
 pub mod eval;
 pub mod info;
+pub mod killer;
 pub mod options;
 pub mod ordering;
 pub mod perft;

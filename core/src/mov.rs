@@ -60,6 +60,16 @@ impl Move {
     }
 
     #[inline(always)]
+    pub fn is_quiet(&self) -> bool {
+        self.ty.contains(MoveType::QUIET)
+    }
+
+    #[inline(always)]
+    pub fn is_quiet_or_castle(&self) -> bool {
+        self.ty.intersects(MoveType::QUIET | MoveType::CASTLE)
+    }
+
+    #[inline(always)]
     pub fn is_promo(&self) -> bool {
         debug_assert!(if self.ty.contains(MoveType::PROMOTION) {
             self.promo_piece_type.is_some()

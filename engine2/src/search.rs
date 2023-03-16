@@ -1,5 +1,6 @@
 use super::eval::Evaluation;
 use super::info::Info;
+use super::killer::KillerTable;
 use super::options::Config;
 use super::ordering::{Loader, OrderedMoves, ScoredMoveList, Scorer};
 use super::pv_table::PVTable;
@@ -32,6 +33,8 @@ pub struct Search {
     trace: Tracer,
     /// The transposition table.
     tt: Table,
+    /// The killer move table.
+    kt: KillerTable,
     /// Channel transmitter to send info to the GUI.
     tx: Option<Sender<Resp>>,
     /// A channel receiver to be informed that the search should stop.
@@ -40,6 +43,7 @@ pub struct Search {
     stopping: bool,
     /// Config governing the current engine session.
     config: Arc<Mutex<Config>>,
+    search_depth: u8,
 }
 
 impl Search {
@@ -48,11 +52,13 @@ impl Search {
             pos,
             config,
             tt: Table::new(16),
+            kt: KillerTable::new(20),
             pvt: PVTable::new(8),
             trace: Tracer::new(),
             tx: None,
             stop_rx: None,
             stopping: false,
+            search_depth: 0,
         }
     }
 
@@ -81,6 +87,7 @@ impl Search {
                 // Some bookeeping and prep.
                 // self.pvt = PVTable::new(d);
                 self.trace.commence_search();
+                self.search_depth = d;
 
                 // let score = self.negamax(d);
                 // let score = self.alphabeta_ordered(Score::INF_N, Score::INF_P, d);
@@ -108,6 +115,7 @@ impl Search {
         let mut score = Score::INF_N;
         for d in 2..=depth {
             self.pvt = PVTable::new(d);
+            self.search_depth = d;
             score = self.alphabeta(Score::INF_N, Score::INF_P, d);
             // score = self.pvs(Score::INF_N, Score::INF_P, d);
             self.report_info(d, score);
@@ -184,7 +192,7 @@ impl Search {
         let mut did_raise_alpha = false;
 
         // Iterate the moves.
-        while moves.load_next_phase(MoveLoader::from(self, tt_mov)) {
+        while moves.load_next_phase(MoveLoader::from(self, tt_mov, self.search_depth - depth)) {
             for mov in &moves {
                 c += 1;
 
@@ -197,24 +205,11 @@ impl Search {
                 }
 
                 if score >= beta {
-                    self.tt.probe(&self.pos).into_inner().write(
-                        &self.pos,
-                        score,
-                        depth,
-                        Bound::Lower,
-                        mov,
-                    );
+                    tt_entry.write(&self.pos, score, depth, Bound::Lower, mov);
 
-                    let retrieved = self
-                        .tt
-                        .probe(&self.pos)
-                        .into_inner()
-                        .read()
-                        .mov
-                        .to_move(&self.pos);
-                    if retrieved != *mov {
-                        println!("stored {:?}; retrieved {:?}", mov, retrieved);
-                        panic!();
+                    if mov.is_quiet_or_castle() {
+                        // This is a killer move. It's quiet and caused a beta-cutoff.
+                        self.kt.store(*mov, self.search_depth - depth);
                     }
 
                     return score;
@@ -477,13 +472,18 @@ impl Search {
 pub struct MoveLoader<'a> {
     search: &'a mut Search,
     hash_move: Option<Move>,
+    draft: u8,
 }
 
 impl<'a> MoveLoader<'a> {
     /// Create a `MoveLoader` from the passed `Search`.
     #[inline(always)]
-    pub fn from(search: &'a mut Search, hash_move: Option<Move>) -> Self {
-        MoveLoader { search, hash_move }
+    pub fn from(search: &'a mut Search, hash_move: Option<Move>, draft: u8) -> Self {
+        MoveLoader {
+            search,
+            hash_move,
+            draft,
+        }
     }
 }
 
@@ -506,7 +506,15 @@ impl<'a> Loader for MoveLoader<'a> {
         self.search.pos.generate_in::<_, Captures, Legal>(movelist);
     }
 
-    fn load_killers(&mut self, _movelist: &mut ScoredMoveList) {}
+    fn load_killers(&mut self, movelist: &mut ScoredMoveList) {
+        let (km1, km2) = self.search.kt.probe(self.draft, &self.search.pos);
+        if km1.is_some() {
+            movelist.push(km1.expect("checked above"));
+        }
+        if km2.is_some() {
+            movelist.push(km2.expect("checked above"));
+        }
+    }
 
     fn load_quiets(&mut self, movelist: &mut ScoredMoveList) {
         self.search.pos.generate_in::<_, Quiets, Legal>(movelist);

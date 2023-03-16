@@ -257,7 +257,7 @@ pub struct OrderedMoves {
     phase: Phase,
 }
 
-#[derive(Copy, Clone, Debug, FromPrimitive)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, FromPrimitive)]
 #[repr(u8)]
 pub enum Phase {
     /// Before the first phase has been loaded.
