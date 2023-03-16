@@ -47,9 +47,9 @@ impl Search {
         Self {
             pos,
             config,
+            tt: Table::new(16),
             pvt: PVTable::new(8),
             trace: Tracer::new(),
-            tt: Table::new(16),
             tx: None,
             stop_rx: None,
             stopping: false,
@@ -104,58 +104,277 @@ impl Search {
         }
     }
 
-    fn alphabeta(&mut self, mut alpha: Score, beta: Score, depth: u8) -> Score {
-        self.trace.visit_node();
-
-        if depth == 0 {
-            self.quiesce(alpha, beta)
-            // self.evaluate()
-        } else {
-            let mut max = Score::INF_N;
-
-            let moves = self.pos.generate::<BasicMoveList, All, Legal>();
-            if moves.is_empty() {
-                self.pvt.pv_leaf_at(depth);
-                return if self.pos.in_check() {
-                    Score::mate(0)
-                } else {
-                    Score::cp(0)
-                };
-            }
-            for mov in &moves {
-                self.pos.make_move(mov);
-                let score = self.alphabeta(-beta, -alpha, depth - 1).neg().inc_mate();
-                self.pos.unmake_move();
-
-                if score >= beta {
-                    return score;
-                }
-
-                if score > max {
-                    self.pvt.copy_to(depth, *mov);
-                    max = score;
-                    if score > alpha {
-                        alpha = score;
-                    }
-                }
-            }
-
-            max
-        }
-    }
-
     fn iterative_deepening(&mut self, depth: u8) -> Score {
         let mut score = Score::INF_N;
         for d in 2..=depth {
             self.pvt = PVTable::new(d);
-            score = self.alphabeta_ordered(Score::INF_N, Score::INF_P, d);
+            // score = self.alphabeta(Score::INF_N, Score::INF_P, d);
+            score = self.pvs(Score::INF_N, Score::INF_P, d);
             self.report_info(d, score);
         }
 
         score
     }
 
-    fn alphabeta_ordered(&mut self, mut alpha: Score, mut beta: Score, depth: u8) -> Score {
+    fn pvs(&mut self, mut alpha: Score, mut beta: Score, depth: u8) -> Score {
+        self.trace.visit_node();
+
+        let (tt_entry, tt_mov) = {
+            use super::tt::Probe::*;
+            match self.tt.probe(&self.pos) {
+                Hit(entry) => {
+                    let e = entry.read();
+                    if e.mov.is_null() {
+                        (entry, None)
+                    } else {
+                        let mov = e.mov.to_move(&self.pos);
+                        if self.pos.valid_move(&mov) {
+                            self.trace.hash_hit();
+                            (entry, Some(mov))
+                        } else {
+                            self.trace.hash_collision();
+                            (entry, None)
+                        }
+                    }
+                }
+                Clash(entry) => {
+                    self.trace.hash_clash();
+                    (entry, None)
+                }
+                Empty(entry) => (entry, None),
+            }
+        };
+
+        // Handle leaf node.
+        if depth == 0 {
+            // Only perform this check at leaf nodes, to prevent doing it too often.
+            self.check_should_stop();
+
+            let score = self.quiesce(alpha, beta);
+            if score == Score::mate(0) {
+                self.pvt.pv_leaf_at(0);
+            }
+            return score;
+        }
+
+        // Immediate return, or window adjustment, if the tt move is of a high enough depth.
+        let entry = tt_entry.read();
+        if entry.depth >= depth {
+            if entry.bound() == Bound::Exact {
+                return entry.score;
+            } else if entry.bound() == Bound::Lower {
+                if entry.score > beta {
+                    return entry.score; // guaranteed beta-cutoff
+                } else if entry.score > alpha {
+                    alpha = entry.score; // can narrow window
+                }
+            } else if entry.bound() == Bound::Upper {
+                if entry.score < alpha {
+                    return entry.score; // guaranteed all-node
+                } else if entry.score < beta {
+                    beta = entry.score; // can narrow window
+                }
+            }
+        }
+
+        let mut max = Score::INF_N;
+        let mut best_move = Move::null();
+
+        let mut moves = OrderedMoves::new();
+        let mut c = 0;
+        let mut did_raise_alpha = false;
+        let mut search_pv = true;
+
+        // Iterate the moves.
+        while moves.load_next_phase(MoveLoader::from(self, tt_mov)) {
+            for mov in &moves {
+                c += 1;
+
+                // Expected PV move.
+                // if !did_raise_alpha {
+                // Assume that the best move is the first one.
+                best_move = *mov;
+
+                self.pos.make_move(mov);
+
+                let mut score;
+                if search_pv {
+                    score = self.pvs(-beta, -alpha, depth - 1).neg().inc_mate();
+                } else {
+                    score = self.zws(-alpha, depth - 1).neg().inc_mate();
+                    if score > alpha {
+                        score = self.pvs(-beta, -alpha, depth - 1).neg().inc_mate()
+                        // re-search
+                    }
+                }
+
+                self.pos.unmake_move();
+
+                if self.stopping {
+                    break;
+                }
+
+                if score >= beta {
+                    tt_entry.write(&self.pos, score, depth, Bound::Lower, &mov);
+                    return score;
+                }
+
+                if score > max {
+                    self.pvt.copy_to(depth, *mov);
+                    max = score;
+                    best_move = *mov;
+                    if score > alpha {
+                        did_raise_alpha = true;
+                        alpha = score;
+                        search_pv = false;
+                    }
+                }
+                // }
+                // // Expected cut node.
+                // else {
+                //     self.pos.make_move(mov);
+
+                //     // Null window search.
+                //     let mut score = self
+                //         .pvs(-alpha - Score::cp(1), -alpha, depth - 1)
+                //         .neg()
+                //         .inc_mate();
+
+                //     if alpha < score && score < beta {
+                //         // Re-search with full window.
+                //         score = self.pvs(-beta, -alpha, depth - 1).neg().inc_mate();
+
+                //         if score > alpha {
+                //             alpha = score;
+                //             did_raise_alpha = true;
+                //         }
+                //     }
+
+                //     self.pos.unmake_move();
+
+                //     if score >= beta {
+                //         tt_entry.write(&self.pos, score, depth, Bound::Lower, &best_move);
+                //         return score;
+                //     }
+
+                //     if score > max {
+                //         self.pvt.copy_to(depth, *mov);
+                //         max = score;
+                //         best_move = *mov;
+
+                //         if score > alpha {
+                //             did_raise_alpha = true;
+                //             alpha = score;
+                //         }
+                //     }
+                // }
+            }
+
+            if self.stopping {
+                break;
+            }
+        }
+
+        // If we had no moves at all, this position is either checkmate or stalemate.
+        if c == 0 {
+            self.pvt.pv_leaf_at(depth);
+
+            let score = if self.pos.in_check() {
+                Score::mate(0)
+            } else {
+                Score::cp(0)
+            };
+
+            tt_entry.write(&self.pos, score, depth, Bound::Exact, &Move::null());
+            return score;
+        }
+
+        // If we got here without a cut-off, then this was an all-node.
+        if did_raise_alpha {
+            tt_entry.write(&self.pos, max, depth, Bound::Exact, &best_move);
+        } else {
+            tt_entry.write(&self.pos, max, depth, Bound::Upper, &best_move);
+        }
+
+        max
+    }
+
+    fn zws(&mut self, mut beta: Score, depth: u8) -> Score {
+        self.trace.visit_node();
+
+        let alpha = beta - Score::cp(1);
+
+        let (tt_entry, tt_mov) = {
+            use super::tt::Probe::*;
+            match self.tt.probe(&self.pos) {
+                Hit(entry) => {
+                    let e = entry.read();
+                    if e.mov.is_null() {
+                        (entry, None)
+                    } else {
+                        let mov = e.mov.to_move(&self.pos);
+                        if self.pos.valid_move(&mov) {
+                            self.trace.hash_hit();
+                            (entry, Some(mov))
+                        } else {
+                            self.trace.hash_collision();
+                            (entry, None)
+                        }
+                    }
+                }
+                Clash(entry) => {
+                    self.trace.hash_clash();
+                    (entry, None)
+                }
+                Empty(entry) => (entry, None),
+            }
+        };
+
+        // Handle leaf node.
+        if depth == 0 {
+            // Only perform this check at leaf nodes, to prevent doing it too often.
+            self.check_should_stop();
+
+            let score = self.quiesce(alpha, beta);
+            if score == Score::mate(0) {
+                self.pvt.pv_leaf_at(0);
+            }
+            return score;
+        }
+
+        // Immediate return if the tt move is of a high enough depth. No need to adjust window as
+        // it is already null.
+        let entry = tt_entry.read();
+        if entry.depth >= depth && entry.bound() == Bound::Exact {
+            return entry.score;
+        }
+
+        // let mut max = Score::INF_N;
+        // let mut best_move = Move::null();
+
+        let mut moves = OrderedMoves::new();
+        // let mut c = 0;
+        // let mut did_raise_alpha = false;
+
+        // Iterate the moves.
+        while moves.load_next_phase(MoveLoader::from(self, tt_mov)) {
+            for mov in &moves {
+                // c += 1;
+
+                self.pos.make_move(mov);
+                let score = self.zws(-alpha, depth - 1).neg().inc_mate();
+                self.pos.unmake_move();
+
+                if score >= beta {
+                    return beta;
+                }
+            }
+        }
+
+        alpha
+    }
+
+    fn alphabeta(&mut self, mut alpha: Score, mut beta: Score, depth: u8) -> Score {
         self.trace.visit_node();
 
         let mut tt_entry: Option<WritableEntry<'_>> = None;
@@ -176,7 +395,7 @@ impl Search {
             Empty(_) => {}
         }
 
-        if depth == 1 {
+        if depth == 0 {
             // Only perform this check at leaf nodes, to prevent doing it too often.
             self.check_should_stop();
 
@@ -230,10 +449,7 @@ impl Search {
 
                     self.pos.make_move(mov);
 
-                    let score = self
-                        .alphabeta_ordered(-beta, -alpha, depth - 1)
-                        .neg()
-                        .inc_mate();
+                    let score = self.alphabeta(-beta, -alpha, depth - 1).neg().inc_mate();
                     self.pos.unmake_move();
 
                     if self.stopping {

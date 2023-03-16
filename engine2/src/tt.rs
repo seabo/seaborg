@@ -318,7 +318,7 @@ impl Table {
     /// reference to it is returned. If not, a unique reference to the entry slot is returned,
     /// which can be overwritten once search has produced a result.
     #[inline(always)]
-    pub fn probe<'a>(&'a self, pos: &Position) -> Probe<'a> {
+    pub fn probe<'tt>(&'_ self, pos: &'_ Position) -> Probe<'tt> {
         let idx = self.idx(pos.zobrist().0);
         let sig = (pos.zobrist().0 >> 48) as u16;
 

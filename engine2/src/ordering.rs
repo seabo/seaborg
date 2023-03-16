@@ -558,6 +558,7 @@ impl OrderedMoves {
     ///
     /// This function calls methods on the passed in `loader` to fill the buffer with the moves
     /// need in the next phase.
+    #[inline]
     pub fn load_next_phase<L: Loader>(&mut self, mut loader: L) -> bool {
         let res = self.phase.inc();
         if res {

@@ -2,6 +2,7 @@ use super::options::{Config, EngineOpt};
 use super::search::Search;
 use super::session::Resp;
 use super::time::TimingMode;
+use super::tt::Table;
 use super::uci::{Command, Error};
 use core::position::Position;
 
