@@ -214,7 +214,7 @@ impl Search {
                     tt_entry.write(&self.pos, score, depth, Bound::Lower, mov);
 
                     if mov.is_quiet_or_castle() {
-                        // This is a killer move. It's quiet and caused a beta-cutoff.
+                        // This is a killer move, because it's quiet and caused a beta-cutoff.
                         self.kt.store(*mov, draft);
                     }
 
@@ -331,18 +331,16 @@ impl Search {
             alpha = stand_pat;
         }
 
+        if self.pos.in_check() {
+            // A one move search extension. The main alphabeta function will tell us if we are in
+            // checkmate or stalemate, and if not, it will try the possible evasions.
+            return self.alphabeta(alpha, beta, 1);
+        }
+
         // TODO: this should look at more than just captures. Checks are important to consider too,
         // but they are harder, as not self-limiting like captures.
         let captures = self.pos.generate::<BasicMoveList, Captures, Legal>();
         let mut score: Score;
-
-        if captures.is_empty() {
-            if self.pos.in_checkmate() {
-                return Score::mate(0);
-            }
-            // TODO: we need to deal with stalemate here. If we don't, we might be getting wrong
-            // results?
-        }
 
         for mov in &captures {
             // Evaluate whether the capture is likely to be favourable with SEE.
