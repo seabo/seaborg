@@ -1,3 +1,5 @@
+use crate::history::HistoryTable;
+
 use super::eval::Evaluation;
 use super::info::{CurrMoveInfo, Info, PvInfo};
 use super::killer::KillerTable;
@@ -35,6 +37,8 @@ pub struct Search {
     tt: Table,
     /// The killer move table.
     kt: KillerTable,
+    /// The history table.
+    history: HistoryTable,
     /// Channel transmitter to send info to the GUI.
     tx: Option<Sender<Resp>>,
     /// A channel receiver to be informed that the search should stop.
@@ -53,6 +57,7 @@ impl Search {
             config,
             tt: Table::new(16),
             kt: KillerTable::new(20),
+            history: HistoryTable::new(),
             pvt: PVTable::new(8),
             trace: Tracer::new(),
             tx: None,
@@ -95,6 +100,7 @@ impl Search {
 
                 self.trace.end_search();
                 self.report_pv(d, score);
+                self.history.reset();
 
                 match self.config.lock() {
                     Ok(c) => {
@@ -216,6 +222,20 @@ impl Search {
                     if mov.is_quiet_or_castle() {
                         // This is a killer move, because it's quiet and caused a beta-cutoff.
                         self.kt.store(*mov, draft);
+
+                        // If we had a beta cutoff on a quiet move at least 2 ply from a leaf,
+                        // record it in the history table.
+                        if depth > 2 {
+                            // SAFETY: this is a legal move, so the squares must be valid.
+                            unsafe {
+                                self.history.inc_unchecked(
+                                    mov.orig(),
+                                    mov.dest(),
+                                    depth as u16 * depth as u16,
+                                    self.pos.turn(),
+                                );
+                            }
+                        }
                     }
 
                     return score;
@@ -473,6 +493,7 @@ impl Search {
             self.trace.hash_clashes().separated_string(),
             self.trace.hash_clashes() as f64 / self.trace.hash_probes() as f64 * 100.
         );
+        println!(" hashfull: {:.2}%", self.tt.hashfull() as f64 / 10.);
         println!("-------------------------");
         println!(
             "pv:        {}",
@@ -491,6 +512,7 @@ impl Search {
             "killers found per node: {:.2}",
             self.trace.killers_per_node.avg() * 2_f64
         );
+        // println!("history table: {:?}", self.history);
     }
 }
 
@@ -562,6 +584,20 @@ impl<'a> Loader for MoveLoader<'a> {
                     mov.dest(),
                     self.search.pos.piece_at_sq(mov.dest()).type_of(),
                     self.search.pos.piece_at_sq(mov.orig()).type_of(),
+                );
+            }
+        }
+    }
+
+    fn score_quiets(&mut self, quiets: Scorer) {
+        let turn = self.search.pos.turn();
+        for (mov, score) in quiets {
+            // SAFETY: these are legal moves, so the squares must be valid.
+            unsafe {
+                *score = Score::cp(
+                    self.search
+                        .history
+                        .get_unchecked(mov.orig(), mov.dest(), turn) as i16,
                 );
             }
         }
