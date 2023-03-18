@@ -104,14 +104,14 @@ where
     }
 }
 
-/// A structure storing two butterfly tables of `u16`s, used to record the history value of moves
+/// A structure storing two butterfly tables of `u32`s, used to record the history value of moves
 /// during search.
 ///
-/// This data structure occupies about 16KB of memory.
+/// This data structure occupies about 32KB of memory.
 #[derive(Debug)]
 pub struct HistoryTable {
-    white: Butterfly<u16>,
-    black: Butterfly<u16>,
+    white: Butterfly<u32>,
+    black: Butterfly<u32>,
 }
 
 impl HistoryTable {
@@ -122,14 +122,14 @@ impl HistoryTable {
         }
     }
 
-    pub unsafe fn inc_unchecked(&mut self, from: Square, to: Square, amt: u16, side: Player) {
+    pub unsafe fn inc_unchecked(&mut self, from: Square, to: Square, amt: u32, side: Player) {
         match side {
             Player::WHITE => self.white.inc_unchecked(from, to, amt),
             Player::BLACK => self.black.inc_unchecked(from, to, amt),
         }
     }
 
-    pub unsafe fn get_unchecked(&self, from: Square, to: Square, side: Player) -> u16 {
+    pub unsafe fn get_unchecked(&self, from: Square, to: Square, side: Player) -> u32 {
         match side {
             Player::WHITE => self.white.get_unchecked(from, to),
             Player::BLACK => self.black.get_unchecked(from, to),

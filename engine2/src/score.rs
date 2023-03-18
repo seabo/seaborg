@@ -77,6 +77,10 @@ impl Score {
     pub fn zero() -> Self {
         Self::cp(0)
     }
+
+    pub fn to_i16(&self) -> i16 {
+        self.0
+    }
 }
 
 impl Neg for Score {

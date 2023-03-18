@@ -14,7 +14,7 @@ use std::mem::MaybeUninit;
 use std::ops::Range;
 use std::slice::Iter as SliceIter;
 
-pub type ScoredMove = (Move, Score);
+pub type ScoredMove = (Move, i16);
 
 /// An entry in the move ordering `ArrayVec` buffer.
 #[derive(Debug)]
@@ -39,7 +39,7 @@ pub struct Scorer<'a> {
 }
 
 impl<'a> Iterator for Scorer<'a> {
-    type Item = (&'a Move, &'a mut Score);
+    type Item = (&'a Move, &'a mut i16);
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
@@ -62,7 +62,7 @@ impl MoveList for ScoredMoveList {
 
     fn push(&mut self, mv: Move) {
         let entry = Entry {
-            sm: (mv, Score::zero()),
+            sm: (mv, 0),
             yielded: UnsafeCell::new(false),
         };
 
@@ -108,7 +108,7 @@ impl<'a> Iterator for SelectionSort<'a> {
         // Then we want to set the `yielded` flag on that entry to `true`, and return a reference
         // to the move. When we get through the whole list without seeing a `yielded = false`, we
         // return `None`.
-        let mut max = Score::INF_N;
+        let mut max = i16::MIN;
         let mut max_entry: MaybeUninit<&Entry> = MaybeUninit::uninit();
         let mut found_one: bool = false;
 
@@ -633,7 +633,7 @@ impl OrderedMoves {
         #[inline]
         fn entry(mov: &Entry, pt: PieceType) -> Entry {
             Entry {
-                sm: (mov.sm.0.set_promo_type(pt), Score::zero()),
+                sm: (mov.sm.0.set_promo_type(pt), 0),
                 yielded: UnsafeCell::new(false),
             }
         }
@@ -674,13 +674,13 @@ impl OrderedMoves {
     #[inline]
     fn good_capt_iter<'a>(&'a self) -> SelectionSort<'a> {
         let segment = self.capt_segment();
-        SelectionSort::from(segment, |sm| sm.1 > Score::zero())
+        SelectionSort::from(segment, |sm| sm.1 > 0)
     }
 
     #[inline]
     fn equal_capt_iter<'a>(&'a self) -> SelectionSort<'a> {
         let segment = self.capt_segment();
-        SelectionSort::from(segment, |sm| sm.1 == Score::zero())
+        SelectionSort::from(segment, |sm| sm.1 == 0)
     }
 
     #[inline]
@@ -715,7 +715,7 @@ impl OrderedMoves {
         // last, since all the other captures will have been yielded already, and the only ones
         // left with `yielded = false` are the bad captures. So we can save an op but be a bit
         // less explicit and brittle / less resilient to future changes.
-        SelectionSort::from(segment, |sm| sm.1 < Score::zero())
+        SelectionSort::from(segment, |sm| sm.1 < 0)
     }
 
     fn underpromo_iter<'a>(&'a self) -> PromotionsIter<'a> {
