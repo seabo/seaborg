@@ -488,6 +488,75 @@ impl Position {
             }),
         }
     }
+
+    pub fn to_fen(&self) -> String {
+        let mut s = String::with_capacity(120);
+
+        // 1. Board
+        let mut squares: [[Piece; 8]; 8] = [[Piece::None; 8]; 8];
+
+        for i in 0..64 {
+            let rank = i / 8;
+            let file = i % 8;
+            squares[rank][file] = self.board.arr[i]
+        }
+
+        let mut board_rows: Vec<String> = Vec::with_capacity(8);
+
+        for row in squares.iter().rev() {
+            let mut fen_row = String::with_capacity(8);
+            let mut c = 0; // counter of consecutive empty squares
+
+            for square in row.iter() {
+                if square.is_none() {
+                    c += 1;
+                } else {
+                    if c != 0 {
+                        fen_row.push_str(&format!("{}", c));
+                    }
+
+                    fen_row.push_str(&format!("{}", square));
+                    c = 0;
+                }
+            }
+
+            if c != 0 {
+                fen_row.push_str(&format!("{}", c));
+            }
+
+            board_rows.push(fen_row);
+        }
+
+        s.push_str(&board_rows.join("/"));
+        s.push(' ');
+
+        // 2. Turn
+        s.push_str(match self.turn() {
+            Player::WHITE => "w",
+            Player::BLACK => "b",
+        });
+        s.push(' ');
+
+        // 3. Castling rights
+        s.push_str(&format!("{}", self.castling_rights()));
+        s.push(' ');
+
+        // 4. En passant square
+        match self.ep_square {
+            Some(ep) => s.push_str(&format!("{}", ep)),
+            None => s.push('-'),
+        }
+        s.push(' ');
+
+        // 5. Halfmove clock
+        s.push_str(&format!("{}", self.half_move_clock));
+        s.push(' ');
+
+        // 6. Fullmove number
+        s.push_str(&format!("{}", self.move_number));
+
+        s
+    }
 }
 
 fn rank_file_to_idx(rank: u32, file: u8) -> u8 {

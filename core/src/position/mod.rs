@@ -846,7 +846,7 @@ impl Default for Position {
 
 impl fmt::Display for Position {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "{}", self.board)
+        write!(f, "{}", self.board)
     }
 }
 

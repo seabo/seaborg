@@ -92,30 +92,25 @@ impl CastlingRights {
 
 impl fmt::Display for CastlingRights {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut white = Vec::new();
-        let mut black = Vec::new();
-        if self.white_kingside() {
-            white.push("kingside")
+        if self.is_empty() {
+            write!(f, "-")
+        } else {
+            let mut white = Vec::new();
+            let mut black = Vec::new();
+            if self.white_kingside() {
+                white.push("K")
+            }
+            if self.white_queenside() {
+                white.push("Q")
+            }
+            if self.black_kingside() {
+                black.push("k")
+            }
+            if self.black_queenside() {
+                black.push("q")
+            }
+            write!(f, "{}{}", white.join(""), black.join(""))
         }
-        if self.white_queenside() {
-            white.push("queenside")
-        }
-        if self.black_kingside() {
-            black.push("kingside")
-        }
-        if self.black_queenside() {
-            black.push("queenside")
-        }
-        if white.len() == 0 {
-            white.push("none")
-        }
-        if black.len() == 0 {
-            black.push("none")
-        }
-        let white_string = white.join(" + ");
-        let black_string = black.join(" + ");
-
-        write!(f, "White: {}, Black: {}", white_string, black_string)
     }
 }
 

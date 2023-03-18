@@ -24,6 +24,8 @@ pub enum Command {
     Quit,
     /// Display the board in ascii format.
     Display,
+    /// Display the board in a Lichess analysis window with the default browser.
+    DisplayLichess,
     /// Display the current engine configuration.
     Config,
     /// Run perft to the given depth.
@@ -67,6 +69,10 @@ enum Keyword {
     // Additional commands
     /// Display the current internal board position.
     Display,
+    /// Appears after the display keyword to open a board position in Lichess.
+    Lichess,
+    /// Short form keyword to open the current internal board position in a Lichess Analysis board.
+    DisplayLichess,
     /// Display the current config of the engine.
     Config,
     /// Run a perft test.
@@ -205,6 +211,7 @@ impl<'a> Parser<'a> {
                 Token::Kw(Keyword::Stop) => self.parse_stop(),
                 Token::Kw(Keyword::Quit) => self.parse_quit(),
                 Token::Kw(Keyword::Display) => self.parse_display(),
+                Token::Kw(Keyword::DisplayLichess) => self.parse_display_lichess(),
                 Token::Kw(Keyword::Config) => self.parse_config(),
                 Token::Kw(Keyword::Perft) => self.parse_perft(),
                 Token::String(_) => self.unexpected_token(),
@@ -417,7 +424,18 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_display(&mut self) -> PResult {
-        self.expect_end(Ok(Command::Display))
+        if self.peek().is_some() {
+            match self.advance().unwrap() {
+                Token::Kw(Keyword::Lichess) => self.parse_display_lichess(),
+                _ => self.unexpected_token(),
+            }
+        } else {
+            self.expect_end(Ok(Command::Display))
+        }
+    }
+
+    fn parse_display_lichess(&mut self) -> PResult {
+        self.expect_end(Ok(Command::DisplayLichess))
     }
 
     fn parse_config(&mut self) -> PResult {
@@ -470,6 +488,8 @@ impl<'a> Token<'a> {
             "ponderhit" => Token::Kw(Keyword::PonderHit),
             "quit" => Token::Kw(Keyword::Quit),
             "d" => Token::Kw(Keyword::Display),
+            "dl" => Token::Kw(Keyword::DisplayLichess),
+            "lichess" => Token::Kw(Keyword::Lichess),
             "display" => Token::Kw(Keyword::Display),
             "config" => Token::Kw(Keyword::Config),
             "perft" => Token::Kw(Keyword::Perft),
