@@ -9,7 +9,7 @@ use core::position::{PieceType, Player, Square};
 
 use std::cmp::max;
 
-impl Search {
+impl<'search> Search<'search> {
     /// The SEE swap algorithm.
     ///
     /// Returns the statically minimaxed outcome of exchanges on square `to` after current player
@@ -98,8 +98,8 @@ impl Search {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use core::position::Position;
+    use std::sync::atomic::AtomicBool;
 
     #[test]
     fn it_works() {
@@ -144,7 +144,8 @@ mod tests {
 
         for (fen, from, to, target, attacker, score) in suite {
             let pos = Position::from_fen(fen).unwrap();
-            let mut search = Search::new(pos, Default::default());
+            let flag = AtomicBool::new(false);
+            let mut search = Search::new(pos, &flag);
             let see = search.see(from, to, target, attacker);
             assert_eq!(see, score);
         }

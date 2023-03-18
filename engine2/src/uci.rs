@@ -26,6 +26,16 @@ pub enum Command {
     Display,
     /// Display the board in a Lichess analysis window with the default browser.
     DisplayLichess,
+    /// Make a move directly on the internal board in its current position.
+    ///
+    /// The UCI protocol is theoretically supposed to be stateless, so that the GUI manages states
+    /// and tells the engine exactly what position to search every time it sends a command, even if
+    /// a game is being played. In reality, because of pondering and `ponderhit`, this doesn't even
+    /// happen in the protocol anyway.
+    ///
+    /// It's an annoying faff when working directly with the CLI to have to retype position strings
+    /// and long strings of consecutive moves, so this additional command allows a move to be
+    /// played directly.
     Move(String),
     /// Display the current engine configuration.
     Config,

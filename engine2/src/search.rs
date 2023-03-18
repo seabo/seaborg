@@ -3,12 +3,9 @@ use crate::history::HistoryTable;
 use super::eval::Evaluation;
 use super::info::{CurrMoveInfo, Info, PvInfo};
 use super::killer::KillerTable;
-use super::options::Config;
 use super::ordering::{Loader, OrderedMoves, ScoredMoveList, Scorer};
 use super::pv_table::PVTable;
 use super::score::Score;
-use super::session::Resp;
-use super::time::TimingMode;
 use super::trace::Tracer;
 use super::tt::{Bound, Table};
 
@@ -17,16 +14,15 @@ use core::mov::Move;
 use core::movelist::{BasicMoveList, MoveList};
 use core::position::{Player, Position};
 
-use crossbeam_channel::{Receiver, Sender};
 use separator::Separatable;
 
 use std::ops::Neg;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub const INFINITY: i32 = 10_000;
 
 /// Manages the search.
-pub struct Search {
+pub struct Search<'search> {
     /// The internal board position.
     pub(super) pos: Position,
     /// Table for tracking the principal variation of the search.
@@ -39,82 +35,45 @@ pub struct Search {
     kt: KillerTable,
     /// The history table.
     history: HistoryTable,
-    /// Channel transmitter to send info to the GUI.
-    tx: Option<Sender<Resp>>,
-    /// A channel receiver to be informed that the search should stop.
-    stop_rx: Option<Receiver<()>>,
     /// Flag to indicate when the search should start unwinding due to user intervention.
-    stopping: bool,
-    /// Config governing the current engine session.
-    config: Arc<Mutex<Config>>,
+    stopping: &'search AtomicBool,
     search_depth: u8,
 }
 
-impl Search {
-    pub fn new(pos: Position, config: Arc<Mutex<Config>>) -> Self {
+impl<'search> Search<'search> {
+    pub fn new(pos: Position, flag: &'search AtomicBool) -> Self {
         Self {
             pos,
-            config,
             tt: Table::new(16),
             kt: KillerTable::new(20),
             history: HistoryTable::new(),
             pvt: PVTable::new(8),
             trace: Tracer::new(),
-            tx: None,
-            stop_rx: None,
-            stopping: false,
+            stopping: flag,
             search_depth: 0,
         }
     }
 
-    pub fn new_with_channels(
-        pos: Position,
-        config: Arc<Mutex<Config>>,
-        tx: Sender<Resp>,
-        stop_rx: Receiver<()>,
-    ) -> Self {
-        let mut s = Search::new(pos, config);
-        s.tx = Some(tx);
-        s.stop_rx = Some(stop_rx);
-        s
-    }
-
-    pub fn start_search(&mut self, tm: TimingMode) -> Score {
+    pub fn start_search(&mut self, d: u8) -> Score {
         self.trace = Tracer::new();
 
-        match tm {
-            TimingMode::Timed(_) => todo!(),
-            TimingMode::MoveTime(_) => todo!(),
-            TimingMode::Depth(d) => {
-                // TODO: turn this into a proper use error.
-                assert!(d > 0);
+        // TODO: turn this into a proper use error.
+        assert!(d > 0);
 
-                // Some bookeeping and prep.
-                // self.pvt = PVTable::new(d);
-                self.trace.commence_search();
-                self.search_depth = d;
+        // Some bookeeping and prep.
+        // self.pvt = PVTable::new(d);
+        self.trace.commence_search();
+        self.search_depth = d;
 
-                // let score = self.negamax(d);
-                // let score = self.alphabeta_ordered(Score::INF_N, Score::INF_P, d);
-                let score = self.iterative_deepening(d);
+        // let score = self.negamax(d);
+        // let score = self.alphabeta_ordered(Score::INF_N, Score::INF_P, d);
+        let score = self.iterative_deepening(d);
 
-                self.trace.end_search();
-                self.report_pv(d, score);
-                self.history.reset();
+        self.trace.end_search();
+        self.report_pv(d, score);
+        self.history.reset();
 
-                match self.config.lock() {
-                    Ok(c) => {
-                        if c.debug_mode() {
-                            self.report_telemetry(d, score);
-                        }
-                    }
-                    _ => {}
-                }
-
-                score
-            }
-            TimingMode::Infinite => todo!(),
-        }
+        score
     }
 
     fn iterative_deepening(&mut self, depth: u8) -> Score {
@@ -162,9 +121,6 @@ impl Search {
 
         // Handle leaf node.
         if depth == 0 {
-            // Only perform this check at leaf nodes, to prevent doing it too often.
-            self.check_should_stop();
-
             // let score = self.evaluate();
             let score = self.quiesce(alpha, beta);
             if score == Score::mate(0) {
@@ -212,7 +168,7 @@ impl Search {
                 let score = self.alphabeta(-beta, -alpha, depth - 1).neg().inc_mate();
                 self.pos.unmake_move();
 
-                if self.stopping {
+                if self.stopping.load(Ordering::Relaxed) {
                     break;
                 }
 
@@ -252,7 +208,7 @@ impl Search {
                 }
             }
 
-            if self.stopping {
+            if self.stopping.load(Ordering::Relaxed) {
                 return Score::cp(0);
             }
         }
@@ -392,51 +348,35 @@ impl Search {
         alpha
     }
 
-    fn check_should_stop(&mut self) {
-        match &self.stop_rx {
-            Some(rx) => match rx.try_recv() {
-                Ok(()) => {
-                    self.stopping = true;
-                }
-                Err(_) => {}
-            },
-            _ => {}
-        }
-    }
-
     fn report_pv(&self, depth: u8, score: Score) {
-        match &self.tx {
-            Some(tx) => {
-                let _ = tx.send(Resp::Info(Info::Pv(PvInfo {
-                    depth,
-                    score,
-                    time: self.trace.live_elapsed().as_millis() as usize,
-                    nodes: self.trace.nodes_visited(),
-                    pv: self
-                        .pvt
-                        .pv()
-                        .map(|m| format!("{}", m))
-                        .intersperse(" ".to_string())
-                        .collect::<String>(),
-                    hashfull: self.tt.hashfull(),
-                    nps: self.trace.live_nps() as u32,
-                })));
-            }
-            None => {}
-        }
+        println!(
+            "{}",
+            Info::Pv(PvInfo {
+                depth,
+                score,
+                time: self.trace.live_elapsed().as_millis() as usize,
+                nodes: self.trace.nodes_visited(),
+                pv: self
+                    .pvt
+                    .pv()
+                    .map(|m| format!("{}", m))
+                    .intersperse(" ".to_string())
+                    .collect::<String>(),
+                hashfull: self.tt.hashfull(),
+                nps: self.trace.live_nps() as u32,
+            })
+        );
     }
 
     fn report_curr_move(&self, depth: u8, mov: &Move, num: u8) {
-        match &self.tx {
-            Some(tx) => {
-                let _ = tx.send(Resp::Info(Info::CurrMove(CurrMoveInfo {
-                    depth,
-                    currmove: *mov,
-                    number: num,
-                })));
-            }
-            None => {}
-        }
+        println!(
+            "{}",
+            Info::CurrMove(CurrMoveInfo {
+                depth,
+                currmove: *mov,
+                number: num,
+            })
+        );
     }
 
     /// Detailed debug info about the search, printed after the end of search in debug mode.
@@ -516,16 +456,16 @@ impl Search {
     }
 }
 
-pub struct MoveLoader<'a> {
-    search: &'a mut Search,
+pub struct MoveLoader<'a, 'search> {
+    search: &'a mut Search<'search>,
     hash_move: Option<Move>,
     draft: u8,
 }
 
-impl<'a> MoveLoader<'a> {
+impl<'a, 'search> MoveLoader<'a, 'search> {
     /// Create a `MoveLoader` from the passed `Search`.
     #[inline(always)]
-    pub fn from(search: &'a mut Search, hash_move: Option<Move>, draft: u8) -> Self {
+    pub fn from(search: &'a mut Search<'search>, hash_move: Option<Move>, draft: u8) -> Self {
         MoveLoader {
             search,
             hash_move,
@@ -534,7 +474,7 @@ impl<'a> MoveLoader<'a> {
     }
 }
 
-impl<'a> Loader for MoveLoader<'a> {
+impl<'a, 'search> Loader for MoveLoader<'a, 'search> {
     #[inline]
     fn load_hash(&mut self, movelist: &mut ScoredMoveList) {
         match self.hash_move {
@@ -653,8 +593,9 @@ mod tests {
 
         for (fen, depth, score) in suite {
             let pos = Position::from_fen(fen).unwrap();
-            let mut search = Search::new(pos, Default::default());
-            let s = search.start_search(TimingMode::Depth(depth));
+            let flag = AtomicBool::new(false);
+            let mut search = Search::new(pos, &flag);
+            let s = search.start_search(depth);
 
             assert_eq!(s, score);
         }
@@ -678,7 +619,8 @@ mod tests {
 
         for (fen, depth, score) in suite {
             let pos = Position::from_fen(fen).unwrap();
-            let mut search = Search::new(pos, Default::default());
+            let flag = AtomicBool::new(false);
+            let mut search = Search::new(pos, &flag);
             let s_negamax = search.negamax(depth);
             let s_alphabeta = search.alphabeta(Score::INF_N, Score::INF_P, depth);
 

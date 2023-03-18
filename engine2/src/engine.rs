@@ -1,135 +1,118 @@
-use super::options::{Config, EngineOpt};
+use super::score::Score;
 use super::search::Search;
-use super::session::Resp;
 use super::time::TimingMode;
-use super::uci::{Command, Error};
+use super::uci::{self, Command, Error};
 use core::position::Position;
 
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::unbounded;
 
-use std::env;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::{
+    io,
+    thread::{self, Scope},
+};
 
-/// Manages the search and related configuration. This runs in a separate thread from the main
-/// process.
-pub struct Engine {
-    /// Transmitter of messages to the Session thread.
-    pub(super) tx: Sender<Resp>,
-    /// Receiver of messages from the Session thread.
-    pub(super) rx: Receiver<Command>,
-    /// Current configuration of the engine.
-    pub(super) config: Arc<Mutex<Config>>,
-    /// The internal board position.
-    pub(super) search: Search,
+/// Launch the engine process.
+pub fn launch() {
+    core::init::init_globals();
+
+    let stop_flag = AtomicBool::new(false);
+    let flag = &stop_flag;
+
+    let mut pos = Position::start_pos();
+
+    // Everything happens inside a global thread scope.
+    thread::scope(|s| {
+        let (uci_tx, uci_rx) = unbounded::<uci::Command>();
+
+        // Launch the UCI thread.
+        s.spawn(move || {
+            let mut buf: String = String::with_capacity(256);
+            loop {
+                buf.clear();
+                io::stdin()
+                    .read_line(&mut buf)
+                    .expect("couldn't read from stdin");
+
+                match uci::Parser::parse(&buf.clone()) {
+                    Ok(cmd @ Command::Quit) => {
+                        let _ = uci_tx.send(cmd);
+                        break;
+                    }
+                    Ok(cmd) => {
+                        let _ = uci_tx.send(cmd);
+                    }
+                    Err(err) => {
+                        eprintln!("error: {:?}", err);
+                    }
+                }
+            }
+        });
+
+        loop {
+            match uci_rx.try_recv() {
+                Ok(Command::Quit) => {
+                    stop_flag.store(true, Ordering::Relaxed);
+                    break;
+                }
+                Ok(Command::Stop) => {
+                    stop_flag.store(true, Ordering::Relaxed);
+                }
+                Ok(Command::Go(d)) => match d {
+                    TimingMode::Depth(depth) => {
+                        stop_flag.store(false, Ordering::Relaxed);
+                        launch_search(s, flag, 1, depth, pos.clone());
+                    }
+                    _ => todo!(),
+                },
+                Ok(Command::SetPosition((fen, moves))) => match Position::from_fen(&fen) {
+                    Ok(mut p) => {
+                        for mov in moves {
+                            if p.make_uci_move(&mov).is_none() {
+                                println!("invalid move");
+                            }
+                        }
+                        pos = p;
+                    }
+                    Err(err) => println!("invalid position; {}", err),
+                },
+                Ok(Command::Display) => println!("{}", pos),
+                Ok(Command::DisplayLichess) => {
+                    let fen_url_safe = pos.to_fen().replace(" ", "_");
+                    let lichess_url =
+                        format!("https://lichess.org/analysis/standard/{}", fen_url_safe);
+
+                    let _ = open::that(lichess_url);
+                }
+                Ok(Command::Move(mov)) => match pos.make_uci_move(&mov) {
+                    Some(_) => {}
+                    None => {
+                        // If the move wasn't valid uci, try to see if it was SAN.
+                        match pos.move_from_san(&mov) {
+                            Some(mov) => pos.make_move(&mov),
+                            None => println!("illegal move: {}", mov),
+                        }
+                    }
+                },
+                Ok(cmd) => println!("{:?}", cmd),
+                Err(_err) => {}
+            }
+        }
+    });
 }
 
-impl Engine {
-    pub fn new(tx: Sender<Resp>, rx: Receiver<Command>, rx_search: Receiver<()>) -> Self {
-        // Since we are creating the engine, which includes a `Position`, we need to ensure that
-        // the globals are initialised first. This is inexpensive if it has already been called
-        // elsewhere.
-        core::init::init_globals();
-
-        let search_tx = tx.clone();
-        let config: Arc<Mutex<Config>> = Default::default();
-
-        match env::var("SEABORG_DEBUG") {
-            Ok(v) => {
-                if v == "true" || v == "True" {
-                    match config.lock() {
-                        Ok(mut c) => c.set_option(EngineOpt::DebugMode(true)),
-                        _ => {}
-                    }
-                }
-            }
-            Err(_) => {}
-        }
-
-        Self {
-            tx,
-            rx,
-            config: config.clone(),
-            search: Search::new_with_channels(Position::start_pos(), config, search_tx, rx_search),
-        }
-    }
-
-    pub fn launch(&mut self) {
-        loop {
-            let s = self.rx.recv().unwrap();
-            self.dispatch_command(s);
-        }
-    }
-
-    fn dispatch_command(&mut self, cmd: Command) {
-        match cmd {
-            Command::Uci => self.command_uci(),
-            Command::IsReady => self.command_isready(),
-            Command::UciNewGame => self.command_ucinewgame(),
-            Command::SetPosition((p, m)) => self.command_set_position(p, m),
-            Command::SetOption(o) => self.command_set_option(o),
-            Command::Go(tm) => self.command_go(tm),
-            Command::Stop => todo!(),
-            Command::Quit => todo!(),
-            Command::Display => self.command_display(),
-            Command::Config => self.command_config(),
-            Command::Perft(d) => self.command_perft(d),
-        }
-    }
-
-    fn command_uci(&mut self) {
-        self.report(Resp::Id);
-        self.report(Resp::OptionsList);
-        self.report(Resp::Uciok);
-    }
-
-    fn command_display(&self) {
-        self.search.pos.pretty_print();
-    }
-
-    fn command_config(&self) {
-        match self.config.lock() {
-            Ok(c) => println!("{:#?}", c),
-            Err(_) => println!("config error"),
-        }
-    }
-
-    fn command_isready(&self) {
-        let _ = self.tx.send(Resp::ReadyOk);
-    }
-
-    fn command_ucinewgame(&self) {}
-
-    fn command_set_position(&mut self, pos: String, moves: Vec<String>) {
-        match Position::from_fen(&pos) {
-            Ok(mut pos) => {
-                for mov in moves {
-                    if pos.make_uci_move(&mov).is_none() {
-                        let _ = self.tx.send(Resp::UciParseError(Error::InvalidMove));
-                    }
-                }
-
-                self.search.pos = pos
-            }
-            Err(err) => self.report(Resp::UciParseError(Error::InvalidPosition(err))),
-        }
-    }
-
-    fn command_set_option(&mut self, o: EngineOpt) {
-        match self.config.lock() {
-            Ok(mut c) => c.set_option(o),
-            _ => {}
-        }
-    }
-
-    fn command_go(&mut self, tm: TimingMode) {
-        let _score = self.search.start_search(tm);
-    }
-
-    fn command_perft(&mut self, d: usize) {
-        super::perft::Perft::divide(&mut self.search.pos, d, true, false);
-    }
-
-    fn report(&mut self, resp: Resp) {
-        let _ = self.tx.send(resp);
+fn launch_search<'scope, 'env>(
+    s: &'scope Scope<'scope, 'env>,
+    flag: &'env AtomicBool,
+    num_threads: u8,
+    depth: u8,
+    pos: Position,
+) {
+    for _ in 0..num_threads {
+        let thread_pos = pos.clone();
+        s.spawn(move || {
+            let mut search = Search::new(thread_pos, flag);
+            search.start_search(depth);
+        });
     }
 }

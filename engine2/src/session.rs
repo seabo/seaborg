@@ -1,4 +1,4 @@
-use super::engine::Engine;
+// use super::engine::Engine;
 use super::info::Info;
 use super::uci::{self, Command};
 
@@ -61,21 +61,21 @@ impl Session {
             }
         });
 
-        // Launch the engine thread.
-        thread::spawn(move || {
-            let mut engine = Engine::new(tx, rx, rx_search);
-            engine.launch();
-        });
+        // // Launch the engine thread.
+        // thread::spawn(move || {
+        //     let mut engine = Engine::new(tx, rx, rx_search);
+        //     engine.launch();
+        // });
 
-        loop {
-            // In each loop cycle, we check for any input from the GUI in `poll_input`. If there is
-            // anything, we parse it and transmit the relevant command into the engine.
-            self.poll_input();
+        // loop {
+        //     // In each loop cycle, we check for any input from the GUI in `poll_input`. If there is
+        //     // anything, we parse it and transmit the relevant command into the engine.
+        //     self.poll_input();
 
-            // Next, we check to see if the engine has sent any messages or reports. These are
-            // printed to stdout.
-            self.poll_output();
-        }
+        //     // Next, we check to see if the engine has sent any messages or reports. These are
+        //     // printed to stdout.
+        //     self.poll_output();
+        // }
     }
 
     fn poll_input(&mut self) {
