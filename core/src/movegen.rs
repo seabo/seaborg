@@ -110,6 +110,10 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
         mov: &'a Move,
         movelist: &mut MP,
     ) -> bool {
+        if !mov.orig().is_okay() || !mov.dest().is_okay() {
+            return false;
+        }
+
         match position.turn() {
             Player::WHITE => {
                 InnerMoveGen::<MP>::valid_move_helper::<G, L, White>(position, mov, movelist)

@@ -66,10 +66,10 @@ impl Score {
         }
     }
 
-    /// Construct a score representing a `x` centipawns.
+    /// Construct a score representing `x` centipawns.
     pub fn cp(x: i16) -> Self {
-        debug_assert!(x < 10_000);
-        debug_assert!(x > -10_000);
+        debug_assert!(x <= 10_000);
+        debug_assert!(x >= -10_000);
         Score(x)
     }
 

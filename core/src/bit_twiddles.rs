@@ -7,7 +7,7 @@ pub fn more_than_one(x: u64) -> bool {
 /// Isolates the least significant bit of a u64.
 #[inline(always)]
 pub fn lsb(x: u64) -> u64 {
-    x & -(x as i64) as u64
+    x & x.overflowing_neg().0 as u64
 }
 
 #[cfg(test)]
