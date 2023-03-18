@@ -846,7 +846,9 @@ impl Default for Position {
 
 impl fmt::Display for Position {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.board)
+        writeln!(f, "{}", self.board)?;
+        writeln!(f, "fen: {}", self.to_fen())?;
+        write!(f, "key: {:X}", self.zobrist())
     }
 }
 

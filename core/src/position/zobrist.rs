@@ -75,6 +75,24 @@ impl Zobrist {
 
 impl fmt::Display for Zobrist {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:b}", self.0)
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl fmt::LowerHex for Zobrist {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::LowerHex::fmt(&self.0, f)
+    }
+}
+
+impl fmt::UpperHex for Zobrist {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::UpperHex::fmt(&self.0, f)
+    }
+}
+
+impl fmt::Binary for Zobrist {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Binary::fmt(&self.0, f)
     }
 }
