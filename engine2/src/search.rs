@@ -21,6 +21,30 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 pub const INFINITY: i32 = 10_000;
 
+/// Trait to monomorphize search functionality over different thread types: master and worker.
+///
+/// The master thread will perform slightly different functionality, such as printing UCI info
+/// reports.
+pub trait Thread {
+    fn is_master() -> bool;
+}
+
+/// Dummy type representing the master search thread.
+pub struct Master;
+impl Thread for Master {
+    fn is_master() -> bool {
+        true
+    }
+}
+
+/// Dummy type representing a worker thread.
+pub struct Worker;
+impl Thread for Worker {
+    fn is_master() -> bool {
+        false
+    }
+}
+
 /// Manages the search.
 pub struct Search<'engine> {
     /// The internal board position.
@@ -54,42 +78,46 @@ impl<'engine> Search<'engine> {
         }
     }
 
-    pub fn start_search(&mut self, d: u8) -> Score {
+    pub fn start_search<T: Thread>(&mut self, d: u8) -> Score {
         self.trace = Tracer::new();
 
         // TODO: turn this into a proper use error.
         assert!(d > 0);
 
         // Some bookeeping and prep.
-        // self.pvt = PVTable::new(d);
         self.trace.commence_search();
         self.search_depth = d;
 
-        // let score = self.negamax(d);
-        // let score = self.alphabeta_ordered(Score::INF_N, Score::INF_P, d);
-        let score = self.iterative_deepening(d);
-
+        let score = self.iterative_deepening::<T>(d);
         self.trace.end_search();
-        self.report_pv(d, score);
+
+        if T::is_master() {
+            self.report_pv(d, score);
+            self.report_telemetry(d, score);
+        }
+
         self.history.reset();
 
         score
     }
 
-    fn iterative_deepening(&mut self, depth: u8) -> Score {
+    fn iterative_deepening<T: Thread>(&mut self, depth: u8) -> Score {
         let mut score = Score::INF_N;
         for d in 2..=depth {
             self.pvt = PVTable::new(d);
             self.search_depth = d;
-            score = self.alphabeta(Score::INF_N, Score::INF_P, d);
+            score = self.alphabeta::<T>(Score::INF_N, Score::INF_P, d);
             // score = self.pvs(Score::INF_N, Score::INF_P, d);
-            self.report_pv(d, score);
+
+            if T::is_master() {
+                self.report_pv(d, score);
+            }
         }
 
         score
     }
 
-    fn alphabeta(&mut self, mut alpha: Score, mut beta: Score, depth: u8) -> Score {
+    fn alphabeta<T: Thread>(&mut self, mut alpha: Score, mut beta: Score, depth: u8) -> Score {
         self.trace.visit_node();
         let draft = self.search_depth - depth;
 
@@ -122,7 +150,7 @@ impl<'engine> Search<'engine> {
         // Handle leaf node.
         if depth == 0 {
             // let score = self.evaluate();
-            let score = self.quiesce(alpha, beta);
+            let score = self.quiesce::<T>(alpha, beta);
             if score == Score::mate(0) {
                 self.pvt.pv_leaf_at(0);
             }
@@ -160,12 +188,15 @@ impl<'engine> Search<'engine> {
                 c += 1;
 
                 // Start reporting which move we're considering after 2 seconds have elapsed.
-                if draft == 0 && self.trace.live_elapsed().as_millis() > 2000 {
+                if T::is_master() && draft == 0 && self.trace.live_elapsed().as_millis() > 2000 {
                     self.report_curr_move(depth, &mov, c);
                 }
 
                 self.pos.make_move(mov);
-                let score = self.alphabeta(-beta, -alpha, depth - 1).neg().inc_mate();
+                let score = self
+                    .alphabeta::<T>(-beta, -alpha, depth - 1)
+                    .neg()
+                    .inc_mate();
                 self.pos.unmake_move();
 
                 if self.stopping.load(Ordering::Relaxed) {
@@ -294,7 +325,7 @@ impl<'engine> Search<'engine> {
         }
     }
 
-    fn quiesce(&mut self, mut alpha: Score, beta: Score) -> Score {
+    fn quiesce<T: Thread>(&mut self, mut alpha: Score, beta: Score) -> Score {
         self.trace.visit_q_node();
 
         let stand_pat = self.evaluate();
@@ -310,7 +341,7 @@ impl<'engine> Search<'engine> {
         if self.pos.in_check() {
             // A one move search extension. The main alphabeta function will tell us if we are in
             // checkmate or stalemate, and if not, it will try the possible evasions.
-            return self.alphabeta(alpha, beta, 1);
+            return self.alphabeta::<T>(alpha, beta, 1);
         }
 
         // TODO: this should look at more than just captures. Checks are important to consider too,
@@ -333,7 +364,7 @@ impl<'engine> Search<'engine> {
             }
 
             self.pos.make_move(mov);
-            score = self.quiesce(-beta, -alpha).neg().inc_mate();
+            score = self.quiesce::<T>(-beta, -alpha).neg().inc_mate();
             self.pos.unmake_move();
 
             if score >= beta {
@@ -594,8 +625,8 @@ mod tests {
         for (fen, depth, score) in suite {
             let pos = Position::from_fen(fen).unwrap();
             let flag = AtomicBool::new(false);
-            let mut search = Search::new(pos, &flag);
-            let s = search.start_search(depth);
+            let mut search = Search::new(pos, &flag, &Table::new(16));
+            let s = search.start_search::<Master>(depth);
 
             assert_eq!(s, score);
         }
@@ -620,9 +651,9 @@ mod tests {
         for (fen, depth, score) in suite {
             let pos = Position::from_fen(fen).unwrap();
             let flag = AtomicBool::new(false);
-            let mut search = Search::new(pos, &flag);
+            let mut search = Search::new(pos, &flag, &Table::new(16));
             let s_negamax = search.negamax(depth);
-            let s_alphabeta = search.alphabeta(Score::INF_N, Score::INF_P, depth);
+            let s_alphabeta = search.alphabeta::<Master>(Score::INF_N, Score::INF_P, depth);
 
             assert_eq!(s_negamax, s_alphabeta);
             assert_eq!(score, s_negamax);
