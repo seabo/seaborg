@@ -452,7 +452,6 @@ impl<'search> Search<'search> {
             "killers found per node: {:.2}",
             self.trace.killers_per_node.avg() * 2_f64
         );
-        // println!("history table: {:?}", self.history);
     }
 }
 
