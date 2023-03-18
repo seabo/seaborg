@@ -1,6 +1,6 @@
 use super::{PieceType, Position, Square};
 use crate::mono_traits::{All, Legal};
-use crate::mov::Move;
+use crate::mov::{Move, MoveType};
 use crate::movelist::BasicMoveList;
 use std::iter::Peekable;
 
@@ -23,15 +23,32 @@ struct MoveDetails {
     piece_type: PieceType,
     from_file: Option<usize>,
     from_rank: Option<usize>,
-    to_square: Square,
+    to_square: Option<Square>,
     is_capture: bool,
     promo_piece: Option<PieceType>,
+    is_ks_castle: bool,
+    is_qs_castle: bool,
 }
 
 impl MoveDetails {
     /// Test whether the passed `Move` matches.
     pub fn matches(&self, pos: &Position, mov: Move) -> bool {
-        if !(self.to_square == mov.dest()) {
+        if self.to_square.is_none() {
+            if self.is_ks_castle
+                && mov.move_type().contains(MoveType::CASTLE)
+                && mov.dest().0 > mov.orig().0
+            {
+                return true;
+            } else if self.is_qs_castle
+                && mov.move_type().contains(MoveType::CASTLE)
+                && mov.dest().0 < mov.orig().0
+            {
+                return true;
+            }
+            return false;
+        }
+
+        if !(self.to_square.unwrap() == mov.dest()) {
             return false;
         }
 
@@ -78,12 +95,26 @@ struct SanParser<'a> {
     to_square: Option<Square>,
     is_capture: bool,
     promo_piece: Option<PieceType>,
+    is_ks_castle: bool,
+    is_qs_castle: bool,
 }
 
 impl<'a> SanParser<'a> {
     fn parse(san: &'a str) -> PResult<MoveDetails> {
         let mut parser = Self::new(san);
-        parser.parse_san()?;
+
+        match san {
+            "O-O" | "o-o" => {
+                parser.is_ks_castle = true;
+                parser.piece_type = Some(PieceType::King);
+            }
+            "O-O-O" | "o-o-o" => {
+                parser.is_qs_castle = true;
+                parser.piece_type = Some(PieceType::King);
+            }
+            _ => parser.parse_san()?,
+        }
+
         Ok(parser.finish())
     }
 
@@ -96,6 +127,8 @@ impl<'a> SanParser<'a> {
             to_square: None,
             is_capture: false,
             promo_piece: None,
+            is_ks_castle: false,
+            is_qs_castle: false,
         }
     }
 
@@ -108,9 +141,11 @@ impl<'a> SanParser<'a> {
             piece_type: self.piece_type.unwrap(),
             from_file: self.from_file,
             from_rank: self.from_rank,
-            to_square: self.to_square.unwrap(),
+            to_square: self.to_square,
             is_capture: self.is_capture,
             promo_piece: self.promo_piece,
+            is_ks_castle: self.is_ks_castle,
+            is_qs_castle: self.is_qs_castle,
         }
     }
 
