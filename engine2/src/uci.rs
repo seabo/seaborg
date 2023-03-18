@@ -26,6 +26,7 @@ pub enum Command {
     Display,
     /// Display the board in a Lichess analysis window with the default browser.
     DisplayLichess,
+    Move(String),
     /// Display the current engine configuration.
     Config,
     /// Run perft to the given depth.
@@ -73,6 +74,8 @@ enum Keyword {
     Lichess,
     /// Short form keyword to open the current internal board position in a Lichess Analysis board.
     DisplayLichess,
+    /// Make a move on the internal board.
+    Move,
     /// Display the current config of the engine.
     Config,
     /// Run a perft test.
@@ -212,6 +215,7 @@ impl<'a> Parser<'a> {
                 Token::Kw(Keyword::Quit) => self.parse_quit(),
                 Token::Kw(Keyword::Display) => self.parse_display(),
                 Token::Kw(Keyword::DisplayLichess) => self.parse_display_lichess(),
+                Token::Kw(Keyword::Move) => self.parse_move(),
                 Token::Kw(Keyword::Config) => self.parse_config(),
                 Token::Kw(Keyword::Perft) => self.parse_perft(),
                 Token::String(_) => self.unexpected_token(),
@@ -438,6 +442,11 @@ impl<'a> Parser<'a> {
         self.expect_end(Ok(Command::DisplayLichess))
     }
 
+    fn parse_move(&mut self) -> PResult {
+        let mov = self.parse_string()?;
+        self.expect_end(Ok(Command::Move(mov.to_string())))
+    }
+
     fn parse_config(&mut self) -> PResult {
         self.expect_end(Ok(Command::Config))
     }
@@ -491,6 +500,7 @@ impl<'a> Token<'a> {
             "dl" => Token::Kw(Keyword::DisplayLichess),
             "lichess" => Token::Kw(Keyword::Lichess),
             "display" => Token::Kw(Keyword::Display),
+            "move" => Token::Kw(Keyword::Move),
             "config" => Token::Kw(Keyword::Config),
             "perft" => Token::Kw(Keyword::Perft),
             _ => Token::String(t),
