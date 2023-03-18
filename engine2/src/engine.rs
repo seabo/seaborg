@@ -64,7 +64,7 @@ pub fn launch() {
                 Ok(Command::Go(d)) => match d {
                     TimingMode::Depth(depth) => {
                         stop_flag.store(false, Ordering::Relaxed);
-                        launch_search(s, flag, 8, depth, pos.clone(), &tt);
+                        launch_search(s, flag, 1, depth, pos.clone(), &tt);
                     }
                     _ => todo!(),
                 },

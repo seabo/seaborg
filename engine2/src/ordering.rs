@@ -917,7 +917,7 @@ mod tests {
             for (mov, score) in captures {
                 if mov.is_capture() {
                     // Assign a random number from -10_000 to +10_000.
-                    *score = Score::cp(rng.gen_range(-10_000..10_000));
+                    *score = rng.gen_range(-10_000..10_000);
                 }
             }
         }
@@ -928,7 +928,7 @@ mod tests {
             for (mov, score) in quiets {
                 if mov.is_capture() {
                     // Assign a random number from -10_000 to +10_000.
-                    *score = Score::cp(rng.gen_range(-10_000..10_000));
+                    *score = rng.gen_range(-10_000..10_000);
                 }
             }
         }
