@@ -263,6 +263,8 @@ pub struct Table {
     mask: usize,
 }
 
+unsafe impl Sync for Table {}
+
 impl std::fmt::Debug for Table {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "Table {{ data: Box<[Entry]>; mask: {} }}", self.mask)

@@ -1,6 +1,7 @@
 use super::score::Score;
 use super::search::Search;
 use super::time::TimingMode;
+use super::tt::Table;
 use super::uci::{self, Command, Error};
 use core::position::Position;
 
@@ -18,6 +19,8 @@ pub fn launch() {
 
     let stop_flag = AtomicBool::new(false);
     let flag = &stop_flag;
+
+    let tt = Table::new(16);
 
     let mut pos = Position::start_pos();
 
@@ -61,7 +64,7 @@ pub fn launch() {
                 Ok(Command::Go(d)) => match d {
                     TimingMode::Depth(depth) => {
                         stop_flag.store(false, Ordering::Relaxed);
-                        launch_search(s, flag, 1, depth, pos.clone());
+                        launch_search(s, flag, 2, depth, pos.clone(), &tt);
                     }
                     _ => todo!(),
                 },
@@ -110,11 +113,12 @@ fn launch_search<'scope, 'env>(
     num_threads: u8,
     depth: u8,
     pos: Position,
+    tt: &'env Table,
 ) {
     for _ in 0..num_threads {
         let thread_pos = pos.clone();
         s.spawn(move || {
-            let mut search = Search::new(thread_pos, flag);
+            let mut search = Search::new(thread_pos, flag, tt);
             search.start_search(depth);
         });
     }

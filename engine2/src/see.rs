@@ -9,7 +9,7 @@ use core::position::{PieceType, Player, Square};
 
 use std::cmp::max;
 
-impl<'search> Search<'search> {
+impl<'engine> Search<'engine> {
     /// The SEE swap algorithm.
     ///
     /// Returns the statically minimaxed outcome of exchanges on square `to` after current player

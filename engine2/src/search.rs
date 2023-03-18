@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub const INFINITY: i32 = 10_000;
 
 /// Manages the search.
-pub struct Search<'search> {
+pub struct Search<'engine> {
     /// The internal board position.
     pub(super) pos: Position,
     /// Table for tracking the principal variation of the search.
@@ -30,21 +30,21 @@ pub struct Search<'search> {
     /// Tracer to track search stats.
     trace: Tracer,
     /// The transposition table.
-    tt: Table,
+    tt: &'engine Table,
     /// The killer move table.
     kt: KillerTable,
     /// The history table.
     history: HistoryTable,
     /// Flag to indicate when the search should start unwinding due to user intervention.
-    stopping: &'search AtomicBool,
+    stopping: &'engine AtomicBool,
     search_depth: u8,
 }
 
-impl<'search> Search<'search> {
-    pub fn new(pos: Position, flag: &'search AtomicBool) -> Self {
+impl<'engine> Search<'engine> {
+    pub fn new(pos: Position, flag: &'engine AtomicBool, tt: &'engine Table) -> Self {
         Self {
             pos,
-            tt: Table::new(16),
+            tt,
             kt: KillerTable::new(20),
             history: HistoryTable::new(),
             pvt: PVTable::new(8),
@@ -461,10 +461,10 @@ pub struct MoveLoader<'a, 'search> {
     draft: u8,
 }
 
-impl<'a, 'search> MoveLoader<'a, 'search> {
+impl<'a, 'engine> MoveLoader<'a, 'engine> {
     /// Create a `MoveLoader` from the passed `Search`.
     #[inline(always)]
-    pub fn from(search: &'a mut Search<'search>, hash_move: Option<Move>, draft: u8) -> Self {
+    pub fn from(search: &'a mut Search<'engine>, hash_move: Option<Move>, draft: u8) -> Self {
         MoveLoader {
             search,
             hash_move,
