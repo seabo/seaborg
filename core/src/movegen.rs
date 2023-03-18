@@ -131,6 +131,18 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
         let dest_bb = mov.dest().to_bb();
         let mut movegen = Self::get_self::<PL>(position, movelist);
 
+        if (mov.move_type().contains(MoveType::CAPTURE))
+            && (position.get_occupied_enemy::<PL>() & dest_bb).is_empty()
+            || ((position.get_occupied_enemy::<PL>() & dest_bb).is_not_empty()
+                && !mov.move_type().contains(MoveType::CAPTURE))
+        {
+            return false;
+        }
+
+        if (mov.move_type().contains(MoveType::CASTLE)) && piece.type_of() != PieceType::King {
+            return false;
+        }
+
         if movegen.position.in_check() {
             if piece.is_none() || piece.player() != movegen.position.turn() {
                 return false;

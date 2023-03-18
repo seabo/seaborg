@@ -69,7 +69,7 @@ pub fn launch() {
                     Ok(mut p) => {
                         for mov in moves {
                             if p.make_uci_move(&mov).is_none() {
-                                println!("invalid move");
+                                println!("invalid move {}", mov);
                             }
                         }
                         pos = p;
@@ -94,6 +94,9 @@ pub fn launch() {
                         }
                     }
                 },
+                Ok(Command::Perft(d)) => {
+                    super::perft::Perft::divide(&mut pos, d, true, false);
+                }
                 Ok(cmd) => println!("{:?}", cmd),
                 Err(_err) => {}
             }

@@ -500,13 +500,14 @@ impl<'a, 'search> Loader for MoveLoader<'a, 'search> {
     fn load_killers(&mut self, movelist: &mut ScoredMoveList) {
         let (km1, km2) = self.search.kt.probe(self.draft, &self.search.pos);
         let mut cnt = 0;
+
         if km1.is_some() {
             cnt += 1;
-            movelist.push(km1.expect("checked above"));
+            movelist.push(km1.unwrap());
         }
         if km2.is_some() {
             cnt += 1;
-            movelist.push(km2.expect("checked above"));
+            movelist.push(km2.unwrap());
         }
         self.search.trace.killers_per_node.push_many(cnt, 2);
     }
