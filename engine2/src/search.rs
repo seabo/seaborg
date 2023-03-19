@@ -19,8 +19,6 @@ use separator::Separatable;
 use std::ops::Neg;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-pub const INFINITY: i32 = 10_000;
-
 /// Trait to monomorphize search functionality over different thread types: master and worker.
 ///
 /// The master thread will perform slightly different functionality, such as printing UCI info
@@ -62,6 +60,7 @@ pub trait NodeType {
     fn pv() -> bool;
     fn cut() -> bool;
     fn all() -> bool;
+    fn root() -> bool;
 }
 
 /// Dummy type representing a PV node.
@@ -74,6 +73,9 @@ impl NodeType for Pv {
         false
     }
     fn all() -> bool {
+        false
+    }
+    fn root() -> bool {
         false
     }
 }
@@ -90,6 +92,9 @@ impl NodeType for Cut {
     fn all() -> bool {
         false
     }
+    fn root() -> bool {
+        false
+    }
 }
 
 /// Dummy type representing an ALL node.
@@ -102,6 +107,26 @@ impl NodeType for All {
         false
     }
     fn all() -> bool {
+        true
+    }
+    fn root() -> bool {
+        false
+    }
+}
+
+/// Dummy type representing the root node. This is also a PV node.
+pub struct Root;
+impl NodeType for Root {
+    fn pv() -> bool {
+        true
+    }
+    fn cut() -> bool {
+        false
+    }
+    fn all() -> bool {
+        false
+    }
+    fn root() -> bool {
         true
     }
 }
@@ -167,7 +192,7 @@ impl<'engine> Search<'engine> {
         for d in 1..=depth {
             self.pvt = PVTable::new(d);
             self.search_depth = d;
-            score = self.alphabeta::<T, Pv>(Score::INF_N, Score::INF_P, d);
+            score = self.alphabeta::<T, Root>(Score::INF_N, Score::INF_P, d);
 
             if T::is_master() {
                 self.report_pv(d, score);
@@ -185,6 +210,18 @@ impl<'engine> Search<'engine> {
     ) -> Score {
         self.trace.visit_node();
         let draft = self.search_depth - depth;
+
+        // Mate distance pruning.
+        if !Node::root() {
+            // If we mate at the next move, the value at the root would be Mate(draft). If we
+            // already have alpha greater than this, then we had a quicker mate elsewhere in the
+            // tree. So we can prune here.
+            alpha = std::cmp::max(Score::mate(draft as i8).neg(), alpha);
+            beta = std::cmp::min(Score::mate(draft as i8 + 1), beta);
+            if alpha >= beta {
+                return alpha;
+            }
+        }
 
         let (tt_entry, tt_mov) = {
             use super::tt::Probe::*;
@@ -252,7 +289,7 @@ impl<'engine> Search<'engine> {
                 c += 1;
 
                 // Start reporting which move we're considering after 2 seconds have elapsed.
-                if T::is_master() && draft == 0 && self.trace.live_elapsed().as_millis() > 2000 {
+                if T::is_master() && Node::root() && self.trace.live_elapsed().as_millis() > 2000 {
                     self.report_curr_move(depth, &mov, c);
                 }
 

@@ -1,8 +1,7 @@
-use super::score::Score;
 use super::search::{Master, Search, Worker};
 use super::time::TimingMode;
 use super::tt::Table;
-use super::uci::{self, Command, Error};
+use super::uci::{self, Command};
 use core::position::Position;
 
 use crossbeam_channel::unbounded;
@@ -100,7 +99,7 @@ pub fn launch() {
                 Ok(Command::Perft(d)) => {
                     super::perft::Perft::divide(&mut pos, d, true, false);
                 }
-                Ok(cmd) => println!("{:?}", cmd),
+                Ok(cmd) => println!("{:?}: not yet implemented", cmd),
                 Err(_err) => {}
             }
         }
