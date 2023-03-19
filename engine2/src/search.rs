@@ -9,7 +9,7 @@ use super::score::Score;
 use super::trace::Tracer;
 use super::tt::{Bound, Table};
 
-use core::mono_traits::{All, Captures, Legal, QueenPromotions, Quiets};
+use core::mono_traits::{All as AllGen, Captures, Legal, QueenPromotions, Quiets};
 use core::mov::Move;
 use core::movelist::{BasicMoveList, MoveList};
 use core::position::{Player, Position};
@@ -42,6 +42,67 @@ pub struct Worker;
 impl Thread for Worker {
     fn is_master() -> bool {
         false
+    }
+}
+
+/// Trait to monomorphize search routine over the node type.
+///
+/// The three node types are PV, ALL and CUT.
+///
+/// * The root node is a PV node.
+/// * The first child of a PV node is a PV node.
+/// * Children of PV nodes that are searched with a zero-window are Cut nodes.
+/// * Children of PV nodes that have to be re-search because the scout search failed high are PV
+/// nodes.
+/// * The first child of a Cut node and other candidate cutoff moves (nullmove, killers, captures,
+/// checks) is an All node.
+/// * A Cut node becomes an All node once all the candidate cutoff moves are searched.
+/// * Children of All nodes are Cut nodes.
+pub trait NodeType {
+    fn pv() -> bool;
+    fn cut() -> bool;
+    fn all() -> bool;
+}
+
+/// Dummy type representing a PV node.
+pub struct Pv;
+impl NodeType for Pv {
+    fn pv() -> bool {
+        true
+    }
+    fn cut() -> bool {
+        false
+    }
+    fn all() -> bool {
+        false
+    }
+}
+
+/// Dummy type representing a CUT node.
+pub struct Cut;
+impl NodeType for Cut {
+    fn pv() -> bool {
+        false
+    }
+    fn cut() -> bool {
+        true
+    }
+    fn all() -> bool {
+        false
+    }
+}
+
+/// Dummy type representing an ALL node.
+pub struct All;
+impl NodeType for All {
+    fn pv() -> bool {
+        false
+    }
+    fn cut() -> bool {
+        false
+    }
+    fn all() -> bool {
+        true
     }
 }
 
@@ -103,11 +164,10 @@ impl<'engine> Search<'engine> {
 
     fn iterative_deepening<T: Thread>(&mut self, depth: u8) -> Score {
         let mut score = Score::INF_N;
-        for d in 2..=depth {
+        for d in 1..=depth {
             self.pvt = PVTable::new(d);
             self.search_depth = d;
-            score = self.alphabeta::<T>(Score::INF_N, Score::INF_P, d);
-            // score = self.pvs(Score::INF_N, Score::INF_P, d);
+            score = self.alphabeta::<T, Pv>(Score::INF_N, Score::INF_P, d);
 
             if T::is_master() {
                 self.report_pv(d, score);
@@ -117,7 +177,12 @@ impl<'engine> Search<'engine> {
         score
     }
 
-    fn alphabeta<T: Thread>(&mut self, mut alpha: Score, mut beta: Score, depth: u8) -> Score {
+    fn alphabeta<T: Thread, N: NodeType>(
+        &mut self,
+        mut alpha: Score,
+        mut beta: Score,
+        depth: u8,
+    ) -> Score {
         self.trace.visit_node();
         let draft = self.search_depth - depth;
 
@@ -149,7 +214,6 @@ impl<'engine> Search<'engine> {
 
         // Handle leaf node.
         if depth == 0 {
-            // let score = self.evaluate();
             let score = self.quiesce::<T>(alpha, beta);
             if score == Score::mate(0) {
                 self.pvt.pv_leaf_at(0);
@@ -193,10 +257,12 @@ impl<'engine> Search<'engine> {
                 }
 
                 self.pos.make_move(mov);
+
                 let score = self
-                    .alphabeta::<T>(-beta, -alpha, depth - 1)
+                    .alphabeta::<T, Pv>(-beta, -alpha, depth - 1)
                     .neg()
                     .inc_mate();
+
                 self.pos.unmake_move();
 
                 if self.stopping.load(Ordering::Relaxed) {
@@ -218,7 +284,7 @@ impl<'engine> Search<'engine> {
                                 self.history.inc_unchecked(
                                     mov.orig(),
                                     mov.dest(),
-                                    depth as u16 * depth as u16,
+                                    depth as u32 * depth as u32,
                                     self.pos.turn(),
                                 );
                             }
@@ -268,41 +334,6 @@ impl<'engine> Search<'engine> {
         max
     }
 
-    fn negamax(&mut self, depth: u8) -> Score {
-        self.trace.visit_node();
-
-        if depth == 0 {
-            self.evaluate()
-        } else {
-            let mut max = Score::INF_N;
-
-            let moves = self.pos.generate::<BasicMoveList, All, Legal>();
-            if moves.is_empty() {
-                self.pvt.pv_leaf_at(depth);
-                return if self.pos.in_check() {
-                    Score::mate(0)
-                } else {
-                    Score::cp(0)
-                };
-            }
-
-            for mov in &moves {
-                self.pos.make_move(mov);
-                let score = self.negamax(depth - 1).neg().inc_mate();
-                self.pos.unmake_move();
-
-                if score > max {
-                    // Because every move should have a score > InfN, this will always get called
-                    // at least once.
-                    self.pvt.copy_to(depth, *mov);
-                    max = score;
-                }
-            }
-
-            max
-        }
-    }
-
     /// Returns the static evaluation, from the perspective of the side to move.
     #[inline(always)]
     fn evaluate(&mut self) -> Score {
@@ -325,6 +356,7 @@ impl<'engine> Search<'engine> {
         }
     }
 
+    /// The quiescence search.
     fn quiesce<T: Thread>(&mut self, mut alpha: Score, beta: Score) -> Score {
         self.trace.visit_q_node();
 
@@ -341,11 +373,9 @@ impl<'engine> Search<'engine> {
         if self.pos.in_check() {
             // A one move search extension. The main alphabeta function will tell us if we are in
             // checkmate or stalemate, and if not, it will try the possible evasions.
-            return self.alphabeta::<T>(alpha, beta, 1);
+            return self.alphabeta::<T, Pv>(alpha, beta, 1);
         }
 
-        // TODO: this should look at more than just captures. Checks are important to consider too,
-        // but they are harder, as not self-limiting like captures.
         let captures = self.pos.generate::<BasicMoveList, Captures, Legal>();
         let mut score: Score;
 
@@ -550,12 +580,15 @@ impl<'a, 'search> Loader for MoveLoader<'a, 'search> {
     fn score_captures(&mut self, captures: Scorer) {
         for (mov, score) in captures {
             if mov.is_capture() {
-                *score = self.search.see(
-                    mov.orig(),
-                    mov.dest(),
-                    self.search.pos.piece_at_sq(mov.dest()).type_of(),
-                    self.search.pos.piece_at_sq(mov.orig()).type_of(),
-                );
+                *score = self
+                    .search
+                    .see(
+                        mov.orig(),
+                        mov.dest(),
+                        self.search.pos.piece_at_sq(mov.dest()).type_of(),
+                        self.search.pos.piece_at_sq(mov.orig()).type_of(),
+                    )
+                    .to_i16();
             }
         }
     }
@@ -565,11 +598,10 @@ impl<'a, 'search> Loader for MoveLoader<'a, 'search> {
         for (mov, score) in quiets {
             // SAFETY: these are legal moves, so the squares must be valid.
             unsafe {
-                *score = Score::cp(
-                    self.search
-                        .history
-                        .get_unchecked(mov.orig(), mov.dest(), turn) as i16,
-                );
+                *score = self
+                    .search
+                    .history
+                    .get_unchecked(mov.orig(), mov.dest(), turn) as i16;
             }
         }
     }
@@ -625,38 +657,11 @@ mod tests {
         for (fen, depth, score) in suite {
             let pos = Position::from_fen(fen).unwrap();
             let flag = AtomicBool::new(false);
-            let mut search = Search::new(pos, &flag, &Table::new(16));
+            let tt = Table::new(16);
+            let mut search = Search::new(pos, &flag, &tt);
             let s = search.start_search::<Master>(depth);
 
             assert_eq!(s, score);
-        }
-    }
-
-    /// Ensure that alphabeta search gives identical result to negamax.
-    #[test]
-    #[ignore]
-    fn ab_equals_negamax() {
-        core::init::init_globals();
-
-        let suite = #[rustfmt::skip]
-        {
-            vec![
-                ("2r2k2/pb1q1pp1/1p1b1nB1/3p4/3Nr3/2P1P3/PPQB1PPP/R3K2R w KQ - 3 23", 5, Score::cp(600)),
-                ("1n1r1r1k/pp2Ppbp/6p1/4p3/PP2R3/5N1P/6P1/1RBQ2K1 b - - 0 25", 5, Score::cp(100)),
-                ("r3k2r/ppb2pp1/2pp3p/P4N2/1PP1n2q/7P/2PB1PP1/R2QR1K1 b kq - 3 17", 3, Score::cp(600)),
-                ("r3k2r/1bqp1ppp/p3pn2/1p2n3/1b2P3/2N2B2/PPPBNPPP/R2QR1K1 w kq - 6 12", 5, Score::cp(100)),
-            ]
-        };
-
-        for (fen, depth, score) in suite {
-            let pos = Position::from_fen(fen).unwrap();
-            let flag = AtomicBool::new(false);
-            let mut search = Search::new(pos, &flag, &Table::new(16));
-            let s_negamax = search.negamax(depth);
-            let s_alphabeta = search.alphabeta::<Master>(Score::INF_N, Score::INF_P, depth);
-
-            assert_eq!(s_negamax, s_alphabeta);
-            assert_eq!(score, s_negamax);
         }
     }
 }
