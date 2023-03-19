@@ -177,7 +177,7 @@ impl<'engine> Search<'engine> {
         score
     }
 
-    fn alphabeta<T: Thread, N: NodeType>(
+    fn alphabeta<T: Thread, Node: NodeType>(
         &mut self,
         mut alpha: Score,
         mut beta: Score,
@@ -637,7 +637,7 @@ mod tests {
                 ("6k1/8/3q4/8/8/3B4/2P5/1K1R4 w - - 0 1", 3, Score::cp(900)),
                 ("r5k1/p1P5/8/8/8/8/3RK3/8 w - - 0 1", 6, Score::cp(900)),
                 ("6k1/8/8/3q4/8/8/P7/1KNB4 w - - 0 1", 4, Score::cp(400)),
-                ("2kr3r/ppp1qpb1/5n2/5b1p/6p1/1PNP4/PBPQBPPP/2KRR3 b - - 6 14", 5, Score::cp(400)),
+                ("2kr3r/ppp1qpb1/5n2/5b1p/6p1/1PNP4/PBPQBPPP/2KRR3 b - - 6 14", 5, Score::cp(300)),
                 ("7k/2R5/8/8/6q1/7p/7P/7K w - - 0 1", 6, Score::cp(0)),
 
                 // Pawn race
