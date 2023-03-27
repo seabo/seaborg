@@ -206,12 +206,13 @@ impl<'engine> Search<'engine> {
         &mut self,
         mut alpha: Score,
         mut beta: Score,
-        depth: u8,
+        mut depth: u8,
     ) -> Score {
         self.trace.visit_node();
         let draft = self.search_depth - depth;
+        let mut was_tt_mov = false;
 
-        // Mate distance pruning.
+        // Step 1. Mate distance pruning.
         if !Node::root() {
             // If we mate at the next move, the value at the root would be Mate(draft). If we
             // already have alpha greater than this, then we had a quicker mate elsewhere in the
@@ -223,6 +224,7 @@ impl<'engine> Search<'engine> {
             }
         }
 
+        // Step 2. Transposition table lookup.
         let (tt_entry, tt_mov) = {
             use super::tt::Probe::*;
             match self.tt.probe(&self.pos) {
@@ -234,6 +236,7 @@ impl<'engine> Search<'engine> {
                         let mov = e.mov.to_move(&self.pos);
                         if self.pos.valid_move(&mov) {
                             self.trace.hash_hit();
+                            was_tt_mov = true;
                             (entry, Some(mov))
                         } else {
                             self.trace.hash_collision();
@@ -249,31 +252,33 @@ impl<'engine> Search<'engine> {
             }
         };
 
-        // Handle leaf node.
+        // Step 3. Check for early TT cutoff.
+        if !Node::pv() {
+            let entry = tt_entry.read();
+            if entry.depth >= depth && entry.bound() == Bound::Exact {
+                return entry.score;
+            } else if entry.depth >= depth && entry.bound() == Bound::Lower {
+                if entry.score > beta {
+                    return entry.score; // guaranteed beta-cutoff
+                } else if entry.score > alpha {
+                    alpha = entry.score; // can narrow window
+                }
+            } else if entry.depth >= depth && entry.bound() == Bound::Upper {
+                if entry.score < alpha {
+                    return entry.score; // guaranteed all-node
+                } else if entry.score < beta {
+                    beta = entry.score; // can narrow window
+                }
+            }
+        }
+
+        // Step 4. Handle leaf node.
         if depth == 0 {
             let score = self.quiesce::<T>(alpha, beta);
             if score == Score::mate(0) {
                 self.pvt.pv_leaf_at(0);
             }
             return score;
-        }
-
-        // Immediate return, or window adjustment, if the tt move is of a high enough depth.
-        let entry = tt_entry.read();
-        if entry.depth >= depth && entry.bound() == Bound::Exact {
-            return entry.score;
-        } else if entry.depth >= depth && entry.bound() == Bound::Lower {
-            if entry.score > beta {
-                return entry.score; // guaranteed beta-cutoff
-            } else if entry.score > alpha {
-                alpha = entry.score; // can narrow window
-            }
-        } else if entry.depth >= depth && entry.bound() == Bound::Upper {
-            if entry.score < alpha {
-                return entry.score; // guaranteed all-node
-            } else if entry.score < beta {
-                beta = entry.score; // can narrow window
-            }
         }
 
         let mut max = Score::INF_N;
@@ -283,7 +288,7 @@ impl<'engine> Search<'engine> {
         let mut c = 0;
         let mut did_raise_alpha = false;
 
-        // Iterate the moves.
+        // Step 5. Iterate the moves.
         while moves.load_next_phase(MoveLoader::from(self, tt_mov, draft)) {
             for mov in &moves {
                 c += 1;
@@ -295,10 +300,34 @@ impl<'engine> Search<'engine> {
 
                 self.pos.make_move(mov);
 
-                let score = self
-                    .alphabeta::<T, Pv>(-beta, -alpha, depth - 1)
-                    .neg()
-                    .inc_mate();
+                let mut score: Score = Score::INF_N;
+
+                if Node::cut() {
+                    debug_assert!(!alpha.is_mate());
+
+                    score = self
+                        .alphabeta::<T, All>(-(alpha + Score::cp(1)), -alpha, depth - 1)
+                        .neg()
+                        .inc_mate();
+                }
+
+                if Node::all() {
+                    debug_assert!(!alpha.is_mate());
+                    score = self
+                        .alphabeta::<T, Cut>(-(alpha + Score::cp(1)), -alpha, depth - 1)
+                        .neg()
+                        .inc_mate();
+                }
+
+                // If it's a PV node or the zero-window search failed high, do a full search.
+                if Node::pv() || score > alpha {
+                    score = self
+                        .alphabeta::<T, Pv>(-beta, -alpha, depth - 1)
+                        .neg()
+                        .inc_mate();
+                }
+
+                debug_assert!(score > Score::INF_N);
 
                 self.pos.unmake_move();
 
@@ -674,7 +703,7 @@ mod tests {
                 ("6k1/8/3q4/8/8/3B4/2P5/1K1R4 w - - 0 1", 3, Score::cp(900)),
                 ("r5k1/p1P5/8/8/8/8/3RK3/8 w - - 0 1", 6, Score::cp(900)),
                 ("6k1/8/8/3q4/8/8/P7/1KNB4 w - - 0 1", 4, Score::cp(400)),
-                ("2kr3r/ppp1qpb1/5n2/5b1p/6p1/1PNP4/PBPQBPPP/2KRR3 b - - 6 14", 5, Score::cp(300)),
+                ("2kr3r/ppp1qpb1/5n2/5b1p/6p1/1PNP4/PBPQBPPP/2KRR3 b - - 6 14", 5, Score::cp(400)),
                 ("7k/2R5/8/8/6q1/7p/7P/7K w - - 0 1", 6, Score::cp(0)),
 
                 // Pawn race

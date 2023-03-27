@@ -81,6 +81,15 @@ impl Score {
     pub fn to_i16(&self) -> i16 {
         self.0
     }
+
+    /// True if this `Score` represents a forced mate-in-n.
+    pub fn is_mate(&self) -> bool {
+        if self.0 < -20_000 || self.0 > 20_000 {
+            true
+        } else {
+            false
+        }
+    }
 }
 
 impl Neg for Score {
