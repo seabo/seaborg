@@ -210,7 +210,7 @@ impl<'engine> Search<'engine> {
         for d in 1..=depth {
             self.pvt = PVTable::new(d);
             self.search_depth = d;
-            score = self.alphabeta_old::<T, Root>(Score::INF_N, Score::INF_P, d);
+            score = self.alphabeta::<T, Root>(Score::INF_N, Score::INF_P, d);
 
             if T::is_master() {
                 self.report_pv(d, score);
@@ -299,7 +299,7 @@ impl<'engine> Search<'engine> {
         }
 
         // Step 5. Straight to quiescence search if depth <= 0.
-        if depth <= 0 {
+        if depth == 0 {
             let score = self.quiesce::<T>(alpha, beta);
             if score == Score::mate(0) {
                 self.pvt.pv_leaf_at(0);
@@ -349,7 +349,7 @@ impl<'engine> Search<'engine> {
         'move_loop: while moves.load_next_phase(MoveLoader::from(self, tt_mov, draft)) {
             for mov in &moves {
                 if self.stopping() {
-                    break;
+                    break 'move_loop;
                 }
 
                 move_count += 1;
@@ -371,16 +371,33 @@ impl<'engine> Search<'engine> {
 
                 // Step 19. Search non-PV move with null window.
                 if !Node::pv() || move_count > 1 {
+                    let sns = self.trace.nodes_visited();
                     value = self
                         .alphabeta::<T, NonPv>(-(alpha + Score::cp(1)), -alpha, depth - 1)
                         .neg()
                         .inc_mate();
+                    let ens = self.trace.nodes_visited();
+                    if depth > 4 {
+                        println!(
+                            "depth: {}, nodes: {}, ebf: {}, cutoff: {}",
+                            depth - 1,
+                            ens - sns,
+                            super::trace::eff_branching_factor(ens - sns, depth - 1),
+                            value >= beta
+                        );
+                    }
                 }
 
                 // Step 20. Search PV move, or perform re-search if null window search failed high.
+                //
+                // If this is a PV node, do a full search on the first move and any move for which
+                // the null-window search failed to produce a cutoff.
                 if Node::pv()
-                    && ((move_count == 1) || (value > alpha && (Node::root() || value < beta)))
+                    && (move_count == 1 || (value > alpha && (Node::root() || value < beta)))
                 {
+                    if depth > 4 && move_count != 1 {
+                        println!("researching");
+                    }
                     value = self
                         .alphabeta::<T, Pv>(-beta, -alpha, depth - 1)
                         .neg()
@@ -697,7 +714,7 @@ impl<'engine> Search<'engine> {
         if self.pos.in_check() {
             // A one move search extension. The main alphabeta function will tell us if we are in
             // checkmate or stalemate, and if not, it will try the possible evasions.
-            return self.alphabeta_old::<T, Pv>(alpha, beta, 1);
+            return self.alphabeta::<T, Pv>(alpha, beta, 1);
         }
 
         let captures = self.pos.generate::<BasicMoveList, Captures, Legal>();

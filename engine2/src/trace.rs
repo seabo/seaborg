@@ -171,34 +171,7 @@ impl Tracer {
     /// satisfy (x^d - 1)/(x-1) = N. To solve this for x, we have to use a numerical method as
     /// there is no closed form rearrangement in terms of x.
     pub fn eff_branching(&self, depth: u8) -> f32 {
-        let f_depth = Into::<f32>::into(depth);
-        let n = self.all_nodes_visited() as f32;
-
-        // Initial guess taken to be average branching factor for chess.
-        let mut x: f32 = 38.;
-
-        // We will use a delta between successive iterations to
-        // determine when to stop.
-        let mut last_delta;
-
-        // The smallest enough delta between iterations for which we will return.
-        let target_delta: f32 = 1e-3;
-
-        // Sometimes, it can take a while to converge..
-        let max_iterations = 100;
-
-        for _ in 0..max_iterations {
-            let x2 = x - numerator(x, f_depth, n) / denominator(x, f_depth);
-            last_delta = (x2 - x).abs();
-
-            if last_delta <= target_delta {
-                return x;
-            }
-
-            x = x2;
-        }
-
-        x
+        eff_branching_factor(self.all_nodes_visited(), depth)
     }
 }
 
@@ -214,6 +187,39 @@ fn numerator(b: f32, d: f32, n: f32) -> f32 {
 /// Represents the denominator in f(x_i)/f'(x_i)
 fn denominator(b: f32, d: f32) -> f32 {
     ((d * b.powf(d - 1.) - 1.) * (b - 1.) - (b.powf(d) - 1.)) / (b - 1.).powf(2.)
+}
+
+/// Calculate the effective branching factor for a given number of nodes and a depth, using a
+/// Newton-Raphson iteration.
+pub fn eff_branching_factor(nodes: usize, depth: u8) -> f32 {
+    let f_depth = Into::<f32>::into(depth);
+    let n = nodes as f32;
+
+    // Initial guess taken to be average branching factor for chess.
+    let mut x: f32 = 38.;
+
+    // We will use a delta between successive iterations to
+    // determine when to stop.
+    let mut last_delta;
+
+    // The smallest enough delta between iterations for which we will return.
+    let target_delta: f32 = 1e-3;
+
+    // Sometimes, it can take a while to converge..
+    let max_iterations = 100;
+
+    for _ in 0..max_iterations {
+        let x2 = x - numerator(x, f_depth, n) / denominator(x, f_depth);
+        last_delta = (x2 - x).abs();
+
+        if last_delta <= target_delta {
+            return x;
+        }
+
+        x = x2;
+    }
+
+    x
 }
 
 /// Type for maintaining running averages of a quantity.
