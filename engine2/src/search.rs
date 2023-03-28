@@ -231,6 +231,21 @@ impl<'engine> Search<'engine> {
         let draft = self.search_depth - depth;
         let mut was_tt_move = false;
 
+        debug_assert!(Score::INF_N <= alpha);
+
+        if alpha >= beta {
+            // println!(
+            //     "{}, alpha: {}, beta: {}",
+            //     self.pos.print_history(),
+            //     alpha,
+            //     beta
+            // );
+        }
+
+        debug_assert!(alpha < beta);
+        debug_assert!(beta <= Score::INF_P);
+        debug_assert!(Node::pv() || alpha + Score::cp(1) == beta);
+
         // Step 1. Check for aborted search and immediate draw.
         if self.stopping() {
             // TODO: is this robust?
@@ -296,11 +311,15 @@ impl<'engine> Search<'engine> {
                     beta = entry.score; // can narrow window
                 }
             }
+
+            if alpha == beta {
+                return alpha;
+            }
         }
 
         // Step 5. Straight to quiescence search if depth <= 0.
         if depth == 0 {
-            let score = self.quiesce::<T>(alpha, beta);
+            let score = self.quiesce::<T, Node>(alpha, beta);
             if score == Score::mate(0) {
                 self.pvt.pv_leaf_at(0);
             }
@@ -378,13 +397,13 @@ impl<'engine> Search<'engine> {
                         .inc_mate();
                     let ens = self.trace.nodes_visited();
                     if depth > 4 {
-                        println!(
-                            "depth: {}, nodes: {}, ebf: {}, cutoff: {}",
-                            depth - 1,
-                            ens - sns,
-                            super::trace::eff_branching_factor(ens - sns, depth - 1),
-                            value >= beta
-                        );
+                        // println!(
+                        //     "depth: {}, nodes: {}, ebf: {}, cutoff: {}",
+                        //     depth - 1,
+                        //     ens - sns,
+                        //     super::trace::eff_branching_factor(ens - sns, depth - 1),
+                        //     value >= beta
+                        // );
                     }
                 }
 
@@ -395,14 +414,13 @@ impl<'engine> Search<'engine> {
                 if Node::pv()
                     && (move_count == 1 || (value > alpha && (Node::root() || value < beta)))
                 {
-                    if depth > 4 && move_count != 1 {
-                        println!("researching");
-                    }
                     value = self
                         .alphabeta::<T, Pv>(-beta, -alpha, depth - 1)
                         .neg()
                         .inc_mate();
                 }
+
+                debug_assert!(Node::pv() || !(value > alpha && (Node::root() || value < beta)));
 
                 // Step 21. Undo move.
                 self.pos.unmake_move();
@@ -416,7 +434,10 @@ impl<'engine> Search<'engine> {
 
                     if value > alpha {
                         best_move = *mov;
-                        self.pvt.copy_to(depth, *mov);
+
+                        if Node::pv() && !Node::root() {
+                            self.pvt.copy_to(depth, *mov);
+                        }
 
                         if Node::pv() && value < beta {
                             alpha = value;
@@ -538,7 +559,7 @@ impl<'engine> Search<'engine> {
 
         // Step 4. Handle leaf node.
         if depth == 0 {
-            let score = self.quiesce::<T>(alpha, beta);
+            let score = self.quiesce::<T, Node>(alpha, beta);
             if score == Score::mate(0) {
                 self.pvt.pv_leaf_at(0);
             }
@@ -698,10 +719,27 @@ impl<'engine> Search<'engine> {
     }
 
     /// The quiescence search.
-    fn quiesce<T: Thread>(&mut self, mut alpha: Score, beta: Score) -> Score {
+    fn quiesce<T: Thread, Node: NodeType>(&mut self, mut alpha: Score, beta: Score) -> Score {
+        debug_assert!(!Node::root());
+        debug_assert!(Score::INF_N <= alpha);
+        debug_assert!(alpha < beta);
+        debug_assert!(beta <= Score::INF_P);
+        debug_assert!(Node::pv() || alpha + Score::cp(1) == beta);
+
         self.trace.visit_q_node();
 
+        // Step 1. Check for an immediate draw or max ply reached.
+        //         TODO
+
+        // Step 2. Transposition table lookup.
+        //         TODO
+
+        // Step 3. Check for early TT cutoff.
+        //         TODO
+
+        // Step 4. Static evaluation.
         let stand_pat = self.evaluate();
+        // TODO: use TT value as a better position evaluation, if it exists.
 
         if stand_pat >= beta {
             return beta;
@@ -711,16 +749,22 @@ impl<'engine> Search<'engine> {
             alpha = stand_pat;
         }
 
+        // TODO: deal with this by looking at quiet check evasions, rather than going back to main
+        // search.
         if self.pos.in_check() {
             // A one move search extension. The main alphabeta function will tell us if we are in
             // checkmate or stalemate, and if not, it will try the possible evasions.
             return self.alphabeta::<T, Pv>(alpha, beta, 1);
         }
 
+        // TODO: use the ordered move system. We can make a different move loader for quiescence
+        // which generates check evasions when necessary, and also queen promotions.
         let captures = self.pos.generate::<BasicMoveList, Captures, Legal>();
         let mut score: Score;
 
+        // Step 5. Loop through all the moves until no moves remain or a beta cutoff occurs.
         for mov in &captures {
+            // TODO: this now goes in the move loader.
             // Evaluate whether the capture is likely to be favourable with SEE.
             let see_eval = self.see(
                 mov.orig(),
@@ -735,7 +779,7 @@ impl<'engine> Search<'engine> {
             }
 
             self.pos.make_move(mov);
-            score = self.quiesce::<T>(-beta, -alpha).neg().inc_mate();
+            score = self.quiesce::<T, Node>(-beta, -alpha).neg().inc_mate();
             self.pos.unmake_move();
 
             if score >= beta {

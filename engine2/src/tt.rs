@@ -37,7 +37,7 @@ impl GenBound {
     pub fn from_raw_parts(gen: u8, bound: Bound) -> Self {
         debug_assert!(gen < 64);
 
-        let v = gen << 2 ^ bound as u8;
+        let v = (gen << 2) ^ bound as u8;
         Self(v)
     }
 
