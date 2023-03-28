@@ -80,6 +80,23 @@ impl NodeType for Pv {
     }
 }
 
+/// Dummy type representing a non-PV node.
+pub struct NonPv;
+impl NodeType for NonPv {
+    fn pv() -> bool {
+        false
+    }
+    fn cut() -> bool {
+        false
+    }
+    fn all() -> bool {
+        false
+    }
+    fn root() -> bool {
+        false
+    }
+}
+
 /// Dummy type representing a CUT node.
 pub struct Cut;
 impl NodeType for Cut {
@@ -189,10 +206,11 @@ impl<'engine> Search<'engine> {
 
     fn iterative_deepening<T: Thread>(&mut self, depth: u8) -> Score {
         let mut score = Score::INF_N;
+
         for d in 1..=depth {
             self.pvt = PVTable::new(d);
             self.search_depth = d;
-            score = self.alphabeta::<T, Root>(Score::INF_N, Score::INF_P, d);
+            score = self.alphabeta_old::<T, Root>(Score::INF_N, Score::INF_P, d);
 
             if T::is_master() {
                 self.report_pv(d, score);
@@ -203,6 +221,235 @@ impl<'engine> Search<'engine> {
     }
 
     fn alphabeta<T: Thread, Node: NodeType>(
+        &mut self,
+        mut alpha: Score,
+        mut beta: Score,
+        depth: u8,
+    ) -> Score {
+        self.trace.visit_node();
+
+        let draft = self.search_depth - depth;
+        let mut was_tt_move = false;
+
+        // Step 1. Check for aborted search and immediate draw.
+        if self.stopping() {
+            // TODO: is this robust?
+            return Score::cp(0);
+        }
+        // TODO: check for immediate draw.
+
+        // Step 2. Mate distance pruning.
+        if !Node::root() {
+            // If we mate at the next move, the value at the root would be Mate(draft). If we
+            // already have alpha greater than this, then we had a quicker mate elsewhere in the
+            // tree. So we can prune here.
+            alpha = std::cmp::max(Score::mate(draft as i8).neg(), alpha);
+            beta = std::cmp::min(Score::mate(draft as i8 + 1), beta);
+            if alpha >= beta {
+                return alpha;
+            }
+        }
+
+        // Step 3. Load transposition table entry.
+        let (tt_entry, tt_mov) = {
+            use super::tt::Probe::*;
+            match self.tt.probe(&self.pos) {
+                Hit(entry) => {
+                    let e = entry.read();
+                    if e.mov.is_null() {
+                        (entry, None)
+                    } else {
+                        let mov = e.mov.to_move(&self.pos);
+                        if self.pos.valid_move(&mov) {
+                            self.trace.hash_hit();
+                            was_tt_move = true;
+                            (entry, Some(mov))
+                        } else {
+                            self.trace.hash_collision();
+                            (entry, None)
+                        }
+                    }
+                }
+                Clash(entry) => {
+                    self.trace.hash_clash();
+                    (entry, None)
+                }
+                Empty(entry) => (entry, None),
+            }
+        };
+
+        // Step 4. In non-PV nodes, check for early cutoff.
+        if !Node::pv() {
+            let entry = tt_entry.read();
+            if entry.depth >= depth && entry.bound() == Bound::Exact {
+                return entry.score;
+            } else if entry.depth >= depth && entry.bound() == Bound::Lower {
+                if entry.score > beta {
+                    return entry.score; // guaranteed beta-cutoff
+                } else if entry.score > alpha {
+                    alpha = entry.score; // can narrow window
+                }
+            } else if entry.depth >= depth && entry.bound() == Bound::Upper {
+                if entry.score < alpha {
+                    return entry.score; // guaranteed all-node
+                } else if entry.score < beta {
+                    beta = entry.score; // can narrow window
+                }
+            }
+        }
+
+        // Step 5. Straight to quiescence search if depth <= 0.
+        if depth <= 0 {
+            let score = self.quiesce::<T>(alpha, beta);
+            if score == Score::mate(0) {
+                self.pvt.pv_leaf_at(0);
+            }
+            return score;
+        }
+
+        // Step 6. Static evaluation.
+        let _static_eval = self.evaluate();
+
+        // Step 7. Razoring.
+        //         TODO
+
+        // Step 8. Futility pruning.
+        //         TODO
+
+        // Step 9. Null move search with verification (non-PV only).
+        //         TODO
+
+        // Step 10. ProbCut.
+        //         TODO
+
+        // Step 11. In PV nodes, if the move is not in TT, decrease depth by 3.
+        //          TODO
+
+        // Step 12. If depth <= 0, run quiescence search.
+        // if depth == 0 {
+        //     let score = self.quiesce::<T>(alpha, beta);
+        //     if score == Score::mate(0) {
+        //         self.pvt.pv_leaf_at(0);
+        //     }
+        //     return score;
+        // }
+
+        // Step 13. In non-PV nodes with depth >= 7 and not in TT, decrease depth by 2.
+        //          TODO
+
+        // Step 14. If PV move and TT move failed low, this is a likely fail-low.
+        //          TODO
+
+        // Step 15. Iterate moves.
+        let mut best_value = Score::INF_N;
+        let mut best_move = Move::null();
+        let mut moves = OrderedMoves::new();
+        let mut move_count = 0;
+
+        'move_loop: while moves.load_next_phase(MoveLoader::from(self, tt_mov, draft)) {
+            for mov in &moves {
+                if self.stopping() {
+                    break;
+                }
+
+                move_count += 1;
+                let mut value = Score::INF_N;
+
+                // Start reporting which move we're considering after 3 seconds have elapsed.
+                if T::is_master() && Node::root() && self.trace.live_elapsed().as_millis() > 3000 {
+                    self.report_curr_move(depth, &mov, move_count);
+                }
+
+                // Step 16. Reductions & extensions.
+                //          TODO
+
+                // Step 17. Late move reduction.
+                //          TODO
+
+                // Step 18. Make the move.
+                self.pos.make_move(mov);
+
+                // Step 19. Search non-PV move with null window.
+                if !Node::pv() || move_count > 1 {
+                    value = self
+                        .alphabeta::<T, NonPv>(-(alpha + Score::cp(1)), -alpha, depth - 1)
+                        .neg()
+                        .inc_mate();
+                }
+
+                // Step 20. Search PV move, or perform re-search if null window search failed high.
+                if Node::pv()
+                    && ((move_count == 1) || (value > alpha && (Node::root() || value < beta)))
+                {
+                    value = self
+                        .alphabeta::<T, Pv>(-beta, -alpha, depth - 1)
+                        .neg()
+                        .inc_mate();
+                }
+
+                // Step 21. Undo move.
+                self.pos.unmake_move();
+
+                debug_assert!(value > Score::INF_N);
+                debug_assert!(value < Score::INF_P);
+
+                // Step 22. Check for new best move.
+                if value > best_value {
+                    best_value = value;
+
+                    if value > alpha {
+                        best_move = *mov;
+                        self.pvt.copy_to(depth, *mov);
+
+                        if Node::pv() && value < beta {
+                            alpha = value;
+                            // TODO: reduce depth on remaining moves.
+                        } else {
+                            debug_assert!(value >= beta);
+                            break 'move_loop;
+                        }
+                    }
+                }
+            }
+        }
+
+        debug_assert!(
+            move_count > 0 || self.pos.generate::<BasicMoveList, AllGen, Legal>().len() == 0
+        );
+
+        // Step 23. Check for mate and stalemate.
+        if move_count == 0 {
+            self.pvt.pv_leaf_at(depth);
+
+            best_value = if self.pos.in_check() {
+                Score::mate(0)
+            } else {
+                Score::cp(0)
+            };
+        }
+
+        debug_assert!(best_value > Score::INF_N);
+
+        // Step 24. Write node information to the transposition table.
+        tt_entry.write(
+            &self.pos,
+            best_value,
+            depth,
+            if best_value >= beta {
+                Bound::Lower
+            } else if Node::pv() && !best_move.is_null() {
+                Bound::Exact
+            } else {
+                Bound::Upper
+            },
+            &best_move,
+        );
+
+        // Step 25. Return best value.
+        best_value
+    }
+
+    fn alphabeta_old<T: Thread, Node: NodeType>(
         &mut self,
         mut alpha: Score,
         mut beta: Score,
@@ -306,7 +553,7 @@ impl<'engine> Search<'engine> {
                     debug_assert!(!alpha.is_mate());
 
                     score = self
-                        .alphabeta::<T, All>(-(alpha + Score::cp(1)), -alpha, depth - 1)
+                        .alphabeta_old::<T, All>(-(alpha + Score::cp(1)), -alpha, depth - 1)
                         .neg()
                         .inc_mate();
                 }
@@ -314,17 +561,23 @@ impl<'engine> Search<'engine> {
                 if Node::all() {
                     debug_assert!(!alpha.is_mate());
                     score = self
-                        .alphabeta::<T, Cut>(-(alpha + Score::cp(1)), -alpha, depth - 1)
+                        .alphabeta_old::<T, Cut>(-(alpha + Score::cp(1)), -alpha, depth - 1)
                         .neg()
                         .inc_mate();
                 }
 
-                // If it's a PV node or the zero-window search failed high, do a full search.
-                if Node::pv() || score > alpha {
+                if Node::pv() || c > 1 {
                     score = self
-                        .alphabeta::<T, Pv>(-beta, -alpha, depth - 1)
+                        .alphabeta_old::<T, Cut>(-(alpha + Score::cp(1)), -alpha, depth - 1)
                         .neg()
                         .inc_mate();
+                }
+
+                if Node::pv() && (c == 1 || (score > alpha && (Node::root() || score < beta))) {
+                    score = self
+                        .alphabeta_old::<T, Pv>(-beta, -alpha, depth - 1)
+                        .neg()
+                        .inc_mate()
                 }
 
                 debug_assert!(score > Score::INF_N);
@@ -400,6 +653,11 @@ impl<'engine> Search<'engine> {
         max
     }
 
+    #[inline(always)]
+    fn stopping(&self) -> bool {
+        self.stopping.load(Ordering::Relaxed)
+    }
+
     /// Returns the static evaluation, from the perspective of the side to move.
     #[inline(always)]
     fn evaluate(&mut self) -> Score {
@@ -439,7 +697,7 @@ impl<'engine> Search<'engine> {
         if self.pos.in_check() {
             // A one move search extension. The main alphabeta function will tell us if we are in
             // checkmate or stalemate, and if not, it will try the possible evasions.
-            return self.alphabeta::<T, Pv>(alpha, beta, 1);
+            return self.alphabeta_old::<T, Pv>(alpha, beta, 1);
         }
 
         let captures = self.pos.generate::<BasicMoveList, Captures, Legal>();
