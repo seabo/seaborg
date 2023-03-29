@@ -242,7 +242,7 @@ impl<'engine> Search<'engine> {
                 self.depth_reached = d;
             }
 
-            if T::is_master() && !self.stopping() {
+            if T::is_master() {
                 self.report_pv(self.depth_reached, score);
             }
         }
@@ -364,12 +364,12 @@ impl<'engine> Search<'engine> {
         // TODO: this doesn't work because of overflowing subtraction. Perhaps we need to switch to
         // representing scores with an i64 so there's plenty of space.
         //
-        if eval < alpha - Score::cp(426) - Score::cp(252 * depth as i16 * depth as i16) {
-            let value = self.quiesce::<Master, NonPv>(alpha - Score::cp(1), alpha);
-            if value < alpha {
-                return value;
-            }
-        }
+        // if eval < alpha - Score::cp(426) - Score::cp(252 * depth as i16 * depth as i16) {
+        //     let value = self.quiesce::<Master, NonPv>(alpha - Score::cp(1), alpha);
+        //     if value < alpha {
+        //         return value;
+        //     }
+        // }
 
         // Step 8. Futility pruning.
         //         TODO

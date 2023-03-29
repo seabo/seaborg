@@ -81,8 +81,9 @@ pub fn launch() {
                         launch_search(s, flag, Some(stop_time), 1, MAX_DEPTH, pos.clone(), &tt);
                     }
                     TimingMode::MoveTime(t) => {
-                        println!("move time: {:?}", t);
-                        todo!()
+                        let stop_time =
+                            std::time::Instant::now() + std::time::Duration::from_millis(t as u64);
+                        launch_search(s, flag, Some(stop_time), 1, MAX_DEPTH, pos.clone(), &tt);
                     }
                 },
                 Ok(Command::SetPosition((fen, moves))) => match Position::from_fen(&fen) {
