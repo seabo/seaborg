@@ -198,6 +198,7 @@ impl<'engine> Search<'engine> {
         assert!(d > 0);
 
         // Some bookeeping and prep.
+        self.tt.clear(); // TODO: we shouldn't have to do this. There is a bug somewhere.
         self.trace.commence_search();
         self.search_depth = d;
 
@@ -268,7 +269,7 @@ impl<'engine> Search<'engine> {
         // Step 1. Check for aborted search and immediate draw.
         if self.stopping() {
             // TODO: is this robust?
-            return Score::cp(0);
+            return Score::zero();
         }
         // TODO: check for immediate draw.
 
@@ -482,6 +483,10 @@ impl<'engine> Search<'engine> {
             move_count > 0 || self.pos.generate::<BasicMoveList, AllGen, Legal>().len() == 0
         );
 
+        if self.stopping() {
+            return Score::zero();
+        }
+
         // Step 23. Check for mate and stalemate.
         if move_count == 0 {
             self.pvt.pv_leaf_at(depth);
@@ -555,7 +560,7 @@ impl<'engine> Search<'engine> {
 
         if self.stopping() {
             // TODO: is this robust?
-            return Score::cp(0);
+            return Score::zero();
         }
 
         // Step 1. Check for an immediate draw or max ply reached.

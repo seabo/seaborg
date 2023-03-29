@@ -286,6 +286,13 @@ impl Table {
         }
     }
 
+    /// Clear the transposition table.
+    pub fn clear(&self) {
+        for e in &*self.data {
+            unsafe { e.get().write(Default::default()) }
+        }
+    }
+
     fn size_from_mb(size: usize) -> usize {
         let desired_entries = size * 1_024 * 1_024 / std::mem::size_of::<Entry>();
         let log_desired_entries = (desired_entries as f64).log(2.).round();
