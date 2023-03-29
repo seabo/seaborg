@@ -325,10 +325,17 @@ impl<'engine> Search<'engine> {
         }
 
         // Step 6. Static evaluation.
-        let _static_eval = self.evaluate();
+        let eval = self.evaluate();
 
         // Step 7. Razoring.
-        //         TODO
+        // When eval is very low, check with quiescence whether has any hope of raising alpha. If
+        // not, return a fail low.
+        if eval < alpha - Score::cp(426) - Score::cp(252 * depth as i16 * depth as i16) {
+            let value = self.quiesce::<Master, NonPv>(alpha - Score::cp(1), alpha);
+            if value < alpha {
+                return value;
+            }
+        }
 
         // Step 8. Futility pruning.
         //         TODO
@@ -500,27 +507,87 @@ impl<'engine> Search<'engine> {
     }
 
     /// The quiescence search.
-    fn quiesce<T: Thread, Node: NodeType>(&mut self, mut alpha: Score, beta: Score) -> Score {
+    fn quiesce<T: Thread, Node: NodeType>(&mut self, mut alpha: Score, mut beta: Score) -> Score {
+        self.trace.visit_q_node();
+
         debug_assert!(!Node::root());
         debug_assert!(Score::INF_N <= alpha);
         debug_assert!(alpha < beta);
         debug_assert!(beta <= Score::INF_P);
         debug_assert!(Node::pv() || alpha + Score::cp(1) == beta);
 
-        self.trace.visit_q_node();
+        if self.stopping() {
+            // TODO: is this robust?
+            return Score::cp(0);
+        }
 
         // Step 1. Check for an immediate draw or max ply reached.
         //         TODO
 
-        // Step 2. Transposition table lookup.
-        //         TODO
+        // Step 2. Load transposition table entry.
+        let (tt_entry, tt_mov, tt_value) = {
+            use super::tt::Probe::*;
+            match self.tt.probe(&self.pos) {
+                Hit(entry) => {
+                    let e = entry.read();
+                    if e.mov.is_null() {
+                        (entry, None, None)
+                    } else {
+                        let mov = e.mov.to_move(&self.pos);
+                        let val = e.score;
+                        if self.pos.valid_move(&mov) {
+                            self.trace.hash_hit();
+                            (entry, Some(mov), Some(val))
+                        } else {
+                            self.trace.hash_collision();
+                            (entry, None, None)
+                        }
+                    }
+                }
+                Clash(entry) => {
+                    self.trace.hash_clash();
+                    (entry, None, None)
+                }
+                Empty(entry) => (entry, None, None),
+            }
+        };
 
         // Step 3. Check for early TT cutoff.
-        //         TODO
+        if !Node::pv() {
+            let entry = tt_entry.read();
+
+            if !entry.is_empty() && entry.depth >= 0 {
+                match entry.bound() {
+                    Bound::Exact => {
+                        return entry.score;
+                    }
+                    Bound::Lower => {
+                        if entry.score > beta {
+                            return entry.score;
+                        } else if entry.score > alpha {
+                            alpha = entry.score
+                        }
+                    }
+                    Bound::Upper => {
+                        if entry.score < alpha {
+                            return entry.score;
+                        } else if entry.score < beta {
+                            beta = entry.score
+                        }
+                    }
+                }
+            }
+
+            if alpha == beta {
+                return alpha;
+            }
+        }
 
         // Step 4. Static evaluation.
-        let stand_pat = self.evaluate();
-        // TODO: use TT value as a better position evaluation, if it exists.
+        let stand_pat = match tt_value {
+            Some(s) => s,
+            None => self.evaluate(),
+        };
 
         if stand_pat >= beta {
             return beta;
@@ -535,7 +602,10 @@ impl<'engine> Search<'engine> {
         if self.pos.in_check() {
             // A one move search extension. The main alphabeta function will tell us if we are in
             // checkmate or stalemate, and if not, it will try the possible evasions.
-            return self.alphabeta::<T, Pv>(alpha, beta, 1);
+
+            // Commenting out as this is currently causing stack overflows. We need to generate
+            // evasions when in check, instead of dropping back to main search.
+            // return self.alphabeta::<T, Pv>(alpha, beta, 1);
         }
 
         // TODO: use the ordered move system. We can make a different move loader for quiescence

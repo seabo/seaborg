@@ -239,10 +239,6 @@ impl<'a> WritableEntry<'a> {
     }
 
     /// Get a shared reference to the `Entry` in order to read its current data.
-    ///
-    /// Contrary to all Rust's usual rules, owning this shared reference _does not_ guarantee that
-    /// the data is not being modified. It is possible for a mutable reference to exist at the same
-    /// time.
     pub fn read(&self) -> &Entry {
         unsafe { &*self.ptr }
     }
