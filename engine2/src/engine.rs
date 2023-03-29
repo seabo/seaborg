@@ -12,6 +12,8 @@ use std::{
     thread::{self, Scope},
 };
 
+const MAX_DEPTH: u8 = 255;
+
 /// Launch the engine process.
 pub fn launch() {
     core::init::init_globals();
@@ -51,6 +53,14 @@ pub fn launch() {
             }
         });
 
+        println!("seaborg 0.0.2 by George Seabridge");
+        let output = std::process::Command::new("git")
+            .args(&["rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+        let git_hash = String::from_utf8(output.stdout).unwrap();
+        println!("commit {}", git_hash);
+
         loop {
             match uci_rx.try_recv() {
                 Ok(Command::Quit) => {
@@ -63,9 +73,22 @@ pub fn launch() {
                 Ok(Command::Go(d)) => match d {
                     TimingMode::Depth(depth) => {
                         stop_flag.store(false, Ordering::Relaxed);
-                        launch_search(s, flag, 1, depth, pos.clone(), &tt);
+                        launch_search(s, flag, None, 1, depth, pos.clone(), &tt);
                     }
-                    _ => todo!(),
+                    TimingMode::Infinite => {
+                        stop_flag.store(false, Ordering::Relaxed);
+                        launch_search(s, flag, None, 1, MAX_DEPTH, pos.clone(), &tt);
+                    }
+                    TimingMode::Timed(tc) => {
+                        let move_time = tc.to_move_time(pos.move_number(), pos.turn());
+                        let stop_time = std::time::Instant::now()
+                            + std::time::Duration::from_millis(move_time.into());
+                        launch_search(s, flag, Some(stop_time), 1, MAX_DEPTH, pos.clone(), &tt);
+                    }
+                    TimingMode::MoveTime(t) => {
+                        println!("move time: {:?}", t);
+                        todo!()
+                    }
                 },
                 Ok(Command::SetPosition((fen, moves))) => match Position::from_fen(&fen) {
                     Ok(mut p) => {
@@ -99,6 +122,14 @@ pub fn launch() {
                 Ok(Command::Perft(d)) => {
                     super::perft::Perft::divide(&mut pos, d, true, false);
                 }
+                Ok(Command::Uci) => {
+                    println!("id name seaborg 0.0.2");
+                    println!("id author George Seabridge");
+                    println!("uciok");
+                }
+                Ok(Command::IsReady) => {
+                    println!("readyok");
+                }
                 Ok(cmd) => println!("{:?}: not yet implemented", cmd),
                 Err(_err) => {}
             }
@@ -109,6 +140,7 @@ pub fn launch() {
 fn launch_search<'scope, 'engine>(
     s: &'scope Scope<'scope, 'engine>,
     flag: &'engine AtomicBool,
+    stop_time: Option<std::time::Instant>,
     num_threads: u8,
     depth: u8,
     pos: Position,
@@ -117,7 +149,7 @@ fn launch_search<'scope, 'engine>(
     for i in 0..num_threads {
         let thread_pos = pos.clone();
         s.spawn(move || {
-            let mut search = Search::new(thread_pos, flag, tt);
+            let mut search = Search::new(thread_pos, flag, stop_time, tt);
             if i == 0 {
                 search.start_search::<Master>(depth);
             } else {

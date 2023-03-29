@@ -146,7 +146,7 @@ mod tests {
             let pos = Position::from_fen(fen).unwrap();
             let flag = AtomicBool::new(false);
             let tt = crate::tt::Table::new(1);
-            let mut search = Search::new(pos, &flag, &tt);
+            let mut search = Search::new(pos, &flag, None, &tt);
             let see = search.see(from, to, target, attacker);
             assert_eq!(see, score);
         }

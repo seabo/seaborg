@@ -164,11 +164,19 @@ pub struct Search<'engine> {
     history: HistoryTable,
     /// Flag to indicate when the search should start unwinding due to user intervention.
     stopping: &'engine AtomicBool,
+    /// Time to at which to end search.
+    stop_time: Option<std::time::Instant>,
     search_depth: u8,
+    depth_reached: u8,
 }
 
 impl<'engine> Search<'engine> {
-    pub fn new(pos: Position, flag: &'engine AtomicBool, tt: &'engine Table) -> Self {
+    pub fn new(
+        pos: Position,
+        flag: &'engine AtomicBool,
+        stop_time: Option<std::time::Instant>,
+        tt: &'engine Table,
+    ) -> Self {
         Self {
             pos,
             tt,
@@ -177,7 +185,9 @@ impl<'engine> Search<'engine> {
             pvt: PVTable::new(8),
             trace: Tracer::new(),
             stopping: flag,
+            stop_time,
             search_depth: 0,
+            depth_reached: 0,
         }
     }
 
@@ -191,12 +201,12 @@ impl<'engine> Search<'engine> {
         self.trace.commence_search();
         self.search_depth = d;
 
-        let score = self.iterative_deepening::<T>(d);
+        let (score, best_move) = self.iterative_deepening::<T>(d);
         self.trace.end_search();
 
         if T::is_master() {
-            self.report_pv(d, score);
             self.report_telemetry(d, score);
+            println!("bestmove {}", best_move);
         }
 
         self.history.reset();
@@ -204,20 +214,39 @@ impl<'engine> Search<'engine> {
         score
     }
 
-    fn iterative_deepening<T: Thread>(&mut self, depth: u8) -> Score {
+    fn iterative_deepening<T: Thread>(&mut self, depth: u8) -> (Score, Move) {
         let mut score = Score::INF_N;
+        let mut best_move = Move::null();
 
         for d in 1..=depth {
+            if self.stopping() {
+                break;
+            }
+
             self.pvt = PVTable::new(d);
             self.search_depth = d;
-            score = self.alphabeta::<T, Root>(Score::INF_N, Score::INF_P, d);
+            let value = self.alphabeta::<T, Root>(Score::INF_N, Score::INF_P, d);
 
-            if T::is_master() {
-                self.report_pv(d, score);
+            if !self.stopping() {
+                score = value;
+                best_move = match self.pvt.pv().into_iter().next() {
+                    Some(mov) => *mov,
+                    None => {
+                        let entry = self.tt.probe(&self.pos).into_inner();
+                        let tt_entry = entry.read();
+                        assert!(!tt_entry.is_empty());
+                        tt_entry.mov.to_move(&self.pos)
+                    }
+                };
+                self.depth_reached = d;
+            }
+
+            if T::is_master() && !self.stopping() {
+                self.report_pv(self.depth_reached, score);
             }
         }
 
-        score
+        (score, best_move)
     }
 
     pub fn alphabeta<T: Thread, Node: NodeType>(
@@ -330,12 +359,16 @@ impl<'engine> Search<'engine> {
         // Step 7. Razoring.
         // When eval is very low, check with quiescence whether has any hope of raising alpha. If
         // not, return a fail low.
-        if eval < alpha - Score::cp(426) - Score::cp(252 * depth as i16 * depth as i16) {
-            let value = self.quiesce::<Master, NonPv>(alpha - Score::cp(1), alpha);
-            if value < alpha {
-                return value;
-            }
-        }
+        //
+        // TODO: this doesn't work because of overflowing subtraction. Perhaps we need to switch to
+        // representing scores with an i64 so there's plenty of space.
+        //
+        // if eval < alpha - Score::cp(426) - Score::cp(252 * depth as i16 * depth as i16) {
+        //     let value = self.quiesce::<Master, NonPv>(alpha - Score::cp(1), alpha);
+        //     if value < alpha {
+        //         return value;
+        //     }
+        // }
 
         // Step 8. Futility pruning.
         //         TODO
@@ -487,6 +520,10 @@ impl<'engine> Search<'engine> {
     #[inline(always)]
     fn stopping(&self) -> bool {
         self.stopping.load(Ordering::Relaxed)
+            || self
+                .stop_time
+                .map(|s| s <= std::time::Instant::now())
+                .unwrap_or(false)
     }
 
     /// Returns the static evaluation, from the perspective of the side to move.
@@ -678,77 +715,87 @@ impl<'engine> Search<'engine> {
 
     /// Detailed debug info about the search, printed after the end of search in debug mode.
     fn report_telemetry(&self, depth: u8, score: Score) {
-        println!(
-            "nodes:     {}",
-            self.trace.all_nodes_visited().separated_string()
-        );
-        println!(
-            "% q_nodes: {:.2}%",
-            self.trace.q_nodes_visited() as f32 / self.trace.all_nodes_visited() as f32 * 100.0
-        );
-        println!(
-            "nps:       {}",
-            self.trace
-                .nps()
-                .expect("`end_search` was called, so this should always work")
-                .separated_string()
-        );
-        println!(
-            "see skips: {}",
-            self.trace.see_skipped_nodes().separated_string()
-        );
-        println!(
-            "time:      {}ms",
-            self.trace
-                .elapsed()
-                .expect("we called `end_search`")
-                .as_millis()
-                .separated_string()
-        );
-        println!(
-            "eff. bf:   {}",
-            self.trace.eff_branching(depth).separated_string()
-        );
-        println!("tt stats ----------------");
-        println!(
-            " size: {}MB, slots: {}",
-            self.tt.capacity_mb(),
-            self.tt.capacity_entries().separated_string()
-        );
-        println!(
-            " hits:       {:>8} ({:.1}%)",
-            self.trace.hash_hits().separated_string(),
-            self.trace.hash_hits() as f64 / self.trace.hash_probes() as f64 * 100.
-        );
-        println!(
-            " collisions: {:>8} ({:.1}%)",
-            self.trace.hash_collisions().separated_string(),
-            self.trace.hash_collisions() as f64 / self.trace.hash_probes() as f64 * 100.
-        );
-        println!(
-            " clashes:    {:>8} ({:.1}%)",
-            self.trace.hash_clashes().separated_string(),
-            self.trace.hash_clashes() as f64 / self.trace.hash_probes() as f64 * 100.
-        );
-        println!(" hashfull: {:.2}%", self.tt.hashfull() as f64 / 10.);
-        println!("-------------------------");
-        println!(
-            "pv:        {}",
-            self.pvt
-                .pv()
-                .map(|m| m.to_uci_string())
-                .collect::<Vec<String>>()
-                .join(" ")
-        );
-        println!("score:     {:?}", score);
-        println!(
-            "tt move found at {:.2}% of nodes",
-            self.trace.hash_found.avg() * 100_f64
-        );
-        println!(
-            "killers found per node: {:.2}",
-            self.trace.killers_per_node.avg() * 2_f64
-        );
+        if false {
+            println!(
+                "nodes:     {}",
+                self.trace.all_nodes_visited().separated_string()
+            );
+            println!(
+                "% q_nodes: {:.2}%",
+                self.trace.q_nodes_visited() as f32 / self.trace.all_nodes_visited() as f32 * 100.0
+            );
+            println!(
+                "nps:       {}",
+                self.trace
+                    .nps()
+                    .expect("`end_search` was called, so this should always work")
+                    .separated_string()
+            );
+            println!(
+                "see skips: {}",
+                self.trace.see_skipped_nodes().separated_string()
+            );
+            println!(
+                "time:      {}ms",
+                self.trace
+                    .elapsed()
+                    .expect("we called `end_search`")
+                    .as_millis()
+                    .separated_string()
+            );
+            println!(
+                "eff. bf:   {}",
+                self.trace.eff_branching(depth).separated_string()
+            );
+            println!("tt stats ----------------");
+            println!(
+                " size: {}MB, slots: {}",
+                self.tt.capacity_mb(),
+                self.tt.capacity_entries().separated_string()
+            );
+            println!(
+                " hits:       {:>8} ({:.1}%)",
+                self.trace.hash_hits().separated_string(),
+                self.trace.hash_hits() as f64 / self.trace.hash_probes() as f64 * 100.
+            );
+            println!(
+                " collisions: {:>8} ({:.1}%)",
+                self.trace.hash_collisions().separated_string(),
+                self.trace.hash_collisions() as f64 / self.trace.hash_probes() as f64 * 100.
+            );
+            println!(
+                " clashes:    {:>8} ({:.1}%)",
+                self.trace.hash_clashes().separated_string(),
+                self.trace.hash_clashes() as f64 / self.trace.hash_probes() as f64 * 100.
+            );
+            println!(" hashfull: {:.2}%", self.tt.hashfull() as f64 / 10.);
+            println!("-------------------------");
+            println!(
+                "pv:        {}",
+                self.pvt
+                    .pv()
+                    .map(|m| m.to_uci_string())
+                    .collect::<Vec<String>>()
+                    .join(" ")
+            );
+            println!("score:     {:?}", score);
+            println!(
+                "tt move found at {:.2}% of nodes",
+                self.trace.hash_found.avg() * 100_f64
+            );
+            println!(
+                "killers found per node: {:.2}",
+                self.trace.killers_per_node.avg() * 2_f64
+            );
+        }
+    }
+
+    fn report_best_move(&self) {
+        // Get TT entry.
+        let entry = self.tt.probe(&self.pos).into_inner();
+        let tt_entry = entry.read();
+        assert!(!tt_entry.is_empty());
+        println!("bestmove {}", tt_entry.mov.to_move(&self.pos));
     }
 }
 
@@ -894,7 +941,7 @@ mod tests {
             let pos = Position::from_fen(fen).unwrap();
             let flag = AtomicBool::new(false);
             let tt = Table::new(16);
-            let mut search = Search::new(pos, &flag, &tt);
+            let mut search = Search::new(pos, &flag, None, &tt);
             let s = search.start_search::<Master>(depth);
 
             assert_eq!(s, score);

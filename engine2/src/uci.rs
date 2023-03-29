@@ -342,8 +342,8 @@ impl<'a> Parser<'a> {
                 Token::Kw(Keyword::Depth) => self.parse_depth(),
                 Token::Kw(Keyword::Nodes) => self.unsupported_time_control(),
                 Token::Kw(Keyword::Mate) => self.unsupported_time_control(),
-                Token::Kw(Keyword::MoveTime) => self.unsupported_time_control(),
-                Token::Kw(Keyword::Infinite) => self.unsupported_time_control(),
+                Token::Kw(Keyword::MoveTime) => self.parse_movetime(),
+                Token::Kw(Keyword::Infinite) => self.parse_infinite(),
                 Token::Kw(Keyword::PonderHit) => self.unsupported_time_control(),
                 _ => Err(Error::UnexpectedToken),
             },
@@ -405,6 +405,18 @@ impl<'a> Parser<'a> {
 
         let depth = self.parse_integer()? as u8;
         Ok(Command::Go(TimingMode::Depth(depth)))
+    }
+
+    fn parse_infinite(&mut self) -> PResult {
+        self.advance().ok_or(Error::UnexpectedEnd)?;
+        self.expect_end(Ok(Command::Go(TimingMode::Infinite)))
+    }
+
+    fn parse_movetime(&mut self) -> PResult {
+        self.advance().ok_or(Error::UnexpectedEnd)?;
+
+        let movetime = self.parse_integer()?;
+        self.expect_end(Ok(Command::Go(TimingMode::MoveTime(movetime))))
     }
 
     fn unsupported_time_control(&mut self) -> PResult {
