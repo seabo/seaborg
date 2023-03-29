@@ -276,6 +276,10 @@ impl<'engine> Search<'engine> {
             return Score::zero();
         }
 
+        if self.pos.half_move_clock() >= 50 {
+            return Score::zero();
+        }
+
         // Step 2. Mate distance pruning.
         if !Node::root() {
             // If we mate at the next move, the value at the root would be Mate(draft). If we
