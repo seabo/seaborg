@@ -314,7 +314,7 @@ impl<'engine> Search<'engine> {
         };
 
         // Step 4. In non-PV nodes, check for early cutoff.
-        if !Node::pv() {
+        if !Node::pv() && tt_move {
             let entry = tt_entry.read();
 
             if !entry.is_empty() && entry.depth >= depth {
@@ -364,12 +364,12 @@ impl<'engine> Search<'engine> {
         // TODO: this doesn't work because of overflowing subtraction. Perhaps we need to switch to
         // representing scores with an i64 so there's plenty of space.
         //
-        // if eval < alpha - Score::cp(426) - Score::cp(252 * depth as i16 * depth as i16) {
-        //     let value = self.quiesce::<Master, NonPv>(alpha - Score::cp(1), alpha);
-        //     if value < alpha {
-        //         return value;
-        //     }
-        // }
+        if eval < alpha - Score::cp(426) - Score::cp(252 * depth as i16 * depth as i16) {
+            let value = self.quiesce::<Master, NonPv>(alpha - Score::cp(1), alpha);
+            if value < alpha {
+                return value;
+            }
+        }
 
         // Step 8. Futility pruning.
         //         TODO
@@ -647,7 +647,7 @@ impl<'engine> Search<'engine> {
 
             // Commenting out as this is currently causing stack overflows. We need to generate
             // evasions when in check, instead of dropping back to main search.
-            // return self.alphabeta::<T, Pv>(alpha, beta, 1);
+            return self.alphabeta::<T, Pv>(alpha, beta, 1);
         }
 
         // TODO: use the ordered move system. We can make a different move loader for quiescence
