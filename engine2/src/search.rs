@@ -296,19 +296,26 @@ impl<'engine> Search<'engine> {
         // Step 4. In non-PV nodes, check for early cutoff.
         if !Node::pv() {
             let entry = tt_entry.read();
-            if entry.depth >= depth && entry.bound() == Bound::Exact {
-                return entry.score;
-            } else if entry.depth >= depth && entry.bound() == Bound::Lower {
-                if entry.score > beta {
-                    return entry.score; // guaranteed beta-cutoff
-                } else if entry.score > alpha {
-                    alpha = entry.score; // can narrow window
-                }
-            } else if entry.depth >= depth && entry.bound() == Bound::Upper {
-                if entry.score < alpha {
-                    return entry.score; // guaranteed all-node
-                } else if entry.score < beta {
-                    beta = entry.score; // can narrow window
+
+            if !entry.is_empty() && entry.depth >= depth {
+                match entry.bound() {
+                    Bound::Exact => {
+                        return entry.score;
+                    }
+                    Bound::Lower => {
+                        if entry.score > beta {
+                            return entry.score;
+                        } else if entry.score > alpha {
+                            alpha = entry.score
+                        }
+                    }
+                    Bound::Upper => {
+                        if entry.score < alpha {
+                            return entry.score;
+                        } else if entry.score < beta {
+                            beta = entry.score
+                        }
+                    }
                 }
             }
 
@@ -323,6 +330,7 @@ impl<'engine> Search<'engine> {
             if score == Score::mate(0) {
                 self.pvt.pv_leaf_at(0);
             }
+
             return score;
         }
 
@@ -364,6 +372,7 @@ impl<'engine> Search<'engine> {
         let mut best_move = Move::null();
         let mut moves = OrderedMoves::new();
         let mut move_count = 0;
+        let mut did_raise_alpha = false;
 
         'move_loop: while moves.load_next_phase(MoveLoader::from(self, tt_mov, draft)) {
             for mov in &moves {
@@ -390,21 +399,10 @@ impl<'engine> Search<'engine> {
 
                 // Step 19. Search non-PV move with null window.
                 if !Node::pv() || move_count > 1 {
-                    let sns = self.trace.nodes_visited();
                     value = self
                         .alphabeta::<T, NonPv>(-(alpha + Score::cp(1)), -alpha, depth - 1)
                         .neg()
                         .inc_mate();
-                    let ens = self.trace.nodes_visited();
-                    if depth > 4 {
-                        // println!(
-                        //     "depth: {}, nodes: {}, ebf: {}, cutoff: {}",
-                        //     depth - 1,
-                        //     ens - sns,
-                        //     super::trace::eff_branching_factor(ens - sns, depth - 1),
-                        //     value >= beta
-                        // );
-                    }
                 }
 
                 // Step 20. Search PV move, or perform re-search if null window search failed high.
@@ -435,12 +433,11 @@ impl<'engine> Search<'engine> {
                     if value > alpha {
                         best_move = *mov;
 
-                        if Node::pv() && !Node::root() {
-                            self.pvt.copy_to(depth, *mov);
-                        }
+                        self.pvt.copy_to(depth, *mov);
 
                         if Node::pv() && value < beta {
                             alpha = value;
+                            did_raise_alpha = true;
                             // TODO: reduce depth on remaining moves.
                         } else {
                             debug_assert!(value >= beta);
@@ -474,10 +471,13 @@ impl<'engine> Search<'engine> {
             best_value,
             depth,
             if best_value >= beta {
+                debug_assert!(!best_move.is_null());
                 Bound::Lower
             } else if Node::pv() && !best_move.is_null() {
+                debug_assert!(did_raise_alpha);
                 Bound::Exact
             } else {
+                debug_assert!(!did_raise_alpha);
                 Bound::Upper
             },
             &best_move,
