@@ -108,26 +108,29 @@ impl fmt::Display for Player {
 // TODO: turn off pub for all the `Position` fields and provide getters
 #[derive(Clone, Eq, PartialEq)]
 pub struct Position {
-    // Array of pieces
+    /// Array of pieces on the board.
     pub(crate) board: Board,
 
     // Bitboards for each piece type
+    /// Piece-type bitboards. One for each player/piece combination.
     pub(crate) bbs: [Bitboard; PIECE_TYPE_CNT],
+    /// Occupancy bitboards for white and black.
     pub(crate) player_occ: [Bitboard; PLAYER_CNT],
 
     // "Invisible" state
+    /// The side whose turn it is to move.
     turn: Player,
+    /// The castling rights of both players.
     pub(crate) castling_rights: CastlingRights,
+    /// A square on which an en passant capture is allowed, if any.
     pub(crate) ep_square: Option<Square>,
-    // TODO: use a 'half-move' counter to track the game move number,
-    // and make the 50-move rule counter a separate thing. That way the
-    // logic for the current concept called `move_number` will be more elegant
-    // (i.e. not checking for a white move before incrementing, and not dealing)
-    // with 0.5 move increments.
+    /// The number of moves since the 50-move rule counter was last reset by a pawn move or
+    /// capture.
     pub(crate) half_move_clock: u32,
+    /// Full move number of the current position in the game being played.
     pub(crate) move_number: u32,
 
-    // `State` struct stores other useful information for fast access
+    /// `State` struct stores other useful information for fast access
     // TODO: Pleco wraps this in an Arc for quick copying of states without
     // copying memory. Do we need that?
     // TODO: This probably needs a better name since it really just has info
@@ -191,6 +194,10 @@ impl Position {
             string.push_str(&mov_str);
         }
         string
+    }
+
+    pub fn half_move_clock(&self) -> u32 {
+        self.half_move_clock
     }
 
     pub fn zobrist(&self) -> Zobrist {

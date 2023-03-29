@@ -537,7 +537,10 @@ impl<'engine> Search<'engine> {
     /// Returns the static evaluation, from the perspective of the side to move.
     #[inline(always)]
     fn evaluate(&mut self) -> Score {
-        Score::cp(self.pos.material_eval() * self.pov())
+        let material = (self.pos.material_eval() * self.pov()) as f32;
+        let hmc = (50 - std::cmp::min(self.pos.half_move_clock(), 50)) as f32 / 50.;
+        let scaled_material = (material * hmc).round() as i16;
+        Score::cp(scaled_material)
     }
 
     /// Returns 1 if the player to move is White, -1 if Black. Useful wherever we are using
