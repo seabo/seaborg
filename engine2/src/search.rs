@@ -220,7 +220,7 @@ impl<'engine> Search<'engine> {
         score
     }
 
-    fn alphabeta<T: Thread, Node: NodeType>(
+    pub fn alphabeta<T: Thread, Node: NodeType>(
         &mut self,
         mut alpha: Score,
         mut beta: Score,
@@ -229,19 +229,9 @@ impl<'engine> Search<'engine> {
         self.trace.visit_node();
 
         let draft = self.search_depth - depth;
-        let mut was_tt_move = false;
+        let mut tt_move = false;
 
         debug_assert!(Score::INF_N <= alpha);
-
-        if alpha >= beta {
-            // println!(
-            //     "{}, alpha: {}, beta: {}",
-            //     self.pos.print_history(),
-            //     alpha,
-            //     beta
-            // );
-        }
-
         debug_assert!(alpha < beta);
         debug_assert!(beta <= Score::INF_P);
         debug_assert!(Node::pv() || alpha + Score::cp(1) == beta);
@@ -277,7 +267,7 @@ impl<'engine> Search<'engine> {
                         let mov = e.mov.to_move(&self.pos);
                         if self.pos.valid_move(&mov) {
                             self.trace.hash_hit();
-                            was_tt_move = true;
+                            tt_move = true;
                             (entry, Some(mov))
                         } else {
                             self.trace.hash_collision();
@@ -487,210 +477,6 @@ impl<'engine> Search<'engine> {
         best_value
     }
 
-    fn alphabeta_old<T: Thread, Node: NodeType>(
-        &mut self,
-        mut alpha: Score,
-        mut beta: Score,
-        mut depth: u8,
-    ) -> Score {
-        self.trace.visit_node();
-        let draft = self.search_depth - depth;
-        let mut was_tt_mov = false;
-
-        // Step 1. Mate distance pruning.
-        if !Node::root() {
-            // If we mate at the next move, the value at the root would be Mate(draft). If we
-            // already have alpha greater than this, then we had a quicker mate elsewhere in the
-            // tree. So we can prune here.
-            alpha = std::cmp::max(Score::mate(draft as i8).neg(), alpha);
-            beta = std::cmp::min(Score::mate(draft as i8 + 1), beta);
-            if alpha >= beta {
-                return alpha;
-            }
-        }
-
-        // Step 2. Transposition table lookup.
-        let (tt_entry, tt_mov) = {
-            use super::tt::Probe::*;
-            match self.tt.probe(&self.pos) {
-                Hit(entry) => {
-                    let e = entry.read();
-                    if e.mov.is_null() {
-                        (entry, None)
-                    } else {
-                        let mov = e.mov.to_move(&self.pos);
-                        if self.pos.valid_move(&mov) {
-                            self.trace.hash_hit();
-                            was_tt_mov = true;
-                            (entry, Some(mov))
-                        } else {
-                            self.trace.hash_collision();
-                            (entry, None)
-                        }
-                    }
-                }
-                Clash(entry) => {
-                    self.trace.hash_clash();
-                    (entry, None)
-                }
-                Empty(entry) => (entry, None),
-            }
-        };
-
-        // Step 3. Check for early TT cutoff.
-        if !Node::pv() {
-            let entry = tt_entry.read();
-            if entry.depth >= depth && entry.bound() == Bound::Exact {
-                return entry.score;
-            } else if entry.depth >= depth && entry.bound() == Bound::Lower {
-                if entry.score > beta {
-                    return entry.score; // guaranteed beta-cutoff
-                } else if entry.score > alpha {
-                    alpha = entry.score; // can narrow window
-                }
-            } else if entry.depth >= depth && entry.bound() == Bound::Upper {
-                if entry.score < alpha {
-                    return entry.score; // guaranteed all-node
-                } else if entry.score < beta {
-                    beta = entry.score; // can narrow window
-                }
-            }
-        }
-
-        // Step 4. Handle leaf node.
-        if depth == 0 {
-            let score = self.quiesce::<T, Node>(alpha, beta);
-            if score == Score::mate(0) {
-                self.pvt.pv_leaf_at(0);
-            }
-            return score;
-        }
-
-        let mut max = Score::INF_N;
-        let mut best_move = Move::null();
-
-        let mut moves = OrderedMoves::new();
-        let mut c = 0;
-        let mut did_raise_alpha = false;
-
-        // Step 5. Iterate the moves.
-        while moves.load_next_phase(MoveLoader::from(self, tt_mov, draft)) {
-            for mov in &moves {
-                c += 1;
-
-                // Start reporting which move we're considering after 2 seconds have elapsed.
-                if T::is_master() && Node::root() && self.trace.live_elapsed().as_millis() > 2000 {
-                    self.report_curr_move(depth, &mov, c);
-                }
-
-                self.pos.make_move(mov);
-
-                let mut score: Score = Score::INF_N;
-
-                if Node::cut() {
-                    debug_assert!(!alpha.is_mate());
-
-                    score = self
-                        .alphabeta_old::<T, All>(-(alpha + Score::cp(1)), -alpha, depth - 1)
-                        .neg()
-                        .inc_mate();
-                }
-
-                if Node::all() {
-                    debug_assert!(!alpha.is_mate());
-                    score = self
-                        .alphabeta_old::<T, Cut>(-(alpha + Score::cp(1)), -alpha, depth - 1)
-                        .neg()
-                        .inc_mate();
-                }
-
-                if Node::pv() || c > 1 {
-                    score = self
-                        .alphabeta_old::<T, Cut>(-(alpha + Score::cp(1)), -alpha, depth - 1)
-                        .neg()
-                        .inc_mate();
-                }
-
-                if Node::pv() && (c == 1 || (score > alpha && (Node::root() || score < beta))) {
-                    score = self
-                        .alphabeta_old::<T, Pv>(-beta, -alpha, depth - 1)
-                        .neg()
-                        .inc_mate()
-                }
-
-                debug_assert!(score > Score::INF_N);
-
-                self.pos.unmake_move();
-
-                if self.stopping.load(Ordering::Relaxed) {
-                    break;
-                }
-
-                if score >= beta {
-                    tt_entry.write(&self.pos, score, depth, Bound::Lower, mov);
-
-                    if mov.is_quiet_or_castle() {
-                        // This is a killer move, because it's quiet and caused a beta-cutoff.
-                        self.kt.store(*mov, draft);
-
-                        // If we had a beta cutoff on a quiet move at least 2 ply from a leaf,
-                        // record it in the history table.
-                        if depth > 2 {
-                            // SAFETY: this is a legal move, so the squares must be valid.
-                            unsafe {
-                                self.history.inc_unchecked(
-                                    mov.orig(),
-                                    mov.dest(),
-                                    depth as u32 * depth as u32,
-                                    self.pos.turn(),
-                                );
-                            }
-                        }
-                    }
-
-                    return score;
-                }
-
-                if score > max {
-                    self.pvt.copy_to(depth, *mov);
-                    max = score;
-                    best_move = mov.clone();
-                    if score > alpha {
-                        did_raise_alpha = true;
-                        alpha = score;
-                    }
-                }
-            }
-
-            if self.stopping.load(Ordering::Relaxed) {
-                return Score::cp(0);
-            }
-        }
-
-        // If we had no moves.
-        if c == 0 {
-            self.pvt.pv_leaf_at(depth);
-
-            let score = if self.pos.in_check() {
-                Score::mate(0)
-            } else {
-                Score::cp(0)
-            };
-
-            tt_entry.write(&self.pos, score, depth, Bound::Exact, &Move::null());
-
-            return score;
-        }
-
-        if did_raise_alpha {
-            tt_entry.write(&self.pos, max, depth, Bound::Exact, &best_move);
-        } else {
-            tt_entry.write(&self.pos, max, depth, Bound::Upper, &Move::null());
-        }
-
-        max
-    }
-
     #[inline(always)]
     fn stopping(&self) -> bool {
         self.stopping.load(Ordering::Relaxed)
@@ -699,12 +485,7 @@ impl<'engine> Search<'engine> {
     /// Returns the static evaluation, from the perspective of the side to move.
     #[inline(always)]
     fn evaluate(&mut self) -> Score {
-        if self.pos.in_checkmate() {
-            Score::mate(0)
-            // TODO: shouldn't we check for stalemate here too?
-        } else {
-            Score::cp(self.pos.material_eval() * self.pov())
-        }
+        Score::cp(self.pos.material_eval() * self.pov())
     }
 
     /// Returns 1 if the player to move is White, -1 if Black. Useful wherever we are using
