@@ -540,45 +540,33 @@ impl Position {
     /// the position, only a threefold repetition where the final repetition is the _current_
     /// position.
     pub fn in_threefold(&self) -> bool {
-        let mut bloom = self.zobrist.0;
+        // TODO: here, we check that there are at least 4 moves in the history. However, if we are
+        // conducting a search, we perhaps want to only go as far back as the root move, on the
+        // basis that if we have been asked to search a position, we already know that the existing
+        // threefold draw is not considered. This _could_ save time, because in practice, UCI means
+        // that the entire game is in history, so we will usually have to go all the way to the
+        // last pawn or capture move, which may be before the current search's root.
 
-        // Count of how many positions we have included in the bloom filter so far.
-        let mut n = 1;
-
-        // * Iterate backwards through the move history (the `UndoableMove`s)
-        for m in self.history() {
-            if !m.ty.contains(MoveType::CAPTURE) {}
-
-            // If we have enough positions in the bloom filter and it is the same side to move,
-            // run a check to detect a possible twofold at this move. We need 3 positions before
-            // checking because there must be a minimum of two positions from the current side to
-            // move in order to get a potential twofold.
-            if n >= 3 && n % 2 == 0 {
-                if m.zobrist.0 & bloom == m.zobrist.0 {
-                    // We have a possible twofold.
-                }
-            }
-
-            bloom |= m.zobrist.0;
-            n += 1;
+        if self.history().len() < 4 {
+            return false;
         }
 
-        // * Stop at the first pawn move or capture (threefolds cannot occur across such a boundary
-        // during the game)
-        // * As we iterate through the history, OR the zobrist keys together (starting with the
-        // current position)
-        // * At each new position added (once there are already two keys included) check to see if
-        // the new zobrist has all its on-bits already set in the accumulator. If this happens, it
-        // indicates that a 'twofold' _might_ be present. Break out and do a direct check to
-        // confirm (by iterating forwards, and pushing all the zobrists into a list and then
-        // looking for duplicates)
-        // * If we reach the end of the list without the condition happening, we can be sure that
-        // there are no threefolds.
-        // * This is an implementation of a bloom filter. The bloom filter allows us to quickly
-        // confirm when there is NOT a threefold repetition in the position. In the cases where
-        // the bloom filter indicates there _may_ be a threefold, the extra cost of checking is
-        // amortised across all the other fast checks. It should hopefully be very rare to have a
-        // false positive from the bloom filter.
+        let curr_zob = self.zobrist();
+        let mut c = 0;
+
+        for m in self.history().iter().rev().skip(1).step_by(2) {
+            if m.ty.contains(MoveType::CAPTURE) || m.piece.type_of() == PieceType::Pawn {
+                return false;
+            }
+
+            if m.zobrist == curr_zob {
+                c += 1;
+
+                if c == 2 {
+                    return true;
+                }
+            }
+        }
 
         false
     }

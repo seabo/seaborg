@@ -45,7 +45,12 @@ fn do_threefold_detect() {
     pos.make_uci_move("d1g4");
     pos.make_uci_move("e4f6");
     pos.make_uci_move("g4d1");
+    pos.make_uci_move("f6e4");
+
+    let s = std::time::Instant::now();
     assert!(pos.in_threefold());
+    let t = s.elapsed().as_nanos();
+    println!("took {}ns to test for threefold", t);
 }
 
 fn do_pseudolegal() {

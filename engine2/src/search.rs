@@ -271,7 +271,10 @@ impl<'engine> Search<'engine> {
             // TODO: is this robust?
             return Score::zero();
         }
-        // TODO: check for immediate draw.
+        // Step 2. check for immediate draw.
+        if self.pos.in_threefold() {
+            return Score::zero();
+        }
 
         // Step 2. Mate distance pruning.
         if !Node::root() {
