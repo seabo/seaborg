@@ -30,7 +30,22 @@ pub fn dev() {
     // do_ordering();
     // do_perf_legal_move();
     // do_attadef();
-    do_pseudolegal();
+    // do_pseudolegal();
+    do_threefold_detect();
+}
+
+fn do_threefold_detect() {
+    let mut pos =
+        Position::from_fen("2rqkb1r/1p1n1ppp/p7/3NpP2/4n3/1P2B2P/1PP3P1/R2QKB1R w KQk - 0 13")
+            .unwrap();
+    pos.make_uci_move("d1g4");
+    pos.make_uci_move("e4f6");
+    pos.make_uci_move("g4d1");
+    pos.make_uci_move("f6e4");
+    pos.make_uci_move("d1g4");
+    pos.make_uci_move("e4f6");
+    pos.make_uci_move("g4d1");
+    assert!(pos.in_threefold());
 }
 
 fn do_pseudolegal() {

@@ -1,4 +1,4 @@
-use crate::position::{CastlingRights, PieceType, Player, Position, Square, State};
+use crate::position::{CastlingRights, Piece, PieceType, Player, Position, Square, State, Zobrist};
 use bitflags::bitflags;
 use std::fmt;
 
@@ -154,6 +154,7 @@ impl Move {
         UndoableMove {
             orig: self.orig,
             dest: self.dest,
+            piece: position.piece_at_sq(self.orig),
             promo_piece_type: self.promo_piece_type,
             captured,
             ty: self.ty,
@@ -161,6 +162,7 @@ impl Move {
             prev_ep_square: position.ep_square,
             prev_half_move_clock: position.half_move_clock,
             state: position.state,
+            zobrist: position.zobrist,
         }
     }
 
@@ -194,6 +196,7 @@ impl fmt::Display for Move {
 pub struct UndoableMove {
     pub orig: Square,
     pub dest: Square,
+    pub piece: Piece,
     pub promo_piece_type: Option<PieceType>,
     pub captured: PieceType,
     pub ty: MoveType,
@@ -201,6 +204,7 @@ pub struct UndoableMove {
     pub prev_ep_square: Option<Square>,
     pub prev_half_move_clock: u32,
     pub state: State,
+    pub zobrist: Zobrist,
 }
 
 impl UndoableMove {

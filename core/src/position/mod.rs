@@ -199,10 +199,8 @@ impl Position {
 
     /// Make a move on the Board and update the `Position`.
     ///
-    /// # Panics
-    ///
-    /// The supplied `Move` must be legal in the current position, otherwise a
-    /// panic will occur. Legal moves can be generated with `MoveGen::generate_all()`
+    /// The supplied `Move` must be legal in the current position, otherwise undefined behaviour
+    /// will occur.
     pub fn make_move(&mut self, mov: &Move) {
         // In debug mode, check the move isn't somehow null
         debug_assert_ne!(mov.orig(), mov.dest());
@@ -317,7 +315,6 @@ impl Position {
     pub fn unmake_move(&mut self) -> Option<UndoableMove> {
         if let Some(undoable_move) = self.history.pop() {
             self.turn = !self.turn();
-            self.zobrist.toggle_side_to_move();
             let us = self.turn();
             let orig = undoable_move.orig;
             let dest = undoable_move.dest;
@@ -350,11 +347,7 @@ impl Position {
                     self.put_piece_c(Piece::make(!us, captured_piece), cap_sq);
                 }
             }
-            self.zobrist
-                .update_castling_rights(self.castling_rights, undoable_move.prev_castling_rights);
-            self.zobrist
-                .update_ep_square(self.ep_square, undoable_move.prev_ep_square);
-
+            self.zobrist = undoable_move.zobrist;
             self.half_move_clock = undoable_move.prev_half_move_clock;
             self.ep_square = undoable_move.prev_ep_square;
             self.castling_rights = undoable_move.prev_castling_rights;
@@ -539,6 +532,55 @@ impl Position {
 
     pub fn in_double_check(&self) -> bool {
         self.state.checkers.popcnt() == 2
+    }
+
+    /// Determines whether the current position has occurred twice before in the history.
+    ///
+    /// Note: this does not exhaustively search for _any_ threefold repetition in the history of
+    /// the position, only a threefold repetition where the final repetition is the _current_
+    /// position.
+    pub fn in_threefold(&self) -> bool {
+        let mut bloom = self.zobrist.0;
+
+        // Count of how many positions we have included in the bloom filter so far.
+        let mut n = 1;
+
+        // * Iterate backwards through the move history (the `UndoableMove`s)
+        for m in self.history() {
+            if !m.ty.contains(MoveType::CAPTURE) {}
+
+            // If we have enough positions in the bloom filter and it is the same side to move,
+            // run a check to detect a possible twofold at this move. We need 3 positions before
+            // checking because there must be a minimum of two positions from the current side to
+            // move in order to get a potential twofold.
+            if n >= 3 && n % 2 == 0 {
+                if m.zobrist.0 & bloom == m.zobrist.0 {
+                    // We have a possible twofold.
+                }
+            }
+
+            bloom |= m.zobrist.0;
+            n += 1;
+        }
+
+        // * Stop at the first pawn move or capture (threefolds cannot occur across such a boundary
+        // during the game)
+        // * As we iterate through the history, OR the zobrist keys together (starting with the
+        // current position)
+        // * At each new position added (once there are already two keys included) check to see if
+        // the new zobrist has all its on-bits already set in the accumulator. If this happens, it
+        // indicates that a 'twofold' _might_ be present. Break out and do a direct check to
+        // confirm (by iterating forwards, and pushing all the zobrists into a list and then
+        // looking for duplicates)
+        // * If we reach the end of the list without the condition happening, we can be sure that
+        // there are no threefolds.
+        // * This is an implementation of a bloom filter. The bloom filter allows us to quickly
+        // confirm when there is NOT a threefold repetition in the position. In the cases where
+        // the bloom filter indicates there _may_ be a threefold, the extra cost of checking is
+        // amortised across all the other fast checks. It should hopefully be very rare to have a
+        // false positive from the bloom filter.
+
+        false
     }
 
     /// Returns a `Bitboard` of possible attacks to a square with a given occupancy.
