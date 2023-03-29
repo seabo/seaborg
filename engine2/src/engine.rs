@@ -54,12 +54,7 @@ pub fn launch() {
         });
 
         println!("seaborg 0.0.2 by George Seabridge");
-        let output = std::process::Command::new("git")
-            .args(&["rev-parse", "HEAD"])
-            .output()
-            .unwrap();
-        let git_hash = String::from_utf8(output.stdout).unwrap();
-        println!("commit {}", git_hash);
+        println!("commit: {}", env!("GIT_HASH"));
 
         loop {
             match uci_rx.try_recv() {
