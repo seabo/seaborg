@@ -135,6 +135,10 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
         let dest_bb = mov.dest().to_bb();
         let mut movegen = Self::get_self::<PL>(position, movelist);
 
+        if piece.type_of() != PieceType::Pawn && mov.move_type().contains(MoveType::PROMOTION) {
+            return false;
+        }
+
         if (mov.move_type().contains(MoveType::CAPTURE))
             && (position.get_occupied_enemy::<PL>() & dest_bb).is_empty()
             || ((position.get_occupied_enemy::<PL>() & dest_bb).is_not_empty()
@@ -351,7 +355,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
                 return false;
             }
 
-            // Only generate the king escapes if we are _not_ doing promotion moves.
+            // Only generate the king escapes if we are _not_ only doing promotion moves.
             if G::kind() != Generation::Promotions && G::kind() != Generation::QueenPromotions {
                 let mut slider_attacks = Bitboard(0);
 

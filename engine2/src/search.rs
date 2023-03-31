@@ -478,6 +478,9 @@ impl<'engine> Search<'engine> {
                             // TODO: reduce depth on remaining moves.
                         } else {
                             debug_assert!(value >= beta);
+                            // beta-cutoff; record killer and history
+                            self.kt.store(*mov, draft);
+
                             break 'move_loop;
                         }
                     }

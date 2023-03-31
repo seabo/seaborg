@@ -43,12 +43,23 @@ impl KillerTable {
         let mut ret1 = (None, 0);
         let mut ret2 = (None, 0);
 
+        let moves = pos.generate::<core::movelist::BasicMoveList, core::mono_traits::All, core::mono_traits::Legal>();
+
         if pos.valid_move(&entry.mov_a.0) {
+            if !moves.contains(&entry.mov_a.0) {
+                println!("{}", pos);
+                println!("{}", entry.mov_a.0);
+            }
+
             ret1 = (Some(entry.mov_a.0), entry.mov_a.1);
             entry.mov_a.1 += 1;
         }
 
         if pos.valid_move(&entry.mov_b.0) {
+            if !moves.contains(&entry.mov_b.0) {
+                println!("{}", pos);
+                println!("{}", entry.mov_b.0);
+            }
             ret2 = (Some(entry.mov_b.0), entry.mov_b.1);
             entry.mov_b.1 += 1;
         }
