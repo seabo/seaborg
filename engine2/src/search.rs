@@ -197,7 +197,7 @@ impl<'engine> Search<'engine> {
         assert!(d > 0);
 
         // Some bookeeping and prep.
-        self.tt.clear(); // TODO: we shouldn't have to do this. There is a bug somewhere.
+        // self.tt.clear(); // TODO: we shouldn't have to do this. There is a bug somewhere.
         self.trace.commence_search();
         self.search_depth = d;
 
