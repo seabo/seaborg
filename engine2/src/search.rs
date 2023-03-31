@@ -197,6 +197,7 @@ impl<'engine> Search<'engine> {
         assert!(d > 0);
 
         // Some bookeeping and prep.
+        let start_zob = self.pos.zobrist();
 
         // TODO: shouldn't have to do this. There is a bug somewhere. It seems to have something to
         // do with the PVS returning immediately from tt stored moves.
@@ -207,6 +208,8 @@ impl<'engine> Search<'engine> {
 
         let (score, best_move) = self.iterative_deepening::<T>(d);
         self.trace.end_search();
+
+        assert_eq!(start_zob, self.pos.zobrist());
 
         if T::is_master() {
             self.report_telemetry(d, score);
@@ -267,7 +270,7 @@ impl<'engine> Search<'engine> {
         debug_assert!(Score::INF_N <= alpha);
         debug_assert!(alpha < beta);
         debug_assert!(beta <= Score::INF_P);
-        debug_assert!(Node::pv() || alpha + Score::cp(1) == beta);
+        debug_assert!(Node::pv() || alpha.inc_one() == beta);
 
         // Step 1. Check for aborted search and immediate draw.
         if self.stopping() {
@@ -320,7 +323,7 @@ impl<'engine> Search<'engine> {
         };
 
         // Step 4. Check for early cutoff.
-        if tt_move {
+        if !Node::pv() && tt_move {
             let entry = tt_entry.read();
 
             if !entry.is_empty() && entry.depth >= depth {
@@ -366,16 +369,12 @@ impl<'engine> Search<'engine> {
         // Step 7. Razoring.
         // When eval is very low, check with quiescence whether it has any hope of raising alpha. If
         // not, return a fail low.
-        // TODO: * there's a bug here which is causing it regressions in the test suite.
-        //       * if we include the condition `depth > 1` then it works.
-        //       * however this isn't that helpful - it kills a lot of cases where razoring would
-        //       save time.
-        // if depth <= 6 && eval + Score::cp(426 + 252 * depth as i16 * depth as i16) < alpha {
-        //     let value = self.quiesce::<Master, NonPv>(alpha - Score::cp(1), alpha);
-        //     if value < alpha {
-        //         return value;
-        //     }
-        // }
+        if depth <= 6 && eval + Score::cp(426 + 252 * depth as i16 * depth as i16) < alpha {
+            let value = self.quiesce::<Master, NonPv>(alpha - Score::cp(1), alpha);
+            if value < alpha {
+                return value;
+            }
+        }
 
         // Step 8. Futility pruning.
         //         TODO
@@ -437,7 +436,7 @@ impl<'engine> Search<'engine> {
                 // Step 19. Search non-PV move with null window.
                 if !Node::pv() || move_count > 1 {
                     value = self
-                        .search::<T, NonPv>(-(alpha + Score::cp(1)), -alpha, depth - 1)
+                        .search::<T, NonPv>(-alpha.inc_one(), -alpha, depth - 1)
                         .neg()
                         .inc_mate();
                 }
@@ -479,7 +478,16 @@ impl<'engine> Search<'engine> {
                         } else {
                             debug_assert!(value >= beta);
                             // beta-cutoff; record killer and history
-                            self.kt.store(*mov, draft);
+                            if mov.is_quiet() {
+                                self.kt.store(*mov, draft);
+                            }
+
+                            // self.history.inc(
+                            //     mov.orig(),
+                            //     mov.dest(),
+                            //     depth as u32 * depth as u32,
+                            //     self.pos.turn(),
+                            // );
 
                             break 'move_loop;
                         }
@@ -572,7 +580,7 @@ impl<'engine> Search<'engine> {
         debug_assert!(Score::INF_N <= alpha);
         debug_assert!(alpha < beta);
         debug_assert!(beta <= Score::INF_P);
-        debug_assert!(Node::pv() || alpha + Score::cp(1) == beta);
+        debug_assert!(Node::pv() || alpha.inc_one() == beta);
 
         if self.stopping() {
             // TODO: is this robust?

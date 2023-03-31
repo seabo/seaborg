@@ -99,6 +99,13 @@ impl Score {
             false
         }
     }
+
+    /// Increment the value of the score by 1, regardless of whether it is a centipawn score or a
+    /// mate-in-N score. This is useful in search, where we have to create null windows by
+    /// increasing alpha by 1.
+    pub fn inc_one(&self) -> Self {
+        Self(self.0 + 1)
+    }
 }
 
 impl Neg for Score {

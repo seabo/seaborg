@@ -139,6 +139,14 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
             return false;
         }
 
+        if piece.type_of() == PieceType::Pawn
+            && ((position.turn() == Player::WHITE && mov.dest().rank() == 7)
+                || (position.turn() == Player::BLACK && mov.dest().rank() == 0))
+            && (!mov.move_type().contains(MoveType::PROMOTION) || mov.promo_piece_type().is_none())
+        {
+            return false;
+        }
+
         if (mov.move_type().contains(MoveType::CAPTURE))
             && (position.get_occupied_enemy::<PL>() & dest_bb).is_empty()
             || ((position.get_occupied_enemy::<PL>() & dest_bb).is_not_empty()

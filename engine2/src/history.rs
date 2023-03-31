@@ -122,6 +122,20 @@ impl HistoryTable {
         }
     }
 
+    pub fn inc(&mut self, from: Square, to: Square, amt: u32, side: Player) {
+        match side {
+            Player::WHITE => self.white.inc(from, to, amt),
+            Player::BLACK => self.black.inc(from, to, amt),
+        }
+    }
+
+    pub fn get(&self, from: Square, to: Square, side: Player) -> u32 {
+        match side {
+            Player::WHITE => self.white.get(from, to),
+            Player::BLACK => self.black.get(from, to),
+        }
+    }
+
     pub unsafe fn inc_unchecked(&mut self, from: Square, to: Square, amt: u32, side: Player) {
         match side {
             Player::WHITE => self.white.inc_unchecked(from, to, amt),

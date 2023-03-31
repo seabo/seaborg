@@ -35,31 +35,20 @@ impl KillerTable {
     /// Probe the killer table for moves at `draft` distance from the root. Only returns moves
     /// which are valid and legal in the given position.
     pub fn probe(&mut self, draft: u8, pos: &Position) -> (Option<Move>, Option<Move>) {
-        if draft as usize >= self.data.len() {
+        if draft == 0 || draft as usize > self.data.len() {
             return (None, None);
         }
 
-        let entry = &mut self.data[draft as usize];
+        let entry = &mut self.data[draft as usize - 1];
         let mut ret1 = (None, 0);
         let mut ret2 = (None, 0);
 
-        let moves = pos.generate::<core::movelist::BasicMoveList, core::mono_traits::All, core::mono_traits::Legal>();
-
         if pos.valid_move(&entry.mov_a.0) {
-            if !moves.contains(&entry.mov_a.0) {
-                println!("{}", pos);
-                println!("{}", entry.mov_a.0);
-            }
-
             ret1 = (Some(entry.mov_a.0), entry.mov_a.1);
             entry.mov_a.1 += 1;
         }
 
         if pos.valid_move(&entry.mov_b.0) {
-            if !moves.contains(&entry.mov_b.0) {
-                println!("{}", pos);
-                println!("{}", entry.mov_b.0);
-            }
             ret2 = (Some(entry.mov_b.0), entry.mov_b.1);
             entry.mov_b.1 += 1;
         }
@@ -71,12 +60,16 @@ impl KillerTable {
         (ret1.0, ret2.0)
     }
 
+    /// Store a killer move for a given draft (number of ply down from the root). This function
+    /// does not accept `draft == 0`, since we do not have killer moves at the root node.
     pub fn store(&mut self, killer: Move, draft: u8) {
-        if draft as usize >= self.data.len() {
+        debug_assert!(draft > 0);
+
+        if draft as usize > self.data.len() {
             return;
         }
 
-        let entry = &mut self.data[draft as usize];
+        let entry = &mut self.data[draft as usize - 1];
 
         if entry.mov_a.0 == killer || entry.mov_b.0 == killer {
             // This killer move is already included at this draft.
@@ -88,5 +81,23 @@ impl KillerTable {
         } else {
             entry.mov_b = (killer, 0);
         }
+    }
+}
+
+impl std::fmt::Display for KillerTable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "KillerTable {{")?;
+        for (i, e) in self.data.iter().enumerate() {
+            writeln!(
+                f,
+                "  {:>2} | ({}, {}) - ({}, {})",
+                i,
+                e.mov_a.0.to_uci_string(),
+                e.mov_a.1,
+                e.mov_b.0.to_uci_string(),
+                e.mov_b.1
+            )?;
+        }
+        writeln!(f, "}}")
     }
 }
