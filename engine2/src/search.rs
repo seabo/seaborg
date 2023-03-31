@@ -362,18 +362,16 @@ impl<'engine> Search<'engine> {
         // Step 7. Razoring.
         // When eval is very low, check with quiescence whether it has any hope of raising alpha. If
         // not, return a fail low.
-        //
-        // TODO: this doesn't work because of overflowing subtraction. Perhaps we need to switch to
-        // representing scores with an i64 so there's plenty of space.
-        //
-        let razor = alpha - Score::cp(426) - Score::cp(252 * depth as i16 * depth as i16);
-        if eval < razor {
-            //println!("{}: {}, {}", alpha, razor, depth);
-            // let value = self.quiesce::<Master, NonPv>(alpha - Score::cp(1), alpha);
-            // if value < alpha {
-            //     return value;
-            // }
-        }
+        // TODO: * there's a bug here which is causing it regressions in the test suite.
+        //       * if we include the condition `depth > 1` then it works.
+        //       * however this isn't that helpful - it kills a lot of cases where razoring would
+        //       save time.
+        // if depth <= 6 && eval + Score::cp(426 + 252 * depth as i16 * depth as i16) < alpha {
+        //     let value = self.quiesce::<Master, NonPv>(alpha - Score::cp(1), alpha);
+        //     if value < alpha {
+        //         return value;
+        //     }
+        // }
 
         // Step 8. Futility pruning.
         //         TODO
