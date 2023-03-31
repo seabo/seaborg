@@ -267,15 +267,11 @@ impl<'engine> Search<'engine> {
 
         // Step 1. Check for aborted search and immediate draw.
         if self.stopping() {
-            // TODO: is this robust?
-            return Score::zero();
-        }
-        // Step 2. check for immediate draw.
-        if self.pos.in_threefold() {
             return Score::zero();
         }
 
-        if self.pos.half_move_clock() >= 50 {
+        // Step 2. check for immediate draw.
+        if self.pos.in_threefold() || self.pos.half_move_clock() >= 50 {
             return Score::zero();
         }
 
@@ -319,8 +315,8 @@ impl<'engine> Search<'engine> {
             }
         };
 
-        // Step 4. In non-PV nodes, check for early cutoff.
-        if !Node::pv() && tt_move {
+        // Step 4. Check for early cutoff.
+        if tt_move {
             let entry = tt_entry.read();
 
             if !entry.is_empty() && entry.depth >= depth {
@@ -512,7 +508,11 @@ impl<'engine> Search<'engine> {
             best_value,
             depth,
             if best_value >= beta {
-                debug_assert!(!best_move.is_null());
+                debug_assert!(
+                    !best_move.is_null()
+                        || best_value == Score::mate(0)
+                        || best_value == Score::zero()
+                );
                 Bound::Lower
             } else if Node::pv() && !best_move.is_null() {
                 debug_assert!(did_raise_alpha);
@@ -656,40 +656,30 @@ impl<'engine> Search<'engine> {
 
             // Commenting out as this is currently causing stack overflows. We need to generate
             // evasions when in check, instead of dropping back to main search.
-            return self.search::<T, Pv>(alpha, beta, 1);
+            // return self.search::<T, Pv>(alpha, beta, 1);
         }
 
-        // TODO: use the ordered move system. We can make a different move loader for quiescence
-        // which generates check evasions when necessary, and also queen promotions.
-        let captures = self.pos.generate::<BasicMoveList, Captures, Legal>();
         let mut score: Score;
+        let mut moves = OrderedMoves::new();
 
         // Step 5. Loop through all the moves until no moves remain or a beta cutoff occurs.
-        for mov in &captures {
-            // TODO: this now goes in the move loader.
-            // Evaluate whether the capture is likely to be favourable with SEE.
-            let see_eval = self.see(
-                mov.orig(),
-                mov.dest(),
-                self.pos.piece_at_sq(mov.dest()).type_of(),
-                self.pos.piece_at_sq(mov.orig()).type_of(),
-            );
+        'move_loop: while moves.load_next_phase(QMoveLoader::from(self, tt_mov)) {
+            for mov in &moves {
+                if self.stopping() {
+                    break 'move_loop;
+                }
 
-            if see_eval < Score::cp(0) {
-                self.trace.see_skip_node();
-                continue;
-            }
+                self.pos.make_move(mov);
+                score = self.quiesce::<T, Node>(-beta, -alpha).neg().inc_mate();
+                self.pos.unmake_move();
 
-            self.pos.make_move(mov);
-            score = self.quiesce::<T, Node>(-beta, -alpha).neg().inc_mate();
-            self.pos.unmake_move();
+                if score >= beta {
+                    return beta;
+                }
 
-            if score >= beta {
-                return beta;
-            }
-
-            if score > alpha {
-                alpha = score;
+                if score > alpha {
+                    alpha = score;
+                }
             }
         }
 
@@ -904,6 +894,80 @@ impl<'a, 'search> Loader for MoveLoader<'a, 'search> {
     }
 }
 
+/// Move loader for the quiescence search.
+pub struct QMoveLoader<'a, 'search> {
+    search: &'a mut Search<'search>,
+    hash_move: Option<Move>,
+}
+
+impl<'a, 'engine> QMoveLoader<'a, 'engine> {
+    /// Create a `MoveLoader` from the passed `Search`.
+    #[inline(always)]
+    pub fn from(search: &'a mut Search<'engine>, hash_move: Option<Move>) -> Self {
+        QMoveLoader { search, hash_move }
+    }
+}
+
+impl<'a, 'search> Loader for QMoveLoader<'a, 'search> {
+    #[inline]
+    fn load_hash(&mut self, movelist: &mut ScoredMoveList) {
+        // match self.hash_move {
+        //     Some(mv) => {
+        //         self.search.trace.hash_found.push(1);
+        //         movelist.push(mv)
+        //     }
+        //     None => {
+        //         self.search.trace.hash_found.push(0);
+        //     }
+        // }
+    }
+
+    fn load_promotions(&mut self, movelist: &mut ScoredMoveList) {
+        self.search
+            .pos
+            .generate_in::<_, QueenPromotions, Legal>(movelist);
+    }
+
+    fn load_captures(&mut self, movelist: &mut ScoredMoveList) {
+        self.search.pos.generate_in::<_, Captures, Legal>(movelist);
+    }
+
+    fn load_quiets(&mut self, movelist: &mut ScoredMoveList) {
+        if self.search.pos.in_check() {
+            self.search.pos.generate_in::<_, Quiets, Legal>(movelist);
+        }
+    }
+
+    fn score_captures(&mut self, captures: Scorer) {
+        for (mov, score) in captures {
+            if mov.is_capture() {
+                *score = self
+                    .search
+                    .see(
+                        mov.orig(),
+                        mov.dest(),
+                        self.search.pos.piece_at_sq(mov.dest()).type_of(),
+                        self.search.pos.piece_at_sq(mov.orig()).type_of(),
+                    )
+                    .to_i16();
+            }
+        }
+    }
+
+    fn score_quiets(&mut self, quiets: Scorer) {
+        let turn = self.search.pos.turn();
+        for (mov, score) in quiets {
+            // SAFETY: these are legal moves, so the squares must be valid.
+            unsafe {
+                *score = self
+                    .search
+                    .history
+                    .get_unchecked(mov.orig(), mov.dest(), turn) as i16;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -938,7 +1002,7 @@ mod tests {
                 ("7k/2R5/8/8/6q1/7p/7P/7K w - - 0 1", 6, Score::cp(0), Score::cp(0), "c7h7"),
 
                 // Pawn race
-                ("8/6pk/8/8/8/8/P7/K7 w - - 0 1", 22, Score::cp(800), Score::cp(800), "a1b2"),
+                ("8/6pk/8/8/8/8/P7/K7 w - - 0 1", 22, Score::cp(700), Score::cp(920), "a1b1"),
             ]
         }
     }
