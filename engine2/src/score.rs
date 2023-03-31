@@ -90,6 +90,15 @@ impl Score {
             false
         }
     }
+
+    /// True if this `Score` represents a centipawn evaluation.
+    pub fn is_cp(&self) -> bool {
+        if -10_000 <= self.0 && self.0 <= 10_000 {
+            true
+        } else {
+            false
+        }
+    }
 }
 
 impl Neg for Score {
@@ -106,7 +115,18 @@ impl Add for Score {
 
     #[inline(always)]
     fn add(self, other: Self) -> Self::Output {
-        Self(self.0 + other.0)
+        if self.is_cp() && !other.is_cp() || self.is_mate() && !other.is_mate() {
+            // Incompatible score variants. Return self.
+            self
+        } else if self.is_cp() {
+            Self((self.0 + other.0).clamp(-10_000, 10_000))
+        } else if self.0 > 10_000 {
+            Self((self.0 + other.0).clamp(10_000, 20_000))
+        } else if self.0 < -10_000 {
+            Self((self.0 + other.0).clamp(-20_000, -10_000))
+        } else {
+            unreachable!()
+        }
     }
 }
 
@@ -115,7 +135,7 @@ impl Sub for Score {
 
     #[inline(always)]
     fn sub(self, other: Self) -> Self::Output {
-        Self(self.0 - other.0)
+        self + -other
     }
 }
 

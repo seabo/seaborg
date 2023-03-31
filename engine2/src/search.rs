@@ -366,12 +366,14 @@ impl<'engine> Search<'engine> {
         // TODO: this doesn't work because of overflowing subtraction. Perhaps we need to switch to
         // representing scores with an i64 so there's plenty of space.
         //
-        // if eval < alpha - Score::cp(426) - Score::cp(252 * depth as i16 * depth as i16) {
-        //     let value = self.quiesce::<Master, NonPv>(alpha - Score::cp(1), alpha);
-        //     if value < alpha {
-        //         return value;
-        //     }
-        // }
+        let razor = alpha - Score::cp(426) - Score::cp(252 * depth as i16 * depth as i16);
+        if eval < razor {
+            //println!("{}: {}, {}", alpha, razor, depth);
+            // let value = self.quiesce::<Master, NonPv>(alpha - Score::cp(1), alpha);
+            // if value < alpha {
+            //     return value;
+            // }
+        }
 
         // Step 8. Futility pruning.
         //         TODO
@@ -663,7 +665,7 @@ impl<'engine> Search<'engine> {
         let mut moves = OrderedMoves::new();
 
         // Step 5. Loop through all the moves until no moves remain or a beta cutoff occurs.
-        'move_loop: while moves.load_next_phase(QMoveLoader::from(self, tt_mov)) {
+        'move_loop: while moves.load_next_phase(QMoveLoader::from(self)) {
             for mov in &moves {
                 if self.stopping() {
                     break 'move_loop;
@@ -897,31 +899,17 @@ impl<'a, 'search> Loader for MoveLoader<'a, 'search> {
 /// Move loader for the quiescence search.
 pub struct QMoveLoader<'a, 'search> {
     search: &'a mut Search<'search>,
-    hash_move: Option<Move>,
 }
 
 impl<'a, 'engine> QMoveLoader<'a, 'engine> {
     /// Create a `MoveLoader` from the passed `Search`.
     #[inline(always)]
-    pub fn from(search: &'a mut Search<'engine>, hash_move: Option<Move>) -> Self {
-        QMoveLoader { search, hash_move }
+    pub fn from(search: &'a mut Search<'engine>) -> Self {
+        QMoveLoader { search }
     }
 }
 
 impl<'a, 'search> Loader for QMoveLoader<'a, 'search> {
-    #[inline]
-    fn load_hash(&mut self, movelist: &mut ScoredMoveList) {
-        // match self.hash_move {
-        //     Some(mv) => {
-        //         self.search.trace.hash_found.push(1);
-        //         movelist.push(mv)
-        //     }
-        //     None => {
-        //         self.search.trace.hash_found.push(0);
-        //     }
-        // }
-    }
-
     fn load_promotions(&mut self, movelist: &mut ScoredMoveList) {
         self.search
             .pos
