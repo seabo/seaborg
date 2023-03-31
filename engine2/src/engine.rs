@@ -147,9 +147,9 @@ fn launch_search<'scope, 'engine>(
         s.spawn(move || {
             let mut search = Search::new(thread_pos, flag, stop_time, tt);
             if i == 0 {
-                search.start_search::<Master>(depth);
+                search.run::<Master>(depth);
             } else {
-                search.start_search::<Worker>(depth);
+                search.run::<Worker>(depth);
             }
         });
     }

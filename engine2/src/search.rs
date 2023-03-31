@@ -191,10 +191,9 @@ impl<'engine> Search<'engine> {
         }
     }
 
-    pub fn start_search<T: Thread>(&mut self, d: u8) -> Score {
+    pub fn run<T: Thread>(&mut self, d: u8) -> (Score, Move) {
         self.trace = Tracer::new();
 
-        // TODO: turn this into a proper use error.
         assert!(d > 0);
 
         // Some bookeeping and prep.
@@ -212,7 +211,7 @@ impl<'engine> Search<'engine> {
 
         self.history.reset();
 
-        score
+        (score, best_move)
     }
 
     fn iterative_deepening<T: Thread>(&mut self, depth: u8) -> (Score, Move) {
@@ -226,7 +225,7 @@ impl<'engine> Search<'engine> {
 
             self.pvt = PVTable::new(d);
             self.search_depth = d;
-            let value = self.alphabeta::<T, Root>(Score::INF_N, Score::INF_P, d);
+            let value = self.search::<T, Root>(Score::INF_N, Score::INF_P, d);
 
             if !self.stopping() {
                 score = value;
@@ -250,7 +249,7 @@ impl<'engine> Search<'engine> {
         (score, best_move)
     }
 
-    pub fn alphabeta<T: Thread, Node: NodeType>(
+    pub fn search<T: Thread, Node: NodeType>(
         &mut self,
         mut alpha: Score,
         mut beta: Score,
@@ -365,7 +364,7 @@ impl<'engine> Search<'engine> {
         let eval = self.evaluate();
 
         // Step 7. Razoring.
-        // When eval is very low, check with quiescence whether has any hope of raising alpha. If
+        // When eval is very low, check with quiescence whether it has any hope of raising alpha. If
         // not, return a fail low.
         //
         // TODO: this doesn't work because of overflowing subtraction. Perhaps we need to switch to
@@ -438,7 +437,7 @@ impl<'engine> Search<'engine> {
                 // Step 19. Search non-PV move with null window.
                 if !Node::pv() || move_count > 1 {
                     value = self
-                        .alphabeta::<T, NonPv>(-(alpha + Score::cp(1)), -alpha, depth - 1)
+                        .search::<T, NonPv>(-(alpha + Score::cp(1)), -alpha, depth - 1)
                         .neg()
                         .inc_mate();
                 }
@@ -451,7 +450,7 @@ impl<'engine> Search<'engine> {
                     && (move_count == 1 || (value > alpha && (Node::root() || value < beta)))
                 {
                     value = self
-                        .alphabeta::<T, Pv>(-beta, -alpha, depth - 1)
+                        .search::<T, Pv>(-beta, -alpha, depth - 1)
                         .neg()
                         .inc_mate();
                 }
@@ -657,7 +656,7 @@ impl<'engine> Search<'engine> {
 
             // Commenting out as this is currently causing stack overflows. We need to generate
             // evasions when in check, instead of dropping back to main search.
-            return self.alphabeta::<T, Pv>(alpha, beta, 1);
+            return self.search::<T, Pv>(alpha, beta, 1);
         }
 
         // TODO: use the ordered move system. We can make a different move loader for quiescence
@@ -909,37 +908,37 @@ impl<'a, 'search> Loader for MoveLoader<'a, 'search> {
 mod tests {
     use super::*;
 
-    fn suite() -> Vec<(&'static str, u8, Score)> {
+    fn suite() -> Vec<(&'static str, u8, Score, Score, &'static str)> {
         // Test position tuples have the form:
-        // (fen, depth, value from perpsective of side to move)
+        // (fen, depth, score range, best_move)
 
         #[rustfmt::skip]
         {
             vec![
                 // Mates
-                ("8/2R2pp1/k3p3/8/5Bn1/6P1/5r1r/1R4K1 w - - 4 3", 6, Score::mate(5)),
-                ("5R2/1p1r2pk/p1n1B2p/2P1q3/2Pp4/P6b/1B1P4/2K3R1 w - - 5 3", 6, Score::mate(5)),
-                ("1r6/p5pk/1q1p2pp/3P3P/4Q1P1/3p4/PP6/3KR3 w - - 0 36", 6, Score::mate(5)),
-                ("1r4k1/p3p1bp/5P1r/3p2Q1/5R2/3Bq3/P1P2RP1/6K1 b - - 0 33", 6, Score::mate(5)),
-                ("2q4k/3r3p/2p2P2/p7/2P5/P2Q2P1/5bK1/1R6 w - - 0 36", 6, Score::mate(5)),
-                ("5rk1/rb3ppp/p7/1pn1q3/8/1BP2Q2/PP3PPP/3R1RK1 w - - 7 21", 6, Score::mate(5)),
-                ("6rk/p7/1pq1p2p/4P3/5BrP/P3Qp2/1P1R1K1P/5R2 b - - 0 34", 8, Score::mate(7)),
-                ("6k1/1p2qppp/4p3/8/p2PN3/P5QP/1r4PK/8 w - - 0 40", 6, Score::mate(5)),
-                ("2R1bk2/p5pp/5p2/8/3n4/3p1B1P/PP1q1PP1/4R1K1 w - - 0 27", 6, Score::mate(5)),
-                ("8/7R/r4pr1/5pkp/1R6/P5P1/5PK1/8 w - - 0 42", 6, Score::mate(5)),
-                ("r5k1/2qn2pp/2nN1p2/3pP2Q/3P1p2/5N2/4B1PP/1b4K1 w - - 0 25", 8, Score::mate(7)),
+                ("8/2R2pp1/k3p3/8/5Bn1/6P1/5r1r/1R4K1 w - - 4 3", 6, Score::mate(5), Score::mate(5), "c7c6"),
+                ("5R2/1p1r2pk/p1n1B2p/2P1q3/2Pp4/P6b/1B1P4/2K3R1 w - - 5 3", 6, Score::mate(5), Score::mate(5), "e6g8"),
+                ("1r6/p5pk/1q1p2pp/3P3P/4Q1P1/3p4/PP6/3KR3 w - - 0 36", 6, Score::mate(5), Score::mate(5), "h5g6"),
+                ("1r4k1/p3p1bp/5P1r/3p2Q1/5R2/3Bq3/P1P2RP1/6K1 b - - 0 33", 6, Score::mate(5), Score::mate(5), "b8b1"),
+                ("2q4k/3r3p/2p2P2/p7/2P5/P2Q2P1/5bK1/1R6 w - - 0 36", 6, Score::mate(5), Score::mate(5), "d3d7"),
+                ("5rk1/rb3ppp/p7/1pn1q3/8/1BP2Q2/PP3PPP/3R1RK1 w - - 7 21", 6, Score::mate(5), Score::mate(5), "f3f7"),
+                ("6rk/p7/1pq1p2p/4P3/5BrP/P3Qp2/1P1R1K1P/5R2 b - - 0 34", 8, Score::mate(7), Score::mate(7), "g4g2"),
+                ("6k1/1p2qppp/4p3/8/p2PN3/P5QP/1r4PK/8 w - - 0 40", 6, Score::mate(5), Score::mate(5), "e4f6"),
+                ("2R1bk2/p5pp/5p2/8/3n4/3p1B1P/PP1q1PP1/4R1K1 w - - 0 27", 6, Score::mate(5), Score::mate(5), "c8e8"),
+                ("8/7R/r4pr1/5pkp/1R6/P5P1/5PK1/8 w - - 0 42", 6, Score::mate(5), Score::mate(5), "h7h5"),
+                ("r5k1/2qn2pp/2nN1p2/3pP2Q/3P1p2/5N2/4B1PP/1b4K1 w - - 0 25", 8, Score::mate(7), Score::mate(7), "h5f7"),
 
-                // Winning material
-                ("rn1q1rk1/5pp1/pppb4/5Q1p/3P4/3BPP1P/PP3PK1/R1B2R2 b - - 1 15", 7, Score::cp(300)),
-                ("4k3/8/8/4q3/8/8/7P/3K2R1 w - - 0 1", 3, Score::cp(100)), 
-                ("6k1/8/3q4/8/8/3B4/2P5/1K1R4 w - - 0 1", 3, Score::cp(900)),
-                ("r5k1/p1P5/8/8/8/8/3RK3/8 w - - 0 1", 6, Score::cp(900)),
-                ("6k1/8/8/3q4/8/8/P7/1KNB4 w - - 0 1", 4, Score::cp(400)),
-                ("2kr3r/ppp1qpb1/5n2/5b1p/6p1/1PNP4/PBPQBPPP/2KRR3 b - - 6 14", 5, Score::cp(400)),
-                ("7k/2R5/8/8/6q1/7p/7P/7K w - - 0 1", 6, Score::cp(0)),
+                // // Winning material
+                ("rn1q1rk1/5pp1/pppb4/5Q1p/3P4/3BPP1P/PP3PK1/R1B2R2 b - - 1 15", 7, Score::cp(290), Score::cp(310), "g7g6"),
+                ("4k3/8/8/4q3/8/8/7P/3K2R1 w - - 0 1", 3, Score::cp(100), Score::cp(100), "g1e1"), 
+                ("6k1/8/3q4/8/8/3B4/2P5/1K1R4 w - - 0 1", 3, Score::cp(850), Score::cp(950), "d3c4"),
+                ("r5k1/p1P5/8/8/8/8/3RK3/8 w - - 0 1", 6, Score::cp(900), Score::cp(900), "d2d8"),
+                ("6k1/8/8/3q4/8/8/P7/1KNB4 w - - 0 1", 4, Score::cp(380), Score::cp(420), "d1b3"),
+                ("2kr3r/ppp1qpb1/5n2/5b1p/6p1/1PNP4/PBPQBPPP/2KRR3 b - - 6 14", 5, Score::cp(380), Score::cp(420), "g7h6"),
+                ("7k/2R5/8/8/6q1/7p/7P/7K w - - 0 1", 6, Score::cp(0), Score::cp(0), "c7h7"),
 
                 // Pawn race
-                // ("8/6pk/8/8/8/8/P7/K7 w - - 0 1", 22, Score::cp(800)),
+                ("8/6pk/8/8/8/8/P7/K7 w - - 0 1", 22, Score::cp(800), Score::cp(800), "a1b2"),
             ]
         }
     }
@@ -952,14 +951,16 @@ mod tests {
 
         let suite = suite();
 
-        for (fen, depth, score) in suite {
+        for (fen, depth, lo, hi, bm) in suite {
             let pos = Position::from_fen(fen).unwrap();
             let flag = AtomicBool::new(false);
             let tt = Table::new(16);
             let mut search = Search::new(pos, &flag, None, &tt);
-            let s = search.start_search::<Master>(depth);
+            let (s, m) = search.run::<Master>(depth);
 
-            assert_eq!(s, score);
+            assert!(lo <= s);
+            assert!(s <= hi);
+            assert_eq!(m.to_uci_string(), bm);
         }
     }
 }

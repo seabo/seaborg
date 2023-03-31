@@ -124,10 +124,10 @@ pub const PIECE_TYPES: [PieceType; 7] = [
 ];
 
 pub const PROMO_PIECES: [PieceType; 4] = [
+    PieceType::Queen,
+    PieceType::Rook,
     PieceType::Knight,
     PieceType::Bishop,
-    PieceType::Rook,
-    PieceType::Queen,
 ];
 
 impl PieceType {
