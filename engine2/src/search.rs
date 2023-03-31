@@ -197,7 +197,11 @@ impl<'engine> Search<'engine> {
         assert!(d > 0);
 
         // Some bookeeping and prep.
-        // self.tt.clear(); // TODO: we shouldn't have to do this. There is a bug somewhere.
+
+        // TODO: shouldn't have to do this. There is a bug somewhere. It seems to have something to
+        // do with the PVS returning immediately from tt stored moves.
+        self.tt.clear();
+
         self.trace.commence_search();
         self.search_depth = d;
 
