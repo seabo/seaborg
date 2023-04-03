@@ -1,234 +1,156 @@
-use crate::search::params::{Builder, BuilderError, BuilderResult, Params};
-use crate::search::search::{Search, TimingMode};
-use crate::sess::Message;
-use crate::uci::Pos;
+use super::search::{Master, Search, Worker};
+use super::time::TimingMode;
+use super::tt::Table;
+use super::uci::{self, Command};
+use core::position::Position;
 
-use crossbeam_channel::{unbounded, Sender};
-use log::info;
+use crossbeam_channel::unbounded;
 
-use std::sync::{Arc, RwLock};
-use std::thread::{self, JoinHandle};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::{
+    io,
+    thread::{self, Scope},
+};
 
-#[derive(Debug)]
-pub enum Command {
-    Initialize,
-    SetPosition((Pos, Option<Vec<String>>)),
-    Search(TimingMode),
-    Quit,
-    Display,
-}
+const MAX_DEPTH: u8 = 255;
 
-#[derive(Clone, Debug)]
-/// Configuration options for the engine.
-pub enum EngineOpt {
-    /// Whether or not the transposition table is turned on.
-    TranspositionTable(bool),
-    /// Whether or not iterative deepening is being used.
-    IterativeDeepening(bool),
-    /// Whether or not move ordering is being used.
-    MoveOrdering(bool),
-}
+/// Launch the engine process.
+pub fn launch() {
+    core::init::init_globals();
 
-/// Represents an engine report. This is passed back from the `Engine` to the
-/// `Session`, which then forwards it to the `Comm` module via `comm.send()`.
-/// The `Comm` module then takes responsibility for handling the report, usually
-/// by converting into a uci response written to stdout.
-// TODO: this should live in a more appropriate module eventually.
-pub enum Report {
-    /// Communicates the best move found by the engine.
-    BestMove(String),
-    /// Info
-    Info(Info),
-    /// Initialization complete.
-    InitializationComplete,
-    /// Error report.
-    Error(String),
-}
+    let stop_flag = AtomicBool::new(false);
+    let flag = &stop_flag;
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct Info {
-    pub(crate) depth: u8,
-    pub(crate) seldepth: u8,
-    pub(crate) score: i32,
-    pub(crate) nodes: usize,
-    pub(crate) nps: usize,
-    pub(crate) pv: String,
-}
+    let tt = Table::new(16);
 
-/// Owns the thread in which the chess engine's search routine executes, and passes
-/// commands for the engine into that thread through a channel.
-///
-/// This struct lives in the `Session` thread.
-pub struct Engine {
-    /// A `JoinHandle` for the engine thread.
-    handle: Option<JoinHandle<()>>,
-    /// A `Sender` to transmit commands into the engine thread.
-    tx: Sender<Command>,
-    /// Flag which allows the search process to know if it needs to halt while
-    /// in the middle of a search.
-    ///
-    /// We pass an `Arc` clone of this to the `Search`, and then inside
-    /// the main search loop, we intermittently check that the value hasn't recently
-    /// been set to `true`. When it does get set to `true` the search can bail early
-    /// and send useful data back through the channel.
-    halt: Arc<RwLock<bool>>,
-}
+    let mut pos = Position::start_pos();
 
-impl Engine {
-    pub fn new(session_tx: Sender<Message>) -> Self {
-        // A channel to send commands into the engine thread.
-        let (tx, rx) = unbounded::<Command>();
+    // Everything happens inside a global thread scope.
+    thread::scope(|s| {
+        let (uci_tx, uci_rx) = unbounded::<uci::Command>();
 
-        // A halt flag.
-        let halt = Arc::new(RwLock::new(false));
-        let halt_clone = Arc::clone(&halt);
+        // Launch the UCI thread.
+        s.spawn(move || {
+            let mut buf: String = String::with_capacity(256);
+            loop {
+                buf.clear();
+                io::stdin()
+                    .read_line(&mut buf)
+                    .expect("couldn't read from stdin");
 
-        let engine_thread = thread::spawn(move || {
-            let mut quit = false;
-            let mut engine_inner = EngineInner::new(session_tx);
-
-            // Keep the thread alive until we receive a quit command
-            while !quit {
-                let cmd = rx
-                    .recv()
-                    .expect("engine thread unable to receive communications from session thread");
-
-                match cmd {
-                    Command::Initialize => engine_inner.init(),
-                    Command::SetPosition((pos, moves)) => engine_inner.set_position(pos, moves),
-                    Command::Search(mode) => {
-                        engine_inner.set_search_mode(mode);
-                        engine_inner.search(Arc::clone(&halt_clone));
+                match uci::Parser::parse(&buf.clone()) {
+                    Ok(cmd @ Command::Quit) => {
+                        let _ = uci_tx.send(cmd);
+                        break;
                     }
-                    Command::Quit => quit = true,
-                    Command::Display => {
-                        engine_inner.display();
+                    Ok(cmd) => {
+                        let _ = uci_tx.send(cmd);
+                    }
+                    Err(err) => {
+                        eprintln!("error: {:?}", err);
                     }
                 }
             }
         });
 
-        Self {
-            handle: Some(engine_thread),
-            halt,
-            tx,
+        println!("seaborg 0.0.2 by George Seabridge");
+        println!("commit: {}", env!("GIT_HASH"));
+
+        loop {
+            match uci_rx.try_recv() {
+                Ok(Command::Quit) => {
+                    stop_flag.store(true, Ordering::Relaxed);
+                    break;
+                }
+                Ok(Command::Stop) => {
+                    stop_flag.store(true, Ordering::Relaxed);
+                }
+                Ok(Command::Go(d)) => match d {
+                    TimingMode::Depth(depth) => {
+                        stop_flag.store(false, Ordering::Relaxed);
+                        launch_search(s, flag, None, 1, depth, pos.clone(), &tt);
+                    }
+                    TimingMode::Infinite => {
+                        stop_flag.store(false, Ordering::Relaxed);
+                        launch_search(s, flag, None, 1, MAX_DEPTH, pos.clone(), &tt);
+                    }
+                    TimingMode::Timed(tc) => {
+                        let move_time = tc.to_move_time(pos.move_number(), pos.turn());
+                        let stop_time = std::time::Instant::now()
+                            + std::time::Duration::from_millis(move_time.into());
+                        launch_search(s, flag, Some(stop_time), 1, MAX_DEPTH, pos.clone(), &tt);
+                    }
+                    TimingMode::MoveTime(t) => {
+                        let stop_time =
+                            std::time::Instant::now() + std::time::Duration::from_millis(t as u64);
+                        launch_search(s, flag, Some(stop_time), 1, MAX_DEPTH, pos.clone(), &tt);
+                    }
+                },
+                Ok(Command::SetPosition((fen, moves))) => match Position::from_fen(&fen) {
+                    Ok(mut p) => {
+                        for mov in moves {
+                            if p.make_uci_move(&mov).is_none() {
+                                println!("invalid move {}", mov);
+                            }
+                        }
+                        pos = p;
+                    }
+                    Err(err) => println!("invalid position; {}", err),
+                },
+                Ok(Command::Display) => println!("{}", pos),
+                Ok(Command::DisplayLichess) => {
+                    let fen_url_safe = pos.to_fen().replace(" ", "_");
+                    let lichess_url =
+                        format!("https://lichess.org/analysis/standard/{}", fen_url_safe);
+
+                    let _ = open::that(lichess_url);
+                }
+                Ok(Command::Move(mov)) => match pos.make_uci_move(&mov) {
+                    Some(_) => {}
+                    None => {
+                        // If the move wasn't valid uci, try to see if it was SAN.
+                        match pos.move_from_san(&mov) {
+                            Some(mov) => pos.make_move(&mov),
+                            None => println!("illegal move: {}", mov),
+                        }
+                    }
+                },
+                Ok(Command::Perft(d)) => {
+                    super::perft::Perft::divide(&mut pos, d, true, false);
+                }
+                Ok(Command::Uci) => {
+                    println!("id name seaborg 0.0.2");
+                    println!("id author George Seabridge");
+                    println!("uciok");
+                }
+                Ok(Command::IsReady) => {
+                    println!("readyok");
+                }
+                Ok(cmd) => println!("{:?}: not yet implemented", cmd),
+                Err(_err) => {}
+            }
         }
-    }
-
-    /// Send a `Command` into the engine thread.
-    pub fn send(&self, cmd: Command) {
-        self.tx
-            .send(cmd)
-            .expect("session thread failed to send command into engine thread");
-    }
-
-    /// Halt the search process.
-    pub fn halt(&self) {
-        *self.halt.write().unwrap() = true;
-    }
-
-    /// Unhalt the search process.
-    pub fn unhalt(&self) {
-        *self.halt.write().unwrap() = false;
-    }
-
-    /// When quitting a session, use this to join on the `Engine` thread and wait
-    /// for it to successfully shutdown.
-    pub fn wait_for_shutdown(&mut self) {
-        if let Some(h) = self.handle.take() {
-            h.join().expect("Error: fatal");
-        }
-    }
+    });
 }
 
-/// A convenient way to organise the code which runs in the engine thread.
-/// Otherwise we would just have a load of local variables to manage.
-///
-/// This struct lives in the `Engine` thread.
-struct EngineInner {
-    /// A `Sender` to emit `Message`s back to the `Session`.
-    session_tx: Sender<Message>,
-    /// Helper to construct search `Params` structs for each new search.
-    builder: Builder,
-}
-
-impl EngineInner {
-    pub fn new(session_tx: Sender<Message>) -> Self {
-        Self {
-            session_tx,
-            builder: Builder::default(),
-        }
-    }
-
-    pub fn init(&mut self) {
-        // Ensure globals variables like magic numbers have been initialized.
-        core::init::init_globals();
-
-        // Report that initialization has completed.
-        self.report(Report::InitializationComplete);
-    }
-
-    pub fn set_position(&mut self, pos: Pos, moves: Option<Vec<String>>) {
-        let result = self.builder.set_position(pos, moves);
-
-        self.handle_result(result);
-    }
-
-    /// Display the position in ascii.
-    pub fn display(&self) {
-        match self.builder.pos() {
-            Some(pos) => pos.pretty_print(),
-            None => {}
-        }
-    }
-
-    pub fn set_search_mode(&mut self, search_mode: TimingMode) {
-        info!("setting engine search mode to: {:?}", search_mode);
-
-        self.builder
-            .set_search_mode(search_mode)
-            .expect("couldn't set the search mode");
-    }
-
-    /// Launch the search. This will take the current params `Builder` and
-    /// build the actual `Params` struct. Then a new `Search` will be started
-    /// with those `Params`.
-    pub fn search(&mut self, halt: Arc<RwLock<bool>>) {
-        // Ensure globals variables like magic numbers have been initialized.
-        core::init::init_globals();
-        // Build the search params.
-        let params = self.builder.clone().into();
-
-        let mut search = Search::new(params, Some(self.session_tx.clone()), halt);
-
-        // TODO: for now, the way this is implemented the `Search` will be
-        // dropped as soon as this returns. Ideally we want to keep it around
-        // and allow a paused search to be restarted. This probably just means
-        // set the `Search` as a field on `EngineInner`.
-        let val = search.iterative_deepening();
-    }
-
-    fn handle_result(&self, res: BuilderResult) {
-        match res {
-            Ok(_) => {}
-            Err(be) => match be {
-                BuilderError::IllegalFen(fe) => {
-                    self.report_error(format!("illegal FEN string: {}", fe));
-                }
-                BuilderError::IllegalMove(mov) => {
-                    self.report_error(format!("illegal move: {}", mov));
-                }
-            },
-        }
-    }
-
-    pub fn report(&self, report: Report) {
-        self.session_tx
-            .send(Message::FromEngine(report))
-            .expect("couldn't send engine report to session thread");
-    }
-
-    pub fn report_error(&self, msg: String) {
-        self.report(Report::Error(msg));
+fn launch_search<'scope, 'engine>(
+    s: &'scope Scope<'scope, 'engine>,
+    flag: &'engine AtomicBool,
+    stop_time: Option<std::time::Instant>,
+    num_threads: u8,
+    depth: u8,
+    pos: Position,
+    tt: &'engine Table,
+) {
+    for i in 0..num_threads {
+        let thread_pos = pos.clone();
+        s.spawn(move || {
+            let mut search = Search::new(thread_pos, flag, stop_time, tt);
+            if i == 0 {
+                search.run::<Master>(depth);
+            } else {
+                search.run::<Worker>(depth);
+            }
+        });
     }
 }

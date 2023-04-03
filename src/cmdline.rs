@@ -1,8 +1,7 @@
 use crate::dev::dev;
 use crate::perft::{perft, PerftArgs};
 use clap::{Parser, Subcommand};
-use engine2::engine;
-use engine2::session::Session;
+use engine::engine;
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]

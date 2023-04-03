@@ -1,6 +1,6 @@
 use core::init::init_globals;
 use core::position::Position;
-use engine::search::perft::Perft;
+use engine::perft::Perft;
 
 use separator::Separatable;
 
