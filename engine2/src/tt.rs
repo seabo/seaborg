@@ -107,7 +107,10 @@ impl PackedMove {
         }
     }
 
+    /// Convert a `PackedMove` back to the corresponding `Move` for a given `Position`.
     pub fn to_move(&self, pos: &Position) -> Move {
+        debug_assert!(!self.is_null());
+
         let orig = Square((self.0 & ORIG_MASK) as u8);
         let dest = Square(((self.0 & DEST_MASK) >> 6) as u8);
         let promo = ((self.0 & PROMO_MASK) >> 12) as u8;
