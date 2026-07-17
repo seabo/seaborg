@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 21:39'
+updated_date: '2026-07-17 21:40'
 labels:
   - search
   - tt
@@ -32,3 +32,12 @@ Search unconditionally clears the shared transposition table because of a known 
 - [ ] #4 Concurrent search workers do not invalidate one another through table generation changes
 - [ ] #5 Tests cover reuse across searches, explicit clear, transposed mate scores at different plies, and concurrent probes
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Define ply-aware transposition-table score encoding/decoding and apply it consistently to main-search and quiescence probes/writes.
+2. Remove automatic table invalidation from Search::run; expose documented SearchEngine clear/new-game ownership and wire UCI/game reset operations to it.
+3. Add regression tests for sequential reuse, explicit/new-game invalidation, mate scores probed at different plies, and concurrent workers retaining the same generation.
+4. Run focused tests, cargo fmt --check, and cargo test --workspace; commit implementation and record the immutable In Review handoff.
+<!-- SECTION:PLAN:END -->
