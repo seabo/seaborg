@@ -1,11 +1,11 @@
 ---
 id: TASK-9
 title: Correct quiescence search check and TT semantics
-status: In Review
+status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 20:21'
+updated_date: '2026-07-17 20:55'
 labels:
   - search
   - correctness
@@ -36,9 +36,9 @@ Quiescence currently allows stand-pat behavior while in check and reuses transpo
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Preserve the writable replacement slot from TT probes while applying quiescence scores and bounds only for signature-valid Probe::Hit entries.
-2. Add a focused regression test proving an indexed TT clash cannot alter the quiescence result.
-3. Run formatting, focused quiescence tests, and the full workspace test suite; commit the rework and record a new immutable review handoff.
+1. Correct the in-check quiescence abort path so stopping cannot be misclassified as checkmate.
+2. Add a regression test covering a pre-signalled stop with legal check evasions.
+3. Run formatting, focused quiescence tests, and the full workspace suite; commit the rework and record a new immutable review handoff.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
@@ -105,5 +105,11 @@ Verification:
 - cargo test -p engine quiescence -- --nocapture: passed (5 tests)
 - cargo test --workspace: passed (1 ignored)
 Known failures: none
+---
+
+author: @codex
+created: 2026-07-17 20:55
+---
+Rework claim: resolving review comment #1, which reports a false mate score when quiescence stops before searching the first legal check evasion.
 ---
 <!-- COMMENTS:END -->
