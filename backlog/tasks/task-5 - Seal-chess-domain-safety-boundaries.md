@@ -1,11 +1,11 @@
 ---
 id: TASK-5
 title: Seal chess domain safety boundaries
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 19:29'
+updated_date: '2026-07-17 19:31'
 labels:
   - safety
   - core
@@ -135,10 +135,18 @@ Verification:
 - cargo test -p core --release: passed (25 unit tests, 1 compile-fail doctest)
 - cargo test --workspace: core passed; engine passed 36/37 non-ignored tests, with only unchanged baseline engine::tt::tests::gen_bound failing
 ---
+
+author: @codex
+created: 2026-07-17 19:31
+---
+Merged to master at 557c1cc96df4365297ec56f14aad11413426521d. Post-merge verification: cargo fmt --all --check passed; cargo test -p core --release passed (31 unit tests and 1 compile-fail doctest); cargo test --workspace passed.
+---
 <!-- COMMENTS:END -->
 
 ## Final Summary
 
 <!-- SECTION:FINAL_SUMMARY:BEGIN -->
 Sealed Square construction and arithmetic, hardened Board, Move, Position, and Bitboard boundaries, and added invalid-input regressions. Review verified implementation 91c1dc33cacfdb274ff153f66fac743701574792 with cargo fmt --all --check, cargo test -p core, and cargo test -p core --release; cargo test --workspace has only the unchanged baseline engine::tt::tests::gen_bound failure.
+
+Merged to master at 557c1cc96df4365297ec56f14aad11413426521d; post-merge formatting, release core tests, and full workspace tests passed.
 <!-- SECTION:FINAL_SUMMARY:END -->
