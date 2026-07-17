@@ -4,14 +4,13 @@ use super::score::Score;
 use core::mov::{Move, MoveType};
 use core::position::{PieceType, Position, Square};
 
-use std::cell::UnsafeCell;
-use std::marker::PhantomData;
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 
 /// The validity of a stored `Score`.
 ///
 /// Sometimes, we will store exact values in the transposition table. Other times, a node will
 /// experience a cutoff but we will still store the lower or upper bound.
-#[derive(Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[repr(u8)]
 pub enum Bound {
     Exact = 0,
@@ -22,7 +21,7 @@ pub enum Bound {
 /// A single byte, packing information about the aging generation of an entry, and what bound it
 /// represents.
 // TODO: make `Generation(u8)` an actual type wrapping `u8`.
-#[derive(Clone, Debug, Default)]
+#[derive(Copy, Clone, Debug, Default)]
 pub struct GenBound(u8);
 
 impl GenBound {
@@ -84,7 +83,7 @@ impl GenBound {
 /// |   |           |___ dest square
 /// |   |___ promotion piece
 /// |___ null flag
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct PackedMove(u16);
 
 const ORIG_MASK: u16 = 0x3F;
@@ -173,7 +172,7 @@ impl Default for PackedMove {
 }
 
 /// An entry in the transposition table.
-#[derive(Clone, Debug, Default)]
+#[derive(Copy, Clone, Debug, Default)]
 #[repr(align(8))]
 pub struct Entry {
     pub sig: u16,
@@ -184,6 +183,32 @@ pub struct Entry {
 }
 
 impl Entry {
+    const SIG_SHIFT: u32 = 0;
+    const DEPTH_SHIFT: u32 = 16;
+    const GEN_BOUND_SHIFT: u32 = 24;
+    const SCORE_SHIFT: u32 = 32;
+    const MOVE_SHIFT: u32 = 48;
+
+    #[inline(always)]
+    fn pack(self) -> u64 {
+        ((self.sig as u64) << Self::SIG_SHIFT)
+            | ((self.depth as u64) << Self::DEPTH_SHIFT)
+            | ((self.gen_bound.0 as u64) << Self::GEN_BOUND_SHIFT)
+            | (((self.score.to_i16() as u16) as u64) << Self::SCORE_SHIFT)
+            | ((self.mov.0 as u64) << Self::MOVE_SHIFT)
+    }
+
+    #[inline(always)]
+    fn unpack(value: u64) -> Self {
+        Self {
+            sig: (value >> Self::SIG_SHIFT) as u16,
+            depth: (value >> Self::DEPTH_SHIFT) as u8,
+            gen_bound: GenBound((value >> Self::GEN_BOUND_SHIFT) as u8),
+            score: Score::from_i16((value >> Self::SCORE_SHIFT) as u16 as i16),
+            mov: PackedMove((value >> Self::MOVE_SHIFT) as u16),
+        }
+    }
+
     /// Returns the generation of this entry.
     #[inline(always)]
     pub fn gen(&self) -> u8 {
@@ -209,18 +234,15 @@ impl Entry {
 /// Represents a transposition table entry that can be written to.
 #[derive(Debug)]
 pub struct WritableEntry<'a> {
-    ptr: *mut Entry,
-    _marker: PhantomData<&'a Entry>,
+    slot: &'a AtomicU64,
+    generation: u8,
 }
 
 impl<'a> WritableEntry<'a> {
-    /// Create a `WritableEntry` from a raw pointer to the underlying `Entry`.
+    /// Create a `WritableEntry` from an atomic table slot.
     #[inline]
-    fn from_raw_ptr(ptr: *mut Entry) -> Self {
-        Self {
-            ptr,
-            _marker: PhantomData,
-        }
+    fn new(slot: &'a AtomicU64, generation: u8) -> Self {
+        Self { slot, generation }
     }
 
     /// Write data to the entry.
@@ -228,47 +250,42 @@ impl<'a> WritableEntry<'a> {
     pub fn write(&self, pos: &Position, score: Score, depth: u8, bound: Bound, mov: &Move) {
         let sig = (pos.zobrist().0 >> 48) as u16;
 
-        // SAFETY: we know that the `'a` reference will be outlived by the table, so we can never
-        // end up writing to a completely unrelated address. However, this may well be racy or
-        // break mutability guarantees. All we know is that we are writing into the table, which is
-        // enough for our use case.
-        unsafe {
-            *self.ptr = Entry {
-                sig,
-                depth,
-                gen_bound: GenBound::from_raw_parts(1, bound),
-                score,
-                mov: PackedMove::from_move(mov),
-            }
-        }
+        let entry = Entry {
+            sig,
+            depth,
+            gen_bound: GenBound::from_raw_parts(self.generation, bound),
+            score,
+            mov: PackedMove::from_move(mov),
+        };
+        self.slot.store(entry.pack(), Ordering::Relaxed);
     }
 
-    /// Get a shared reference to the `Entry` in order to read its current data.
-    pub fn read(&self) -> &Entry {
-        unsafe { &*self.ptr }
+    /// Read a consistent snapshot of the current entry.
+    #[inline(always)]
+    pub fn read(&self) -> Entry {
+        let entry = Entry::unpack(self.slot.load(Ordering::Relaxed));
+        if entry.gen() == self.generation {
+            entry
+        } else {
+            Entry::default()
+        }
     }
 }
 
 /// The transposition table.
 ///
-/// The underlying storage for a `Table` uses `UnsafeCell`. Given our use patterns, we are actually
-/// comfortable with this data structure being racy and breaking mutability / pointer aliasing
-/// guarantees. In particular, it is theoretically possible for multiple `&mut` pointers to coexist
-/// for the same entry in the transposition table. When this happens, it is of course possible for
-/// data to get corrupted in an entry, but this should be extremely rare, and will cause less of a
-/// performance hit than using more reliable data structures. Data should never be corrupted in
-/// such a way as to actually cause a crash - just possibly-incorrect results for the probing code.
+/// Each entry is stored as one packed atomic word. Relaxed loads and stores retain the intended
+/// lockless behavior while ensuring readers never observe a torn or data-racy entry.
 pub struct Table {
     /// The storage buffer.
-    data: Box<[UnsafeCell<Entry>]>,
+    data: Box<[AtomicU64]>,
     mask: usize,
+    generation: AtomicU8,
 }
-
-unsafe impl Sync for Table {}
 
 impl std::fmt::Debug for Table {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Table {{ data: Box<[Entry]>; mask: {} }}", self.mask)
+        writeln!(f, "Table {{ data: Box<[AtomicU64]>; mask: {} }}", self.mask)
     }
 }
 
@@ -283,18 +300,30 @@ impl Table {
     pub fn new(size: usize) -> Self {
         let entries = Table::size_from_mb(size);
         let mut v = Vec::with_capacity(entries);
-        v.resize_with(entries, || UnsafeCell::new(Default::default()));
+        v.resize_with(entries, || AtomicU64::new(Entry::default().pack()));
 
         Table {
             data: v.into_boxed_slice(),
             mask: entries - 1,
+            generation: AtomicU8::new(1),
         }
     }
 
     /// Clear the transposition table.
     pub fn clear(&self) {
-        for e in &*self.data {
-            unsafe { e.get().write(Default::default()) }
+        let previous = self
+            .generation
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |generation| {
+                Some(if generation == 63 { 1 } else { generation + 1 })
+            })
+            .expect("generation update cannot fail");
+
+        // Old entries are ignored by generation, so normal clears are O(1). On wrap, physically
+        // clear the table to prevent entries from 62 searches ago becoming visible again.
+        if previous == 63 {
+            for slot in &*self.data {
+                slot.store(Entry::default().pack(), Ordering::Relaxed);
+            }
         }
     }
 
@@ -328,23 +357,23 @@ impl Table {
     /// reference to it is returned. If not, a unique reference to the entry slot is returned,
     /// which can be overwritten once search has produced a result.
     #[inline(always)]
-    pub fn probe<'tt>(&'_ self, pos: &'_ Position) -> Probe<'tt> {
+    pub fn probe<'tt>(&'tt self, pos: &Position) -> Probe<'tt> {
         let idx = self.idx(pos.zobrist().0);
         let sig = (pos.zobrist().0 >> 48) as u16;
+        let generation = self.generation.load(Ordering::Relaxed);
 
-        // We don't need to bounds check `idx` because it is guaranteed to be in bounds.
-        let entry = unsafe { self.data.get_unchecked(idx).get() };
-        let writable_entry = WritableEntry::from_raw_ptr(entry);
+        // SAFETY: `idx` is masked by `capacity - 1`, and the capacity is a non-zero power of two.
+        let slot = unsafe { self.data.get_unchecked(idx) };
+        let entry = Entry::unpack(slot.load(Ordering::Relaxed));
+        let writable_entry = WritableEntry::new(slot, generation);
 
         use Probe::*;
-        unsafe {
-            if (*entry).is_empty() {
-                Empty(writable_entry)
-            } else if sig == (*entry).sig {
-                Hit(writable_entry)
-            } else {
-                Clash(writable_entry)
-            }
+        if entry.gen() != generation {
+            Empty(writable_entry)
+        } else if sig == entry.sig {
+            Hit(writable_entry)
+        } else {
+            Clash(writable_entry)
         }
     }
 
@@ -355,11 +384,10 @@ impl Table {
     /// This is used in info reports to the GUI via UCI, among others.
     pub fn hashfull(&self) -> u16 {
         let mut c = 0;
+        let generation = self.generation.load(Ordering::Relaxed);
         for e in &self.data[0..1000] {
-            // SAFETY: we are just reading the value. Not emitting a reference to safe code, nor
-            // mutating the value.
-            let entry = unsafe { &*e.get() };
-            if entry.is_empty() {
+            let entry = Entry::unpack(e.load(Ordering::Relaxed));
+            if entry.gen() != generation {
                 c += 1;
             }
         }
@@ -508,5 +536,43 @@ mod tests {
                 entry.write(&pos, Score::cp(240), 14, Bound::Exact, &Move::null());
             }
         }
+    }
+
+    #[test]
+    fn packed_entry_round_trips() {
+        let entry = Entry {
+            sig: 0x9abc,
+            depth: 42,
+            gen_bound: GenBound::from_raw_parts(37, Bound::Lower),
+            score: Score::mate(-7),
+            mov: PackedMove(0xd321),
+        };
+
+        let unpacked = Entry::unpack(entry.pack());
+        assert_eq!(unpacked.sig, entry.sig);
+        assert_eq!(unpacked.depth, entry.depth);
+        assert_eq!(
+            unpacked.gen_bound.to_raw_parts(),
+            entry.gen_bound.to_raw_parts()
+        );
+        assert_eq!(unpacked.score, entry.score);
+        assert_eq!(unpacked.mov.0, entry.mov.0);
+    }
+
+    #[test]
+    fn clear_invalidates_previous_generation() {
+        core::init::init_globals();
+
+        let table = Table::new(1);
+        let pos = Position::start_pos();
+        table
+            .probe(&pos)
+            .into_inner()
+            .write(&pos, Score::cp(12), 4, Bound::Exact, &Move::null());
+        assert!(table.probe(&pos).is_hit());
+
+        table.clear();
+        assert!(!table.probe(&pos).is_hit());
+        assert!(table.probe(&pos).into_inner().read().is_empty());
     }
 }

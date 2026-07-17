@@ -37,6 +37,7 @@ fn tables() -> &'static BoardTables {
 #[inline(always)]
 pub fn knight_moves(square: Square) -> Bitboard {
     debug_assert!(square.is_okay());
+    // SAFETY: move generation only produces squares in 0..64.
     unsafe { Bitboard::new(*tables().knight.get_unchecked(square.0 as usize)) }
 }
 
@@ -44,6 +45,7 @@ pub fn knight_moves(square: Square) -> Bitboard {
 #[inline(always)]
 pub fn king_moves(square: Square) -> Bitboard {
     debug_assert!(square.is_okay());
+    // SAFETY: move generation only produces squares in 0..64.
     unsafe { Bitboard::new(*tables().king.get_unchecked(square.0 as usize)) }
 }
 
@@ -206,6 +208,7 @@ const fn gen_between_and_line_bbs() -> ([[u64; 64]; 64], [[u64; 64]; 64]) {
 #[inline(always)]
 pub fn pawn_attacks_from(sq: Square, player: Player) -> u64 {
     debug_assert!(sq.is_okay());
+    // SAFETY: `Player` has two values and move generation only produces squares in 0..64.
     unsafe {
         *tables()
             .pawn_attacks
@@ -219,6 +222,7 @@ pub fn pawn_attacks_from(sq: Square, player: Player) -> u64 {
 pub fn line_bb(sq_one: Square, sq_two: Square) -> u64 {
     debug_assert!(sq_one.is_okay());
     debug_assert!(sq_two.is_okay());
+    // SAFETY: both squares originate from a position or generated move and are in 0..64.
     unsafe {
         *tables()
             .lines
@@ -232,6 +236,7 @@ pub fn line_bb(sq_one: Square, sq_two: Square) -> u64 {
 pub fn between_bb(sq_one: Square, sq_two: Square) -> u64 {
     debug_assert!(sq_one.is_okay());
     debug_assert!(sq_two.is_okay());
+    // SAFETY: both squares originate from a position or generated move and are in 0..64.
     unsafe {
         *tables()
             .between

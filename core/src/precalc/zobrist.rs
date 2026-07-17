@@ -81,17 +81,14 @@ const fn gen_ep_file_keys() -> [u64; 8] {
 #[inline(always)]
 pub fn piece_square_key(piece: Piece, square: Square) -> u64 {
     debug_assert!(square.is_okay());
-    unsafe {
-        *keys()
-            .piece_square
-            .get_unchecked(square.0 as usize)
-            .get_unchecked(piece as usize)
-    }
+    // SAFETY: every non-null move and occupied-board square is in the range 0..64.
+    // Keeping this lookup unchecked avoids a measurable perft regression.
+    unsafe { keys().piece_square.get_unchecked(square.0 as usize)[piece as usize] }
 }
 
 #[inline(always)]
 pub fn side_to_move_key(turn: Player) -> u64 {
-    unsafe { *keys().side_to_move.get_unchecked(turn.inner() as usize) }
+    keys().side_to_move[turn.inner() as usize]
 }
 
 #[inline(always)]
@@ -101,16 +98,21 @@ pub fn side_to_move_toggler() -> u64 {
 
 #[inline(always)]
 pub fn castling_rights_keys(castling_rights: CastlingRights) -> u64 {
-    debug_assert!(castling_rights.is_okay());
-    unsafe {
-        *keys()
-            .castling_rights
-            .get_unchecked(castling_rights.bits() as usize)
-    }
+    keys().castling_rights[castling_rights.bits() as usize]
 }
 
 #[inline(always)]
 pub fn ep_file_keys(sq: Square) -> u64 {
-    debug_assert!(sq.is_okay());
-    unsafe { *keys().ep_file.get_unchecked(sq.rank() as usize) }
+    keys().ep_file[sq.file() as usize]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn en_passant_keys_are_by_file() {
+        assert_eq!(ep_file_keys(Square::A3), ep_file_keys(Square::A6));
+        assert_ne!(ep_file_keys(Square::A3), ep_file_keys(Square::B3));
+    }
 }

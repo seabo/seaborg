@@ -890,7 +890,7 @@ impl<'a, 'search> Loader for MoveLoader<'a, 'search> {
     fn score_quiets(&mut self, quiets: Scorer) {
         let turn = self.search.pos.turn();
         for (mov, score) in quiets {
-            // SAFETY: these are legal moves, so the squares must be valid.
+            // SAFETY: these are legal moves, so both squares are valid.
             unsafe {
                 *score = self
                     .search
@@ -950,7 +950,7 @@ impl<'a, 'search> Loader for QMoveLoader<'a, 'search> {
     fn score_quiets(&mut self, quiets: Scorer) {
         let turn = self.search.pos.turn();
         for (mov, score) in quiets {
-            // SAFETY: these are legal moves, so the squares must be valid.
+            // SAFETY: these are legal moves, so both squares are valid.
             unsafe {
                 *score = self
                     .search

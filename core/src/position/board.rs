@@ -20,11 +20,10 @@ impl Board {
 
     /// Returns the Piece at a `Square`, Or None if the square is empty.
     ///
-    /// Uses unchecked access to the array. Only checks that the `Square` is
-    /// legitimate in debug mode.
     #[inline]
     pub fn piece_at_sq(&self, sq: Square) -> Piece {
         debug_assert!(sq.is_okay());
+        // SAFETY: board access is only performed for non-null moves and valid board squares.
         unsafe { *self.arr.get_unchecked(sq.0 as usize) }
     }
 

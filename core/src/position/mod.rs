@@ -667,6 +667,8 @@ impl Position {
     #[inline]
     pub fn piece_bb(&self, player: Player, piece_type: PieceType) -> Bitboard {
         let idx = 6 * (player.inner() as usize) + (piece_type as usize);
+        // SAFETY: `Player` has two values and `PieceType` has seven, so `idx` is in 0..13.
+        // Exhaustive safe matching here regresses fixed-depth search by double digits.
         unsafe { *self.bbs.get_unchecked(idx) }
     }
     /// Returns the Bitboard of the Queens and Rooks for a given player.

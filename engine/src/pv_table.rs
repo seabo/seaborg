@@ -51,10 +51,8 @@ impl PVTable {
 
     #[inline(always)]
     fn update_leaf(&mut self, mov: Move) {
-        // Safety: we never mutate `self.depth` after the `PVTable` struct is created, so this
-        // index is guaranteed to exist.
         let m = self.depth;
-        unsafe { *self.data.get_unchecked_mut(m * (m - 1)) = mov };
+        self.data[m * (m - 1)] = mov;
     }
 
     #[inline(always)]

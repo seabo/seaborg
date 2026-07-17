@@ -36,31 +36,7 @@ where
     /// This method will panic if the squares passed are not valid squares (i.e. they satisfy
     /// `square.is_okay() == true`).
     pub fn inc(&mut self, from: Square, to: Square, amt: T) {
-        assert!(from.is_okay());
-        assert!(to.is_okay());
-
-        // SAFETY: bounds have been checked above.
-        unsafe {
-            *self
-                .data
-                .get_unchecked_mut(from.0 as usize)
-                .get_unchecked_mut(to.0 as usize) += amt;
-        }
-    }
-
-    /// Increment by `amt` a from-to pair on the butterfly board, indexed by the squares.
-    ///
-    /// This method assumes that the squares are valid (i.e. they have value < 64); in debug mode,
-    /// the function will panic if this doesn't hold but in release mode, UB will occur as the
-    /// check is elided.
-    pub unsafe fn inc_unchecked(&mut self, from: Square, to: Square, amt: T) {
-        debug_assert!(from.is_okay());
-        debug_assert!(to.is_okay());
-
-        *self
-            .data
-            .get_unchecked_mut(from.0 as usize)
-            .get_unchecked_mut(to.0 as usize) += amt;
+        self.data[from.0 as usize][to.0 as usize] += amt;
     }
 }
 
@@ -75,28 +51,19 @@ where
     /// This method will panic if the squares passed are not valid squares (i.e. they satisfy
     /// `square.is_okay() == true`).
     pub fn get(&self, from: Square, to: Square) -> T {
-        assert!(from.is_okay());
-        assert!(to.is_okay());
-
-        // SAFETY: bounds have been checked above.
-        unsafe {
-            *self
-                .data
-                .get_unchecked(from.0 as usize)
-                .get_unchecked(to.0 as usize)
-        }
+        self.data[from.0 as usize][to.0 as usize]
     }
 
-    /// Get the value indexed by `from` and `to`.
+    /// Get a value without bounds checks.
     ///
-    /// This method assumes that the squares are valid (i.e. they have value < 64); in debug mode,
-    /// the function will panic if this doesn't hold but in release mode, UB will occur as the
-    /// check is elided.
+    /// # Safety
+    ///
+    /// Both squares must be in the range 0..64.
+    #[inline(always)]
     pub unsafe fn get_unchecked(&self, from: Square, to: Square) -> T {
         debug_assert!(from.is_okay());
         debug_assert!(to.is_okay());
 
-        // SAFETY: bounds have been checked above.
         *self
             .data
             .get_unchecked(from.0 as usize)
@@ -136,13 +103,12 @@ impl HistoryTable {
         }
     }
 
-    pub unsafe fn inc_unchecked(&mut self, from: Square, to: Square, amt: u32, side: Player) {
-        match side {
-            Player::WHITE => self.white.inc_unchecked(from, to, amt),
-            Player::BLACK => self.black.inc_unchecked(from, to, amt),
-        }
-    }
-
+    /// Get a history value without bounds checks.
+    ///
+    /// # Safety
+    ///
+    /// Both squares must be in the range 0..64.
+    #[inline(always)]
     pub unsafe fn get_unchecked(&self, from: Square, to: Square, side: Player) -> u32 {
         match side {
             Player::WHITE => self.white.get_unchecked(from, to),

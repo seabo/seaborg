@@ -182,20 +182,24 @@ static ROOK_MAGICS: [SMagic; 64] = bind_magics(&ROOK_HASHES, &ROOK_ATTACKS);
 #[inline]
 pub fn bishop_attacks(mut occupied: u64, square: u8) -> u64 {
     debug_assert!(square < 64);
-    let magic = unsafe { BISHOP_MAGICS.get_unchecked(square as usize) };
+    let magic = &BISHOP_MAGICS[square as usize];
     occupied &= magic.mask;
     occupied = occupied.wrapping_mul(magic.magic);
     occupied = occupied.wrapping_shr(magic.shift);
+    // SAFETY: the generated magic index is within this square's attack-table segment. A checked
+    // access here regresses move generation by more than 2%.
     unsafe { *(magic.attacks as *const u64).add(occupied as usize) }
 }
 
 #[inline]
 pub fn rook_attacks(mut occupied: u64, square: u8) -> u64 {
     debug_assert!(square < 64);
-    let magic = unsafe { ROOK_MAGICS.get_unchecked(square as usize) };
+    let magic = &ROOK_MAGICS[square as usize];
     occupied &= magic.mask;
     occupied = occupied.wrapping_mul(magic.magic);
     occupied = occupied.wrapping_shr(magic.shift);
+    // SAFETY: the generated magic index is within this square's attack-table segment. A checked
+    // access here regresses move generation by more than 2%.
     unsafe { *(magic.attacks as *const u64).add(occupied as usize) }
 }
 

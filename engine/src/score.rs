@@ -82,6 +82,11 @@ impl Score {
         self.0
     }
 
+    /// Reconstruct a score from its compact transposition-table representation.
+    pub(crate) fn from_i16(value: i16) -> Self {
+        Self(value)
+    }
+
     /// True if this `Score` represents a forced mate-in-n.
     pub fn is_mate(&self) -> bool {
         if self.0 < -20_000 || self.0 > 20_000 {

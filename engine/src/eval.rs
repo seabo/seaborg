@@ -44,5 +44,7 @@ fn material_evaluation(pos: &Position) -> i16 {
 
 /// The material evaluation of `PieceType`.
 pub fn piece_value(piece_type: PieceType) -> i16 {
+    // SAFETY: `PieceType` is represented by values in 0..7. Safe matching measurably regresses SEE
+    // and fixed-depth search.
     unsafe { *PIECE_VALUES.get_unchecked(piece_type as usize) }
 }

@@ -146,22 +146,13 @@ impl<'a> Parser<'a> {
     }
 
     fn advance(&mut self) -> Option<&Token<'a>> {
-        if self.cursor < self.toks.len() {
-            let next = unsafe { self.toks.get_unchecked(self.cursor) };
-            self.cursor += 1;
-            Some(next)
-        } else {
-            None
-        }
+        let next = self.toks.get(self.cursor)?;
+        self.cursor += 1;
+        Some(next)
     }
 
     fn peek(&mut self) -> Option<&Token<'a>> {
-        if self.cursor < self.toks.len() {
-            let next = unsafe { self.toks.get_unchecked(self.cursor) };
-            Some(next)
-        } else {
-            None
-        }
+        self.toks.get(self.cursor)
     }
 
     fn expect_kw(&mut self, kw: Keyword) -> Result<(), Error> {
