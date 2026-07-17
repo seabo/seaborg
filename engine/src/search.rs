@@ -591,30 +591,30 @@ impl<'engine> Search<'engine> {
         //         TODO
 
         // Step 2. Load transposition table entry.
-        let (tt_entry, tt_mov, tt_value) = {
+        let (tt_entry, tt_value) = {
             use super::tt::Probe::*;
             match self.tt.probe(&self.pos) {
                 Hit(entry) => {
                     let e = entry.read();
                     if e.mov.is_null() {
-                        (entry, None, None)
+                        (entry, None)
                     } else {
                         let mov = e.mov.to_move(&self.pos);
                         let val = e.score;
                         if self.pos.valid_move(&mov) {
                             self.trace.hash_hit();
-                            (entry, Some(mov), Some(val))
+                            (entry, Some(val))
                         } else {
                             self.trace.hash_collision();
-                            (entry, None, None)
+                            (entry, None)
                         }
                     }
                 }
                 Clash(entry) => {
                     self.trace.hash_clash();
-                    (entry, None, None)
+                    (entry, None)
                 }
-                Empty(entry) => (entry, None, None),
+                Empty(entry) => (entry, None),
             }
         };
 
@@ -622,7 +622,7 @@ impl<'engine> Search<'engine> {
         if !Node::pv() {
             let entry = tt_entry.read();
 
-            if !entry.is_empty() && entry.depth >= 0 {
+            if !entry.is_empty() {
                 match entry.bound() {
                     Bound::Exact => {
                         return entry.score;
@@ -807,14 +807,6 @@ impl<'engine> Search<'engine> {
                 self.trace.killers_per_node.avg() * 2_f64
             );
         }
-    }
-
-    fn report_best_move(&self) {
-        // Get TT entry.
-        let entry = self.tt.probe(&self.pos).into_inner();
-        let tt_entry = entry.read();
-        assert!(!tt_entry.is_empty());
-        println!("bestmove {}", tt_entry.mov.to_move(&self.pos));
     }
 }
 

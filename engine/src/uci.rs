@@ -126,7 +126,6 @@ pub enum Error {
 pub type PResult = Result<Command, Error>;
 
 pub struct Parser<'a> {
-    raw: &'a str,
     toks: Vec<Token<'a>>,
     cursor: usize,
 }
@@ -138,7 +137,6 @@ impl<'a> Parser<'a> {
 
     fn new(input: &'a str) -> Parser<'a> {
         Parser {
-            raw: input,
             toks: input
                 .split_whitespace()
                 .map(|t| Token::scan(t))
@@ -200,15 +198,6 @@ impl<'a> Parser<'a> {
     fn parse_integer(&mut self) -> Result<usize, Error> {
         let s = self.parse_string()?;
         s.parse::<usize>().map_err(|_| Error::ExpectedNumber)
-    }
-
-    fn parse_bool(&mut self) -> Result<bool, Error> {
-        let b = self.parse_string()?;
-        match b {
-            "true" => Ok(true),
-            "false" => Ok(false),
-            _ => Err(Error::ExpectedBool),
-        }
     }
 
     fn parse_command(&mut self) -> PResult {

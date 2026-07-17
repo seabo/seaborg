@@ -1,4 +1,4 @@
-use core::mono_traits::{All, Captures, Legal};
+use core::mono_traits::{All, Legal};
 use core::mov::Move;
 use core::movelist::BasicMoveList;
 use core::position::{Position, START_POSITION};

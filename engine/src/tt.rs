@@ -4,9 +4,6 @@ use super::score::Score;
 use core::mov::{Move, MoveType};
 use core::position::{PieceType, Position, Square};
 
-use num_derive::FromPrimitive;
-use num_traits::FromPrimitive;
-
 use std::cell::UnsafeCell;
 use std::marker::PhantomData;
 
@@ -14,7 +11,7 @@ use std::marker::PhantomData;
 ///
 /// Sometimes, we will store exact values in the transposition table. Other times, a node will
 /// experience a cutoff but we will still store the lower or upper bound.
-#[derive(Debug, PartialEq, FromPrimitive)]
+#[derive(Debug, PartialEq)]
 #[repr(u8)]
 pub enum Bound {
     Exact = 0,
@@ -56,7 +53,12 @@ impl GenBound {
     /// Extract the bound.
     #[inline(always)]
     pub fn bound(&self) -> Bound {
-        FromPrimitive::from_u8(self.0 & 0x3).unwrap()
+        match self.0 & 0x3 {
+            0 => Bound::Exact,
+            1 => Bound::Upper,
+            2 => Bound::Lower,
+            _ => unreachable!("invalid bound bits"),
+        }
     }
 }
 
@@ -119,7 +121,7 @@ impl PackedMove {
             None
         } else {
             move_type |= MoveType::PROMOTION;
-            Some(FromPrimitive::from_u8(promo + 1).expect("should never fail"))
+            Some(PieceType::try_from(promo + 1).expect("should never fail"))
         };
 
         if !pos.piece_at_sq(dest).is_none() {
@@ -471,7 +473,7 @@ mod tests {
         let size = 1;
         let tt = Table::new(size);
 
-        let mut pos = Position::start_pos();
+        let pos = Position::start_pos();
 
         match tt.probe(&pos) {
             Hit(entry) => {

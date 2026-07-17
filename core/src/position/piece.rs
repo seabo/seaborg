@@ -1,5 +1,4 @@
 use super::Player;
-use num_derive::FromPrimitive;
 
 use std::fmt;
 
@@ -101,7 +100,7 @@ impl Piece {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, FromPrimitive, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum PieceType {
     None = 0,
@@ -129,6 +128,23 @@ pub const PROMO_PIECES: [PieceType; 4] = [
     PieceType::Knight,
     PieceType::Bishop,
 ];
+
+impl TryFrom<u8> for PieceType {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::None),
+            1 => Ok(Self::Pawn),
+            2 => Ok(Self::Knight),
+            3 => Ok(Self::Bishop),
+            4 => Ok(Self::Rook),
+            5 => Ok(Self::Queen),
+            6 => Ok(Self::King),
+            _ => Err(()),
+        }
+    }
+}
 
 impl PieceType {
     pub fn is_none(&self) -> bool {

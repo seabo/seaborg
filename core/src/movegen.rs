@@ -1,10 +1,10 @@
 use crate::bb::Bitboard;
 use crate::mono_traits::{
     All, Bishop, Black, Captures, Generate, King, Knight, Legal, Legality, Pawn, PieceTrait,
-    Promotions, PseudoLegal, Queen, QueenPromotions, Quiets, Rook, Side, White,
+    Promotions, Queen, QueenPromotions, Quiets, Rook, Side, White,
 };
 use crate::mov::{Move, MoveType};
-use crate::movelist::{BasicMoveList, Frame, MoveList, MoveStack};
+use crate::movelist::MoveList;
 use crate::position::{CastleType, PieceType, Player, Position, Square, PROMO_PIECES};
 use crate::precalc::boards::{between_bb, king_moves, knight_moves, line_bb, pawn_attacks_from};
 use crate::precalc::magic;
@@ -820,6 +820,7 @@ pub fn queen_moves(occupied: Bitboard, sq: Square) -> Bitboard {
 mod tests {
     use super::*;
     use crate::init::init_globals;
+    use crate::movelist::BasicMoveList;
     use crate::position::Position;
 
     fn number_of_captures(fen: &str) -> usize {

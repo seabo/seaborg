@@ -1,12 +1,8 @@
 //! Tools for ordering and iterating moves in a search environment.
-use super::score::Score;
 
 use core::mov::Move;
 use core::movelist::{ArrayVec, MoveList};
 use core::position::PieceType;
-
-use num::FromPrimitive;
-use num_derive::FromPrimitive;
 
 use std::cell::UnsafeCell;
 use std::iter::Chain;
@@ -257,7 +253,7 @@ pub struct OrderedMoves {
     phase: Phase,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, FromPrimitive)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum Phase {
     /// Before the first phase has been loaded.
@@ -287,13 +283,18 @@ pub enum Phase {
 
 impl Phase {
     pub fn inc(&mut self) -> bool {
-        match FromPrimitive::from_u8(*self as u8 + 1) {
-            Some(p) => {
-                *self = p;
-                true
-            }
-            None => false,
-        }
+        *self = match *self {
+            Phase::Pre => Phase::HashTable,
+            Phase::HashTable => Phase::QueenPromotions,
+            Phase::QueenPromotions => Phase::GoodCaptures,
+            Phase::GoodCaptures => Phase::EqualCaptures,
+            Phase::EqualCaptures => Phase::Killers,
+            Phase::Killers => Phase::Quiet,
+            Phase::Quiet => Phase::BadCaptures,
+            Phase::BadCaptures => Phase::Underpromotions,
+            Phase::Underpromotions => return false,
+        };
+        true
     }
 }
 
@@ -472,24 +473,6 @@ impl OrderedMoves {
         unsafe { self.segment_from_range(self.underpromo_segment.clone()) }
     }
 
-    /// Return the hash segment.
-    #[inline]
-    fn hash_segment_mut(&mut self) -> SegmentMut<'_> {
-        // SAFETY: the segment `Range` starts as `0..0`, which is always fine for us to get.
-        // We only ever change the `Range` when we know that moves have been placed in that
-        // location, so we are safe to derefence.
-        unsafe { self.segment_from_range_mut(self.hash_segment.clone()) }
-    }
-
-    /// Return the promo segment.
-    #[inline]
-    fn promo_segment_mut(&mut self) -> SegmentMut<'_> {
-        // SAFETY: the segment `Range` starts as `0..0`, which is always fine for us to get.
-        // We only ever change the `Range` when we know that moves have been placed in that
-        // location, so we are safe to derefence.
-        unsafe { self.segment_from_range_mut(self.promo_segment.clone()) }
-    }
-
     /// Return the capture segment.
     #[inline]
     fn capt_segment_mut(&mut self) -> SegmentMut<'_> {
@@ -499,15 +482,6 @@ impl OrderedMoves {
         unsafe { self.segment_from_range_mut(self.capt_segment.clone()) }
     }
 
-    /// Return the killer segment.
-    #[inline]
-    fn killer_segment_mut(&mut self) -> SegmentMut<'_> {
-        // SAFETY: the segment `Range` starts as `0..0`, which is always fine for us to get.
-        // We only ever change the `Range` when we know that moves have been placed in that
-        // location, so we are safe to derefence.
-        unsafe { self.segment_from_range_mut(self.killer_segment.clone()) }
-    }
-
     /// Return the quiet segment.
     #[inline]
     fn quiets_segment_mut(&mut self) -> SegmentMut<'_> {
@@ -515,15 +489,6 @@ impl OrderedMoves {
         // We only ever change the `Range` when we know that moves have been placed in that
         // location, so we are safe to derefence.
         unsafe { self.segment_from_range_mut(self.quiet_segment.clone()) }
-    }
-
-    /// Return the underpromo segment.
-    #[inline]
-    fn underpromo_segment_mut(&mut self) -> SegmentMut<'_> {
-        // SAFETY: the segment `Range` starts as `0..0`, which is always fine for us to get.
-        // We only ever change the `Range` when we know that moves have been placed in that
-        // location, so we are safe to derefence.
-        unsafe { self.segment_from_range_mut(self.underpromo_segment.clone()) }
     }
 
     /// This is very unsafe. First, we do not bounds check the range. Even more unsafe is that we
