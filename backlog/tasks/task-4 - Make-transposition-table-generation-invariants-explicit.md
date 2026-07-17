@@ -1,9 +1,11 @@
 ---
 id: TASK-4
 title: Make transposition-table generation invariants explicit
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-17 16:44'
+updated_date: '2026-07-17 18:44'
 labels: []
 dependencies: []
 references:
@@ -29,3 +31,12 @@ Transposition-table generations are six-bit epoch identifiers, with 0 reserved a
 - [ ] #5 Documentation and tests describe and verify empty, valid, invalid, and wraparound generation behavior
 - [ ] #6 cargo test --workspace passes
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Introduce a checked Generation value type representing only live epochs 1..=63, and make GenBound construction require it while retaining raw zero solely for default empty entries.
+2. Route table generation loads and writable entries through Generation, and change wraparound clearing so storage is physically zeroed before generation 1 is published again.
+3. Replace contradictory generation tests with coverage for empty encoding, valid boundaries, rejected zero/out-of-range inputs, and physical invalidation on wrap.
+4. Run cargo fmt --check and cargo test --workspace, then record the immutable implementation handoff.
+<!-- SECTION:PLAN:END -->
