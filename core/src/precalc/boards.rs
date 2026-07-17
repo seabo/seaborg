@@ -1,45 +1,56 @@
-use super::magic::{bishop_attacks, rook_attacks};
+use super::magic::sliding_attack;
 use crate::bb::Bitboard;
-use crate::position::{file_of_sq, u8_to_u64, Player, Square};
+use crate::position::{u8_to_u64, Player, Square};
 
-/// Fast lookup table for Knight moves
-static mut KING_TABLE: [u64; 64] = [0; 64];
-/// Fast lookup table for King moves
-static mut KNIGHT_TABLE: [u64; 64] = [0; 64];
-/// Fast lookup table for Pawn attacks
-static mut PAWN_ATTACKS_FROM: [[u64; 64]; 2] = [[0; 64]; 2];
-/// Fast lookup line bitboards for any two squares.
-static mut LINE_BITBOARD: [[u64; 64]; 64] = [[0; 64]; 64];
-/// Fast lookup bitboards for the squares between any two squares.
-static mut BETWEEN_SQUARES_BB: [[u64; 64]; 64] = [[0; 64]; 64];
+const BISHOP_DELTAS: [i8; 4] = [7, 9, -9, -7];
+const ROOK_DELTAS: [i8; 4] = [8, 1, -8, -1];
 
-#[cold]
-pub fn init_boards() {
-    unsafe {
-        gen_knight_moves();
-        gen_king_moves();
-        gen_pawn_attacks();
-        gen_between_and_line_bbs();
+static BOARD_TABLES: BoardTables = BoardTables::new();
+
+struct BoardTables {
+    king: [u64; 64],
+    knight: [u64; 64],
+    pawn_attacks: [[u64; 64]; 2],
+    lines: [[u64; 64]; 64],
+    between: [[u64; 64]; 64],
+}
+
+impl BoardTables {
+    const fn new() -> Self {
+        let (between, lines) = gen_between_and_line_bbs();
+        Self {
+            king: gen_king_moves(),
+            knight: gen_knight_moves(),
+            pawn_attacks: gen_pawn_attacks(),
+            lines,
+            between,
+        }
     }
+}
+
+#[inline(always)]
+fn tables() -> &'static BoardTables {
+    &BOARD_TABLES
 }
 
 /// Generate Knight moves Bitboard from an origin square
 #[inline(always)]
 pub fn knight_moves(square: Square) -> Bitboard {
     debug_assert!(square.is_okay());
-    unsafe { Bitboard::new(*KNIGHT_TABLE.get_unchecked(square.0 as usize)) }
+    unsafe { Bitboard::new(*tables().knight.get_unchecked(square.0 as usize)) }
 }
 
 /// Generate King moves Bitboard from an origin square
 #[inline(always)]
 pub fn king_moves(square: Square) -> Bitboard {
     debug_assert!(square.is_okay());
-    unsafe { Bitboard::new(*KING_TABLE.get_unchecked(square.0 as usize)) }
+    unsafe { Bitboard::new(*tables().king.get_unchecked(square.0 as usize)) }
 }
 
-#[cold]
-unsafe fn gen_knight_moves() {
-    for (index, spot) in KNIGHT_TABLE.iter_mut().enumerate() {
+const fn gen_knight_moves() -> [u64; 64] {
+    let mut table = [0; 64];
+    let mut index = 0;
+    while index < 64 {
         let mut mask: u64 = 0;
         let file = index % 8;
 
@@ -75,13 +86,16 @@ unsafe fn gen_knight_moves() {
         if file > 1 && index > 7 {
             mask |= 1 << (index - 10);
         }
-        *spot = mask;
+        table[index] = mask;
+        index += 1;
     }
+    table
 }
 
-#[cold]
-unsafe fn gen_king_moves() {
-    for index in 0..64 {
+const fn gen_king_moves() -> [u64; 64] {
+    let mut table = [0; 64];
+    let mut index = 0;
+    while index < 64 {
         let mut mask: u64 = 0;
         let file = index % 8;
         // LEFT
@@ -116,59 +130,74 @@ unsafe fn gen_king_moves() {
         if file != 7 && index < 56 {
             mask |= 1 << (index + 9);
         }
-        KING_TABLE[index] = mask;
+        table[index] = mask;
+        index += 1;
     }
+    table
 }
 
-#[cold]
-unsafe fn gen_pawn_attacks() {
+const fn gen_pawn_attacks() -> [[u64; 64]; 2] {
+    let mut table = [[0; 64]; 2];
+
     // White pawn attacks
-    for i in 0..56 as u8 {
+    let mut i = 0;
+    while i < 56 {
         let mut bb: u64 = 0;
-        if file_of_sq(i) != 0 {
-            bb |= u8_to_u64(i + 7)
+        if i % 8 != 0 {
+            bb |= 1 << (i + 7);
         }
-        if file_of_sq(i) != 7 {
-            bb |= u8_to_u64(i + 9)
+        if i % 8 != 7 {
+            bb |= 1 << (i + 9);
         }
-        PAWN_ATTACKS_FROM[0][i as usize] = bb;
+        table[0][i as usize] = bb;
+        i += 1;
     }
 
     // Black pawn attacks
-    for i in 8..64 as u8 {
+    i = 8;
+    while i < 64 {
         let mut bb: u64 = 0;
-        if file_of_sq(i) != 0 {
-            bb |= u8_to_u64(i - 9)
+        if i % 8 != 0 {
+            bb |= 1 << (i - 9);
         }
-        if file_of_sq(i) != 7 {
-            bb |= u8_to_u64(i - 7)
+        if i % 8 != 7 {
+            bb |= 1 << (i - 7);
         }
-        PAWN_ATTACKS_FROM[1][i as usize] = bb;
+        table[1][i as usize] = bb;
+        i += 1;
     }
+    table
 }
 
-#[cold]
-unsafe fn gen_between_and_line_bbs() {
-    for i in 0..64 as u8 {
-        for j in 0..64 as u8 {
-            let i_bb: u64 = (1 as u64) << i;
-            let j_bb: u64 = (1 as u64) << j;
-            if rook_attacks(0, i) & j_bb != 0 {
-                LINE_BITBOARD[i as usize][j as usize] |=
-                    (rook_attacks(0, j) & rook_attacks(0, i)) | i_bb | j_bb;
-                BETWEEN_SQUARES_BB[i as usize][j as usize] =
-                    rook_attacks(i_bb, j) & rook_attacks(j_bb, i);
-            } else if bishop_attacks(0, i) & j_bb != 0 {
-                LINE_BITBOARD[i as usize][j as usize] |=
-                    (bishop_attacks(0, j) & bishop_attacks(0, i)) | i_bb | j_bb;
-                BETWEEN_SQUARES_BB[i as usize][j as usize] =
-                    bishop_attacks(i_bb, j) & bishop_attacks(j_bb, i);
-            } else {
-                LINE_BITBOARD[i as usize][j as usize] = 0;
-                BETWEEN_SQUARES_BB[i as usize][j as usize] = 0;
+const fn gen_between_and_line_bbs() -> ([[u64; 64]; 64], [[u64; 64]; 64]) {
+    let mut between_squares = [[0; 64]; 64];
+    let mut line_bitboards = [[0; 64]; 64];
+    let mut i = 0;
+    while i < 64 {
+        let mut j = 0;
+        while j < 64 {
+            let i_bb = 1_u64 << i;
+            let j_bb = 1_u64 << j;
+            if sliding_attack(&ROOK_DELTAS, i, 0) & j_bb != 0 {
+                line_bitboards[i as usize][j as usize] |= (sliding_attack(&ROOK_DELTAS, j, 0)
+                    & sliding_attack(&ROOK_DELTAS, i, 0))
+                    | i_bb
+                    | j_bb;
+                between_squares[i as usize][j as usize] =
+                    sliding_attack(&ROOK_DELTAS, j, i_bb) & sliding_attack(&ROOK_DELTAS, i, j_bb);
+            } else if sliding_attack(&BISHOP_DELTAS, i, 0) & j_bb != 0 {
+                line_bitboards[i as usize][j as usize] |= (sliding_attack(&BISHOP_DELTAS, j, 0)
+                    & sliding_attack(&BISHOP_DELTAS, i, 0))
+                    | i_bb
+                    | j_bb;
+                between_squares[i as usize][j as usize] = sliding_attack(&BISHOP_DELTAS, j, i_bb)
+                    & sliding_attack(&BISHOP_DELTAS, i, j_bb);
             }
+            j += 1;
         }
+        i += 1;
     }
+    (between_squares, line_bitboards)
 }
 
 /// Pawn attacks `Bitboard` from a given square and player.
@@ -178,7 +207,8 @@ unsafe fn gen_between_and_line_bbs() {
 pub fn pawn_attacks_from(sq: Square, player: Player) -> u64 {
     debug_assert!(sq.is_okay());
     unsafe {
-        *PAWN_ATTACKS_FROM
+        *tables()
+            .pawn_attacks
             .get_unchecked(player.inner() as usize)
             .get_unchecked(sq.0 as usize)
     }
@@ -189,7 +219,12 @@ pub fn pawn_attacks_from(sq: Square, player: Player) -> u64 {
 pub fn line_bb(sq_one: Square, sq_two: Square) -> u64 {
     debug_assert!(sq_one.is_okay());
     debug_assert!(sq_two.is_okay());
-    unsafe { *(LINE_BITBOARD.get_unchecked(sq_one.0 as usize)).get_unchecked(sq_two.0 as usize) }
+    unsafe {
+        *tables()
+            .lines
+            .get_unchecked(sq_one.0 as usize)
+            .get_unchecked(sq_two.0 as usize)
+    }
 }
 
 /// Get the line (diagonal / file / rank) `BitBoard` between two squares, not including the squares, if it exists.
@@ -198,7 +233,10 @@ pub fn between_bb(sq_one: Square, sq_two: Square) -> u64 {
     debug_assert!(sq_one.is_okay());
     debug_assert!(sq_two.is_okay());
     unsafe {
-        *(BETWEEN_SQUARES_BB.get_unchecked(sq_one.0 as usize)).get_unchecked(sq_two.0 as usize)
+        *tables()
+            .between
+            .get_unchecked(sq_one.0 as usize)
+            .get_unchecked(sq_two.0 as usize)
     }
 }
 
