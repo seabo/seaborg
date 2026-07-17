@@ -294,10 +294,14 @@ def run(argv: Sequence[str] | None = None) -> int:
         (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
     label = report.get("authority", "UNKNOWN")
     print(f"{label} strength test verdict: {final}")
-    if "sprt" in report:
-        print(f"SPRT elo0={args.elo0} elo1={args.elo1} alpha={args.alpha} beta={args.beta} "
-              f"LLR={report['sprt']['llr']} bounds=[{report['sprt']['lower_bound']}, "
-              f"{report['sprt']['upper_bound']}], games={report['results']['games']}")
+    sprt = report.get("sprt", {})
+    results = report.get("results", {})
+    if all(field in sprt for field in ("llr", "lower_bound", "upper_bound")) \
+            and "games" in results:
+        print(f"SPRT elo0={sprt['elo0']} elo1={sprt['elo1']} "
+              f"alpha={sprt['alpha']} beta={sprt['beta']} LLR={sprt['llr']} "
+              f"bounds=[{sprt['lower_bound']}, {sprt['upper_bound']}], "
+              f"games={results['games']}")
     elif "error" in report:
         print(report["error"], file=sys.stderr)
     return VERDICT_EXIT[final]

@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import strength_test as st
 
@@ -110,6 +111,44 @@ class StrengthTestTests(unittest.TestCase):
             report = json.loads((output / "report.json").read_text())
             self.assertEqual(report["verdict"], "INFRASTRUCTURE ERROR")
             self.assertIn("invalid command line", report["error"])
+
+    def assert_run_failure(self, runner_output, runner_exit=0):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "artifacts"
+            baseline = root / "baseline"
+            candidate = root / "candidate"
+            argv = [
+                "--baseline", str(baseline), "--baseline-id", "base-sha",
+                "--candidate", str(candidate), "--candidate-id", "candidate-sha",
+                "--build-settings", "cargo build --release",
+                "--output", str(output),
+            ]
+            completed = subprocess.CompletedProcess(
+                ["cutechess-cli"], runner_exit, runner_output, "")
+            with mock.patch.object(st, "validate"), \
+                    mock.patch.object(st, "runner_version", return_value="1.3.1"), \
+                    mock.patch.object(st, "uci_preflight", return_value={"bestmove": "e2e4"}), \
+                    mock.patch.object(st, "sha256", return_value="0" * 64), \
+                    mock.patch.object(st.subprocess, "run", return_value=completed), \
+                    mock.patch("builtins.print") as printed:
+                exit_code = st.run(argv)
+            self.assertEqual(exit_code, st.INFRA_ERROR)
+            self.assertTrue(any("INFRASTRUCTURE ERROR" in str(call)
+                                for call in printed.call_args_list))
+            report = json.loads((output / "report.json").read_text())
+            self.assertEqual(report["verdict"], "INFRASTRUCTURE ERROR")
+            self.assertIn("error", report)
+
+    def test_run_malformed_and_incomplete_output_are_infrastructure_errors(self):
+        for output in ("malformed runner output\n",
+                       PASS_LOG.replace("Finished match\n", "")):
+            with self.subTest(output=output):
+                self.assert_run_failure(output)
+
+    def test_run_crash_and_nonzero_runner_are_infrastructure_errors(self):
+        self.assert_run_failure(PASS_LOG + "Engine disconnects\n")
+        self.assert_run_failure(PASS_LOG, runner_exit=7)
 
 
 if __name__ == "__main__":
