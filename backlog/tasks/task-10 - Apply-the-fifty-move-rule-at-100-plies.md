@@ -1,11 +1,11 @@
 ---
 id: TASK-10
 title: Apply the fifty-move rule at 100 plies
-status: In Review
+status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 19:12'
+updated_date: '2026-07-17 19:16'
 labels:
   - search
   - rules
@@ -30,10 +30,10 @@ The Position halfmove clock counts plies, but search declares a draw and evaluat
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A halfmove clock of 99 does not trigger the fifty-move draw condition
-- [ ] #2 A halfmove clock of 100 triggers the draw condition
-- [ ] #3 Material evaluation is not incorrectly forced to zero at 50 plies
-- [ ] #4 Tests cover FEN positions immediately below, at, and above the threshold
+- [x] #1 A halfmove clock of 99 does not trigger the fifty-move draw condition
+- [x] #2 A halfmove clock of 100 triggers the draw condition
+- [x] #3 Material evaluation is not incorrectly forced to zero at 50 plies
+- [x] #4 Tests cover FEN positions immediately below, at, and above the threshold
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -76,4 +76,27 @@ Verification:
 - cargo test --workspace: passed (56 passed, 1 ignored)
 Known failures: none
 ---
+
+author: @codex
+created: 2026-07-17 19:16
+---
+Review attempt: 1
+Reviewed branch: task-10-fifty-move-rule
+Reviewed implementation: d19aaec7d53af14ad7277ed017d872b83c5f5e48
+Verdict: approved
+
+Verification:
+- cargo test -p engine fifty_move_rule_uses_halfmove_boundary: passed
+- cargo test -p engine material_evaluation_scales_over_one_hundred_halfmoves: passed
+- cargo fmt --check: passed
+- cargo test --workspace: passed (61 passed, 1 ignored)
+
+Acceptance criteria verified at halfmove clocks 99, 100, and 101; material evaluation remains nonzero at 50.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Applied a shared 100-halfmove threshold to search and game draw detection and aligned material scaling with that window. Verified boundary behavior at 99, 100, and 101 plies, nonzero evaluation at 50, formatting, and the full workspace test suite.
+<!-- SECTION:FINAL_SUMMARY:END -->
