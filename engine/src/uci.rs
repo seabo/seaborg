@@ -191,6 +191,11 @@ impl<'a> Parser<'a> {
         s.parse::<usize>().map_err(|_| Error::ExpectedNumber)
     }
 
+    fn parse_u64(&mut self) -> Result<u64, Error> {
+        let s = self.parse_string()?;
+        s.parse::<u64>().map_err(|_| Error::ExpectedNumber)
+    }
+
     fn parse_command(&mut self) -> PResult {
         match self.advance() {
             Some(tok) => match tok {
@@ -340,27 +345,27 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_time_control(&mut self) -> PResult {
-        let mut wtime: Option<usize> = None;
-        let mut btime: Option<usize> = None;
-        let mut winc: usize = 0;
-        let mut binc: usize = 0;
-        let mut moves_to_go: Option<usize> = None;
+        let mut wtime: Option<u64> = None;
+        let mut btime: Option<u64> = None;
+        let mut winc: u64 = 0;
+        let mut binc: u64 = 0;
+        let mut moves_to_go: Option<u64> = None;
 
         while self.peek().is_some() {
             match self.advance().unwrap() {
                 Token::Kw(Keyword::Wtime) => {
-                    wtime = Some(self.parse_integer()?);
+                    wtime = Some(self.parse_u64()?);
                 }
                 Token::Kw(Keyword::Btime) => {
-                    btime = Some(self.parse_integer()?);
+                    btime = Some(self.parse_u64()?);
                 }
                 Token::Kw(Keyword::Winc) => {
-                    winc = self.parse_integer()?;
+                    winc = self.parse_u64()?;
                 }
                 Token::Kw(Keyword::Binc) => {
-                    binc = self.parse_integer()?;
+                    binc = self.parse_u64()?;
                 }
-                Token::Kw(Keyword::MovesToGo) => moves_to_go = Some(self.parse_integer()?),
+                Token::Kw(Keyword::MovesToGo) => moves_to_go = Some(self.parse_u64()?),
                 _ => {
                     return Err(Error::UnexpectedToken);
                 }
@@ -395,7 +400,7 @@ impl<'a> Parser<'a> {
     fn parse_movetime(&mut self) -> PResult {
         self.advance().ok_or(Error::UnexpectedEnd)?;
 
-        let movetime = self.parse_integer()?;
+        let movetime = self.parse_u64()?;
         self.expect_end(Ok(Command::Go(TimingMode::MoveTime(movetime))))
     }
 
@@ -507,5 +512,33 @@ impl<'a> Token<'a> {
             "perft" => Token::Kw(Keyword::Perft),
             _ => Token::String(t),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::position::Player;
+
+    #[test]
+    fn parses_move_time_above_u32_max_without_narrowing() {
+        let command = Parser::parse("go movetime 4294967296").unwrap();
+
+        assert!(matches!(
+            command,
+            Command::Go(TimingMode::MoveTime(4_294_967_296))
+        ));
+    }
+
+    #[test]
+    fn parses_large_timed_control_values_without_narrowing() {
+        let command =
+            Parser::parse("go wtime 85899345900 btime 1000 winc 4294967296 binc 0 movestogo 20")
+                .unwrap();
+        let Command::Go(TimingMode::Timed(control)) = command else {
+            panic!("expected a timed go command");
+        };
+
+        assert_eq!(control.to_move_time(1, Player::WHITE), 8_589_934_441);
     }
 }
