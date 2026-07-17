@@ -1,11 +1,11 @@
 ---
 id: TASK-12
 title: Repair transposition-table reuse and mate-score semantics
-status: In Review
+status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 23:22'
+updated_date: '2026-07-17 23:45'
 labels:
   - search
   - tt
@@ -26,11 +26,11 @@ Search unconditionally clears the shared transposition table because of a known 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Starting a normal search does not unconditionally invalidate the shared transposition table
-- [ ] #2 New-game and explicit clear operations have documented ownership and generation behavior
-- [ ] #3 Mate scores are encoded and decoded relative to ply so transposed positions preserve mate distance
-- [ ] #4 Concurrent search workers do not invalidate one another through table generation changes
-- [ ] #5 Tests cover reuse across searches, explicit clear, transposed mate scores at different plies, and concurrent probes
+- [x] #1 Starting a normal search does not unconditionally invalidate the shared transposition table
+- [x] #2 New-game and explicit clear operations have documented ownership and generation behavior
+- [x] #3 Mate scores are encoded and decoded relative to ply so transposed positions preserve mate distance
+- [x] #4 Concurrent search workers do not invalidate one another through table generation changes
+- [x] #5 Tests cover reuse across searches, explicit clear, transposed mate scores at different plies, and concurrent probes
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -114,4 +114,36 @@ Verification:
 - cargo test --workspace: passed (engine lib 59 passed, 1 ignored; engine integration 31 passed; build_metadata 5 passed; doc-tests passed)
 Known failures: none
 ---
+
+author: @codex
+created: 2026-07-17 23:45
+---
+Review attempt: 2
+Reviewed branch: task-12-tt-reuse-mate-scores
+Reviewed implementation: de1ccb9f1092c9b4b9ba649a02b67452c37c61ed
+Base: 2c3a91b42c8810ca1897c4fc7675470aa4245ac0
+Verdict: approved
+
+Resolved REV-1-01: confirmed. Independently verified this engine scores mate position-relative — the checkmate leaf returns a constant Score::mate(0) (search.rs:716 and quiesce_evasions:905) and inc_mate accumulates distance-to-mate on unwind (search.rs:645,658,882,914), so a node's mate score is intrinsic to that position and invariant to the ply at which it is reached. The attempt-1 ply-relative (+ply/-ply) encoding was therefore a regression; the rework removed Score::to_tt/from_tt and all ply plumbing (grep confirms no remnants), restoring identity storage so a transposed position preserves its mate distance at any probe ply.
+
+Acceptance criteria (all proven):
+- AC#1: unconditional Search::run tt.clear() removed; searches_reuse_the_shared_table_until_the_owner_clears_it passes; warm-TT gives_correct_answers passes (former PVS-clear TODO is benign).
+- AC#2: clear_hash/new_game are documented owner ops; Table::clear doc describes generation semantics and worker prohibition; UCI ucinewgame + GameController reset wired; uci_new_game_is_an_owner_handled_hash_boundary passes.
+- AC#3: identity storage preserves mate distance across cross-ply transpositions (correct for position-relative scoring); mate_scores_are_stored_position_relative round-trip + warm-TT mate(5)/mate(7) exact distances pass.
+- AC#4: generation advances only via owner clear_hash/new_game; workers never advance it; UCI stop_search->finish_search->wait() and GameController cancel_search->handle.wait() join workers before advancing generation; concurrent_searches_do_not_invalidate_the_shared_generation and concurrent_probes_share_the_live_generation pass.
+- AC#5: reuse, explicit-clear, position-relative mate, and concurrent-probe/search tests present and passing.
+
+Immutability: base 2c3a91b is an ancestor of target de1ccb9; commits after target (bff8333) touch only the task file; worktree clean.
+
+Verification:
+- cargo fmt --check: passed
+- cargo test --workspace: passed (core 31; engine lib 59 passed, 1 ignored; build_metadata 5; doc-tests 1)
+- grep for to_tt/from_tt/ply-adjust remnants: none in engine/src
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Restored TT reuse and correct position-relative mate semantics. Removed the unconditional per-search tt.clear() so iterative-deepening iterations and concurrent workers reuse a warm shared table; added owner-only clear_hash/new_game (documented generation/ownership) wired into the UCI ucinewgame handler and GameController position reset, both of which stop and join active workers before advancing the shared generation. Reverted the attempt-1 Stockfish-style ply-relative TT mate encoding (removed Score::to_tt/from_tt and all ply plumbing) because this engine scores mate position-relative (constant Score::mate(0) leaf + inc_mate on unwind), so scores are stored verbatim and a transposed position preserves its mate distance at any ply. Verified: cargo fmt --check passed; cargo test --workspace passed (core 31; engine lib 59 passed, 1 ignored; build_metadata 5; doc-tests 1), including reuse, explicit-clear, position-relative mate round-trip, concurrent-probe/concurrent-search regressions and the warm-TT gives_correct_answers mate(5)/mate(7) suite.
+<!-- SECTION:FINAL_SUMMARY:END -->
