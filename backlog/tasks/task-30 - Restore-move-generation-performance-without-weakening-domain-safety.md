@@ -1,11 +1,11 @@
 ---
 id: TASK-30
 title: Restore move-generation performance without weakening domain safety
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-17 20:57'
-updated_date: '2026-07-17 21:29'
+updated_date: '2026-07-17 21:40'
 labels:
   - performance
   - safety
@@ -51,3 +51,32 @@ Move generation and perft regressed after the domain-safety work introduced at c
 4. Extend or preserve invalid-input regression coverage, then run formatting, workspace tests, and focused release checks.
 5. Run full idle-machine Criterion measurements on the implementation commit, update BENCHMARKS.md only if repeatable results justify it, and record confidence intervals in the review handoff.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented checked/unchecked boundary splits for Move construction, Position mutation, and internal Square offsets. Safe public constructors and mutation retain release-mode assertions; generated moves use crate-private or unsafe operations with explicit contracts. Added regression tests proving friendly captures and invalid castling/en-passant metadata are rejected before mutation. BENCHMARKS.md was not changed because the final measurements do not show a repeatable improvement over its baseline.
+
+Verification: cargo fmt --check passed; cargo test --workspace passed (33 core, 48 engine with 1 ignored, 5 metadata, 1 doctest); cargo test -p core --release passed (33 tests); Criterion on Apple M3 Pro with rustc/cargo 1.97.1 at d56d02aa0726d1cb079af8d41a9e087ebb1efa8b reported generate moves 187.41 ns (95% CI 186.50–188.45 ns) and perft 5 22.434 ms (95% CI 22.356–22.524 ms). Background desktop activity was present, so the measurements are conservative rather than a perfectly idle-machine sample.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @codex
+created: 2026-07-17 21:40
+---
+Implementation handoff
+Branch: task-30-movegen-performance
+Worktree: /Users/seabo/seaborg-worktrees/task-30-movegen-performance
+Base: c3bf61430f135456f9d3dddfa8faafacb8a270e2
+Implementation target: d56d02aa0726d1cb079af8d41a9e087ebb1efa8b
+Resolved findings: none
+Verification:
+- cargo fmt --check: passed
+- cargo test --workspace: passed
+- cargo test -p core --release: passed
+- cargo bench --bench perft --bench movegen: generate moves 187.41 ns (95% CI 186.50–188.45 ns); perft 5 22.434 ms (95% CI 22.356–22.524 ms)
+Known failures: A separate cargo test --workspace --release attempt reached all core safety tests successfully, then engine::search::tests::fifty_move_rule_uses_halfmove_boundary failed in engine/src/trace.rs with a divide-by-zero timing calculation; release workspace tests are not a repository-required check. Background desktop activity was visible during Criterion measurement.
+---
+<!-- COMMENTS:END -->
