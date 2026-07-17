@@ -1,11 +1,11 @@
 ---
 id: TASK-1.2
 title: Add the authoritative game controller
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-17 15:40'
-updated_date: '2026-07-17 18:15'
+updated_date: '2026-07-17 18:18'
 labels: []
 dependencies:
   - TASK-1.1
@@ -54,6 +54,8 @@ Implemented engine::game with an authoritative single-owner GameController, owne
 Verification so far: cargo fmt --check passes; all 8 game::tests pass; git diff --check passes. cargo test --workspace passes the core suite and all new controller tests, retaining only the two pre-existing engine failures already documented on TASK-1.1: search::tests::gives_correct_answers and tt::tests::gen_bound.
 
 Rework started for REV-1-01. Root cause confirmed: fa7e9b0 was based on 6e9502a and does not descend from the committed TASK-1.1 typed-search implementation.
+
+Resolved REV-1-01: merged the complete task-1.1-typed-engine-api branch (0625ec3), adapted GameController to optional completed search results and optional best moves, and added a regression test proving zero-time/incomplete outcomes do not mutate the game. Verification: cargo fmt --check passed; cargo test -p engine game::tests -- --nocapture passed 9/9; cargo test --workspace passed all affected tests and failed only tt::tests::gen_bound, reproduced identically on task-1.1-typed-engine-api (assertion gen < 64); git diff --check passed.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -79,5 +81,22 @@ Verification:
 - cargo test -p engine game::tests -- --nocapture: failed to compile with E0432/E0433
 - git merge-base --is-ancestor 6f42a3296cdd2a8400f88e94531d7e4d74e62e9b fa7e9b0eb00849d93b48d3c3e248772b16bd6f87: false
 - Handoff audit: 7f9c675 contains only task metadata, but no required Implementation handoff comment records the base and immutable target.
+---
+
+author: @codex
+created: 2026-07-17 18:18
+---
+Implementation handoff
+Branch: task-1.2-game-controller
+Worktree: /Users/seabo/seaborg-worktrees/task-1.2-game-controller
+Base: 4dd57abfdc18b0f70c4d6030e4ced0ef8c19b3ab
+Implementation target: 6290e1732fb94fff13ff7c90e1051254d3c18554
+Resolved findings: REV-1-01
+Verification:
+- cargo fmt --check: passed
+- cargo test -p engine game::tests -- --nocapture: passed (9 tests)
+- cargo test --workspace: all affected/controller tests passed; one baseline failure below
+- git diff --check: passed
+Known failures: tt::tests::gen_bound fails at engine/src/tt.rs:34 (assertion gen < 64); reproduced unchanged on task-1.1-typed-engine-api.
 ---
 <!-- COMMENTS:END -->
