@@ -1,11 +1,11 @@
 ---
 id: TASK-30
 title: Restore move-generation performance without weakening domain safety
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-17 20:57'
-updated_date: '2026-07-17 23:01'
+updated_date: '2026-07-17 23:10'
 labels:
   - performance
   - safety
