@@ -1,11 +1,11 @@
 ---
 id: TASK-27
 title: Add a reproducible engine strength-regression test script
-status: In Review
+status: Changes Requested
 assignee:
   - '@codex'
 created_date: '2026-07-17 18:54'
-updated_date: '2026-07-17 19:26'
+updated_date: '2026-07-17 19:32'
 labels: []
 dependencies: []
 references:
@@ -137,5 +137,26 @@ Implementation target: e044fd54e019efff8dbbd64c91d014cfb07a7605
 Resolved findings: REV-1-01
 Verification:
 - python3 -m unittest discover -s tools/strength -p 'test_*.py' -v: PASS (9 tests)\n- python3 tools/strength/strength_test.py: PASS (emits INFRASTRUCTURE ERROR and exits 3 as required)\n- cargo fmt --check: PASS\n- git diff --check: PASS\n- cargo test --workspace: FAIL only at pre-existing engine::tt::tests::gen_bound assertion gen < 64\nKnown failures: engine::tt::tests::gen_bound fails on recorded base dc8f6ce; TASK-27 changes no Rust sources, and current primary contains an independent later fix.
+---
+
+author: @codex
+created: 2026-07-17 19:32
+---
+Review attempt: 2
+Reviewed branch: task-27-strength-regression
+Reviewed implementation: e044fd54e019efff8dbbd64c91d014cfb07a7605
+Verdict: changes_requested
+
+REV-2-01 [P1] Post-setup infrastructure failures crash while printing the verdict
+Location: tools/strength/strength_test.py:297
+Impact: After the report has been initialized with SPRT configuration, any runner-output InfrastructureError before result fields are populated (including malformed/incomplete output, crash/forfeit detection, or a runner exceeding the cap) is caught and report.json records INFRASTRUCTURE ERROR, but the final print path treats the presence of the sprt object as proof that llr/results exist. It raises KeyError and the real process exits 1, not the documented infrastructure status 3. Automation therefore misclassifies exactly the fail-safe paths required by acceptance criteria 4 and 6, and acceptance criterion 10 lacks orchestration-level coverage of them.
+Reproduction: Mock a successful setup and runner execution returning malformed output, then call strength_test.run([]). The caught InfrastructureError writes report.json, prints the infrastructure verdict, and then raises KeyError: llr at line 299. This was reproduced against e044fd54 with the runner subprocess mocked to return CompletedProcess([], 0, "malformed runner output\\n", "").
+Expected: Every caught infrastructure failure completes without a secondary exception, prints the human-readable INFRASTRUCTURE ERROR verdict, preserves available artifacts/report data, and returns exit 3. Automated tests should exercise run() or the real entry point for representative post-setup malformed, incomplete, crash/forfeit, and nonzero-runner failures.
+
+Verification:
+- python3 -m unittest discover -s tools/strength -p test_*.py -v: PASS (9 tests; no post-setup run-path failure coverage)
+- mocked strength_test.run([]) with malformed runner output: FAIL, raises KeyError llr after writing the infrastructure report
+- cargo fmt --check: PASS
+- cargo test --workspace: FAIL only at pre-existing engine::tt::tests::gen_bound on the recorded base
 ---
 <!-- COMMENTS:END -->
