@@ -120,8 +120,8 @@ impl PackedMove {
             PackedMove(0)
         } else {
             let null = 1 << 15;
-            let orig = mov.orig().0 as u16;
-            let dest = (mov.dest().0 as u16) << 6;
+            let orig = mov.orig().index() as u16;
+            let dest = (mov.dest().index() as u16) << 6;
             let promo = match mov.promo_piece_type() {
                 Some(p) => ((p as u8 - 1) as u16) << 12,
                 None => 0,
@@ -135,8 +135,10 @@ impl PackedMove {
     pub fn to_move(&self, pos: &Position) -> Move {
         debug_assert!(!self.is_null());
 
-        let orig = Square((self.0 & ORIG_MASK) as u8);
-        let dest = Square(((self.0 & DEST_MASK) >> 6) as u8);
+        let orig = Square::try_from((self.0 & ORIG_MASK) as u8)
+            .expect("packed origin is masked to six bits");
+        let dest = Square::try_from(((self.0 & DEST_MASK) >> 6) as u8)
+            .expect("packed destination is masked to six bits");
         let promo = ((self.0 & PROMO_MASK) >> 12) as u8;
         let mut move_type = MoveType::empty();
         let promo_piece = if promo == 0 {

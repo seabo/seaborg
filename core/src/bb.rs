@@ -101,15 +101,16 @@ impl Bitboard {
         more_than_one(self.0)
     }
 
-    /// Returns the square for a given bitboard.
+    /// Returns the square for a bitboard containing exactly one set bit.
     ///
-    /// # Panics
-    ///
-    /// In debug mode, panics if more than one bit is set.
+    /// Returns `None` when the bitboard is empty or contains multiple set bits.
     #[inline(always)]
-    pub fn to_square(&self) -> Square {
-        debug_assert!(self.popcnt() == 1);
-        Square(self.bsf() as u8)
+    pub fn to_square(&self) -> Option<Square> {
+        if self.popcnt() == 1 {
+            Some(Square(self.bsf() as u8))
+        } else {
+            None
+        }
     }
 
     /// Returns a Bitboard with a single bit set, corresponding to the lowest set bit in the input.
@@ -123,12 +124,13 @@ impl Bitboard {
     /// Returns the `Square` and `Bitboard` of the least significant bit and removes
     /// that bit from the `Bitboard`.
     ///
-    /// # Safety
+    /// # Panics
     ///
     /// Panics if the `Bitboard` is empty. See [`Bitboard::pop_some_lsb_and_bit`] for a
     /// non-panicking version of the method.
     #[inline(always)]
     pub fn pop_lsb_and_bit(&mut self) -> (Square, Bitboard) {
+        assert!(self.is_not_empty(), "cannot pop an empty bitboard");
         let sq: Square = Square(self.bsf() as u8);
         *self &= *self - 1;
         (sq, sq.to_bb())
@@ -210,6 +212,19 @@ mod tests {
 
         let bb = Bitboard::empty();
         assert_eq!(bb.lsb(), Bitboard::empty());
+    }
+
+    #[test]
+    fn square_conversion_rejects_non_singleton_bitboards() {
+        assert_eq!(Bitboard::empty().to_square(), None);
+        assert_eq!(Bitboard::ALL.to_square(), None);
+        assert_eq!(Square::C4.to_bb().to_square(), Some(Square::C4));
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot pop an empty bitboard")]
+    fn direct_pop_rejects_an_empty_bitboard() {
+        Bitboard::empty().pop_lsb_and_bit();
     }
 
     #[test]

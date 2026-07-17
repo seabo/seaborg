@@ -55,7 +55,10 @@ impl<'engine> Search<'engine> {
             processed ^= from_set;
 
             if !(from_set & may_xray).is_empty() {
-                atta_def |= self.pos.attack_defend_sliding(occ, from_set.to_square()) & !processed;
+                let from = from_set
+                    .to_square()
+                    .expect("least valuable attacker must be a single square");
+                atta_def |= self.pos.attack_defend_sliding(occ, from) & !processed;
             }
 
             (attacker, from_set) = self.least_valuable_piece(atta_def, side);

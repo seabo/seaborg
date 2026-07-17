@@ -22,8 +22,7 @@ impl Board {
     ///
     #[inline]
     pub fn piece_at_sq(&self, sq: Square) -> Piece {
-        debug_assert!(sq.is_okay());
-        // SAFETY: board access is only performed for non-null moves and valid board squares.
+        // SAFETY: `Square`'s private representation guarantees an index in 0..64.
         unsafe { *self.arr.get_unchecked(sq.0 as usize) }
     }
 
@@ -31,9 +30,8 @@ impl Board {
     ///
     /// # Panics
     ///
-    /// In debug mode, panics if the passed `Square` is not valid.
+    /// This operation cannot receive an invalid square through the safe API.
     pub fn remove(&mut self, sq: Square) {
-        debug_assert!(sq.is_okay());
         self.arr[sq.0 as usize] = Piece::None;
     }
 
@@ -41,11 +39,9 @@ impl Board {
     ///
     /// # Panics
     ///
-    /// In debug mode, panics if the passed `Square` is not valid or `PieceType`
-    /// is `PieceType::None`.
+    /// Panics if `piece_ty` is `PieceType::None`.
     pub fn place(&mut self, sq: Square, player: Player, piece_ty: PieceType) {
-        debug_assert!(sq.is_okay());
-        debug_assert_ne!(piece_ty, PieceType::None);
+        assert_ne!(piece_ty, PieceType::None, "cannot place an empty piece");
         self.arr[sq.0 as usize] = Piece::make(player, piece_ty);
     }
 
@@ -125,5 +121,24 @@ impl<'a> IntoIterator for &'a Board {
 impl fmt::Display for Board {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.pretty_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[should_panic(expected = "cannot place an empty piece")]
+    fn board_rejects_empty_piece_placement() {
+        Board::new().place(Square::A1, Player::WHITE, PieceType::None);
+    }
+
+    #[test]
+    fn empty_bitboard_cannot_reach_board_indexing() {
+        let board = Board::new();
+        let square = crate::bb::Bitboard::empty().to_square();
+
+        assert_eq!(square.map(|sq| board.piece_at_sq(sq)), None);
     }
 }

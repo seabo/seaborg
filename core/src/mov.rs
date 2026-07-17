@@ -32,8 +32,8 @@ impl Move {
     /// Build a null move. Used for initialising MoveList arrays
     pub fn null() -> Self {
         Self {
-            orig: Square(64),
-            dest: Square(64),
+            orig: Square::A1,
+            dest: Square::A1,
             promo_piece_type: None,
             ty: MoveType::NULL,
         }
@@ -111,16 +111,46 @@ impl Move {
     /// and information about special moves like promotion, en
     /// passant and castling.
     ///
-    /// Note: if you pass a promotion piece and `true` for en
-    /// passant or castling, there will be undefined behaviour.
-    /// To save time, this method assumes the data passed is
-    /// already consistent and does no checks.
+    /// # Panics
+    ///
+    /// Panics when the move encoding is inconsistent: origin equals destination,
+    /// null is combined with another flag, incompatible special flags are combined,
+    /// or promotion metadata does not match the promotion flag.
     pub fn build(
         orig: Square,
         dest: Square,
         promo_piece_type: Option<PieceType>,
         ty: MoveType,
     ) -> Self {
+        assert_ne!(orig, dest, "a chess move must change squares");
+        assert!(!ty.is_empty(), "a move must have a type");
+        assert!(
+            !ty.contains(MoveType::NULL),
+            "use Move::null for null moves"
+        );
+        assert!(
+            !(ty.contains(MoveType::CASTLE)
+                && ty.intersects(MoveType::CAPTURE | MoveType::EN_PASSANT | MoveType::PROMOTION)),
+            "castling cannot be combined with capture, en passant, or promotion"
+        );
+        assert!(
+            !ty.contains(MoveType::EN_PASSANT) || ty.contains(MoveType::CAPTURE),
+            "en passant must be a capture"
+        );
+        assert_eq!(
+            ty.contains(MoveType::PROMOTION),
+            promo_piece_type.is_some(),
+            "promotion flag and piece must agree"
+        );
+        if let Some(piece) = promo_piece_type {
+            assert!(
+                matches!(
+                    piece,
+                    PieceType::Queen | PieceType::Rook | PieceType::Bishop | PieceType::Knight
+                ),
+                "invalid promotion piece"
+            );
+        }
         Self {
             orig,
             dest,
@@ -275,5 +305,17 @@ mod tests {
     #[test]
     fn undoable_move_is_64_bytes() {
         assert_eq!(mem::size_of::<UndoableMove>(), 64);
+    }
+
+    #[test]
+    #[should_panic(expected = "promotion flag and piece must agree")]
+    fn move_rejects_inconsistent_promotion_input() {
+        Move::build(Square::A7, Square::A8, None, MoveType::PROMOTION);
+    }
+
+    #[test]
+    #[should_panic(expected = "use Move::null for null moves")]
+    fn move_rejects_null_flag_in_general_constructor() {
+        Move::build(Square::A1, Square::A2, None, MoveType::NULL);
     }
 }
