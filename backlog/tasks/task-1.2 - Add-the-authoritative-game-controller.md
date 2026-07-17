@@ -1,11 +1,11 @@
 ---
 id: TASK-1.2
 title: Add the authoritative game controller
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-17 15:40'
-updated_date: '2026-07-17 18:35'
+updated_date: '2026-07-17 18:36'
 labels: []
 dependencies:
   - TASK-1.1
@@ -137,5 +137,22 @@ author: @codex
 created: 2026-07-17 18:33
 ---
 Rework started for REV-2-01 on the existing task branch and worktree.
+---
+
+author: @codex
+created: 2026-07-17 18:36
+---
+Implementation handoff
+Branch: task-1.2-game-controller
+Worktree: /Users/seabo/seaborg-worktrees/task-1.2-game-controller
+Base: 4dd57abfdc18b0f70c4d6030e4ced0ef8c19b3ab
+Implementation target: 8b430ee4be7c4420651463e8e8ca7ee744b85323
+Resolved findings: REV-2-01
+Verification:
+- cargo fmt --check: passed
+- cargo test -p engine game::tests -- --nocapture: passed (10 tests)
+- git diff --check: passed
+- cargo test --workspace --no-fail-fast: all controller and affected tests passed; one baseline failure below
+Known failures: tt::tests::gen_bound fails at engine/src/tt.rs:34 (assertion gen < 64); previously reproduced unchanged on task-1.1-typed-engine-api.
 ---
 <!-- COMMENTS:END -->
