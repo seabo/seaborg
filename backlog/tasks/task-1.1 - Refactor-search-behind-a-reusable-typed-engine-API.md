@@ -1,11 +1,11 @@
 ---
 id: TASK-1.1
 title: Refactor search behind a reusable typed engine API
-status: Changes Requested
+status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 15:39'
-updated_date: '2026-07-17 16:46'
+updated_date: '2026-07-17 18:06'
 labels: []
 dependencies: []
 documentation:
@@ -39,11 +39,10 @@ Decouple search execution and reporting from the current stdin/stdout UCI driver
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Introduce a public typed search lifecycle API with SearchLimit, SearchEvent, SearchResult/SearchOutcome, a cancellation token, and an asynchronous SearchHandle backed by the shared transposition table.
-2. Refactor Search reporting to emit typed progress/current-move events through a channel and return structured results, with no protocol printing in the search layer.
-3. Adapt the UCI driver to own/cancel active search handles and format typed events/outcomes into the existing info/bestmove text.
-4. Update internal callers and add focused tests for completion, cancellation, event contents, and UCI formatting.
-5. Run formatting and the full Rust workspace test suite, then record evidence and finalize the task.
+1. Model a search with no completed iteration or no legal move explicitly, while preserving terminal scores and valid completed results.
+2. Emit progress only after a fully completed iterative-deepening iteration and add regression tests for immediate cancellation, zero time, terminal positions, and cancellation event consistency.
+3. Update UCI outcome formatting so absent best moves use the protocol null move `0000`, then run focused tests and required workspace checks.
+4. Record each REV-1-* resolution, commit the immutable implementation target, and return the task to In Review with verification evidence.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
@@ -84,5 +83,11 @@ Expected: emit completed-iteration progress only inside the successful iteration
 Verification: cargo fmt --check passed; all 8 TASK-1.1-focused tests passed; git diff --check passed. cargo test --workspace retained the documented pre-existing failures search::tests::gives_correct_answers and tt::tests::gen_bound.
 
 Required handoff: resolve each REV-1-* finding on this task, record the resolving commit and tests, then return the task to In Review for a fresh full review.
+---
+
+author: @codex
+created: 2026-07-17 18:06
+---
+Rework started for REV-1-01, REV-1-02, and REV-1-03 on the existing task branch and worktree.
 ---
 <!-- COMMENTS:END -->
