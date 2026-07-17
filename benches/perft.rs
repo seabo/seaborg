@@ -1,7 +1,7 @@
 use core::init::init_globals;
 use core::position::Position;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use engine::search::perft::Perft;
+use engine::perft::Perft;
 
 fn run_perft(pos: &mut Position) {
     let _res = Perft::perft(pos, 5, false, false, false);
