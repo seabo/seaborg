@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 18:54'
-updated_date: '2026-07-17 18:57'
+updated_date: '2026-07-17 19:06'
 labels: []
 dependencies: []
 references:
@@ -58,5 +58,17 @@ The implementation should be practical on a dedicated or self-hosted machine. It
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Add a dependency-light Python orchestration tool with strict argument validation, executable hashing/identity capture, UCI preflight, pinned opening validation, deterministic cutechess command construction, and fail-closed output parsing/verdict mapping.\n2. Add a small repository-owned/versioned EPD opening suite with provenance and a baked checksum, plus authoritative paired-colour/equal-resource defaults and a visibly non-authoritative bounded smoke mode.\n3. Add automated unit tests using fake engines/runner transcripts to cover configuration, pairing, validation, parsing, verdict/exit mappings, caps, crashes, and malformed output without playing a full match.\n4. Document prerequisites, statistical contract/limitations, costs, invocation, artifacts, reruns, calibration, and immutable build/identity expectations.\n5. Run focused tests, cargo fmt --check, and cargo test --workspace; commit implementation and create the In Review handoff.
+1. Add a dependency-light Python orchestration tool with strict argument validation, executable hashing/identity capture, UCI preflight, pinned opening validation, deterministic cutechess command construction, and fail-closed output parsing/verdict mapping.
+2. Add a small repository-owned/versioned EPD opening suite with provenance and a baked checksum, plus authoritative paired-colour/equal-resource defaults and a visibly non-authoritative bounded smoke mode.
+3. Add automated unit tests using fake engines/runner transcripts to cover configuration, pairing, validation, parsing, verdict/exit mappings, caps, crashes, and malformed output without playing a full match.
+4. Document prerequisites, statistical contract/limitations, costs, invocation, artifacts, reruns, calibration, and immutable build/identity expectations.
+5. Run focused tests, cargo fmt --check, and cargo test --workspace; commit implementation and create the In Review handoff.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented a Python 3 cutechess-cli SPRT orchestrator, pinned CC0 opening suite, fail-closed UCI/runner validation, immutable JSON/log/PGN artifacts, smoke-mode gate isolation, unit fixtures, and operator/statistical documentation. No automatic change classification or invocation policy was added.
+
+Verification found the task branch original base fails engine::tt::tests::gen_bound (assertion gen < 64); TASK-27 modifies no Rust sources. The current primary branch contains an independent fix after TASK-27's recorded base.
+<!-- SECTION:NOTES:END -->
