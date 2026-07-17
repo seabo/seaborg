@@ -1,11 +1,11 @@
 ---
 id: TASK-9
 title: Correct quiescence search check and TT semantics
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 19:07'
+updated_date: '2026-07-17 19:14'
 labels:
   - search
   - correctness
@@ -41,3 +41,30 @@ Quiescence currently allows stand-pat behavior while in check and reuses transpo
 3. Add focused regression tests for quiet evasions, horizon mate, TT exact/lower/upper and insufficient-depth behavior, plus window invariants.
 4. Run formatting and workspace tests, commit the implementation, then record an immutable In Review handoff.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented complete legal evasion search at checked quiescence nodes, with mate detection and repetition/fifty-move termination. TT hits now apply only as non-PV alpha-beta bounds; stored search scores are never reused as static evaluation. Added focused regression coverage for quiet evasions, horizon mate, exact/lower/upper TT hits, null TT moves, and PV static-evaluation separation.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @codex
+created: 2026-07-17 19:14
+---
+Implementation handoff
+Branch: task-9-quiescence-semantics
+Worktree: /Users/seabo/seaborg-worktrees/task-9-quiescence-semantics
+Base: 4e7c7089431de8122541bc430ff200beb954f2e1
+Implementation target: b132b08e55530074d8cef14a19101024d7814dfa
+Resolved findings: none
+Verification:
+- cargo fmt --check: passed
+- cargo test -p engine quiescence: passed (4 tests)
+- cargo test -p engine gives_correct_answers: passed
+- cargo test --workspace: passed (including long-running perft; 1 ignored)
+Known failures: none
+---
+<!-- COMMENTS:END -->
