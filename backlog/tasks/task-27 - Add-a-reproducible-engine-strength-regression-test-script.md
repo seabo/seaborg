@@ -1,11 +1,11 @@
 ---
 id: TASK-27
 title: Add a reproducible engine strength-regression test script
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-17 18:54'
-updated_date: '2026-07-17 20:20'
+updated_date: '2026-07-17 20:22'
 labels: []
 dependencies: []
 references:
@@ -72,6 +72,8 @@ Implemented a Python 3 cutechess-cli SPRT orchestrator, pinned CC0 opening suite
 Verification found the task branch original base fails engine::tt::tests::gen_bound (assertion gen < 64); TASK-27 modifies no Rust sources. The current primary branch contains an independent fix after TASK-27's recorded base.
 
 Resolved REV-1-01: argparse now raises InfrastructureError for missing/invalid CLI values, so the real entry point emits INFRASTRUCTURE ERROR and exits 3. When --output is recoverable, parse failures preserve report.json. Added subprocess-level regression coverage for both missing arguments and invalid typed values.
+
+Resolved REV-2-01: infrastructure-error rendering now prints SPRT statistics only when a complete parsed result exists. Malformed, incomplete, crash-marked, and nonzero runner outcomes preserve report.json, emit INFRASTRUCTURE ERROR, and return exit 3 without a secondary exception. Added orchestration-level regression coverage for all representative failure paths.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -158,5 +160,18 @@ Verification:
 - mocked strength_test.run([]) with malformed runner output: FAIL, raises KeyError llr after writing the infrastructure report
 - cargo fmt --check: PASS
 - cargo test --workspace: FAIL only at pre-existing engine::tt::tests::gen_bound on the recorded base
+---
+
+author: @codex
+created: 2026-07-17 20:22
+---
+Implementation handoff
+Branch: task-27-strength-regression
+Worktree: /Users/seabo/seaborg-worktrees/task-27-strength-regression
+Base: dc8f6cef131c0cdfdb3feb3e914dd6e938c3a87d
+Implementation target: cdae8f24fe1c30892f2ad88923a4c6a7057f6dea
+Resolved findings: REV-2-01
+Verification:
+- python3 -m unittest discover -s tools/strength -p 'test_*.py' -v: PASS (11 tests)\n- cargo fmt --check: PASS\n- git diff --check: PASS\n- cargo test --workspace: FAIL only at pre-existing engine::tt::tests::gen_bound assertion gen < 64\nKnown failures: engine::tt::tests::gen_bound fails on recorded base dc8f6ce; TASK-27 changes no Rust sources, and current primary contains an independent later fix.
 ---
 <!-- COMMENTS:END -->
