@@ -67,25 +67,25 @@ pub enum SearchEvent {
     CurrentMove(CurrentMove),
 }
 
-/// The final result calculated by a search.
+/// The final result from a completed iterative-deepening iteration.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SearchResult {
     pub score: Score,
-    pub best_move: Move,
+    pub best_move: Option<Move>,
     pub depth: u8,
 }
 
-/// The reason a search stopped, together with its latest completed result.
+/// The reason a search stopped, together with its latest completed result, if any.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SearchOutcome {
-    Completed(SearchResult),
-    Cancelled(SearchResult),
+    Completed(Option<SearchResult>),
+    Cancelled(Option<SearchResult>),
 }
 
 impl SearchOutcome {
-    pub fn result(&self) -> &SearchResult {
+    pub fn result(&self) -> Option<&SearchResult> {
         match self {
-            Self::Completed(result) | Self::Cancelled(result) => result,
+            Self::Completed(result) | Self::Cancelled(result) => result.as_ref(),
         }
     }
 
@@ -393,7 +393,7 @@ impl<'engine> Search<'engine> {
         }
     }
 
-    pub fn run<T: Thread>(&mut self, d: u8) -> SearchResult {
+    pub fn run<T: Thread>(&mut self, d: u8) -> Option<SearchResult> {
         self.trace = Tracer::new();
 
         assert!(d > 0);
@@ -408,25 +408,22 @@ impl<'engine> Search<'engine> {
         self.trace.commence_search();
         self.search_depth = d;
 
-        let (score, best_move) = self.iterative_deepening::<T>(d);
+        let result = self.iterative_deepening::<T>(d);
         self.trace.end_search();
 
         assert_eq!(start_zob, self.pos.zobrist());
 
-        self.report_telemetry(d, score);
+        if let Some(result) = &result {
+            self.report_telemetry(d, result.score);
+        }
 
         self.history.reset();
 
-        SearchResult {
-            score,
-            best_move,
-            depth: self.depth_reached,
-        }
+        result
     }
 
-    fn iterative_deepening<T: Thread>(&mut self, depth: u8) -> (Score, Move) {
-        let mut score = Score::INF_N;
-        let mut best_move = Move::null();
+    fn iterative_deepening<T: Thread>(&mut self, depth: u8) -> Option<SearchResult> {
+        let mut result = None;
 
         for d in 1..=depth {
             if self.stopping() {
@@ -438,25 +435,19 @@ impl<'engine> Search<'engine> {
             let value = self.search::<T, Root>(Score::INF_N, Score::INF_P, d);
 
             if !self.stopping() {
-                score = value;
-                best_move = match self.pvt.pv().into_iter().next() {
-                    Some(mov) => *mov,
-                    None => {
-                        let entry = self.tt.probe(&self.pos).into_inner();
-                        let tt_entry = entry.read();
-                        assert!(!tt_entry.is_empty());
-                        tt_entry.mov.to_move(&self.pos)
-                    }
-                };
                 self.depth_reached = d;
-            }
-
-            if T::is_master() {
-                self.emit_progress(self.depth_reached, score);
+                result = Some(SearchResult {
+                    score: value,
+                    best_move: self.pvt.pv().next().copied(),
+                    depth: d,
+                });
+                if T::is_master() {
+                    self.emit_progress(d, value);
+                }
             }
         }
 
-        (score, best_move)
+        result
     }
 
     pub fn search<T: Thread, Node: NodeType>(
@@ -1218,11 +1209,11 @@ mod tests {
             let flag = AtomicBool::new(false);
             let tt = Table::new(16);
             let mut search = Search::new(pos, &flag, None, &tt);
-            let result = search.run::<Master>(depth);
+            let result = search.run::<Master>(depth).unwrap();
 
             assert!(lo <= result.score);
             assert!(result.score <= hi);
-            assert_eq!(result.best_move.to_uci_string(), bm);
+            assert_eq!(result.best_move.unwrap().to_uci_string(), bm);
         }
     }
 
@@ -1235,8 +1226,8 @@ mod tests {
         let outcome = search.wait();
 
         assert!(!outcome.was_cancelled());
-        assert_eq!(outcome.result().depth, 2);
-        assert!(!outcome.result().best_move.is_null());
+        assert_eq!(outcome.result().unwrap().depth, 2);
+        assert!(outcome.result().unwrap().best_move.is_some());
     }
 
     #[test]
@@ -1294,6 +1285,7 @@ mod tests {
 
         let engine = SearchEngine::new(1);
         let search = engine.start(Position::start_pos(), SearchLimit::Infinite);
+        let events = search.events().clone();
         search
             .events()
             .recv_timeout(Duration::from_secs(2))
@@ -1302,8 +1294,54 @@ mod tests {
         let outcome = search.wait();
 
         assert!(outcome.was_cancelled());
-        assert!(outcome.result().depth >= 1);
-        assert!(!outcome.result().best_move.is_null());
+        assert!(outcome.result().unwrap().depth >= 1);
+        assert!(outcome.result().unwrap().best_move.is_some());
+        assert!(events.try_iter().all(|event| match event {
+            SearchEvent::Progress(progress) => {
+                progress.principal_variation.len() <= usize::from(progress.depth)
+            }
+            SearchEvent::CurrentMove(_) => true,
+        }));
+    }
+
+    #[test]
+    fn zero_time_limit_has_no_fabricated_result() {
+        core::init::init_globals();
+
+        let engine = SearchEngine::new(1);
+        let search = engine.start(Position::start_pos(), SearchLimit::Time(Duration::ZERO));
+        let outcome = search.wait();
+
+        assert!(matches!(outcome, SearchOutcome::Completed(None)));
+    }
+
+    #[test]
+    fn immediate_cancellation_returns_an_explicit_optional_result() {
+        core::init::init_globals();
+
+        let engine = SearchEngine::new(1);
+        let search = engine.start(Position::start_pos(), SearchLimit::Infinite);
+        search.cancel();
+        let outcome = search.wait();
+
+        assert!(outcome.was_cancelled());
+        assert!(outcome
+            .result()
+            .is_none_or(|result| result.best_move.is_some()));
+    }
+
+    #[test]
+    fn terminal_position_returns_score_without_a_best_move() {
+        core::init::init_globals();
+
+        let position = Position::from_fen("7k/6Q1/6K1/8/8/8/8/8 b - - 0 1").unwrap();
+        let engine = SearchEngine::new(1);
+        let outcome = engine.start(position, SearchLimit::Depth(1)).wait();
+        let result = outcome.result().unwrap();
+
+        assert!(matches!(outcome, SearchOutcome::Completed(Some(_))));
+        assert_eq!(result.depth, 1);
+        assert_eq!(result.best_move, None);
     }
 
     #[test]

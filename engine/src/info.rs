@@ -32,7 +32,10 @@ pub fn format_search_event(event: &SearchEvent) -> String {
 
 /// Format a typed final search outcome as a UCI `bestmove` line.
 pub fn format_search_outcome(outcome: &SearchOutcome) -> String {
-    format!("bestmove {}", outcome.result().best_move)
+    match outcome.result().and_then(|result| result.best_move) {
+        Some(best_move) => format!("bestmove {}", best_move),
+        None => "bestmove 0000".to_owned(),
+    }
 }
 
 #[cfg(test)]
@@ -40,7 +43,6 @@ mod tests {
     use super::*;
     use crate::score::Score;
     use crate::search::{CurrentMove, SearchProgress, SearchResult};
-    use core::mov::Move;
     use core::position::Position;
     use std::time::Duration;
 
@@ -82,12 +84,30 @@ mod tests {
 
     #[test]
     fn formats_outcome_as_uci_bestmove() {
-        let outcome = SearchOutcome::Cancelled(SearchResult {
+        let mut position = Position::start_pos();
+        let best_move = position.make_uci_move("e2e4").unwrap();
+        let outcome = SearchOutcome::Completed(Some(SearchResult {
             score: Score::zero(),
-            best_move: Move::null(),
-            depth: 0,
-        });
+            best_move: Some(best_move),
+            depth: 1,
+        }));
 
-        assert_eq!(format_search_outcome(&outcome), "bestmove Null");
+        assert_eq!(format_search_outcome(&outcome), "bestmove e2e4");
+    }
+
+    #[test]
+    fn formats_absent_result_as_uci_null_move() {
+        assert_eq!(
+            format_search_outcome(&SearchOutcome::Cancelled(None)),
+            "bestmove 0000"
+        );
+        assert_eq!(
+            format_search_outcome(&SearchOutcome::Completed(Some(SearchResult {
+                score: Score::zero(),
+                best_move: None,
+                depth: 1,
+            }))),
+            "bestmove 0000"
+        );
     }
 }

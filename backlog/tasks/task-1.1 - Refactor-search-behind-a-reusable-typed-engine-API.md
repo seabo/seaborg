@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 15:39'
-updated_date: '2026-07-17 18:06'
+updated_date: '2026-07-17 18:11'
 labels: []
 dependencies: []
 documentation:
@@ -53,6 +53,12 @@ Implemented the reusable typed search lifecycle in engine::search: SearchEngine/
 Verification: cargo fmt --check passes. All 7 task-specific typed lifecycle/UCI formatting tests pass. Manual `--uci` smoke test with `go depth 2` emitted two info lines and `bestmove a2a3`. `cargo test --workspace` ran but the engine suite retains two pre-existing failures: search::tests::gives_correct_answers (alpha < beta debug assertion) and tt::tests::gen_bound (gen < 64 debug assertion). Both were reproduced against an untouched archive of HEAD; the task changes introduce no additional workspace failures.
 
 Final focused verification now covers 8 tests (including direct typed current-move event delivery); all pass. git diff --check also passes.
+
+Resolved REV-1-01: SearchOutcome now carries an optional completed iteration and SearchResult carries an optional best move, eliminating sentinel score/move results. Zero-time and immediate-cancellation regressions cover the boundary; UCI renders absent moves as `bestmove 0000`.
+
+Resolved REV-1-02: Terminal searches retain their typed score/depth while representing the absence of a legal best move explicitly, without probing an assumed transposition-table entry. The reviewer FEN is covered by a regression test.
+
+Resolved REV-1-03: Progress events are emitted only inside the fully completed iteration branch. Cancellation coverage asserts emitted PV lengths remain consistent with their reported depth.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
