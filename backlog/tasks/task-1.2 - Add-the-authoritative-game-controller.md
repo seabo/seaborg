@@ -1,11 +1,11 @@
 ---
 id: TASK-1.2
 title: Add the authoritative game controller
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-17 15:40'
-updated_date: '2026-07-17 18:40'
+updated_date: '2026-07-17 18:41'
 labels: []
 dependencies:
   - TASK-1.1
@@ -175,6 +175,12 @@ Verification:
 - cargo test -p engine game::tests -- --nocapture: passed (10/10)
 - cargo test --workspace --no-fail-fast: all controller and affected tests passed; failed only tt::tests::gen_bound
 - Baseline check on task-1.1-typed-engine-api: cargo test -p engine tt::tests::gen_bound -- --exact --nocapture failed identically
+---
+
+author: @codex
+created: 2026-07-17 18:41
+---
+Merged approved task branch task-1.2-game-controller into master. Approved implementation: 8b430ee4be7c4420651463e8e8ca7ee744b85323. Merge commit: 8f9e245f9ad52a22414d16bd5e5ccda780e81286.
 ---
 <!-- COMMENTS:END -->
 
