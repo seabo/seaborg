@@ -1,11 +1,11 @@
 ---
 id: TASK-1.1
 title: Refactor search behind a reusable typed engine API
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-17 15:39'
-updated_date: '2026-07-17 18:15'
+updated_date: '2026-07-17 18:17'
 labels: []
 dependencies: []
 documentation:
@@ -134,6 +134,12 @@ Verification:
 - baseline cargo test -p engine tt::tests::gen_bound -- --exact on master: same gen < 64 assertion failed
 
 Approval applies to immutable implementation f3a521d; commits after it contain task metadata only.
+---
+
+author: @codex
+created: 2026-07-17 18:17
+---
+Merged approved task branch task-1.1-typed-engine-api at 88e138e into master via merge commit 12d0324. Approved implementation target: f3a521d.
 ---
 <!-- COMMENTS:END -->
 
