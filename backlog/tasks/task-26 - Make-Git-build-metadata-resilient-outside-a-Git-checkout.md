@@ -1,9 +1,11 @@
 ---
 id: TASK-26
 title: Make Git build metadata resilient outside a Git checkout
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-17 18:19'
+updated_date: '2026-07-17 18:29'
 labels:
   - build
   - reliability
@@ -29,3 +31,12 @@ The workspace and engine build scripts currently panic when Git cannot be execut
 - [ ] #3 When commit metadata cannot be resolved or decoded, both build targets expose a deterministic, non-empty fallback without panicking
 - [ ] #4 Regression coverage exercises successful and failed metadata resolution without depending on the developer machine Git state
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Extract one shared build-metadata resolver used by the workspace and engine build scripts.
+2. Resolve `git rev-parse HEAD` only on successful command status and valid trimmed UTF-8, otherwise emit a documented deterministic non-empty fallback.
+3. Add machine-independent regression tests with injected command results covering success, missing Git/non-checkout failure, unsuccessful status, invalid UTF-8, and empty output.
+4. Run formatting and the full workspace test suite, then commit the implementation and record the immutable review handoff.
+<!-- SECTION:PLAN:END -->
