@@ -1,7 +1,7 @@
 ---
 id: TASK-10
 title: Apply the fifty-move rule at 100 plies
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
@@ -92,6 +92,12 @@ Verification:
 - cargo test --workspace: passed (61 passed, 1 ignored)
 
 Acceptance criteria verified at halfmove clocks 99, 100, and 101; material evaluation remains nonzero at 50.
+---
+
+author: @codex
+created: 2026-07-17 19:16
+---
+Merged approved branch into master at ab57ff99be1d3b439244ad191ea58f7a8c02db72. Reviewed implementation d19aaec7d53af14ad7277ed017d872b83c5f5e48.
 ---
 <!-- COMMENTS:END -->
 
