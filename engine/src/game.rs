@@ -179,15 +179,17 @@ impl GameController {
         let revision = active.revision;
         let outcome = active.handle.wait();
         changed = true;
-        if let SearchOutcome::Completed(result) = outcome {
+        if let SearchOutcome::Completed(Some(result)) = outcome {
+            let Some(best_move) = result.best_move else {
+                return changed;
+            };
             if revision == self.revision
                 && self.position.turn() != self.human_side
                 && self.status == GameStatus::Ongoing
-                && find_uci_move(&self.position, &result.best_move.to_uci_string())
-                    == Some(result.best_move)
+                && find_uci_move(&self.position, &best_move.to_uci_string()) == Some(best_move)
                 && id < self.next_search_id
             {
-                self.apply_move(result.best_move);
+                self.apply_move(best_move);
             }
         }
         changed
@@ -473,6 +475,17 @@ mod tests {
         game.reset(Player::BLACK);
         game.cancel_search();
         assert_eq!(game.snapshot().fen, core::position::START_POSITION);
+    }
+
+    #[test]
+    fn incomplete_search_outcomes_are_ignored() {
+        init_globals();
+        let mut game = GameController::new(Player::BLACK, SearchLimit::Time(Duration::ZERO), 1);
+        let original = game.snapshot().fen;
+        wait_for_engine(&mut game);
+        assert_eq!(game.snapshot().fen, original);
+        assert_eq!(game.snapshot().side_to_move, Player::WHITE);
+        assert_eq!(game.snapshot().engine_status, EngineStatus::Idle);
     }
 
     #[test]
