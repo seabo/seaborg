@@ -1,11 +1,11 @@
 ---
 id: TASK-9
 title: Correct quiescence search check and TT semantics
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 20:55'
+updated_date: '2026-07-17 20:57'
 labels:
   - search
   - correctness
@@ -47,6 +47,8 @@ Quiescence currently allows stand-pat behavior while in check and reuses transpo
 Implemented complete legal evasion search at checked quiescence nodes, with mate detection and repetition/fifty-move termination. TT hits now apply only as non-PV alpha-beta bounds; stored search scores are never reused as static evaluation. Added focused regression coverage for quiet evasions, horizon mate, exact/lower/upper TT hits, null TT moves, and PV static-evaluation separation.
 
 Resolved REV-1-01: quiescence now distinguishes signature-valid TT hits from clashes, retains clash slots only for replacement, and ignores their stored bounds. Added a forced one-slot collision regression test. Verification passed: cargo fmt --check; cargo test -p engine quiescence -- --nocapture (5 passed); cargo test --workspace (all passed, 1 ignored).
+
+Resolved review comment #1: quiescence now decides checkmate from the generated legal-evasion list before consulting the stop signal, so an abort with available evasions returns the current alpha bound. Added a deterministic abort regression. Verification passed: cargo fmt --check; cargo test -p engine quiescence -- --nocapture (6 passed); cargo test --workspace (all passed, 1 ignored).
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -111,5 +113,21 @@ author: @codex
 created: 2026-07-17 20:55
 ---
 Rework claim: resolving review comment #1, which reports a false mate score when quiescence stops before searching the first legal check evasion.
+---
+
+author: @codex
+created: 2026-07-17 20:57
+---
+Implementation handoff
+Branch: task-9-quiescence-semantics
+Worktree: /Users/seabo/seaborg-worktrees/task-9-quiescence-semantics
+Base: 4e7c7089431de8122541bc430ff200beb954f2e1
+Implementation target: 5cea705a7e781078d4c30f21b182cd71daa26636
+Resolved findings: review comment #1 (no REV ID assigned)
+Verification:
+- cargo fmt --check: passed
+- cargo test -p engine quiescence -- --nocapture: passed (6 tests)
+- cargo test --workspace: passed (1 ignored)
+Known failures: none
 ---
 <!-- COMMENTS:END -->
