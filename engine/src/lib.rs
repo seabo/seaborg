@@ -1,5 +1,6 @@
 pub mod engine;
 pub mod eval;
+pub mod game;
 pub mod history;
 pub mod info;
 pub mod killer;
