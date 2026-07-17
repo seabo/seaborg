@@ -5,13 +5,15 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 18:30'
+updated_date: '2026-07-17 18:36'
 labels:
   - uci
   - concurrency
 dependencies:
   - TASK-1.1
 references:
+  - engine/src/engine.rs
+modified_files:
   - engine/src/engine.rs
 priority: high
 type: bug
@@ -41,3 +43,11 @@ After the typed search lifecycle lands, the UCI driver still busy-polls commands
 3. Serialize active-search transitions so replacement, stop, quit, and input termination cancel and join deterministically while draining typed events and formatting outcomes consistently.
 4. Add integration-style driver tests for idle readiness, EOF, read failure, replacement search, stop, and quit; then run focused tests and required workspace checks.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Replaced the UCI busy-poll loop with blocking command receives while idle and crossbeam selection between commands and typed search events while active. EOF, read errors, and command-channel disconnection now converge on clean shutdown. Stop, replacement go, quit, and input termination synchronously cancel and join the active search before the next transition. Injected I/O enables driver-level coverage for EOF, read failure, idle readiness, natural completion, replacement, stop, and quit.
+
+Verification: cargo fmt --check passed; all 4 focused engine::tests passed; git diff --check passed. cargo test --workspace --no-fail-fast completed with 40 tests passing, 1 ignored, and the documented baseline failure tt::tests::gen_bound (assertion gen < 64).
+<!-- SECTION:NOTES:END -->
