@@ -1,11 +1,11 @@
 ---
 id: TASK-1.2
 title: Add the authoritative game controller
-status: In Review
+status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-17 15:40'
-updated_date: '2026-07-17 18:36'
+updated_date: '2026-07-17 18:40'
 labels: []
 dependencies:
   - TASK-1.1
@@ -29,12 +29,12 @@ Add a single-owner game session that coordinates the human side, live Position, 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The controller can create a game for either human side and publishes FEN, side to move, legal UCI moves, last move, move history, game status, and engine status
-- [ ] #2 Human moves are accepted only when legal, current, and made for the configured human side
-- [ ] #3 Search IDs, position revisions, and cancellation prevent stale commands or obsolete best moves from changing the active game
-- [ ] #4 The controller detects checkmate, stalemate, repetition, and applicable move-count draw conditions and does not search after game end
-- [ ] #5 Move history can be presented in SAN, including disambiguation, castling, captures, checks, checkmate, and promotion
-- [ ] #6 Tests cover normal play, illegal and stale commands, cancellation, undo or reset during search, castling, en passant, promotion, and terminal positions
+- [x] #1 The controller can create a game for either human side and publishes FEN, side to move, legal UCI moves, last move, move history, game status, and engine status
+- [x] #2 Human moves are accepted only when legal, current, and made for the configured human side
+- [x] #3 Search IDs, position revisions, and cancellation prevent stale commands or obsolete best moves from changing the active game
+- [x] #4 The controller detects checkmate, stalemate, repetition, and applicable move-count draw conditions and does not search after game end
+- [x] #5 Move history can be presented in SAN, including disambiguation, castling, captures, checks, checkmate, and promotion
+- [x] #6 Tests cover normal play, illegal and stale commands, cancellation, undo or reset during search, castling, en passant, promotion, and terminal positions
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -155,4 +155,31 @@ Verification:
 - cargo test --workspace --no-fail-fast: all controller and affected tests passed; one baseline failure below
 Known failures: tt::tests::gen_bound fails at engine/src/tt.rs:34 (assertion gen < 64); previously reproduced unchanged on task-1.1-typed-engine-api.
 ---
+
+author: @codex-review
+created: 2026-07-17 18:40
+---
+Review attempt: 3
+Reviewed branch: task-1.2-game-controller
+Reviewed implementation: 8b430ee4be7c4420651463e8e8ca7ee744b85323
+Verdict: approved
+
+All acceptance criteria are proven. REV-1-01 and REV-2-01 are resolved, including the regression that preserves the opening engine search after an empty undo.
+
+Verification:
+- git merge-base --is-ancestor 4dd57abf 8b430ee4: passed
+- git merge-base --is-ancestor 8b430ee4 92c09e5: passed
+- git diff 8b430ee4..92c09e5: task metadata only
+- git diff --check 4dd57abf..8b430ee4: passed
+- cargo fmt --check: passed
+- cargo test -p engine game::tests -- --nocapture: passed (10/10)
+- cargo test --workspace --no-fail-fast: all controller and affected tests passed; failed only tt::tests::gen_bound
+- Baseline check on task-1.1-typed-engine-api: cargo test -p engine tt::tests::gen_bound -- --exact --nocapture failed identically
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Added a transport-independent authoritative game controller with revision-checked commands, asynchronous search lifecycle protection, terminal detection, owned snapshots, and SAN history. Verified at implementation target 8b430ee4be7c4420651463e8e8ca7ee744b85323 with cargo fmt --check, 10 focused controller tests, git diff --check, and the workspace suite; the sole tt::tests::gen_bound failure reproduces unchanged on the TASK-1.1 dependency branch.
+<!-- SECTION:FINAL_SUMMARY:END -->
