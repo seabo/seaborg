@@ -1,11 +1,11 @@
 ---
 id: TASK-9
 title: Correct quiescence search check and TT semantics
-status: In Review
+status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 20:57'
+updated_date: '2026-07-17 21:00'
 labels:
   - search
   - correctness
@@ -26,11 +26,11 @@ Quiescence currently allows stand-pat behavior while in check and reuses transpo
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Positions in check never return a stand-pat cutoff and search all required legal evasions
-- [ ] #2 Transposition-table values are used in quiescence only when their stored depth and bound semantics justify the use
-- [ ] #3 A stored search score is not substituted for a static evaluation unless it was explicitly stored as one
-- [ ] #4 Quiescence never recurses with an empty or inverted alpha-beta window
-- [ ] #5 Regression tests cover quiet check evasions, checkmate at the horizon, and TT hit variants
+- [x] #1 Positions in check never return a stand-pat cutoff and search all required legal evasions
+- [x] #2 Transposition-table values are used in quiescence only when their stored depth and bound semantics justify the use
+- [x] #3 A stored search score is not substituted for a static evaluation unless it was explicitly stored as one
+- [x] #4 Quiescence never recurses with an empty or inverted alpha-beta window
+- [x] #5 Regression tests cover quiet check evasions, checkmate at the horizon, and TT hit variants
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -130,4 +130,27 @@ Verification:
 - cargo test --workspace: passed (1 ignored)
 Known failures: none
 ---
+
+author: @codex
+created: 2026-07-17 21:00
+---
+Review attempt: 3
+Reviewed branch: task-9-quiescence-semantics
+Reviewed implementation: 5cea705a7e781078d4c30f21b182cd71daa26636
+Verdict: approved
+
+All acceptance criteria are objectively verified. The prior abort defect is resolved by determining mate from legal-evasion list emptiness before honoring the stop signal; an aborted node with legal evasions returns the current alpha bound. TT clash, bound, static-evaluation separation, quiet-evasion, horizon-mate, window, and abort paths were reviewed across the full base-to-target diff.
+
+Verification:
+- git diff --check 4e7c7089431de8122541bc430ff200beb954f2e1..5cea705a7e781078d4c30f21b182cd71daa26636: passed
+- cargo fmt --check: passed
+- cargo test -p engine quiescence -- --nocapture: passed (6 tests)
+- cargo test --workspace: passed (all tests; 1 ignored)
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Corrected quiescence to search legal check evasions without stand pat, apply only signature-valid TT bounds, keep search scores separate from static evaluation, and preserve valid alpha-beta windows. Verified implementation 5cea705a7e781078d4c30f21b182cd71daa26636 with cargo fmt --check, six focused quiescence regressions, and cargo test --workspace.
+<!-- SECTION:FINAL_SUMMARY:END -->
