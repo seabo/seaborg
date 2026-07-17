@@ -271,23 +271,18 @@ impl<'a> WritableEntry<'a> {
     }
 
     /// Write data to the entry.
+    ///
+    /// Scores are stored verbatim. Mate scores are position-relative (see [`Score::from_i16`]), so
+    /// no ply adjustment is applied on the way in or out of the table.
     #[inline]
-    pub fn write(
-        &self,
-        pos: &Position,
-        score: Score,
-        depth: u8,
-        ply: u8,
-        bound: Bound,
-        mov: &Move,
-    ) {
+    pub fn write(&self, pos: &Position, score: Score, depth: u8, bound: Bound, mov: &Move) {
         let sig = (pos.zobrist().0 >> 48) as u16;
 
         let entry = Entry {
             sig,
             depth,
             gen_bound: GenBound::new(self.generation, bound),
-            score: score.to_tt(ply),
+            score,
             mov: PackedMove::from_move(mov),
         };
         self.slot.store(entry.pack(), Ordering::Relaxed);
@@ -295,10 +290,9 @@ impl<'a> WritableEntry<'a> {
 
     /// Read a consistent snapshot of the current entry.
     #[inline(always)]
-    pub fn read(&self, ply: u8) -> Entry {
-        let mut entry = Entry::unpack(self.slot.load(Ordering::Relaxed));
+    pub fn read(&self) -> Entry {
+        let entry = Entry::unpack(self.slot.load(Ordering::Relaxed));
         if entry.gen() == self.generation.0 {
-            entry.score = entry.score.from_tt(ply);
             entry
         } else {
             Entry::default()
@@ -581,34 +575,34 @@ mod tests {
         match tt.probe(&pos) {
             Hit(entry) => {
                 println!("hit; found entry {:?}", entry);
-                println!("reading entry {:?}", entry.read(0));
+                println!("reading entry {:?}", entry.read());
                 println!("writing entry while i have a shared reference!");
-                entry.write(&pos, Score::cp(23), 3, 0, Bound::Upper, &Move::null());
-                println!("reading from the _same_ reference {:?}", entry.read(0));
+                entry.write(&pos, Score::cp(23), 3, Bound::Upper, &Move::null());
+                println!("reading from the _same_ reference {:?}", entry.read());
             }
             Clash(entry) => {
                 println!("clash; found entry {:?}", entry);
             }
             Empty(entry) => {
                 println!("writing an entry");
-                entry.write(&pos, Score::cp(240), 5, 0, Bound::Exact, &Move::null());
+                entry.write(&pos, Score::cp(240), 5, Bound::Exact, &Move::null());
             }
         }
 
         match tt.probe(&pos) {
             Hit(entry) => {
                 println!("hit; found entry {:?}", entry);
-                println!("reading entry {:?}", entry.read(0));
+                println!("reading entry {:?}", entry.read());
                 println!("writing entry while i have a shared reference!");
-                entry.write(&pos, Score::cp(23), 10, 0, Bound::Lower, &Move::null());
-                println!("reading from the _same_ reference {:?}", entry.read(0));
+                entry.write(&pos, Score::cp(23), 10, Bound::Lower, &Move::null());
+                println!("reading from the _same_ reference {:?}", entry.read());
             }
             Clash(entry) => {
                 println!("clash; found entry {:?}", entry);
             }
             Empty(entry) => {
                 println!("writing an entry");
-                entry.write(&pos, Score::cp(240), 14, 0, Bound::Exact, &Move::null());
+                entry.write(&pos, Score::cp(240), 14, Bound::Exact, &Move::null());
             }
         }
     }
@@ -640,34 +634,37 @@ mod tests {
 
         let table = Table::new(1);
         let pos = Position::start_pos();
-        table.probe(&pos).into_inner().write(
-            &pos,
-            Score::cp(12),
-            4,
-            0,
-            Bound::Exact,
-            &Move::null(),
-        );
+        table
+            .probe(&pos)
+            .into_inner()
+            .write(&pos, Score::cp(12), 4, Bound::Exact, &Move::null());
         assert!(table.probe(&pos).is_hit());
 
         table.clear();
         assert!(!table.probe(&pos).is_hit());
-        assert!(table.probe(&pos).into_inner().read(0).is_empty());
+        assert!(table.probe(&pos).into_inner().read().is_empty());
     }
 
     #[test]
-    fn mate_scores_decode_relative_to_the_probe_ply() {
+    fn mate_scores_are_stored_position_relative() {
         core::init::init_globals();
 
+        // Mate scores are position-relative: the distance stored for a position is intrinsic to
+        // that position and must be returned unchanged however the position is later reached. A
+        // transposition that arrives at a different ply therefore preserves the mate distance.
         let table = Table::new(1);
         let pos = Position::start_pos();
         let entry = table.probe(&pos).into_inner();
-        entry.write(&pos, Score::mate(7), 8, 3, Bound::Exact, &Move::null());
-        assert_eq!(entry.read(3).score, Score::mate(7));
-        assert_eq!(entry.read(5).score, Score::mate(9));
 
-        entry.write(&pos, Score::mate(-7), 8, 3, Bound::Exact, &Move::null());
-        assert_eq!(entry.read(5).score, Score::mate(-9));
+        entry.write(&pos, Score::mate(7), 8, Bound::Exact, &Move::null());
+        assert_eq!(entry.read().score, Score::mate(7));
+
+        entry.write(&pos, Score::mate(-7), 8, Bound::Exact, &Move::null());
+        assert_eq!(entry.read().score, Score::mate(-7));
+
+        // Centipawn and infinity scores are likewise stored verbatim.
+        entry.write(&pos, Score::cp(42), 8, Bound::Exact, &Move::null());
+        assert_eq!(entry.read().score, Score::cp(42));
     }
 
     #[test]
@@ -676,14 +673,10 @@ mod tests {
 
         let table = std::sync::Arc::new(Table::new(1));
         let pos = Position::start_pos();
-        table.probe(&pos).into_inner().write(
-            &pos,
-            Score::cp(17),
-            4,
-            0,
-            Bound::Exact,
-            &Move::null(),
-        );
+        table
+            .probe(&pos)
+            .into_inner()
+            .write(&pos, Score::cp(17), 4, Bound::Exact, &Move::null());
 
         std::thread::scope(|scope| {
             for _ in 0..8 {
@@ -691,7 +684,7 @@ mod tests {
                 let pos = pos.clone();
                 scope.spawn(move || {
                     for _ in 0..1_000 {
-                        let entry = table.probe(&pos).into_inner().read(0);
+                        let entry = table.probe(&pos).into_inner().read();
                         assert_eq!(entry.score, Score::cp(17));
                     }
                 });
