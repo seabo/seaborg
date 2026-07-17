@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 18:55'
+updated_date: '2026-07-17 19:01'
 labels:
   - search
   - uci
@@ -41,3 +41,11 @@ Ordinary timed searches can panic after move 40 or underflow when the per-move a
 3. Add focused unit tests for late games, sub-buffer clocks, increments, explicit moves-to-go, and values above u32::MAX.
 4. Run formatting and the full Rust workspace test suite, commit the implementation, and record an immutable review handoff.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented explicit u64 protocol timing values and saturating allocation arithmetic. Late-game estimates use saturating subtraction with the existing 20-move floor; explicit movestogo values are honored, with zero safely treated as one. Added focused allocation and parser regression tests.
+
+Verification: cargo fmt --check passed; focused time and UCI tests passed (7 tests). cargo test --workspace ran 43 engine tests successfully and failed only pre-existing tt::tests::gen_bound at engine/src/tt.rs:34 (`gen < 64`), which is outside TASK-7 and is concurrently addressed by TASK-4.
+<!-- SECTION:NOTES:END -->

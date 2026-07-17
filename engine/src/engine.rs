@@ -74,10 +74,10 @@ where
                         TimingMode::Infinite => SearchLimit::Infinite,
                         TimingMode::Timed(tc) => {
                             let move_time = tc.to_move_time(pos.move_number(), pos.turn());
-                            SearchLimit::Time(Duration::from_millis(move_time.into()))
+                            SearchLimit::Time(Duration::from_millis(move_time))
                         }
                         TimingMode::MoveTime(time) => {
-                            SearchLimit::Time(Duration::from_millis(time as u64))
+                            SearchLimit::Time(Duration::from_millis(time))
                         }
                     };
                     active_search = Some(search_engine.start(pos.clone(), limit));
