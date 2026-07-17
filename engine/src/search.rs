@@ -853,34 +853,9 @@ impl<'engine> Search<'engine> {
         }
 
         let mut score: Score;
-        let mut move_count = 0;
-
         if in_check {
             let moves = self.pos.generate::<BasicMoveList, AllGen, Legal>();
-            for mov in &moves {
-                if self.stopping() {
-                    break;
-                }
-
-                move_count += 1;
-                self.pos.make_move(mov);
-                score = self.quiesce::<T, Node>(-beta, -alpha).neg().inc_mate();
-                self.pos.unmake_move();
-
-                if score >= beta {
-                    return beta;
-                }
-
-                if score > alpha {
-                    alpha = score;
-                }
-            }
-
-            return if move_count == 0 {
-                Score::mate(0)
-            } else {
-                alpha
-            };
+            return self.quiesce_evasions::<T, Node>(alpha, beta, &moves);
         }
 
         // Step 5. Loop through all the moves until no moves remain or a beta cutoff occurs.
@@ -902,6 +877,37 @@ impl<'engine> Search<'engine> {
                 if score > alpha {
                     alpha = score;
                 }
+            }
+        }
+
+        alpha
+    }
+
+    fn quiesce_evasions<T: Thread, Node: NodeType>(
+        &mut self,
+        mut alpha: Score,
+        beta: Score,
+        moves: &BasicMoveList,
+    ) -> Score {
+        if moves.is_empty() {
+            return Score::mate(0);
+        }
+
+        for mov in moves {
+            if self.stopping() {
+                break;
+            }
+
+            self.pos.make_move(mov);
+            let score = self.quiesce::<T, Node>(-beta, -alpha).neg().inc_mate();
+            self.pos.unmake_move();
+
+            if score >= beta {
+                return beta;
+            }
+
+            if score > alpha {
+                alpha = score;
             }
         }
 
@@ -1236,6 +1242,24 @@ mod tests {
         assert_eq!(
             search.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P),
             Score::mate(0)
+        );
+    }
+
+    #[test]
+    fn quiescence_abort_with_legal_evasions_is_not_checkmate() {
+        core::init::init_globals();
+
+        let position = Position::from_fen("k3r3/8/8/8/8/8/8/4K3 w - - 0 1").unwrap();
+        let moves = position.generate::<BasicMoveList, AllGen, Legal>();
+        assert!(!moves.is_empty());
+
+        let flag = AtomicBool::new(true);
+        let table = Table::new(1);
+        let mut search = Search::new(position, &flag, None, &table);
+
+        assert_eq!(
+            search.quiesce_evasions::<Master, Pv>(Score::INF_N, Score::INF_P, &moves),
+            Score::INF_N
         );
     }
 
