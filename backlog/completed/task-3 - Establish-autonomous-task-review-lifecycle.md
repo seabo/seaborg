@@ -1,11 +1,11 @@
 ---
 id: TASK-3
 title: Establish task implementation and review lifecycle
-status: In Review
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-17 16:43'
-updated_date: '2026-07-17 17:49'
+updated_date: '2026-07-17 18:36'
 labels: []
 dependencies: []
 references:
