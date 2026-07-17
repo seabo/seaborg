@@ -1,11 +1,11 @@
 ---
 id: TASK-9
 title: Correct quiescence search check and TT semantics
-status: In Review
+status: Changes Requested
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 19:14'
+updated_date: '2026-07-17 19:27'
 labels:
   - search
   - correctness
@@ -66,5 +66,27 @@ Verification:
 - cargo test -p engine gives_correct_answers: passed
 - cargo test --workspace: passed (including long-running perft; 1 ignored)
 Known failures: none
+---
+
+author: @codex
+created: 2026-07-17 19:27
+---
+Review attempt: 1
+Reviewed branch: task-9-quiescence-semantics
+Reviewed implementation: b132b08e55530074d8cef14a19101024d7814dfa
+Verdict: changes_requested
+
+REV-1-01 [P1] Quiescence consumes TT slot clashes as valid hits
+Location: engine/src/search.rs:798
+Impact: A position whose table index is occupied by a different signature reads that other position's exact/lower/upper score at lines 808-832. This can return an unrelated exact score, cause an invalid cutoff, or narrow the alpha-beta window from data that is not a TT hit, violating acceptance criterion 2 and leaving criterion 5 without clash coverage.
+Reproduction: Table::probe returns Probe::Clash when the indexed live entry has a different signature (engine/src/tt.rs:415-422). The Clash arm in quiesce returns the same WritableEntry as Hit, and WritableEntry::read validates only generation, not signature, so !entry.is_empty() is true and the bound is applied.
+Expected: Preserve the writable slot for replacement but gate score/bound use on Probe::Hit only; add a regression test proving a clash cannot affect a quiescence result.
+
+Verification:
+- git diff --check 4e7c7089431de8122541bc430ff200beb954f2e1..b132b08e55530074d8cef14a19101024d7814dfa: passed
+- cargo fmt --check: passed
+- cargo test -p engine quiescence -- --nocapture: passed (4 tests)
+- cargo test --workspace: passed (1 ignored)
+- Static control-flow reproduction against Table::probe and WritableEntry::read: confirmed clash entry is non-empty and its bound is consumed
 ---
 <!-- COMMENTS:END -->
