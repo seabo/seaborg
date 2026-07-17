@@ -1,11 +1,11 @@
 ---
 id: TASK-5
 title: Seal chess domain safety boundaries
-status: In Review
+status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 19:26'
+updated_date: '2026-07-17 19:29'
 labels:
   - safety
   - core
@@ -28,10 +28,10 @@ Public safe domain types currently allow invalid squares, moves, and positions t
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Invalid square values cannot be constructed through the normal safe API
-- [ ] #2 Safe Board, Move, and Position operations reject invalid input without undefined behavior in debug or release builds
-- [ ] #3 Any remaining unchecked operations are private or exposed through an unsafe API with a precise safety contract
-- [ ] #4 Regression tests cover invalid square, move, and blank-position inputs
+- [x] #1 Invalid square values cannot be constructed through the normal safe API
+- [x] #2 Safe Board, Move, and Position operations reject invalid input without undefined behavior in debug or release builds
+- [x] #3 Any remaining unchecked operations are private or exposed through an unsafe API with a precise safety contract
+- [x] #4 Regression tests cover invalid square, move, and blank-position inputs
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -118,4 +118,27 @@ Verification:
 - cargo test --workspace: core passed 25/25; engine passed 36/37 non-ignored tests
 Known failures: engine::tt::tests::gen_bound fails at engine/src/tt.rs:34 because the test passes generation 64 to existing debug_assert!(gen < 64); unchanged from the recorded base and prior implementation handoff.
 ---
+
+author: @codex
+created: 2026-07-17 19:29
+---
+Review attempt: 2
+Reviewed branch: task-5-domain-safety
+Reviewed implementation: 91c1dc33cacfdb274ff153f66fac743701574792
+Verdict: approved
+
+All acceptance criteria are proven. REV-1-01 is resolved: singleton conversion is checked, empty direct pop uses a release-active assertion, and safe composition cannot produce Square(64). The implementation target descends from the recorded base, and the only later commit before approval contains task handoff metadata.
+
+Verification:
+- cargo fmt --all --check: passed
+- cargo test -p core: passed (25 unit tests, 1 compile-fail doctest)
+- cargo test -p core --release: passed (25 unit tests, 1 compile-fail doctest)
+- cargo test --workspace: core passed; engine passed 36/37 non-ignored tests, with only unchanged baseline engine::tt::tests::gen_bound failing
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Sealed Square construction and arithmetic, hardened Board, Move, Position, and Bitboard boundaries, and added invalid-input regressions. Review verified implementation 91c1dc33cacfdb274ff153f66fac743701574792 with cargo fmt --all --check, cargo test -p core, and cargo test -p core --release; cargo test --workspace has only the unchanged baseline engine::tt::tests::gen_bound failure.
+<!-- SECTION:FINAL_SUMMARY:END -->
