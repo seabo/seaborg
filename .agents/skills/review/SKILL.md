@@ -38,6 +38,16 @@ target, not only the latest fix. Check:
 - Repository-required formatting, tests, and focused verification.
 - Scope discipline and accidental unrelated changes.
 
+When the diff may affect move generation or search hot paths, run the speed
+benchmarks and compare against `BENCHMARKS.md`. Because that baseline is locked
+to specific hardware and toolchain, compare relatively rather than against its
+absolute thresholds: confirm the machine is reasonably idle (no competing test
+or build processes, sustained idle period), then run
+`cargo bench --bench perft --bench movegen` on both the recorded base commit and
+the implementation target on the same machine, and judge the delta between them.
+Treat a repeatable regression beyond the `BENCHMARKS.md` thresholds as a blocking
+finding; treat differences within Criterion's confidence interval as noise.
+
 Distinguish patch-introduced defects from pre-existing failures while still
 identifying baseline behavior that makes an acceptance criterion unprovable.
 
