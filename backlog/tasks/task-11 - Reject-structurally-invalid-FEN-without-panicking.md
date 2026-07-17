@@ -1,9 +1,11 @@
 ---
 id: TASK-11
 title: Reject structurally invalid FEN without panicking
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-17 17:14'
+updated_date: '2026-07-17 19:07'
 labels:
   - core
   - fen
@@ -30,3 +32,11 @@ FEN parsing can accept ranks with the wrong width and can construct positions wi
 - [ ] #3 Invalid structural input never reaches State or Zobrist initialization
 - [ ] #4 Regression tests cover short and long final ranks, empty boards, missing kings, and duplicate kings
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Add explicit structural FEN validation for every rank and exactly one king per side before Position construction.
+2. Add regression tests for short/long final ranks, empty and missing-king boards, duplicate kings, and valid parsing.
+3. Run focused tests plus cargo fmt --check and cargo test --workspace, then commit an immutable implementation and record the review handoff.
+<!-- SECTION:PLAN:END -->
