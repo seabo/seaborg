@@ -1,11 +1,11 @@
 ---
 id: TASK-8
 title: Make the UCI driver event loop blocking and EOF safe
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 18:41'
+updated_date: '2026-07-17 18:42'
 labels:
   - uci
   - concurrency
@@ -86,6 +86,18 @@ Verification:
 - cargo test --workspace --no-fail-fast: TASK-8 coverage passed; 40 tests passed, 1 ignored, with the documented pre-existing tt::tests::gen_bound failure
 - git diff --check 46aa66ed04ba91d9526114dd01c5f06fe5668ee4..1a3f4be19ea783038905d954c153927bd7f303d1: passed
 - immutable target validation: base is an ancestor and post-target commit changes only TASK-8 handoff metadata
+---
+
+author: @codex
+created: 2026-07-17 18:42
+---
+Merged into master at 4acfdde09c53b5ec74eda793256c6204e02681f0. Post-merge verification: cargo fmt --check passed; cargo test -p engine engine::tests -- --nocapture passed (4 tests).
+---
+
+author: @codex
+created: 2026-07-17 18:42
+---
+Correction: the actual TASK-8 merge commit on master is ced9de7bab11149f0e20b6678ac1a46edd08185a.
 ---
 <!-- COMMENTS:END -->
 
