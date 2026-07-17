@@ -788,18 +788,18 @@ impl<'engine> Search<'engine> {
         }
 
         // Step 2. Load transposition table entry.
-        let tt_entry = {
+        let (tt_entry, tt_hit) = {
             use super::tt::Probe::*;
             match self.tt.probe(&self.pos) {
                 Hit(entry) => {
                     self.trace.hash_hit();
-                    entry
+                    (entry, true)
                 }
                 Clash(entry) => {
                     self.trace.hash_clash();
-                    entry
+                    (entry, false)
                 }
-                Empty(entry) => entry,
+                Empty(entry) => (entry, false),
             }
         };
 
@@ -810,7 +810,7 @@ impl<'engine> Search<'engine> {
             // A quiescence node has depth zero, so results from quiescence or any deeper main
             // search are sufficiently deep. The stored score remains an alpha-beta bound; it is
             // never a replacement for the position's static evaluation.
-            if !entry.is_empty() {
+            if tt_hit && !entry.is_empty() {
                 match entry.bound() {
                     Bound::Exact => {
                         return entry.score;
@@ -1283,6 +1283,34 @@ mod tests {
 
         assert_eq!(
             search.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P),
+            Score::zero()
+        );
+    }
+
+    #[test]
+    fn quiescence_ignores_tt_slot_clashes() {
+        core::init::init_globals();
+
+        let position = Position::from_fen("7k/8/8/8/8/8/8/K7 w - - 0 1").unwrap();
+        let clashing_position = Position::from_fen("7k/8/8/8/8/8/8/K7 b - - 0 1").unwrap();
+        let flag = AtomicBool::new(false);
+        let table = Table::new(0);
+        assert_eq!(table.capacity_entries(), 1);
+        table.probe(&clashing_position).into_inner().write(
+            &clashing_position,
+            Score::cp(300),
+            8,
+            Bound::Exact,
+            &Move::null(),
+        );
+        assert!(matches!(
+            table.probe(&position),
+            super::super::tt::Probe::Clash(_)
+        ));
+        let mut search = Search::new(position, &flag, None, &table);
+
+        assert_eq!(
+            search.quiesce::<Master, NonPv>(Score::cp(-1), Score::zero()),
             Score::zero()
         );
     }
