@@ -1,7 +1,7 @@
 ---
 id: TASK-7
 title: Make time-control allocation overflow safe
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
@@ -49,3 +49,24 @@ Implemented explicit u64 protocol timing values and saturating allocation arithm
 
 Verification: cargo fmt --check passed; focused time and UCI tests passed (7 tests). cargo test --workspace ran 43 engine tests successfully and failed only pre-existing tt::tests::gen_bound at engine/src/tt.rs:34 (`gen < 64`), which is outside TASK-7 and is concurrently addressed by TASK-4.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @codex
+created: 2026-07-17 19:01
+---
+Implementation handoff
+Branch: task-7-overflow-safe-time-control
+Worktree: /Users/seabo/seaborg-worktrees/task-7-overflow-safe-time-control
+Base: ff4276b3b26928053f042776231fc6a9e8d4c163
+Implementation target: 27cb863518265f4fd78858e8344434ebe4d439a7
+Resolved findings: none
+Verification:
+- cargo fmt --check: passed
+- cargo test -p engine time::tests: passed (5 tests)
+- cargo test -p engine uci::tests: passed (2 tests)
+- cargo test --workspace: 43 engine tests passed; one known unrelated failure below
+Known failures: tt::tests::gen_bound fails at engine/src/tt.rs:34 because the base implementation supplies a generation >= 64; this is outside TASK-7 and is being addressed by TASK-4.
+---
+<!-- COMMENTS:END -->
