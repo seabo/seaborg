@@ -18,22 +18,45 @@ pub enum Bound {
     Lower,
 }
 
-/// A single byte, packing information about the aging generation of an entry, and what bound it
-/// represents.
-// TODO: make `Generation(u8)` an actual type wrapping `u8`.
+/// A live transposition-table generation.
+///
+/// Zero is excluded because the packed entry representation reserves it for empty slots. The
+/// remaining six-bit values are the live generations used by the table.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct Generation(u8);
+
+impl Generation {
+    const FIRST: Self = Self(1);
+    const LAST: Self = Self(63);
+
+    fn next(self) -> Option<Self> {
+        (self != Self::LAST).then(|| Self(self.0 + 1))
+    }
+}
+
+impl TryFrom<u8> for Generation {
+    type Error = &'static str;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        if (Self::FIRST.0..=Self::LAST.0).contains(&value) {
+            Ok(Self(value))
+        } else {
+            Err("generation must be in 1..=63")
+        }
+    }
+}
+
+/// A single byte packing an entry's generation and score bound.
+///
+/// A raw zero byte represents an empty entry. Live entries are constructed with a checked
+/// [`Generation`], so their generation bits cannot alias empty or exceed the six-bit range.
 #[derive(Copy, Clone, Debug, Default)]
 pub struct GenBound(u8);
 
 impl GenBound {
-    /// Create a `GenerationBound` from its raw parts.
-    ///
-    /// Since a `Bound` consumes 2 bits, we pack the generation number into the remaining 6 bits -
-    /// therefore, a generation can be any number 0-63. If a larger number than 63 is passed, the
-    /// remaining bits will be dropped and lost.
-    pub fn from_raw_parts(gen: u8, bound: Bound) -> Self {
-        debug_assert!(gen < 64);
-
-        let v = (gen << 2) ^ bound as u8;
+    /// Pack a valid live generation with its bound.
+    pub fn new(generation: Generation, bound: Bound) -> Self {
+        let v = (generation.0 << 2) | bound as u8;
         Self(v)
     }
 
@@ -235,13 +258,13 @@ impl Entry {
 #[derive(Debug)]
 pub struct WritableEntry<'a> {
     slot: &'a AtomicU64,
-    generation: u8,
+    generation: Generation,
 }
 
 impl<'a> WritableEntry<'a> {
     /// Create a `WritableEntry` from an atomic table slot.
     #[inline]
-    fn new(slot: &'a AtomicU64, generation: u8) -> Self {
+    fn new(slot: &'a AtomicU64, generation: Generation) -> Self {
         Self { slot, generation }
     }
 
@@ -253,7 +276,7 @@ impl<'a> WritableEntry<'a> {
         let entry = Entry {
             sig,
             depth,
-            gen_bound: GenBound::from_raw_parts(self.generation, bound),
+            gen_bound: GenBound::new(self.generation, bound),
             score,
             mov: PackedMove::from_move(mov),
         };
@@ -264,7 +287,7 @@ impl<'a> WritableEntry<'a> {
     #[inline(always)]
     pub fn read(&self) -> Entry {
         let entry = Entry::unpack(self.slot.load(Ordering::Relaxed));
-        if entry.gen() == self.generation {
+        if entry.gen() == self.generation.0 {
             entry
         } else {
             Entry::default()
@@ -305,26 +328,48 @@ impl Table {
         Table {
             data: v.into_boxed_slice(),
             mask: entries - 1,
-            generation: AtomicU8::new(1),
+            generation: AtomicU8::new(Generation::FIRST.0),
         }
     }
 
     /// Clear the transposition table.
     pub fn clear(&self) {
-        let previous = self
-            .generation
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |generation| {
-                Some(if generation == 63 { 1 } else { generation + 1 })
-            })
-            .expect("generation update cannot fail");
-
-        // Old entries are ignored by generation, so normal clears are O(1). On wrap, physically
-        // clear the table to prevent entries from 62 searches ago becoming visible again.
-        if previous == 63 {
-            for slot in &*self.data {
-                slot.store(Entry::default().pack(), Ordering::Relaxed);
+        loop {
+            let current = self.current_generation();
+            if let Some(next) = current.next() {
+                if self
+                    .generation
+                    .compare_exchange(current.0, next.0, Ordering::Relaxed, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    return;
+                }
+            } else {
+                // Generation 1 may still be present from the previous cycle. Physically remove
+                // every entry before publishing generation 1 again, so it can never become live
+                // merely because the six-bit epoch identifier wrapped.
+                for slot in &*self.data {
+                    slot.store(Entry::default().pack(), Ordering::Relaxed);
+                }
+                if self
+                    .generation
+                    .compare_exchange(
+                        Generation::LAST.0,
+                        Generation::FIRST.0,
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                    )
+                    .is_ok()
+                {
+                    return;
+                }
             }
         }
+    }
+
+    fn current_generation(&self) -> Generation {
+        Generation::try_from(self.generation.load(Ordering::Relaxed))
+            .expect("table generation invariant violated")
     }
 
     fn size_from_mb(size: usize) -> usize {
@@ -360,7 +405,7 @@ impl Table {
     pub fn probe<'tt>(&'tt self, pos: &Position) -> Probe<'tt> {
         let idx = self.idx(pos.zobrist().0);
         let sig = (pos.zobrist().0 >> 48) as u16;
-        let generation = self.generation.load(Ordering::Relaxed);
+        let generation = self.current_generation();
 
         // SAFETY: `idx` is masked by `capacity - 1`, and the capacity is a non-zero power of two.
         let slot = unsafe { self.data.get_unchecked(idx) };
@@ -368,7 +413,7 @@ impl Table {
         let writable_entry = WritableEntry::new(slot, generation);
 
         use Probe::*;
-        if entry.gen() != generation {
+        if entry.gen() != generation.0 {
             Empty(writable_entry)
         } else if sig == entry.sig {
             Hit(writable_entry)
@@ -384,10 +429,10 @@ impl Table {
     /// This is used in info reports to the GUI via UCI, among others.
     pub fn hashfull(&self) -> u16 {
         let mut c = 0;
-        let generation = self.generation.load(Ordering::Relaxed);
+        let generation = self.current_generation();
         for e in &self.data[0..1000] {
             let entry = Entry::unpack(e.load(Ordering::Relaxed));
-            if entry.gen() != generation {
+            if entry.gen() != generation.0 {
                 c += 1;
             }
         }
@@ -466,16 +511,32 @@ mod tests {
         assert_eq!(Table::size_from_mb(1024), 134217728);
     }
 
-    #[rustfmt::skip]
     #[test]
-    fn gen_bound() {
-        assert_eq!(GenBound::from_raw_parts(62, Bound::Lower).to_raw_parts(), (62, Bound::Lower));
-        assert_eq!(GenBound::from_raw_parts(3, Bound::Exact).to_raw_parts(), (3, Bound::Exact));
-        assert_eq!(GenBound::from_raw_parts(41, Bound::Upper).to_raw_parts(), (41, Bound::Upper));
-        assert_eq!(GenBound::from_raw_parts(2, Bound::Upper).to_raw_parts(), (2, Bound::Upper));
-        assert_eq!(GenBound::from_raw_parts(0, Bound::Lower).to_raw_parts(), (0, Bound::Lower));
-        assert_eq!(GenBound::from_raw_parts(64, Bound::Lower).to_raw_parts(), (0, Bound::Lower));
-        assert_eq!(GenBound::from_raw_parts(63, Bound::Upper).to_raw_parts(), (63, Bound::Upper));
+    fn generations_reject_empty_and_out_of_range_values() {
+        assert_eq!(Generation::try_from(0), Err("generation must be in 1..=63"));
+        assert_eq!(
+            Generation::try_from(64),
+            Err("generation must be in 1..=63")
+        );
+        assert_eq!(
+            Generation::try_from(u8::MAX),
+            Err("generation must be in 1..=63")
+        );
+    }
+
+    #[test]
+    fn gen_bound_distinguishes_empty_and_live_generations() {
+        assert_eq!(GenBound::default().to_raw_parts(), (0, Bound::Exact));
+
+        for raw_generation in [1, 2, 41, 62, 63] {
+            let generation = Generation::try_from(raw_generation).unwrap();
+            for bound in [Bound::Exact, Bound::Upper, Bound::Lower] {
+                assert_eq!(
+                    GenBound::new(generation, bound).to_raw_parts(),
+                    (raw_generation, bound)
+                );
+            }
+        }
     }
 
     #[test]
@@ -543,7 +604,7 @@ mod tests {
         let entry = Entry {
             sig: 0x9abc,
             depth: 42,
-            gen_bound: GenBound::from_raw_parts(37, Bound::Lower),
+            gen_bound: GenBound::new(Generation::try_from(37).unwrap(), Bound::Lower),
             score: Score::mate(-7),
             mov: PackedMove(0xd321),
         };
@@ -574,5 +635,26 @@ mod tests {
         table.clear();
         assert!(!table.probe(&pos).is_hit());
         assert!(table.probe(&pos).into_inner().read().is_empty());
+    }
+
+    #[test]
+    fn generation_wrap_physically_clears_entries_before_reusing_first() {
+        let table = Table::new(1);
+        let stale_entry = Entry {
+            gen_bound: GenBound::new(Generation::FIRST, Bound::Exact),
+            ..Entry::default()
+        };
+        table.data[0].store(stale_entry.pack(), Ordering::Relaxed);
+        table
+            .generation
+            .store(Generation::LAST.0, Ordering::Relaxed);
+
+        table.clear();
+
+        assert_eq!(table.current_generation(), Generation::FIRST);
+        assert_eq!(
+            table.data[0].load(Ordering::Relaxed),
+            Entry::default().pack()
+        );
     }
 }
