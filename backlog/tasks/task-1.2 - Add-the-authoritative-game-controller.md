@@ -1,11 +1,11 @@
 ---
 id: TASK-1.2
 title: Add the authoritative game controller
-status: Done
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-17 15:40'
-updated_date: '2026-07-17 16:28'
+updated_date: '2026-07-17 17:38'
 labels: []
 dependencies:
   - TASK-1.1
