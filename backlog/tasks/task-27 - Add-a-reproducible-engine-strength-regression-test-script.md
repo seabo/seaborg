@@ -1,11 +1,11 @@
 ---
 id: TASK-27
 title: Add a reproducible engine strength-regression test script
-status: In Review
+status: Changes Requested
 assignee:
   - '@codex'
 created_date: '2026-07-17 18:54'
-updated_date: '2026-07-17 20:22'
+updated_date: '2026-07-17 21:58'
 labels: []
 dependencies: []
 references:
@@ -173,5 +173,34 @@ Implementation target: cdae8f24fe1c30892f2ad88923a4c6a7057f6dea
 Resolved findings: REV-2-01
 Verification:
 - python3 -m unittest discover -s tools/strength -p 'test_*.py' -v: PASS (11 tests)\n- cargo fmt --check: PASS\n- git diff --check: PASS\n- cargo test --workspace: FAIL only at pre-existing engine::tt::tests::gen_bound assertion gen < 64\nKnown failures: engine::tt::tests::gen_bound fails on recorded base dc8f6ce; TASK-27 changes no Rust sources, and current primary contains an independent later fix.
+---
+
+author: @georgeseabridge
+created: 2026-07-17 21:58
+---
+Review attempt: 3
+Reviewed branch: task-27-strength-regression
+Reviewed implementation: cdae8f24fe1c30892f2ad88923a4c6a7057f6dea
+Verdict: changes_requested
+
+REV-3-01 [P1] cutechess `-games 1 -repeat 2` cannot deliver colour-reversed paired openings
+Location: tools/strength/strength_test.py build_command (-rounds/-games/-repeat)
+Impact: The command builds `-rounds max_games -games 1 -repeat 2`. `-repeat 2` asks cutechess to replay each opening with colours reversed, but `-games 1` allows only one game per encounter, so the second (colour-reversed) game of each pair is never played. This contradicts docs/strength-testing.md ("each opening twice with colours reversed"), the report field `paired_colour_reversal: true`, and acceptance criterion 2 (paired self-play with colours reversed). It also makes the effective game count ambiguous versus the documented `max_games`. No test detects this because build_command is only asserted structurally.
+Expected: Emit a runner invocation that genuinely plays each opening as a colour-reversed pair (conventionally `-games 2 -repeat 2` with `-rounds` counting pairs), keep the total-game/cap accounting consistent with the docs and `max_games`, and add a test asserting the paired/colour-reversal configuration. Please verify the final flags against the installed cutechess-cli version.
+
+REV-3-02 [P2] No success-path (PASS / exit 0) test for run()
+Location: tools/strength/test_strength_test.py
+Impact: Tests cover verdict()/parse_result() in isolation and every run() failure path, but nothing drives run() with a mocked runner returning a PASS log and return code 0 to assert exit 0 and that report.json records verdict PASS with populated results/sprt. The happy path (report assembly, sprt.update, results serialization) is therefore untested end-to-end, and acceptance criterion 10 asks for verdict/exit-code mapping coverage. assert_run_failure is already almost the required harness.
+Expected: Add a run()-level test that mocks setup and a PASS runner output at return code 0, asserting exit 0, verdict PASS in report.json, and populated results/sprt.
+
+REV-3-03 [P3] Dead code / unused fields
+Location: tools/strength/strength_test.py write_report(); Result.forfeits/Result.crashes
+Impact: write_report() is defined but never called — run() inlines mkdir + report.json writes at both sites. Result.forfeits and Result.crashes always serialize as 0 because parse_result raises on failure words rather than counting them, giving a misleading impression in report.json.
+Expected: Remove write_report() (or use it to de-duplicate the two write sites), and either populate or drop forfeits/crashes (or document them as reserved).
+
+Verification:
+- python3 -m unittest discover -s tools/strength -p 'test_*.py': PASS (11 tests)
+- shasum -a 256 tools/strength/openings-v1.epd: PASS (matches embedded SUITE_SHA256 eca44927b4cabdaa96cb9ab24a66c54e7c7444ac1c3e28d97b4436c110c4e275)
+Note: REV-1-01 and REV-2-01 confirmed resolved. The pre-existing engine::tt::tests::gen_bound failure on the recorded base is unrelated to this diff (no Rust sources changed).
 ---
 <!-- COMMENTS:END -->
