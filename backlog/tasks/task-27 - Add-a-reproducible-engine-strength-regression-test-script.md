@@ -1,9 +1,11 @@
 ---
 id: TASK-27
 title: Add a reproducible engine strength-regression test script
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-17 18:54'
+updated_date: '2026-07-17 18:56'
 labels: []
 dependencies: []
 references:
