@@ -1,11 +1,11 @@
 ---
 id: TASK-3
 title: Establish task implementation and review lifecycle
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-17 16:43'
-updated_date: '2026-07-17 17:43'
+updated_date: '2026-07-17 17:49'
 labels: []
 dependencies: []
 references:
@@ -60,5 +60,33 @@ Restored check_active_branches=true. Backlog.md 1.48.0 is the latest release. Th
 
 Validation: both skills pass the official quick_validate.py validator; generated openai.yaml metadata references $implement and $review; backlog config reports active-branch checks enabled; backlog doctor reports no duplicate IDs; /api/task/TASK-1.1 reproduces HTTP 409 and /api/tasks/duplicates returns no findings; git diff --check passes.
 
-Handoff constraint: this shared checkout contains unrelated Rust and Backlog changes from earlier sessions. TASK-3 remains In Progress until its lifecycle artifacts can be isolated and committed for independent review without disturbing those changes.
+Bootstrap handoff: the lifecycle infrastructure was committed directly to master as 0ffca7d3e0015f7346137d69b9163f81ad9b0558 with explicit user authorization because TASK-3 predates the branch/worktree convention it establishes. Future task processing follows the dedicated task branch model.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @codex
+created: 2026-07-17 17:48
+---
+Implementation handoff
+Branch: master (TASK-3 bootstrap exception)
+Worktree: /Users/seabo/seaborg
+Base: b6ba5d869f928f5a3388fc6c7102f9dfb569e5fe
+Implementation target: 0ffca7d48f3cf16000df0a06a99802c125e1a2aa
+Resolved findings: none
+Verification:
+- skill-creator quick_validate.py for implement: passed
+- skill-creator quick_validate.py for review: passed
+- backlog config get checkActiveBranches: true
+- backlog doctor: no duplicate task IDs
+- git diff --check: passed
+Known failures: Backlog.md 1.48.0 task detail returns HTTP 409 under active-branch scanning; upstream issue #783 documents the regression.
+---
+
+author: @codex
+created: 2026-07-17 17:49
+---
+Handoff correction: the full implementation target SHA is 0ffca7d3e0015f7346137d69b9163f81ad9b0558. This supersedes the incorrectly expanded SHA in comment #1.
+---
+<!-- COMMENTS:END -->
