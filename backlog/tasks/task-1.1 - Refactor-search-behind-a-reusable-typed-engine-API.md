@@ -1,11 +1,11 @@
 ---
 id: TASK-1.1
 title: Refactor search behind a reusable typed engine API
-status: In Review
+status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-17 15:39'
-updated_date: '2026-07-17 18:11'
+updated_date: '2026-07-17 18:15'
 labels: []
 dependencies: []
 documentation:
@@ -29,11 +29,11 @@ Decouple search execution and reporting from the current stdin/stdout UCI driver
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Callers can start a search from a Position with a depth, time, or infinite limit and receive a typed final outcome
-- [ ] #2 Iterative-deepening progress, score, nodes, NPS, principal variation, and current-move information are available as typed events rather than being printed by Search
-- [ ] #3 A running search can be cancelled and reports an outcome that distinguishes completion from cancellation
-- [ ] #4 UCI mode formats the typed events into its existing `info` and `bestmove` output without a behavior regression
-- [ ] #5 Tests cover completed search, cancellation, event delivery, and UCI output formatting
+- [x] #1 Callers can start a search from a Position with a depth, time, or infinite limit and receive a typed final outcome
+- [x] #2 Iterative-deepening progress, score, nodes, NPS, principal variation, and current-move information are available as typed events rather than being printed by Search
+- [x] #3 A running search can be cancelled and reports an outcome that distinguishes completion from cancellation
+- [x] #4 UCI mode formats the typed events into its existing `info` and `bestmove` output without a behavior regression
+- [x] #5 Tests cover completed search, cancellation, event delivery, and UCI output formatting
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -115,4 +115,30 @@ Verification:
 - cargo test --workspace --no-fail-fast: 21 engine tests passed, 1 ignored; one known baseline failure
 Known failures: tt::tests::gen_bound asserts gen < 64, previously documented as pre-existing.
 ---
+
+author: @codex-reviewer
+created: 2026-07-17 18:15
+---
+Review attempt: 2
+Reviewed branch: task-1.1-typed-engine-api
+Reviewed implementation: f3a521d
+Verdict: approved
+
+Resolved findings verified: REV-1-01, REV-1-02, REV-1-03.
+
+Verification:
+- cargo fmt --check: passed
+- focused typed API, cancellation, terminal-position, current-move delivery, and UCI formatting tests: passed
+- git diff --check 4dd57ab..f3a521d: passed
+- cargo test --workspace --no-fail-fast: 22 engine tests passed, 1 ignored; tt::tests::gen_bound failed
+- baseline cargo test -p engine tt::tests::gen_bound -- --exact on master: same gen < 64 assertion failed
+
+Approval applies to immutable implementation f3a521d; commits after it contain task metadata only.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Introduced a reusable typed asynchronous search API with depth, time, and infinite limits; structured progress/current-move events; explicit completion and cancellation outcomes; and UCI adapter formatting. Verified implementation f3a521d with cargo fmt --check, focused lifecycle/terminal/cancellation/UCI tests, git diff --check, and cargo test --workspace --no-fail-fast (22 engine tests passed, 1 ignored; baseline tt::tests::gen_bound failure reproduced on master).
+<!-- SECTION:FINAL_SUMMARY:END -->
