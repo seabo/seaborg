@@ -1,11 +1,11 @@
 ---
 id: TASK-5
 title: Seal chess domain safety boundaries
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 19:02'
+updated_date: '2026-07-17 19:03'
 labels:
   - safety
   - core
@@ -50,3 +50,24 @@ Sealed `Square` behind a private external representation with checked raw conver
 
 Workspace verification note: `cargo test --workspace` passed all core tests and 36/37 non-ignored engine tests; pre-existing `engine::tt::tests::gen_bound` fails because the test deliberately passes generation 64 to a function with `debug_assert!(gen < 64)`. The same contradictory test and assertion are present at the base commit.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @codex
+created: 2026-07-17 19:03
+---
+Implementation handoff
+Branch: task-5-domain-safety
+Worktree: /Users/seabo/seaborg-worktrees/task-5-domain-safety
+Base: ff4276b3b26928053f042776231fc6a9e8d4c163
+Implementation target: 68dfdba
+Resolved findings: none
+Verification:
+- cargo fmt --all --check: passed
+- cargo test -p core --release: passed (22 unit tests, 1 compile-fail doctest)
+- cargo test -p engine --lib tt::tests::packed_entry_round_trips: passed
+- cargo test --workspace: core passed 21/21; engine passed 36/37 non-ignored tests
+Known failures: engine::tt::tests::gen_bound fails at engine/src/tt.rs:34 because the base test passes generation 64 to existing debug_assert!(gen < 64); unchanged from base.
+---
+<!-- COMMENTS:END -->
