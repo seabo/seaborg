@@ -89,6 +89,12 @@ created: 2026-07-17 19:12
 ---
 Merged approved task branch task-6-memory-safe-movelists into master at f78173d403ca4e25c4f181cdf924004f6c6171c9. Post-merge verification: cargo fmt --check passed; cargo test -p core movelist::tests passed (4 tests); cargo test --release -p core movelist::tests passed (4 tests).
 ---
+
+author: @codex
+created: 2026-07-17 19:12
+---
+Correction to merge metadata: TASK-6 was merged by commit 887bc59 (Merge task-6-memory-safe-movelists). Commit f78173d is the subsequent concurrent TASK-7 merge and is not TASK-6's merge commit.
+---
 <!-- COMMENTS:END -->
 
 ## Final Summary
