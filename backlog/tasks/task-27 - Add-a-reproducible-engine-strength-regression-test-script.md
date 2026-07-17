@@ -1,11 +1,11 @@
 ---
 id: TASK-27
 title: Add a reproducible engine strength-regression test script
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-17 18:54'
-updated_date: '2026-07-17 19:06'
+updated_date: '2026-07-17 19:07'
 labels: []
 dependencies: []
 references:
@@ -72,3 +72,25 @@ Implemented a Python 3 cutechess-cli SPRT orchestrator, pinned CC0 opening suite
 
 Verification found the task branch original base fails engine::tt::tests::gen_bound (assertion gen < 64); TASK-27 modifies no Rust sources. The current primary branch contains an independent fix after TASK-27's recorded base.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @codex
+created: 2026-07-17 19:07
+---
+Implementation handoff
+Branch: task-27-strength-regression
+Worktree: /Users/seabo/seaborg-worktrees/task-27-strength-regression
+Base: dc8f6cef131c0cdfdb3feb3e914dd6e938c3a87d
+Implementation target: 613ba0ca7a5c7f6c84b542d7cc53bdf0e64e954f
+Resolved findings: none
+Verification:
+- python3 -m unittest discover -s tools/strength -p 'test_*.py' -v: PASS (7 tests)
+- cargo fmt --check: PASS
+- git diff --cached --check: PASS
+- sha256sum tools/strength/openings-v1.epd: PASS (embedded checksum eca44927b4cabdaa96cb9ab24a66c54e7c7444ac1c3e28d97b4436c110c4e275)
+- cargo test --workspace: FAIL on pre-existing engine::tt::tests::gen_bound assertion gen < 64
+Known failures: engine::tt::tests::gen_bound fails on recorded base dc8f6ce; TASK-27 changes no Rust sources, and current primary contains an independent later fix.
+---
+<!-- COMMENTS:END -->
