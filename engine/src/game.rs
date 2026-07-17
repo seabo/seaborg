@@ -227,6 +227,7 @@ impl GameController {
 
     fn replace_position(&mut self, position: Position, human_side: Player) {
         self.cancel_search();
+        self.search_engine.new_game();
         self.position = position;
         self.human_side = human_side;
         self.history.clear();
@@ -238,6 +239,9 @@ impl GameController {
     fn cancel_search(&mut self) {
         if let Some(search) = self.active_search.take() {
             search.handle.cancel();
+            // New-game table invalidation must not race a detached worker which can subsequently
+            // probe and write into the freshly published generation.
+            search.handle.wait();
         }
     }
 

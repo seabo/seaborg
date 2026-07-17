@@ -82,6 +82,12 @@ where
                     };
                     active_search = Some(search_engine.start(pos.clone(), limit));
                 }
+                DriverEvent::Input(Ok(Input::Command(Command::UciNewGame))) => {
+                    if let Some(search) = active_search.take() {
+                        stop_search(search, &mut output);
+                    }
+                    search_engine.new_game();
+                }
                 DriverEvent::Input(Ok(Input::Command(command))) => {
                     handle_command(command, &mut pos, &mut output);
                 }
@@ -278,6 +284,14 @@ mod tests {
     fn replacement_stop_and_quit_are_serialized() {
         let (output, errors) = run_script("go infinite\ngo depth 1\nstop\ngo infinite\nquit\n");
         assert_eq!(output.matches("bestmove ").count(), 3);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn uci_new_game_is_an_owner_handled_hash_boundary() {
+        let (output, errors) = run_script("ucinewgame\nisready\nquit\n");
+        assert!(output.contains("readyok"));
+        assert!(!output.contains("UciNewGame: not yet implemented"));
         assert!(errors.is_empty());
     }
 

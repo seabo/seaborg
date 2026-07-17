@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 21:40'
+updated_date: '2026-07-17 21:44'
 labels:
   - search
   - tt
@@ -41,3 +41,13 @@ Search unconditionally clears the shared transposition table because of a known 
 3. Add regression tests for sequential reuse, explicit/new-game invalidation, mate scores probed at different plies, and concurrent workers retaining the same generation.
 4. Run focused tests, cargo fmt --check, and cargo test --workspace; commit implementation and record the immutable In Review handoff.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Removed per-search generation advancement and made SearchEngine owners responsible for explicit clear/new-game boundaries. UCI new-game and GameController resets now stop active work before advancing the shared generation. TT reads/writes encode and decode mate scores using the caller’s ply in both main and quiescence search paths. Added sequential reuse, explicit clear, new-game handling, cross-ply mate, concurrent probe, and concurrent search regressions.
+
+Validation passed:
+- cargo fmt --check
+- cargo test --workspace
+<!-- SECTION:NOTES:END -->

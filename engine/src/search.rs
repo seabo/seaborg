@@ -124,6 +124,20 @@ impl SearchEngine {
         }
     }
 
+    /// Invalidate the shared hash at an explicit administrative boundary.
+    ///
+    /// Callers own this operation and must ensure no active searches need the current generation.
+    pub fn clear_hash(&self) {
+        self.table.clear();
+    }
+
+    /// Begin a new game with a fresh transposition-table generation.
+    ///
+    /// Normal searches reuse the current generation; only the session owner starts a new one.
+    pub fn new_game(&self) {
+        self.clear_hash();
+    }
+
     /// Start searching a cloned position on a background thread.
     pub fn start(&self, position: Position, limit: SearchLimit) -> SearchHandle {
         if let SearchLimit::Depth(depth) = limit {
@@ -401,10 +415,6 @@ impl<'engine> Search<'engine> {
         // Some bookeeping and prep.
         let start_zob = self.pos.zobrist();
 
-        // TODO: shouldn't have to do this. There is a bug somewhere. It seems to have something to
-        // do with the PVS returning immediately from tt stored moves.
-        self.tt.clear();
-
         self.trace.commence_search();
         self.search_depth = d;
 
@@ -493,7 +503,7 @@ impl<'engine> Search<'engine> {
             use super::tt::Probe::*;
             match self.tt.probe(&self.pos) {
                 Hit(entry) => {
-                    let e = entry.read();
+                    let e = entry.read(draft);
                     if e.mov.is_null() {
                         (entry, None)
                     } else {
@@ -518,7 +528,7 @@ impl<'engine> Search<'engine> {
 
         // Step 4. Check for early cutoff.
         if !Node::pv() && tt_move {
-            let entry = tt_entry.read();
+            let entry = tt_entry.read(draft);
 
             if !entry.is_empty() && entry.depth >= depth {
                 match entry.bound() {
@@ -549,7 +559,7 @@ impl<'engine> Search<'engine> {
 
         // Step 5. Straight to quiescence search if depth <= 0.
         if depth == 0 {
-            let score = self.quiesce::<T, Node>(alpha, beta);
+            let score = self.quiesce::<T, Node>(alpha, beta, draft);
             if score == Score::mate(0) {
                 self.pvt.pv_leaf_at(0);
             }
@@ -564,7 +574,7 @@ impl<'engine> Search<'engine> {
         // When eval is very low, check with quiescence whether it has any hope of raising alpha. If
         // not, return a fail low.
         if should_razor(depth, eval, alpha) {
-            let value = self.quiesce::<Master, NonPv>(alpha - Score::cp(1), alpha);
+            let value = self.quiesce::<Master, NonPv>(alpha - Score::cp(1), alpha, draft);
             if value < alpha {
                 return value;
             }
@@ -716,6 +726,7 @@ impl<'engine> Search<'engine> {
             &self.pos,
             best_value,
             depth,
+            draft,
             if best_value >= beta {
                 debug_assert!(
                     !best_move.is_null()
@@ -769,7 +780,12 @@ impl<'engine> Search<'engine> {
     }
 
     /// The quiescence search.
-    fn quiesce<T: Thread, Node: NodeType>(&mut self, mut alpha: Score, mut beta: Score) -> Score {
+    fn quiesce<T: Thread, Node: NodeType>(
+        &mut self,
+        mut alpha: Score,
+        mut beta: Score,
+        ply: u8,
+    ) -> Score {
         self.trace.visit_q_node();
 
         debug_assert!(!Node::root());
@@ -807,7 +823,7 @@ impl<'engine> Search<'engine> {
 
         // Step 3. Check for early TT cutoff.
         if !Node::pv() {
-            let entry = tt_entry.read();
+            let entry = tt_entry.read(ply);
 
             // A quiescence node has depth zero, so results from quiescence or any deeper main
             // search are sufficiently deep. The stored score remains an alpha-beta bound; it is
@@ -857,7 +873,7 @@ impl<'engine> Search<'engine> {
         let mut score: Score;
         if in_check {
             let moves = self.pos.generate::<BasicMoveList, AllGen, Legal>();
-            return self.quiesce_evasions::<T, Node>(alpha, beta, &moves);
+            return self.quiesce_evasions::<T, Node>(alpha, beta, &moves, ply);
         }
 
         // Step 5. Loop through all the moves until no moves remain or a beta cutoff occurs.
@@ -869,7 +885,10 @@ impl<'engine> Search<'engine> {
                 }
 
                 self.pos.make_move(mov);
-                score = self.quiesce::<T, Node>(-beta, -alpha).neg().inc_mate();
+                score = self
+                    .quiesce::<T, Node>(-beta, -alpha, ply.saturating_add(1))
+                    .neg()
+                    .inc_mate();
                 self.pos.unmake_move();
 
                 if score >= beta {
@@ -890,6 +909,7 @@ impl<'engine> Search<'engine> {
         mut alpha: Score,
         beta: Score,
         moves: &BasicMoveList,
+        ply: u8,
     ) -> Score {
         if moves.is_empty() {
             return Score::mate(0);
@@ -901,7 +921,10 @@ impl<'engine> Search<'engine> {
             }
 
             self.pos.make_move(mov);
-            let score = self.quiesce::<T, Node>(-beta, -alpha).neg().inc_mate();
+            let score = self
+                .quiesce::<T, Node>(-beta, -alpha, ply.saturating_add(1))
+                .neg()
+                .inc_mate();
             self.pos.unmake_move();
 
             if score >= beta {
@@ -1243,7 +1266,7 @@ mod tests {
         let table = Table::new(1);
         let mut search = Search::new(position, &flag, None, &table);
 
-        let score = search.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P);
+        let score = search.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P, 0);
 
         assert_eq!(score, Score::cp(-495));
         assert!(search.trace.q_nodes_visited() > 1);
@@ -1259,7 +1282,7 @@ mod tests {
         let mut search = Search::new(position, &flag, None, &table);
 
         assert_eq!(
-            search.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P),
+            search.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P, 0),
             Score::mate(0)
         );
     }
@@ -1277,7 +1300,7 @@ mod tests {
         let mut search = Search::new(position, &flag, None, &table);
 
         assert_eq!(
-            search.quiesce_evasions::<Master, Pv>(Score::INF_N, Score::INF_P, &moves),
+            search.quiesce_evasions::<Master, Pv>(Score::INF_N, Score::INF_P, &moves, 0),
             Score::INF_N
         );
     }
@@ -1295,14 +1318,18 @@ mod tests {
             (Bound::Upper, Score::cp(-70), Score::cp(-70)),
         ] {
             let table = Table::new(1);
-            table
-                .probe(&position)
-                .into_inner()
-                .write(&position, stored, 0, bound, &Move::null());
+            table.probe(&position).into_inner().write(
+                &position,
+                stored,
+                0,
+                0,
+                bound,
+                &Move::null(),
+            );
             let mut search = Search::new(position.clone(), &flag, None, &table);
 
             assert_eq!(
-                search.quiesce::<Master, NonPv>(Score::cp(-50), Score::cp(-49)),
+                search.quiesce::<Master, NonPv>(Score::cp(-50), Score::cp(-49), 0),
                 expected
             );
         }
@@ -1329,13 +1356,14 @@ mod tests {
             &position,
             Score::cp(300),
             8,
+            0,
             Bound::Exact,
             &Move::null(),
         );
         let mut search = Search::new(position, &flag, None, &table);
 
         assert_eq!(
-            search.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P),
+            search.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P, 0),
             Score::zero()
         );
     }
@@ -1353,6 +1381,7 @@ mod tests {
             &clashing_position,
             Score::cp(300),
             8,
+            0,
             Bound::Exact,
             &Move::null(),
         );
@@ -1363,7 +1392,7 @@ mod tests {
         let mut search = Search::new(position, &flag, None, &table);
 
         assert_eq!(
-            search.quiesce::<Master, NonPv>(Score::cp(-1), Score::zero()),
+            search.quiesce::<Master, NonPv>(Score::cp(-1), Score::zero(), 0),
             Score::zero()
         );
     }
@@ -1400,6 +1429,60 @@ mod tests {
         assert!(!outcome.was_cancelled());
         assert_eq!(outcome.result().unwrap().depth, 2);
         assert!(outcome.result().unwrap().best_move.is_some());
+    }
+
+    #[test]
+    fn searches_reuse_the_shared_table_until_the_owner_clears_it() {
+        core::init::init_globals();
+
+        let engine = SearchEngine::new(1);
+        let marker = Position::from_fen("7k/8/8/8/8/8/8/K7 w - - 0 1").unwrap();
+        assert_ne!(
+            engine.table.idx(marker.zobrist().0),
+            engine.table.idx(Position::start_pos().zobrist().0)
+        );
+        engine.table.probe(&marker).into_inner().write(
+            &marker,
+            Score::cp(17),
+            1,
+            0,
+            Bound::Exact,
+            &Move::null(),
+        );
+
+        engine
+            .start(Position::start_pos(), SearchLimit::Depth(1))
+            .wait();
+        engine
+            .start(Position::start_pos(), SearchLimit::Depth(1))
+            .wait();
+        assert!(engine.table.probe(&marker).is_hit());
+
+        engine.clear_hash();
+        assert!(!engine.table.probe(&marker).is_hit());
+    }
+
+    #[test]
+    fn concurrent_searches_do_not_invalidate_the_shared_generation() {
+        core::init::init_globals();
+
+        let engine = SearchEngine::new(1);
+        let marker = Position::from_fen("7k/8/8/8/8/8/8/K7 w - - 0 1").unwrap();
+        engine.table.probe(&marker).into_inner().write(
+            &marker,
+            Score::cp(17),
+            1,
+            0,
+            Bound::Exact,
+            &Move::null(),
+        );
+
+        let first = engine.start(Position::start_pos(), SearchLimit::Depth(2));
+        let second = engine.start(Position::start_pos(), SearchLimit::Depth(2));
+        first.wait();
+        second.wait();
+
+        assert!(engine.table.probe(&marker).is_hit());
     }
 
     #[test]

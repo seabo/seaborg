@@ -87,6 +87,31 @@ impl Score {
         Self(value)
     }
 
+    /// Encode a search score for storage in the transposition table.
+    ///
+    /// Mate scores are made root-relative so an entry found at a different ply can be adjusted
+    /// back to the caller's frame of reference. Centipawn and infinity scores are unchanged.
+    pub(crate) fn to_tt(self, ply: u8) -> Self {
+        if self.0 > 20_000 && self.0 < Self::INF_P.0 {
+            Self(self.0 + i16::from(ply))
+        } else if self.0 < -20_000 && self.0 > Self::INF_N.0 {
+            Self(self.0 - i16::from(ply))
+        } else {
+            self
+        }
+    }
+
+    /// Decode a root-relative transposition-table score for a probe at `ply`.
+    pub(crate) fn from_tt(self, ply: u8) -> Self {
+        if self.0 > 20_000 && self.0 < Self::INF_P.0 {
+            Self(self.0 - i16::from(ply))
+        } else if self.0 < -20_000 && self.0 > Self::INF_N.0 {
+            Self(self.0 + i16::from(ply))
+        } else {
+            self
+        }
+    }
+
     /// True if this `Score` represents a forced mate-in-n.
     pub fn is_mate(&self) -> bool {
         if self.0 < -20_000 || self.0 > 20_000 {
@@ -217,5 +242,13 @@ mod tests {
         assert!(Score::mate(1) > Score::cp(300));
         assert!(Score::cp(0) > Score::INF_N);
         assert!(Score::cp(0) < Score::INF_P);
+    }
+
+    #[test]
+    fn tt_mate_scores_are_adjusted_for_probe_ply() {
+        assert_eq!(Score::mate(7).to_tt(3).from_tt(5), Score::mate(9));
+        assert_eq!(Score::mate(-7).to_tt(3).from_tt(5), Score::mate(-9));
+        assert_eq!(Score::cp(42).to_tt(3).from_tt(5), Score::cp(42));
+        assert_eq!(Score::INF_P.to_tt(3).from_tt(5), Score::INF_P);
     }
 }

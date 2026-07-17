@@ -272,14 +272,22 @@ impl<'a> WritableEntry<'a> {
 
     /// Write data to the entry.
     #[inline]
-    pub fn write(&self, pos: &Position, score: Score, depth: u8, bound: Bound, mov: &Move) {
+    pub fn write(
+        &self,
+        pos: &Position,
+        score: Score,
+        depth: u8,
+        ply: u8,
+        bound: Bound,
+        mov: &Move,
+    ) {
         let sig = (pos.zobrist().0 >> 48) as u16;
 
         let entry = Entry {
             sig,
             depth,
             gen_bound: GenBound::new(self.generation, bound),
-            score,
+            score: score.to_tt(ply),
             mov: PackedMove::from_move(mov),
         };
         self.slot.store(entry.pack(), Ordering::Relaxed);
@@ -287,9 +295,10 @@ impl<'a> WritableEntry<'a> {
 
     /// Read a consistent snapshot of the current entry.
     #[inline(always)]
-    pub fn read(&self) -> Entry {
-        let entry = Entry::unpack(self.slot.load(Ordering::Relaxed));
+    pub fn read(&self, ply: u8) -> Entry {
+        let mut entry = Entry::unpack(self.slot.load(Ordering::Relaxed));
         if entry.gen() == self.generation.0 {
+            entry.score = entry.score.from_tt(ply);
             entry
         } else {
             Entry::default()
@@ -334,7 +343,10 @@ impl Table {
         }
     }
 
-    /// Clear the transposition table.
+    /// Explicitly invalidate every currently live entry by advancing the shared generation.
+    ///
+    /// This is an owner-level operation for new-game or explicit-clear boundaries. Search workers
+    /// must not call it: advancing the generation also invalidates entries used by sibling workers.
     pub fn clear(&self) {
         loop {
             let current = self.current_generation();
@@ -569,34 +581,34 @@ mod tests {
         match tt.probe(&pos) {
             Hit(entry) => {
                 println!("hit; found entry {:?}", entry);
-                println!("reading entry {:?}", entry.read());
+                println!("reading entry {:?}", entry.read(0));
                 println!("writing entry while i have a shared reference!");
-                entry.write(&pos, Score::cp(23), 3, Bound::Upper, &Move::null());
-                println!("reading from the _same_ reference {:?}", entry.read());
+                entry.write(&pos, Score::cp(23), 3, 0, Bound::Upper, &Move::null());
+                println!("reading from the _same_ reference {:?}", entry.read(0));
             }
             Clash(entry) => {
                 println!("clash; found entry {:?}", entry);
             }
             Empty(entry) => {
                 println!("writing an entry");
-                entry.write(&pos, Score::cp(240), 5, Bound::Exact, &Move::null());
+                entry.write(&pos, Score::cp(240), 5, 0, Bound::Exact, &Move::null());
             }
         }
 
         match tt.probe(&pos) {
             Hit(entry) => {
                 println!("hit; found entry {:?}", entry);
-                println!("reading entry {:?}", entry.read());
+                println!("reading entry {:?}", entry.read(0));
                 println!("writing entry while i have a shared reference!");
-                entry.write(&pos, Score::cp(23), 10, Bound::Lower, &Move::null());
-                println!("reading from the _same_ reference {:?}", entry.read());
+                entry.write(&pos, Score::cp(23), 10, 0, Bound::Lower, &Move::null());
+                println!("reading from the _same_ reference {:?}", entry.read(0));
             }
             Clash(entry) => {
                 println!("clash; found entry {:?}", entry);
             }
             Empty(entry) => {
                 println!("writing an entry");
-                entry.write(&pos, Score::cp(240), 14, Bound::Exact, &Move::null());
+                entry.write(&pos, Score::cp(240), 14, 0, Bound::Exact, &Move::null());
             }
         }
     }
@@ -628,15 +640,65 @@ mod tests {
 
         let table = Table::new(1);
         let pos = Position::start_pos();
-        table
-            .probe(&pos)
-            .into_inner()
-            .write(&pos, Score::cp(12), 4, Bound::Exact, &Move::null());
+        table.probe(&pos).into_inner().write(
+            &pos,
+            Score::cp(12),
+            4,
+            0,
+            Bound::Exact,
+            &Move::null(),
+        );
         assert!(table.probe(&pos).is_hit());
 
         table.clear();
         assert!(!table.probe(&pos).is_hit());
-        assert!(table.probe(&pos).into_inner().read().is_empty());
+        assert!(table.probe(&pos).into_inner().read(0).is_empty());
+    }
+
+    #[test]
+    fn mate_scores_decode_relative_to_the_probe_ply() {
+        core::init::init_globals();
+
+        let table = Table::new(1);
+        let pos = Position::start_pos();
+        let entry = table.probe(&pos).into_inner();
+        entry.write(&pos, Score::mate(7), 8, 3, Bound::Exact, &Move::null());
+        assert_eq!(entry.read(3).score, Score::mate(7));
+        assert_eq!(entry.read(5).score, Score::mate(9));
+
+        entry.write(&pos, Score::mate(-7), 8, 3, Bound::Exact, &Move::null());
+        assert_eq!(entry.read(5).score, Score::mate(-9));
+    }
+
+    #[test]
+    fn concurrent_probes_share_the_live_generation() {
+        core::init::init_globals();
+
+        let table = std::sync::Arc::new(Table::new(1));
+        let pos = Position::start_pos();
+        table.probe(&pos).into_inner().write(
+            &pos,
+            Score::cp(17),
+            4,
+            0,
+            Bound::Exact,
+            &Move::null(),
+        );
+
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                let table = std::sync::Arc::clone(&table);
+                let pos = pos.clone();
+                scope.spawn(move || {
+                    for _ in 0..1_000 {
+                        let entry = table.probe(&pos).into_inner().read(0);
+                        assert_eq!(entry.score, Score::cp(17));
+                    }
+                });
+            }
+        });
+
+        assert!(table.probe(&pos).is_hit());
     }
 
     #[test]
