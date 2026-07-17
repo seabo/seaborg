@@ -30,6 +30,13 @@ class InfrastructureError(RuntimeError):
     pass
 
 
+class InfrastructureArgumentParser(argparse.ArgumentParser):
+    """Route command-line configuration errors through the infra verdict."""
+
+    def error(self, message: str) -> None:
+        raise InfrastructureError(f"invalid command line: {message}")
+
+
 @dataclass
 class Result:
     games: int
@@ -71,7 +78,7 @@ def probability(value: str) -> float:
 
 def parser() -> argparse.ArgumentParser:
     root = Path(__file__).resolve().parent
-    p = argparse.ArgumentParser(description=__doc__)
+    p = InfrastructureArgumentParser(description=__doc__)
     p.add_argument("--baseline", required=True, type=Path)
     p.add_argument("--baseline-id", required=True,
                    help="immutable revision/build identity")
@@ -98,6 +105,18 @@ def parser() -> argparse.ArgumentParser:
                    metavar="NAME=VALUE")
     p.add_argument("--preflight-timeout", type=positive, default=10)
     return p
+
+
+def requested_output(argv: Sequence[str]) -> Path | None:
+    """Recover --output for a report when full argument parsing fails."""
+    for index, value in enumerate(argv):
+        if value.startswith("--output="):
+            candidate = value.partition("=")[2]
+            return Path(candidate) if candidate else None
+        if (value == "--output" and index + 1 < len(argv)
+                and not argv[index + 1].startswith("-")):
+            return Path(argv[index + 1])
+    return None
 
 
 def validate(args: argparse.Namespace) -> None:
@@ -217,10 +236,11 @@ def write_report(path: Path, report: dict) -> None:
 
 
 def run(argv: Sequence[str] | None = None) -> int:
-    args = parser().parse_args(argv)
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
     report: dict = {"schema_version": 1, "verdict": "INFRASTRUCTURE ERROR"}
     output_created = False
     try:
+        args = parser().parse_args(raw_argv)
         validate(args)
         version = runner_version(args.runner)
         preflight = {"baseline": uci_preflight(args.baseline, args.preflight_timeout),
@@ -266,9 +286,10 @@ def run(argv: Sequence[str] | None = None) -> int:
     except (InfrastructureError, OSError, ValueError) as exc:
         report["error"] = str(exc)
         final = "INFRASTRUCTURE ERROR"
-    if ("args" in locals() and getattr(args, "output", None)
-            and (output_created or not args.output.exists())):
-        output = args.output.resolve()
+    output_arg = (getattr(args, "output", None) if "args" in locals()
+                  else requested_output(raw_argv))
+    if output_arg and (output_created or not output_arg.exists()):
+        output = output_arg.resolve()
         output.mkdir(parents=True, exist_ok=True)
         (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
     label = report.get("authority", "UNKNOWN")

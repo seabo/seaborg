@@ -1,4 +1,7 @@
 import argparse
+import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -86,6 +89,27 @@ class StrengthTestTests(unittest.TestCase):
                 openings=openings)
             with self.assertRaises(st.InfrastructureError):
                 st.validate(args)
+
+    def test_real_cli_missing_arguments_is_infrastructure_error(self):
+        proc = subprocess.run(
+            [sys.executable, str(Path(st.__file__))],
+            text=True, capture_output=True, check=False)
+        self.assertEqual(proc.returncode, st.INFRA_ERROR)
+        self.assertIn("INFRASTRUCTURE ERROR", proc.stdout)
+        self.assertNotIn("INCONCLUSIVE", proc.stdout + proc.stderr)
+
+    def test_real_cli_invalid_typed_value_preserves_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "artifacts"
+            proc = subprocess.run(
+                [sys.executable, str(Path(st.__file__)), "--output", str(output),
+                 "--max-games", "not-a-number"],
+                text=True, capture_output=True, check=False)
+            self.assertEqual(proc.returncode, st.INFRA_ERROR)
+            self.assertIn("INFRASTRUCTURE ERROR", proc.stdout)
+            report = json.loads((output / "report.json").read_text())
+            self.assertEqual(report["verdict"], "INFRASTRUCTURE ERROR")
+            self.assertIn("invalid command line", report["error"])
 
 
 if __name__ == "__main__":
