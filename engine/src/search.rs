@@ -713,8 +713,8 @@ impl<'engine> Search<'engine> {
                     .pvt
                     .pv()
                     .map(|m| format!("{}", m))
-                    .intersperse(" ".to_string())
-                    .collect::<String>(),
+                    .collect::<Vec<_>>()
+                    .join(" "),
                 hashfull: self.tt.hashfull(),
                 nps: self.trace.live_nps() as u32,
             })
@@ -973,13 +973,12 @@ impl<'a, 'search> Loader for QMoveLoader<'a, 'search> {
 mod tests {
     use super::*;
 
+    #[rustfmt::skip]
     fn suite() -> Vec<(&'static str, u8, Score, Score, &'static str)> {
         // Test position tuples have the form:
         // (fen, depth, score range, best_move)
 
-        #[rustfmt::skip]
-        {
-            vec![
+        vec![
                 // Mates
                 ("8/2R2pp1/k3p3/8/5Bn1/6P1/5r1r/1R4K1 w - - 4 3", 6, Score::mate(5), Score::mate(5), "c7c6"),
                 ("5R2/1p1r2pk/p1n1B2p/2P1q3/2Pp4/P6b/1B1P4/2K3R1 w - - 5 3", 6, Score::mate(5), Score::mate(5), "e6g8"),
@@ -1004,8 +1003,7 @@ mod tests {
 
                 // Pawn race
                 ("8/6pk/8/8/8/8/P7/K7 w - - 0 1", 22, Score::cp(700), Score::cp(920), "a1b1"),
-            ]
-        }
+        ]
     }
 
     /// A regression test to ensure that our search routine produces the expected results for a

@@ -76,7 +76,7 @@ impl<T, const N: usize> Default for ArrayVec<T, N> {
     #[inline]
     fn default() -> Self {
         ArrayVec {
-            inner: MaybeUninit::uninit_array(),
+            inner: [const { MaybeUninit::uninit() }; N],
             len: 0,
         }
     }
@@ -106,7 +106,12 @@ impl<'a, T, const N: usize> IntoIterator for &'a ArrayVec<T, N> {
 
     #[inline]
     fn into_iter(self) -> Self::IntoIter {
-        unsafe { MaybeUninit::slice_assume_init_ref(self.inner.get_unchecked(0..self.len)).iter() }
+        unsafe {
+            self.inner
+                .get_unchecked(0..self.len)
+                .assume_init_ref()
+                .iter()
+        }
     }
 }
 
@@ -117,7 +122,10 @@ impl<'a, T, const N: usize> IntoIterator for &'a mut ArrayVec<T, N> {
     #[inline]
     fn into_iter(self) -> Self::IntoIter {
         unsafe {
-            MaybeUninit::slice_assume_init_mut(self.inner.get_unchecked_mut(0..self.len)).iter_mut()
+            self.inner
+                .get_unchecked_mut(0..self.len)
+                .assume_init_mut()
+                .iter_mut()
         }
     }
 }
@@ -185,14 +193,14 @@ impl<T, const N: usize> ArrayVec<T, N> {
     /// Return a mut pointer to the element next to the last element in the list.
     #[inline(always)]
     pub unsafe fn over_bounds_ptr_mut(&mut self) -> *mut T {
-        MaybeUninit::slice_as_mut_ptr(&mut self.inner).add(self.len)
+        self.inner.as_mut_ptr().cast::<T>().add(self.len)
         // self.as_mut_ptr().add(self.len)
     }
 
     /// Return a const pointer to the element next to the last element in the list.
     #[inline(always)]
     pub unsafe fn over_bounds_ptr(&self) -> *const T {
-        MaybeUninit::slice_as_ptr(&self.inner).add(self.len)
+        self.inner.as_ptr().cast::<T>().add(self.len)
         // self.inner.as_slice().as_ptr().add(self.len)
     }
 
@@ -219,7 +227,7 @@ impl<T, const N: usize> ArrayVec<T, N> {
     pub unsafe fn get_slice_unchecked(&self, rng: Range<usize>) -> &[T] {
         let p = self.inner.as_ptr();
         let start = p.add(rng.start);
-        MaybeUninit::slice_assume_init_ref(slice::from_raw_parts(start, rng.len()))
+        slice::from_raw_parts(start, rng.len()).assume_init_ref()
     }
 
     /// Return a mutable slice over a specified range, without performing bounds checking. Undefined
@@ -231,7 +239,7 @@ impl<T, const N: usize> ArrayVec<T, N> {
     pub unsafe fn get_slice_mut_unchecked(&mut self, rng: Range<usize>) -> &mut [T] {
         let p = self.inner.as_mut_ptr();
         let start = p.add(rng.start);
-        MaybeUninit::slice_assume_init_mut(slice::from_raw_parts_mut(start, rng.len()))
+        slice::from_raw_parts_mut(start, rng.len()).assume_init_mut()
     }
 }
 
@@ -252,7 +260,7 @@ impl<T, const N: usize> Deref for ArrayVec<T, N> {
     fn deref(&self) -> &[T] {
         unsafe {
             let p = self.inner.as_ptr();
-            MaybeUninit::slice_assume_init_ref(slice::from_raw_parts(p, self.len))
+            slice::from_raw_parts(p, self.len).assume_init_ref()
         }
     }
 }
@@ -262,7 +270,7 @@ impl<T, const N: usize> DerefMut for ArrayVec<T, N> {
     fn deref_mut(&mut self) -> &mut [T] {
         unsafe {
             let p = self.inner.as_mut_ptr();
-            MaybeUninit::slice_assume_init_mut(slice::from_raw_parts_mut(p, self.len))
+            slice::from_raw_parts_mut(p, self.len).assume_init_mut()
         }
     }
 }

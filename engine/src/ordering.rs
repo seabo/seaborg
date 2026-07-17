@@ -535,9 +535,8 @@ impl OrderedMoves {
     unsafe fn segment_from_range(&self, rng: Range<usize>) -> Segment<'_> {
         let ptr = self.buf.0.list_ptr();
         let start = ptr.add(rng.start);
-        let end = ptr.add(rng.end);
 
-        std::slice::from_ptr_range(Range { start, end })
+        std::slice::from_raw_parts(start, rng.len())
     }
 
     /// This is very unsafe. First, we do not bounds check the range. Even more unsafe is that we
@@ -549,9 +548,8 @@ impl OrderedMoves {
     unsafe fn segment_from_range_mut(&mut self, rng: Range<usize>) -> SegmentMut<'_> {
         let ptr = self.buf.0.list_ptr_mut();
         let start = ptr.add(rng.start);
-        let end = ptr.add(rng.end);
 
-        std::slice::from_mut_ptr_range(Range { start, end })
+        std::slice::from_raw_parts_mut(start, rng.len())
     }
 
     /// Load the next phase of moves into the buffer.

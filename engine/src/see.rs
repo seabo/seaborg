@@ -102,11 +102,11 @@ mod tests {
     use std::sync::atomic::AtomicBool;
 
     #[test]
+    #[rustfmt::skip]
     fn it_works() {
         core::init::init_globals();
 
-        let suite = #[rustfmt::skip] {
-            vec![
+        let suite = vec![
                 ("1k1r4/1pp4p/p7/4p3/8/P5P1/1PP4P/2K1R3 w - - 0 1", Square::E1, Square::E5, PieceType::Pawn, PieceType::Rook, Score::cp(100)),
                 ("1k1r3q/1ppn3p/p4b2/4p3/8/P2N2P1/1PP1R1BP/2K1Q3 w - - 0 1", Square::D3, Square::E5, PieceType::Pawn, PieceType::Knight, Score::cp(-200)),
                 ("k3q3/4r1n1/4p3/8/8/4R3/4Q3/K3R3 w - - 0 1", Square::E3, Square::E6, PieceType::Pawn, PieceType::Rook, Score::cp(-400)),
@@ -139,8 +139,7 @@ mod tests {
                 // capture is deemed favourable).
                 ("k7/8/2B2n2/8/4Q3/5P2/3n4/K7 b - - 0 1", Square::F6, Square::E4, PieceType::Queen, PieceType::Knight, Score::cp(900)),
                 ("k7/8/3np3/5R2/8/3Q2N1/8/K4R2 b - - 0 1", Square::E6, Square::F5, PieceType::Rook, PieceType::Pawn, Score::cp(500)),
-            ]
-        };
+        ];
 
         for (fen, from, to, target, attacker, score) in suite {
             let pos = Position::from_fen(fen).unwrap();

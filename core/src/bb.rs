@@ -213,9 +213,9 @@ mod tests {
     }
 
     #[test]
+    #[rustfmt::skip]
     fn pop_lsb_works() {
         let mut bb = Bitboard(4415494823944);
-        #[rustfmt::skip]
         {
             assert_eq!(bb.pop_some_lsb_and_bit(), Some((Square(3), Bitboard(8))));
             assert_eq!(bb.pop_some_lsb_and_bit(), Some((Square(13), Bitboard(8192))));
