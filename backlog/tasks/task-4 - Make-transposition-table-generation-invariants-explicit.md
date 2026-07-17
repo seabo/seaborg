@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 16:44'
-updated_date: '2026-07-17 18:44'
+updated_date: '2026-07-17 18:47'
 labels: []
 dependencies: []
 references:
@@ -40,3 +40,9 @@ Transposition-table generations are six-bit epoch identifiers, with 0 reserved a
 3. Replace contradictory generation tests with coverage for empty encoding, valid boundaries, rejected zero/out-of-range inputs, and physical invalidation on wrap.
 4. Run cargo fmt --check and cargo test --workspace, then record the immutable implementation handoff.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented a checked Generation type for live epochs 1..=63 and made GenBound construction require it. Generation zero remains available only through the default empty packed representation. Reworked Table::clear so wraparound zeroes every slot before publishing generation 1, and added tests for invalid inputs, valid bounds, empty encoding, normal invalidation, and physical wrap invalidation.
+<!-- SECTION:NOTES:END -->
