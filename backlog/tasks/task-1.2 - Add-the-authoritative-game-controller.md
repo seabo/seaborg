@@ -1,11 +1,11 @@
 ---
 id: TASK-1.2
 title: Add the authoritative game controller
-status: In Review
+status: Changes Requested
 assignee:
   - '@codex'
 created_date: '2026-07-17 15:40'
-updated_date: '2026-07-17 18:18'
+updated_date: '2026-07-17 18:32'
 labels: []
 dependencies:
   - TASK-1.1
@@ -98,5 +98,36 @@ Verification:
 - cargo test --workspace: all affected/controller tests passed; one baseline failure below
 - git diff --check: passed
 Known failures: tt::tests::gen_bound fails at engine/src/tt.rs:34 (assertion gen < 64); reproduced unchanged on task-1.1-typed-engine-api.
+---
+
+author: @codex-review
+created: 2026-07-17 18:31
+---
+Review attempt: 2\nReviewed branch: task-1.2-game-controller\nReviewed implementation: 6290e1732fb94fff13ff7c90e1051254d3c18554\nVerdict: changes_requested\n\nREV-2-01 [P1] Empty undo cancels the opening engine turn permanently\nLocation: engine/src/game.rs:203\nImpact: A game configured with the human as Black can become stuck before its first move. The controller reports an ongoing position with White to move and EngineStatus::Idle, so no actor can advance the game.\nReproduction: Create GameController::new(Player::BLACK, SearchLimit::Depth(1), 1), immediately call undo(0), and inspect the result and snapshot. undo cancels active_search before unmake_move reports NothingToUndo; it then returns without restarting the engine search.\nExpected: A failed undo must preserve or restart the current engine turn, and a regression test must cover undo with no available move during an active search.\n\nVerification:\n- git merge-base --is-ancestor 4dd57abf 6290e173: passed\n- git merge-base --is-ancestor 6290e173 0e7f3b3: passed\n- git diff 6290e173..0e7f3b3: only TASK-1.2 handoff metadata\n- git diff --check 4dd57abf..6290e173: passed\n- cargo fmt --check: passed\n- cargo test -p engine game::tests -- --nocapture: passed (9 tests)\n- cargo test --workspace: controller and affected tests passed; failed only tt::tests::gen_bound\n- Baseline check on task-1.1-typed-engine-api: cargo test -p engine tt::tests::gen_bound -- --exact --nocapture failed identically
+---
+
+author: @codex-review
+created: 2026-07-17 18:32
+---
+Review attempt: 2
+Reviewed branch: task-1.2-game-controller
+Reviewed implementation: 6290e1732fb94fff13ff7c90e1051254d3c18554
+Verdict: changes_requested
+
+REV-2-01 [P1] Empty undo cancels the opening engine turn permanently
+Location: engine/src/game.rs:203
+Impact: A game configured with the human as Black can become stuck before its first move. The controller reports an ongoing position with White to move and EngineStatus::Idle, so no actor can advance the game.
+Reproduction: Create GameController::new(Player::BLACK, SearchLimit::Depth(1), 1), immediately call undo(0), and inspect the result and snapshot. undo cancels active_search before unmake_move reports NothingToUndo; it then returns without restarting the engine search.
+Expected: A failed undo must preserve or restart the current engine turn, and a regression test must cover undo with no available move during an active search.
+
+Verification:
+- git merge-base --is-ancestor 4dd57abf 6290e173: passed
+- git merge-base --is-ancestor 6290e173 0e7f3b3: passed
+- git diff 6290e173..0e7f3b3: only TASK-1.2 handoff metadata
+- git diff --check 4dd57abf..6290e173: passed
+- cargo fmt --check: passed
+- cargo test -p engine game::tests -- --nocapture: passed (9 tests)
+- cargo test --workspace: controller and affected tests passed; failed only tt::tests::gen_bound
+- Baseline check on task-1.1-typed-engine-api: cargo test -p engine tt::tests::gen_bound -- --exact --nocapture failed identically
 ---
 <!-- COMMENTS:END -->
