@@ -35,9 +35,9 @@ pub fn perft(args: &PerftArgs) {
             let start_zob = pos.zobrist().clone();
             let now = Instant::now();
             let perft_result = if args.divide {
-                Perft::divide(pos, depth as usize, false, false)
+                Perft::divide(pos, depth as usize, args.verbose, false)
             } else {
-                Perft::perft(pos, depth as usize, false, false, true)
+                Perft::perft(pos, depth as usize, args.verbose, false, true)
             };
 
             let elapsed = now.elapsed();

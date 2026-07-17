@@ -178,7 +178,11 @@ impl<'a> Perft<'a> {
 
     fn perft_inner(&mut self, depth: usize) {
         if depth == 0 {
+            // A depth-zero perft counts the current position as a single leaf. Returning here
+            // avoids both a redundant move generation and the `depth - 1` unsigned underflow that
+            // would otherwise drive unbounded recursion.
             self.data.nodes += 1;
+            return;
         }
 
         let moves = self.position.generate::<_, All, Legal>();
@@ -227,26 +231,31 @@ impl<'a> Perft<'a> {
         collect_detailed_data: bool,
         collect_check_data: bool,
     ) -> PerftData {
-        assert!(depth >= 1);
         let perft_options = PerftOptions::new(collect_detailed_data, collect_check_data);
         let mut perft = Self::new(position, perft_options);
 
-        let mut cumulative_nodes: usize = 0;
         let start = Instant::now();
 
-        let moves = perft.position.generate::<_, All, Legal>();
-
-        if depth == 1 {
-            perft.handle_leaf(&moves);
-            for mov in &moves {
-                println!("{}: 1", mov);
-            }
+        if depth == 0 {
+            // Handle depth zero consistently with `perft`: the position itself is the single leaf,
+            // and there are no child moves to divide over.
+            perft.data.nodes += 1;
         } else {
-            for mov in &moves {
-                perft.recurse(mov, depth - 1);
-                let new_nodes_for_mov = perft.data.nodes - cumulative_nodes;
-                println!("{}: {}", mov, new_nodes_for_mov.separated_string());
-                cumulative_nodes += new_nodes_for_mov;
+            let mut cumulative_nodes: usize = 0;
+            let moves = perft.position.generate::<_, All, Legal>();
+
+            if depth == 1 {
+                perft.handle_leaf(&moves);
+                for mov in &moves {
+                    println!("{}: 1", mov);
+                }
+            } else {
+                for mov in &moves {
+                    perft.recurse(mov, depth - 1);
+                    let new_nodes_for_mov = perft.data.nodes - cumulative_nodes;
+                    println!("{}: {}", mov, new_nodes_for_mov.separated_string());
+                    cumulative_nodes += new_nodes_for_mov;
+                }
             }
         }
         let elapsed = start.elapsed();
@@ -282,11 +291,13 @@ impl<'a> Perft<'a> {
                 if self.options.checks {
                     // SAFETY: perft only traverses moves generated for this position.
                     unsafe { self.position.make_move_unchecked(mov) };
+                    // Count every leaf where the side to move is in check (single or double).
+                    // Checkmates are a subset of checks, matching the chessprogramming.org tables.
+                    if self.position.in_check() {
+                        self.data.check += 1;
+                    }
                     if self.position.in_checkmate() {
                         self.data.checkmate += 1;
-                    }
-                    if self.position.in_double_check() {
-                        self.data.check += 1;
                     }
                     self.position.unmake_move();
                 }
@@ -334,6 +345,62 @@ mod tests {
         let mut pos = Position::from_fen(fen).unwrap();
         let res = Perft::perft(&mut pos, depth, false, false, false);
         res.nodes.unwrap()
+    }
+
+    fn run_perft_detailed(fen: &'static str, depth: usize) -> PerftData {
+        let mut pos = Position::from_fen(fen).unwrap();
+        Perft::perft(&mut pos, depth, true, true, false)
+    }
+
+    /// Depth zero must count exactly one leaf (the position itself) without recursing or
+    /// panicking, for any legal position.
+    #[test]
+    fn perft_depth_zero_counts_single_node() {
+        setup();
+
+        for fen in [START_POSITION, TESTS[1].0] {
+            let mut pos = Position::from_fen(fen).unwrap();
+            let res = Perft::perft(&mut pos, 0, false, false, false);
+            assert_eq!(res.nodes.unwrap(), 1);
+        }
+    }
+
+    /// Divide must handle depth zero consistently with `perft`: a single node and no panic from
+    /// an unsigned `depth - 1` underflow.
+    #[test]
+    fn divide_depth_zero_matches_perft() {
+        setup();
+
+        let mut pos = Position::from_fen(START_POSITION).unwrap();
+        let res = Perft::divide(&mut pos, 0, false, false);
+        assert_eq!(res.nodes.unwrap(), 1);
+    }
+
+    /// Verify the detailed leaf statistics (captures, en passant, castles, promotions, checks and
+    /// checkmates) against the published reference tables at
+    /// <https://www.chessprogramming.org/Perft_Results>.
+    #[rustfmt::skip]
+    #[test]
+    fn perft_detailed_statistics() {
+        setup();
+
+        // (fen, depth, nodes, captures, en_passant, castles, promotions, checks, checkmates)
+        let cases: [(&str, usize, usize, usize, usize, usize, usize, usize, usize); 3] = [
+            (START_POSITION, 3, 8_902, 34, 0, 0, 0, 12, 0),
+            ("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1", 2, 2_039, 351, 1, 91, 0, 3, 0),
+            ("r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1", 3, 9_467, 1_021, 4, 0, 120, 38, 22),
+        ];
+
+        for (fen, depth, nodes, captures, ep, castles, promotions, checks, checkmates) in cases {
+            let res = run_perft_detailed(fen, depth);
+            assert_eq!(res.nodes.unwrap(), nodes, "nodes for {fen} @ depth {depth}");
+            assert_eq!(res.captures.unwrap(), captures, "captures for {fen} @ depth {depth}");
+            assert_eq!(res.en_passant.unwrap(), ep, "en passant for {fen} @ depth {depth}");
+            assert_eq!(res.castles.unwrap(), castles, "castles for {fen} @ depth {depth}");
+            assert_eq!(res.promotions.unwrap(), promotions, "promotions for {fen} @ depth {depth}");
+            assert_eq!(res.check.unwrap(), checks, "checks for {fen} @ depth {depth}");
+            assert_eq!(res.checkmate.unwrap(), checkmates, "checkmates for {fen} @ depth {depth}");
+        }
     }
 
     /// Run a comprehensive perft suite based on the position found at 
