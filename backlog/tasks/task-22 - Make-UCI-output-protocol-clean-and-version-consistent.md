@@ -1,9 +1,11 @@
 ---
 id: TASK-22
 title: Make UCI output protocol clean and version consistent
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-17 17:15'
+updated_date: '2026-07-17 23:21'
 labels:
   - uci
   - release
@@ -32,3 +34,14 @@ The process emits unsolicited startup text and several diagnostics on protocol s
 - [ ] #4 Commit metadata is trimmed and, when shown, is emitted through an appropriate diagnostic channel or UCI info form
 - [ ] #5 Integration tests assert the exact startup, uci handshake, error, and readiness output streams
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Thread a single authoritative engine identity (name, version=CARGO_PKG_VERSION, author, commit=GIT_HASH) from the seaborg binary into engine::launch, replacing hardcoded '0.0.2' strings so id name, --version, and startup metadata share one source.
+2. Remove the unsolicited startup banner + 'commit:' line from protocol stdout; emit a single human diagnostic banner (with trimmed short commit) to stderr instead so no non-UCI stdout precedes the uci command.
+3. Update the 'uci' handshake to emit 'id name <name> <version>' derived from the threaded identity.
+4. Ensure errors/diagnostics never appear as invalid protocol messages on stdout (verify existing stderr routing; keep commit metadata on diagnostic channel).
+5. Add/strengthen integration tests asserting exact startup, uci handshake, error, and readiness stdout streams; update existing tests referencing the old banner.
+6. Run cargo build, cargo test, cargo fmt --check, cargo clippy.
+<!-- SECTION:PLAN:END -->
