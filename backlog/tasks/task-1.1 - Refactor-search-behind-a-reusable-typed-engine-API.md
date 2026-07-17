@@ -1,7 +1,7 @@
 ---
 id: TASK-1.1
 title: Refactor search behind a reusable typed engine API
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-17 15:39'
@@ -59,6 +59,8 @@ Resolved REV-1-01: SearchOutcome now carries an optional completed iteration and
 Resolved REV-1-02: Terminal searches retain their typed score/depth while representing the absence of a legal best move explicitly, without probing an assumed transposition-table entry. The reviewer FEN is covered by a regression test.
 
 Resolved REV-1-03: Progress events are emitted only inside the fully completed iteration branch. Cancellation coverage asserts emitted PV lengths remain consistent with their reported depth.
+
+Rework verification: cargo fmt --check passed; focused typed lifecycle, immediate cancellation, zero-time, terminal-position, and UCI formatting tests passed; git diff --check passed. cargo test --workspace --no-fail-fast completed with 21 engine tests passing, 1 ignored, and the known baseline failure tt::tests::gen_bound (assertion gen < 64).
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -95,5 +97,22 @@ author: @codex
 created: 2026-07-17 18:06
 ---
 Rework started for REV-1-01, REV-1-02, and REV-1-03 on the existing task branch and worktree.
+---
+
+author: @codex
+created: 2026-07-17 18:11
+---
+Implementation handoff
+Branch: task-1.1-typed-engine-api
+Worktree: /Users/seabo/seaborg-worktrees/task-1.1-typed-engine-api
+Base: 4dd57abfdc18b0f70c4d6030e4ced0ef8c19b3ab
+Implementation target: f3a521d
+Resolved findings: REV-1-01, REV-1-02, REV-1-03
+Verification:
+- cargo fmt --check: passed
+- focused typed lifecycle, immediate cancellation, zero-time, terminal-position, and UCI formatting tests: passed
+- git diff --check: passed
+- cargo test --workspace --no-fail-fast: 21 engine tests passed, 1 ignored; one known baseline failure
+Known failures: tt::tests::gen_bound asserts gen < 64, previously documented as pre-existing.
 ---
 <!-- COMMENTS:END -->
