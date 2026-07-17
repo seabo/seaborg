@@ -99,6 +99,12 @@ created: 2026-07-17 18:42
 ---
 Correction: the actual TASK-8 merge commit on master is ced9de7bab11149f0e20b6678ac1a46edd08185a.
 ---
+
+author: @codex
+created: 2026-07-17 18:42
+---
+Final merge-reference correction: TASK-8 was merged by commit fbcd95d; ced9de7 is a subsequent TASK-1.2 lifecycle commit created concurrently on master.
+---
 <!-- COMMENTS:END -->
 
 ## Final Summary
