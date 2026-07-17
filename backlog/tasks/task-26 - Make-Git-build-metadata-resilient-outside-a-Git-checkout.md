@@ -1,11 +1,11 @@
 ---
 id: TASK-26
 title: Make Git build metadata resilient outside a Git checkout
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-17 18:19'
-updated_date: '2026-07-17 18:38'
+updated_date: '2026-07-17 18:40'
 labels:
   - build
   - reliability
@@ -85,6 +85,12 @@ Verification:
 - checkout `cargo check --workspace -vv`: engine and seaborg both emitted trimmed HEAD `bb75dbca431fafcb6cf05de91858dcf27e059476`
 - `git archive f6b057b` source tree `cargo check --workspace -vv`: passed; engine and seaborg both emitted `unknown`
 - `cargo test --workspace`: only `engine::tt::tests::gen_bound` failed; documented baseline failure unchanged at base 46aa66e
+---
+
+author: @codex
+created: 2026-07-17 18:40
+---
+Merged to master at ba2499ea21f5298cdef883329dd8a8ff12e68249. Post-merge verification: cargo fmt --check passed; cargo test --test build_metadata passed (5 tests); cargo test --workspace reproduced only the documented pre-existing engine::tt::tests::gen_bound failure.
 ---
 <!-- COMMENTS:END -->
 
