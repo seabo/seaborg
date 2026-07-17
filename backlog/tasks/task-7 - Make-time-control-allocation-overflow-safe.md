@@ -1,11 +1,11 @@
 ---
 id: TASK-7
 title: Make time-control allocation overflow safe
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 19:07'
+updated_date: '2026-07-17 19:12'
 labels:
   - search
   - uci
@@ -86,6 +86,12 @@ Verification:
 - cargo test -p engine uci::tests: 2 passed
 - u64::MAX Duration/Instant deadline check: passed
 - cargo test --workspace: TASK-7 tests passed; unchanged pre-existing tt::tests::gen_bound failure at engine/src/tt.rs:34
+---
+
+author: @codex
+created: 2026-07-17 19:12
+---
+Merged to master as cbb8d06cba3fea9f64246f93d14da7cb17b29826. Post-merge verification: cargo fmt --check passed; cargo test --workspace passed.
 ---
 <!-- COMMENTS:END -->
 
