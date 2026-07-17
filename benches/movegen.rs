@@ -1,9 +1,11 @@
 use core::init::init_globals;
+use core::mono_traits::{All, Legal};
+use core::movelist::BasicMoveList;
 use core::position::Position;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
-fn gen_moves(position: &Position) {
-    position.generate_moves();
+fn gen_moves(position: &Position) -> BasicMoveList {
+    position.generate::<BasicMoveList, All, Legal>()
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
