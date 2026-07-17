@@ -1,9 +1,11 @@
 ---
 id: TASK-10
 title: Apply the fifty-move rule at 100 plies
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-17 17:14'
+updated_date: '2026-07-17 19:07'
 labels:
   - search
   - rules
