@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 18:19'
-updated_date: '2026-07-17 18:29'
+updated_date: '2026-07-17 18:33'
 labels:
   - build
   - reliability
@@ -40,3 +40,11 @@ The workspace and engine build scripts currently panic when Git cannot be execut
 3. Add machine-independent regression tests with injected command results covering success, missing Git/non-checkout failure, unsuccessful status, invalid UTF-8, and empty output.
 4. Run formatting and the full workspace test suite, then commit the implementation and record the immutable review handoff.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented a shared build metadata resolver for both build scripts. Successful Git output is UTF-8 decoded and trimmed; missing Git, unsuccessful commands, invalid UTF-8, and empty output use the documented deterministic fallback `unknown`. Added injected regression coverage for each resolution path.
+
+Verification note: the source-archive workspace check succeeds without a `.git` directory. The full workspace test suite has one unrelated baseline failure, `engine::tt::tests::gen_bound`, which reproduces at the untouched base commit.
+<!-- SECTION:NOTES:END -->
