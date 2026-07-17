@@ -1,7 +1,7 @@
 ---
 id: TASK-26
 title: Make Git build metadata resilient outside a Git checkout
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-17 18:19'
@@ -48,3 +48,24 @@ Implemented a shared build metadata resolver for both build scripts. Successful 
 
 Verification note: the source-archive workspace check succeeds without a `.git` directory. The full workspace test suite has one unrelated baseline failure, `engine::tt::tests::gen_bound`, which reproduces at the untouched base commit.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @codex
+created: 2026-07-17 18:33
+---
+Implementation handoff
+Branch: task-26-resilient-git-metadata
+Worktree: /Users/seabo/seaborg-worktrees/task-26-resilient-git-metadata
+Base: 46aa66ed04ba91d9526114dd01c5f06fe5668ee4
+Implementation target: f6b057b
+Resolved findings: none
+Verification:
+- `cargo fmt --check`: passed
+- `cargo test --test build_metadata`: passed (5 tests)
+- source archive `cargo check --workspace` without `.git`: passed
+- `cargo test --workspace`: 61 passed, 1 ignored, 1 baseline failure across reported suites before stopping
+Known failures: `engine::tt::tests::gen_bound` fails `assertion failed: gen < 64`; reproduced with `cargo test -p engine tt::tests::gen_bound -- --exact` at both implementation and base 46aa66e.
+---
+<!-- COMMENTS:END -->
