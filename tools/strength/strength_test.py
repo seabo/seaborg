@@ -49,6 +49,11 @@ class Result:
     elo: float | None = None
     elo_error: float | None = None
     pentanomial: list[int] | None = None
+    # Reserved for AC #7 report enumeration. The orchestrator is fail-closed:
+    # any crash or forfeit raises InfrastructureError before a Result exists, so
+    # a completed Result always reports zero here. A future counting mode could
+    # populate these; crashes/forfeits are otherwise recorded as the
+    # INFRASTRUCTURE ERROR report's error message.
     forfeits: int = 0
     crashes: int = 0
     runner_finished: bool = False
@@ -185,8 +190,11 @@ def build_command(args: argparse.Namespace, pgn: Path) -> list[str]:
             "-engine", "name=candidate", f"cmd={args.candidate}",
             "-engine", "name=baseline", f"cmd={args.baseline}",
             "-each", *common,
-            "-tournament", "round-robin", "-rounds", str(args.max_games),
-            "-games", "1", "-repeat", "2",
+            # -rounds counts opening pairs; -games 2 -repeat 2 plays each
+            # opening twice with colours reversed. Total games = rounds * 2 =
+            # max_games (validated even), so cap accounting stays consistent.
+            "-tournament", "round-robin", "-rounds", str(args.max_games // 2),
+            "-games", "2", "-repeat", "2",
             "-openings", f"file={args.openings}", "format=epd",
             "order=sequential", "policy=round",
             "-concurrency", str(args.concurrency),
@@ -228,11 +236,6 @@ def verdict(result: Result, cap: int, authoritative: bool) -> str:
     if result.llr <= result.lower_bound:
         return "FAIL" if authoritative else "INCONCLUSIVE"
     return "INCONCLUSIVE"
-
-
-def write_report(path: Path, report: dict) -> None:
-    path.mkdir(parents=True, exist_ok=False)
-    (path / "report.json").write_text(json.dumps(report, indent=2) + "\n")
 
 
 def run(argv: Sequence[str] | None = None) -> int:

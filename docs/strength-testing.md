@@ -59,7 +59,10 @@ equal time/hash/threads/options, and `restart=on` so stale process state cannot
 cross games. The runner validates engine result claims. The tool also performs
 a UCI handshake/readiness/depth-one preflight, then fails closed on missing
 inputs/dependencies, malformed or incomplete output, crashes, disconnects,
-illegal moves, and time forfeits.
+illegal moves, and time forfeits. Because any such event fails closed to an
+`INFRASTRUCTURE ERROR` before a result is recorded, a completed result always
+reports zero forfeits and zero crashes; those fields are reserved for a future
+counting mode, and real crashes/forfeits appear instead in the error report.
 
 Runner output formats are part of the validated interface. Use a current
 cutechess release that emits the documented score and SPRT lines; the exact

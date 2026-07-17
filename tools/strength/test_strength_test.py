@@ -43,7 +43,22 @@ class StrengthTestTests(unittest.TestCase):
         self.assertIn("option.Hash=64", command)
         self.assertEqual(command[command.index("-repeat") + 1], "2")
         self.assertIn("policy=round", command)
-        self.assertEqual(command[command.index("-rounds") + 1], "100")
+        # -rounds counts opening pairs; -games 2 -repeat 2 plays each opening
+        # with colours reversed. Total games = rounds * 2 = max_games.
+        self.assertEqual(command[command.index("-rounds") + 1], "50")
+
+    def test_command_plays_each_opening_as_colour_reversed_pair(self):
+        config = self.config()
+        command = st.build_command(config, Path("games.pgn"))
+        rounds = int(command[command.index("-rounds") + 1])
+        games = int(command[command.index("-games") + 1])
+        repeat = int(command[command.index("-repeat") + 1])
+        # Each opening is played twice with reversed colours.
+        self.assertEqual(games, 2)
+        self.assertEqual(repeat, 2)
+        # Rounds count pairs and the total game budget matches max_games.
+        self.assertEqual(rounds, config.max_games // 2)
+        self.assertEqual(rounds * games, config.max_games)
 
     def test_parse_complete_result(self):
         result = st.parse_result(PASS_LOG)
@@ -112,7 +127,7 @@ class StrengthTestTests(unittest.TestCase):
             self.assertEqual(report["verdict"], "INFRASTRUCTURE ERROR")
             self.assertIn("invalid command line", report["error"])
 
-    def assert_run_failure(self, runner_output, runner_exit=0):
+    def run_with_mocks(self, runner_output, runner_exit=0, extra_argv=()):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             output = root / "artifacts"
@@ -122,7 +137,7 @@ class StrengthTestTests(unittest.TestCase):
                 "--baseline", str(baseline), "--baseline-id", "base-sha",
                 "--candidate", str(candidate), "--candidate-id", "candidate-sha",
                 "--build-settings", "cargo build --release",
-                "--output", str(output),
+                "--output", str(output), *extra_argv,
             ]
             completed = subprocess.CompletedProcess(
                 ["cutechess-cli"], runner_exit, runner_output, "")
@@ -133,12 +148,33 @@ class StrengthTestTests(unittest.TestCase):
                     mock.patch.object(st.subprocess, "run", return_value=completed), \
                     mock.patch("builtins.print") as printed:
                 exit_code = st.run(argv)
-            self.assertEqual(exit_code, st.INFRA_ERROR)
-            self.assertTrue(any("INFRASTRUCTURE ERROR" in str(call)
-                                for call in printed.call_args_list))
             report = json.loads((output / "report.json").read_text())
-            self.assertEqual(report["verdict"], "INFRASTRUCTURE ERROR")
-            self.assertIn("error", report)
+            return exit_code, report, printed
+
+    def assert_run_failure(self, runner_output, runner_exit=0):
+        exit_code, report, printed = self.run_with_mocks(runner_output, runner_exit)
+        self.assertEqual(exit_code, st.INFRA_ERROR)
+        self.assertTrue(any("INFRASTRUCTURE ERROR" in str(call)
+                            for call in printed.call_args_list))
+        self.assertEqual(report["verdict"], "INFRASTRUCTURE ERROR")
+        self.assertIn("error", report)
+
+    def test_run_success_path_passes_and_records_results(self):
+        exit_code, report, printed = self.run_with_mocks(PASS_LOG, runner_exit=0)
+        self.assertEqual(exit_code, st.PASS)
+        self.assertEqual(report["verdict"], "PASS")
+        self.assertEqual(report["authority"], "AUTHORITATIVE")
+        self.assertEqual(report["runner_exit_code"], 0)
+        # SPRT likelihood state and result statistics are populated end-to-end.
+        self.assertEqual(report["results"]["games"], 10)
+        self.assertEqual(
+            (report["results"]["wins"], report["results"]["draws"],
+             report["results"]["losses"]),
+            (5, 4, 1))
+        for field in ("llr", "lower_bound", "upper_bound"):
+            self.assertIn(field, report["sprt"])
+        self.assertTrue(any("verdict: PASS" in str(call)
+                            for call in printed.call_args_list))
 
     def test_run_malformed_and_incomplete_output_are_infrastructure_errors(self):
         for output in ("malformed runner output\n",
