@@ -692,9 +692,9 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
                 PL::player().relative_square(if king_side { Square::G1 } else { Square::C1 });
             let enemies = self.them_occ;
             let direction: fn(Square) -> Square = if king_side {
-                |x: Square| x - Square(1)
+                |x: Square| unsafe { x.offset_unchecked(-1) }
             } else {
-                |x: Square| x + Square(1)
+                |x: Square| unsafe { x.offset_unchecked(1) }
             };
 
             let mut s: Square = k_to;

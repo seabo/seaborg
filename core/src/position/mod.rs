@@ -63,8 +63,8 @@ impl Player {
     /// Returns the relative square from a given square.
     #[inline(always)]
     pub fn relative_square(self, sq: Square) -> Square {
-        assert!(sq.is_okay());
-        sq ^ Square((self.0) as u8 * 56)
+        // `Square` guarantees `sq < 64`; XOR with 0 or 56 preserves that range.
+        Square(sq.0 ^ (self.0 as u8 * 56))
     }
 
     /// Returns the offset for a single move pawn push.
@@ -294,8 +294,8 @@ impl Position {
             if captured_piece.type_of() == PieceType::Pawn {
                 if mov.is_en_passant() {
                     match us {
-                        Player::WHITE => cap_sq -= Square(8),
-                        Player::BLACK => cap_sq += Square(8),
+                        Player::WHITE => cap_sq = unsafe { cap_sq.offset_unchecked(-8) },
+                        Player::BLACK => cap_sq = unsafe { cap_sq.offset_unchecked(8) },
                     };
 
                     debug_assert_eq!(moving_piece.type_of(), PieceType::Pawn);
@@ -453,8 +453,8 @@ impl Position {
                     let mut cap_sq = dest;
                     if undoable_move.is_en_passant() {
                         match us {
-                            Player::WHITE => cap_sq -= Square(8),
-                            Player::BLACK => cap_sq += Square(8),
+                            Player::WHITE => cap_sq = unsafe { cap_sq.offset_unchecked(-8) },
+                            Player::BLACK => cap_sq = unsafe { cap_sq.offset_unchecked(8) },
                         };
                     }
                     self.put_piece_c(Piece::make(!us, captured_piece), cap_sq);
