@@ -1,7 +1,6 @@
 use crate::history::HistoryTable;
 
 use super::eval::Evaluation;
-use super::info::{CurrMoveInfo, Info, PvInfo};
 use super::killer::KillerTable;
 use super::ordering::{Loader, OrderedMoves, ScoredMoveList, Scorer};
 use super::pv_table::PVTable;
@@ -18,11 +17,191 @@ use separator::Separatable;
 
 use std::ops::Neg;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+
+use crossbeam_channel::{unbounded, Receiver, Sender};
+
+const MAX_DEPTH: u8 = 255;
+
+fn should_razor(depth: u8, eval: Score, alpha: Score) -> bool {
+    depth <= 6 && alpha.is_cp() && eval + Score::cp(426 + 252 * depth as i16 * depth as i16) < alpha
+}
+
+/// A limit controlling how long a search may run.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SearchLimit {
+    /// Search through the given depth.
+    Depth(u8),
+    /// Search until the given amount of wall-clock time has elapsed.
+    Time(Duration),
+    /// Search until explicitly cancelled.
+    Infinite,
+}
+
+/// A snapshot produced after an iterative-deepening iteration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SearchProgress {
+    pub depth: u8,
+    pub score: Score,
+    pub elapsed: Duration,
+    pub nodes: usize,
+    pub nps: u32,
+    pub hashfull: u16,
+    pub principal_variation: Vec<Move>,
+}
+
+/// The move currently being considered at the root of the search.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CurrentMove {
+    pub depth: u8,
+    pub current_move: Move,
+    pub number: u8,
+}
+
+/// A typed update emitted while a search is running.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SearchEvent {
+    Progress(SearchProgress),
+    CurrentMove(CurrentMove),
+}
+
+/// The final result from a completed iterative-deepening iteration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SearchResult {
+    pub score: Score,
+    pub best_move: Option<Move>,
+    pub depth: u8,
+}
+
+/// The reason a search stopped, together with its latest completed result, if any.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SearchOutcome {
+    Completed(Option<SearchResult>),
+    Cancelled(Option<SearchResult>),
+}
+
+impl SearchOutcome {
+    pub fn result(&self) -> Option<&SearchResult> {
+        match self {
+            Self::Completed(result) | Self::Cancelled(result) => result.as_ref(),
+        }
+    }
+
+    pub fn was_cancelled(&self) -> bool {
+        matches!(self, Self::Cancelled(_))
+    }
+}
+
+/// A clonable token used to cancel a running search.
+#[derive(Clone, Debug, Default)]
+pub struct CancellationToken(Arc<AtomicBool>);
+
+impl CancellationToken {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
+/// A reusable owner of search resources.
+pub struct SearchEngine {
+    table: Arc<Table>,
+}
+
+impl SearchEngine {
+    pub fn new(hash_size_mb: usize) -> Self {
+        Self {
+            table: Arc::new(Table::new(hash_size_mb)),
+        }
+    }
+
+    /// Start searching a cloned position on a background thread.
+    pub fn start(&self, position: Position, limit: SearchLimit) -> SearchHandle {
+        if let SearchLimit::Depth(depth) = limit {
+            assert!(depth > 0, "search depth must be greater than zero");
+        }
+
+        let cancellation = CancellationToken::new();
+        let thread_cancellation = cancellation.clone();
+        let table = Arc::clone(&self.table);
+        let (events, receiver) = unbounded();
+        let join = std::thread::spawn(move || {
+            let (depth, deadline) = match limit {
+                SearchLimit::Depth(depth) => (depth, None),
+                SearchLimit::Time(duration) => (MAX_DEPTH, Some(Instant::now() + duration)),
+                SearchLimit::Infinite => (MAX_DEPTH, None),
+            };
+            let mut search =
+                Search::with_events(position, &thread_cancellation.0, deadline, &table, events);
+            let result = search.run::<Master>(depth);
+            if thread_cancellation.is_cancelled() {
+                SearchOutcome::Cancelled(result)
+            } else {
+                SearchOutcome::Completed(result)
+            }
+        });
+
+        SearchHandle {
+            cancellation,
+            events: receiver,
+            join: Some(join),
+        }
+    }
+}
+
+/// Access to a running search's events, cancellation, and final outcome.
+pub struct SearchHandle {
+    cancellation: CancellationToken,
+    events: Receiver<SearchEvent>,
+    join: Option<JoinHandle<SearchOutcome>>,
+}
+
+impl SearchHandle {
+    pub fn cancellation_token(&self) -> CancellationToken {
+        self.cancellation.clone()
+    }
+
+    pub fn events(&self) -> &Receiver<SearchEvent> {
+        &self.events
+    }
+
+    pub fn cancel(&self) {
+        self.cancellation.cancel();
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.join.as_ref().is_none_or(JoinHandle::is_finished)
+    }
+
+    pub fn wait(mut self) -> SearchOutcome {
+        self.join
+            .take()
+            .expect("search outcome was already taken")
+            .join()
+            .expect("search thread panicked")
+    }
+}
+
+impl Drop for SearchHandle {
+    fn drop(&mut self) {
+        if self.join.is_some() {
+            self.cancel();
+        }
+    }
+}
 
 /// Trait to monomorphize search functionality over different thread types: master and worker.
 ///
-/// The master thread will perform slightly different functionality, such as printing UCI info
-/// reports.
+/// The master thread emits typed search events while workers search silently.
 pub trait Thread {
     fn is_master() -> bool;
 }
@@ -165,7 +344,9 @@ pub struct Search<'engine> {
     /// Flag to indicate when the search should start unwinding due to user intervention.
     stopping: &'engine AtomicBool,
     /// Time to at which to end search.
-    stop_time: Option<std::time::Instant>,
+    stop_time: Option<Instant>,
+    /// Destination for typed search progress events.
+    events: Option<Sender<SearchEvent>>,
     search_depth: u8,
     depth_reached: u8,
 }
@@ -174,8 +355,28 @@ impl<'engine> Search<'engine> {
     pub fn new(
         pos: Position,
         flag: &'engine AtomicBool,
-        stop_time: Option<std::time::Instant>,
+        stop_time: Option<Instant>,
         tt: &'engine Table,
+    ) -> Self {
+        Self::build(pos, flag, stop_time, tt, None)
+    }
+
+    fn with_events(
+        pos: Position,
+        flag: &'engine AtomicBool,
+        stop_time: Option<Instant>,
+        tt: &'engine Table,
+        events: Sender<SearchEvent>,
+    ) -> Self {
+        Self::build(pos, flag, stop_time, tt, Some(events))
+    }
+
+    fn build(
+        pos: Position,
+        flag: &'engine AtomicBool,
+        stop_time: Option<Instant>,
+        tt: &'engine Table,
+        events: Option<Sender<SearchEvent>>,
     ) -> Self {
         Self {
             pos,
@@ -186,12 +387,13 @@ impl<'engine> Search<'engine> {
             trace: Tracer::new(),
             stopping: flag,
             stop_time,
+            events,
             search_depth: 0,
             depth_reached: 0,
         }
     }
 
-    pub fn run<T: Thread>(&mut self, d: u8) -> (Score, Move) {
+    pub fn run<T: Thread>(&mut self, d: u8) -> Option<SearchResult> {
         self.trace = Tracer::new();
 
         assert!(d > 0);
@@ -206,24 +408,22 @@ impl<'engine> Search<'engine> {
         self.trace.commence_search();
         self.search_depth = d;
 
-        let (score, best_move) = self.iterative_deepening::<T>(d);
+        let result = self.iterative_deepening::<T>(d);
         self.trace.end_search();
 
         assert_eq!(start_zob, self.pos.zobrist());
 
-        if T::is_master() {
-            self.report_telemetry(d, score);
-            println!("bestmove {}", best_move);
+        if let Some(result) = &result {
+            self.report_telemetry(d, result.score);
         }
 
         self.history.reset();
 
-        (score, best_move)
+        result
     }
 
-    fn iterative_deepening<T: Thread>(&mut self, depth: u8) -> (Score, Move) {
-        let mut score = Score::INF_N;
-        let mut best_move = Move::null();
+    fn iterative_deepening<T: Thread>(&mut self, depth: u8) -> Option<SearchResult> {
+        let mut result = None;
 
         for d in 1..=depth {
             if self.stopping() {
@@ -235,25 +435,19 @@ impl<'engine> Search<'engine> {
             let value = self.search::<T, Root>(Score::INF_N, Score::INF_P, d);
 
             if !self.stopping() {
-                score = value;
-                best_move = match self.pvt.pv().into_iter().next() {
-                    Some(mov) => *mov,
-                    None => {
-                        let entry = self.tt.probe(&self.pos).into_inner();
-                        let tt_entry = entry.read();
-                        assert!(!tt_entry.is_empty());
-                        tt_entry.mov.to_move(&self.pos)
-                    }
-                };
                 self.depth_reached = d;
-            }
-
-            if T::is_master() {
-                self.report_pv(self.depth_reached, score);
+                result = Some(SearchResult {
+                    score: value,
+                    best_move: self.pvt.pv().next().copied(),
+                    depth: d,
+                });
+                if T::is_master() {
+                    self.emit_progress(d, value);
+                }
             }
         }
 
-        (score, best_move)
+        result
     }
 
     pub fn search<T: Thread, Node: NodeType>(
@@ -369,7 +563,7 @@ impl<'engine> Search<'engine> {
         // Step 7. Razoring.
         // When eval is very low, check with quiescence whether it has any hope of raising alpha. If
         // not, return a fail low.
-        if depth <= 6 && eval + Score::cp(426 + 252 * depth as i16 * depth as i16) < alpha {
+        if should_razor(depth, eval, alpha) {
             let value = self.quiesce::<Master, NonPv>(alpha - Score::cp(1), alpha);
             if value < alpha {
                 return value;
@@ -421,7 +615,7 @@ impl<'engine> Search<'engine> {
 
                 // Start reporting which move we're considering after 3 seconds have elapsed.
                 if T::is_master() && Node::root() && self.trace.live_elapsed().as_millis() > 3000 {
-                    self.report_curr_move(depth, &mov, move_count);
+                    self.emit_current_move(depth, &mov, move_count);
                 }
 
                 // Step 16. Reductions & extensions.
@@ -496,13 +690,13 @@ impl<'engine> Search<'engine> {
             }
         }
 
-        debug_assert!(
-            move_count > 0 || self.pos.generate::<BasicMoveList, AllGen, Legal>().len() == 0
-        );
-
         if self.stopping() {
             return Score::zero();
         }
+
+        debug_assert!(
+            move_count > 0 || self.pos.generate::<BasicMoveList, AllGen, Legal>().len() == 0
+        );
 
         // Step 23. Check for mate and stalemate.
         if move_count == 0 {
@@ -701,35 +895,30 @@ impl<'engine> Search<'engine> {
         alpha
     }
 
-    fn report_pv(&self, depth: u8, score: Score) {
-        println!(
-            "{}",
-            Info::Pv(PvInfo {
-                depth,
-                score,
-                time: self.trace.live_elapsed().as_millis() as usize,
-                nodes: self.trace.nodes_visited(),
-                pv: self
-                    .pvt
-                    .pv()
-                    .map(|m| format!("{}", m))
-                    .collect::<Vec<_>>()
-                    .join(" "),
-                hashfull: self.tt.hashfull(),
-                nps: self.trace.live_nps() as u32,
-            })
-        );
+    fn emit_progress(&self, depth: u8, score: Score) {
+        self.emit(SearchEvent::Progress(SearchProgress {
+            depth,
+            score,
+            elapsed: self.trace.live_elapsed(),
+            nodes: self.trace.nodes_visited(),
+            principal_variation: self.pvt.pv().copied().collect(),
+            hashfull: self.tt.hashfull(),
+            nps: self.trace.live_nps() as u32,
+        }));
     }
 
-    fn report_curr_move(&self, depth: u8, mov: &Move, num: u8) {
-        println!(
-            "{}",
-            Info::CurrMove(CurrMoveInfo {
-                depth,
-                currmove: *mov,
-                number: num,
-            })
-        );
+    fn emit_current_move(&self, depth: u8, mov: &Move, num: u8) {
+        self.emit(SearchEvent::CurrentMove(CurrentMove {
+            depth,
+            current_move: *mov,
+            number: num,
+        }));
+    }
+
+    fn emit(&self, event: SearchEvent) {
+        if let Some(events) = &self.events {
+            let _ = events.send(event);
+        }
     }
 
     /// Detailed debug info about the search, printed after the end of search in debug mode.
@@ -964,6 +1153,7 @@ impl<'a, 'search> Loader for QMoveLoader<'a, 'search> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[rustfmt::skip]
     fn suite() -> Vec<(&'static str, u8, Score, Score, &'static str)> {
@@ -998,6 +1188,14 @@ mod tests {
         ]
     }
 
+    /// Razoring relies on a static centipawn evaluation, so mate and infinity bounds are excluded.
+    #[test]
+    fn razoring_only_applies_to_centipawn_bounds() {
+        assert!(should_razor(1, Score::cp(-1_000), Score::cp(0)));
+        assert!(!should_razor(1, Score::cp(-1_000), Score::mate(5)));
+        assert!(!should_razor(1, Score::cp(-1_000), Score::INF_P));
+    }
+
     /// A regression test to ensure that our search routine produces the expected results for a
     /// range of positions.
     #[test]
@@ -1011,11 +1209,152 @@ mod tests {
             let flag = AtomicBool::new(false);
             let tt = Table::new(16);
             let mut search = Search::new(pos, &flag, None, &tt);
-            let (s, m) = search.run::<Master>(depth);
+            let result = search.run::<Master>(depth).unwrap();
 
-            assert!(lo <= s);
-            assert!(s <= hi);
-            assert_eq!(m.to_uci_string(), bm);
+            assert!(lo <= result.score);
+            assert!(result.score <= hi);
+            assert_eq!(result.best_move.unwrap().to_uci_string(), bm);
         }
+    }
+
+    #[test]
+    fn typed_api_returns_completed_search() {
+        core::init::init_globals();
+
+        let engine = SearchEngine::new(1);
+        let search = engine.start(Position::start_pos(), SearchLimit::Depth(2));
+        let outcome = search.wait();
+
+        assert!(!outcome.was_cancelled());
+        assert_eq!(outcome.result().unwrap().depth, 2);
+        assert!(outcome.result().unwrap().best_move.is_some());
+    }
+
+    #[test]
+    fn typed_api_delivers_iterative_deepening_events() {
+        core::init::init_globals();
+
+        let engine = SearchEngine::new(1);
+        let search = engine.start(Position::start_pos(), SearchLimit::Depth(2));
+        let events = search.events().clone();
+        let outcome = search.wait();
+        let progress = events
+            .try_iter()
+            .filter_map(|event| match event {
+                SearchEvent::Progress(progress) => Some(progress),
+                SearchEvent::CurrentMove(_) => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert!(matches!(outcome, SearchOutcome::Completed(_)));
+        assert_eq!(progress.len(), 2);
+        assert_eq!(progress[0].depth, 1);
+        assert_eq!(progress[1].depth, 2);
+        assert!(progress.iter().all(|event| event.nodes > 0));
+        assert!(progress
+            .iter()
+            .all(|event| !event.principal_variation.is_empty()));
+    }
+
+    #[test]
+    fn search_emits_typed_current_move_events() {
+        core::init::init_globals();
+
+        let mut position = Position::start_pos();
+        let current_move = position.make_uci_move("e2e4").unwrap();
+        let flag = AtomicBool::new(false);
+        let table = Table::new(1);
+        let (sender, events) = unbounded();
+        let search = Search::with_events(position, &flag, None, &table, sender);
+
+        search.emit_current_move(7, &current_move, 4);
+
+        assert_eq!(
+            events.recv().unwrap(),
+            SearchEvent::CurrentMove(CurrentMove {
+                depth: 7,
+                current_move,
+                number: 4,
+            })
+        );
+    }
+
+    #[test]
+    fn typed_api_cancels_running_search() {
+        core::init::init_globals();
+
+        let engine = SearchEngine::new(1);
+        let search = engine.start(Position::start_pos(), SearchLimit::Infinite);
+        let events = search.events().clone();
+        search
+            .events()
+            .recv_timeout(Duration::from_secs(2))
+            .expect("search should produce progress before cancellation");
+        search.cancel();
+        let outcome = search.wait();
+
+        assert!(outcome.was_cancelled());
+        assert!(outcome.result().unwrap().depth >= 1);
+        assert!(outcome.result().unwrap().best_move.is_some());
+        assert!(events.try_iter().all(|event| match event {
+            SearchEvent::Progress(progress) => {
+                progress.principal_variation.len() <= usize::from(progress.depth)
+            }
+            SearchEvent::CurrentMove(_) => true,
+        }));
+    }
+
+    #[test]
+    fn zero_time_limit_has_no_fabricated_result() {
+        core::init::init_globals();
+
+        let engine = SearchEngine::new(1);
+        let search = engine.start(Position::start_pos(), SearchLimit::Time(Duration::ZERO));
+        let outcome = search.wait();
+
+        assert!(matches!(outcome, SearchOutcome::Completed(None)));
+    }
+
+    #[test]
+    fn immediate_cancellation_returns_an_explicit_optional_result() {
+        core::init::init_globals();
+
+        let engine = SearchEngine::new(1);
+        let search = engine.start(Position::start_pos(), SearchLimit::Infinite);
+        search.cancel();
+        let outcome = search.wait();
+
+        assert!(outcome.was_cancelled());
+        assert!(outcome
+            .result()
+            .is_none_or(|result| result.best_move.is_some()));
+    }
+
+    #[test]
+    fn terminal_position_returns_score_without_a_best_move() {
+        core::init::init_globals();
+
+        let position = Position::from_fen("7k/6Q1/6K1/8/8/8/8/8 b - - 0 1").unwrap();
+        let engine = SearchEngine::new(1);
+        let outcome = engine.start(position, SearchLimit::Depth(1)).wait();
+        let result = outcome.result().unwrap();
+
+        assert!(matches!(outcome, SearchOutcome::Completed(Some(_))));
+        assert_eq!(result.depth, 1);
+        assert_eq!(result.best_move, None);
+    }
+
+    #[test]
+    fn typed_api_supports_time_limits() {
+        core::init::init_globals();
+
+        let engine = SearchEngine::new(1);
+        let search = engine.start(
+            Position::start_pos(),
+            SearchLimit::Time(Duration::from_millis(10)),
+        );
+        let outcome = search.wait();
+
+        assert!(matches!(outcome, SearchOutcome::Completed(_)));
     }
 }

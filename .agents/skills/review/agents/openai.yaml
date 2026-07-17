@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review"
+  short_description: "Review committed task work independently"
+  default_prompt: "Use $review to enter the task worktree, independently review its committed implementation, and record the verdict."
