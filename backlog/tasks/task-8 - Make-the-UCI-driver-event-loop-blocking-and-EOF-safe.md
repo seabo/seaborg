@@ -1,10 +1,11 @@
 ---
 id: TASK-8
 title: Make the UCI driver event loop blocking and EOF safe
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 18:27'
+updated_date: '2026-07-17 18:30'
 labels:
   - uci
   - concurrency
@@ -31,3 +32,12 @@ After the typed search lifecycle lands, the UCI driver still busy-polls commands
 - [ ] #4 Starting, stopping, replacing, and quitting an active search has deterministic serialized behavior
 - [ ] #5 Integration tests cover EOF, stdin read failure, idle readiness, replacement search, stop, and quit
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Refactor the UCI input reader and driver behind injectable buffered input/output while preserving the public launch entry point.
+2. Replace command and search busy-polling with blocking receive/select behavior, treating EOF, read failure, and channel disconnection as clean shutdown signals.
+3. Serialize active-search transitions so replacement, stop, quit, and input termination cancel and join deterministically while draining typed events and formatting outcomes consistently.
+4. Add integration-style driver tests for idle readiness, EOF, read failure, replacement search, stop, and quit; then run focused tests and required workspace checks.
+<!-- SECTION:PLAN:END -->
