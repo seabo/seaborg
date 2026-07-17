@@ -1,11 +1,11 @@
 ---
 id: TASK-27
 title: Add a reproducible engine strength-regression test script
-status: Changes Requested
+status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 18:54'
-updated_date: '2026-07-17 21:58'
+updated_date: '2026-07-17 23:20'
 labels: []
 dependencies: []
 references:
@@ -58,10 +58,10 @@ The implementation should be practical on a dedicated or self-hosted machine. It
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Resolve REV-2-01 by making verdict rendering conditional on complete result statistics.
-2. Add orchestration-level tests for malformed, incomplete, crash-marked, and nonzero runner outcomes.
-3. Verify every failure preserves the infrastructure report and returns exit 3 without a secondary exception.
-4. Run focused tests and repository quality gates, record the resolution, commit a new immutable target, and hand off for review.
+1. Resolve REV-3-01 (P1): change runner invocation to genuinely play each opening as a colour-reversed pair. Use cutechess -rounds max_games/2 -games 2 -repeat 2 (rounds count pairs; total games = max_games), keeping cap/max_games accounting consistent. Add a test asserting the paired/colour-reversal flags. cutechess-cli is not installed in this environment; verify flags against the cutechess-cli.6 manual and canonical fishtest usage, and note that in the handoff.
+2. Resolve REV-3-02 (P2): add a run()-level success test that mocks setup and a PASS runner output at return code 0, asserting exit 0, verdict PASS in report.json, and populated results/sprt.
+3. Resolve REV-3-03 (P3): remove dead write_report(); make forfeits/crashes honest by documenting them as reserved fail-closed-zero counters (fields kept for AC #7 report enumeration) in code and docs.
+4. Run focused Python tests and repository quality gates (cargo fmt --check, cargo test --workspace), record resolutions, commit a new immutable target, and hand off for review.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
