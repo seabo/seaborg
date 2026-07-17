@@ -1,11 +1,11 @@
 ---
 id: TASK-11
 title: Reject structurally invalid FEN without panicking
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 19:16'
+updated_date: '2026-07-17 19:18'
 labels:
   - core
   - fen
@@ -89,6 +89,12 @@ Verification:
 - cargo fmt --check: passed
 - cargo test -p core position::fen::tests: passed (4 tests)
 - cargo test --workspace: passed (core 19; engine 39 passed, 1 ignored; build metadata 5; doc tests 0)
+---
+
+author: @codex
+created: 2026-07-17 19:18
+---
+Merged approved branch task-11-reject-invalid-fen into master at a98dd50c5a9d169bb97afc3ef74d75a194ea25d0. Post-merge verification: cargo fmt --check passed; cargo test --workspace passed (core 21; engine 48 passed, 1 ignored; build metadata 5; doc tests 0).
 ---
 <!-- COMMENTS:END -->
 
