@@ -151,6 +151,27 @@ impl Move {
                 "invalid promotion piece"
             );
         }
+        // SAFETY: the assertions above establish the constructor contract.
+        unsafe { Self::build_unchecked(orig, dest, promo_piece_type, ty) }
+    }
+
+    /// Builds a move without validating its structural invariants.
+    ///
+    /// # Safety
+    ///
+    /// `orig` and `dest` must differ; `ty` must be non-empty and must not contain
+    /// `NULL`; castling must not be combined with capture, en passant, or
+    /// promotion; en passant must include capture; and promotion metadata must
+    /// contain a queen, rook, bishop, or knight exactly when `PROMOTION` is set.
+    /// This is crate-private so only audited move-generation paths can elide the
+    /// public constructor's validation.
+    #[inline(always)]
+    pub(crate) unsafe fn build_unchecked(
+        orig: Square,
+        dest: Square,
+        promo_piece_type: Option<PieceType>,
+        ty: MoveType,
+    ) -> Self {
         Self {
             orig,
             dest,

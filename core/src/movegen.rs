@@ -490,12 +490,16 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
 
             for dest in push_one {
                 let orig = PL::down(dest);
-                self.add_move::<L>(Move::build(orig, dest, None, MoveType::QUIET));
+                self.add_move::<L>(unsafe {
+                    Move::build_unchecked(orig, dest, None, MoveType::QUIET)
+                });
             }
 
             for dest in push_two {
                 let orig = PL::down(PL::down(dest));
-                self.add_move::<L>(Move::build(orig, dest, None, MoveType::QUIET));
+                self.add_move::<L>(unsafe {
+                    Move::build_unchecked(orig, dest, None, MoveType::QUIET)
+                });
             }
         }
 
@@ -533,12 +537,16 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
 
             for dest in left_cap {
                 let orig = PL::down_right(dest);
-                self.add_move::<L>(Move::build(orig, dest, None, MoveType::CAPTURE));
+                self.add_move::<L>(unsafe {
+                    Move::build_unchecked(orig, dest, None, MoveType::CAPTURE)
+                });
             }
 
             for dest in right_cap {
                 let orig = PL::down_left(dest);
-                self.add_move::<L>(Move::build(orig, dest, None, MoveType::CAPTURE));
+                self.add_move::<L>(unsafe {
+                    Move::build_unchecked(orig, dest, None, MoveType::CAPTURE)
+                });
             }
 
             if let Some(ep_square) = self.position.ep_square() {
@@ -549,12 +557,14 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
                     pawns_not_rank_7 & Bitboard(pawn_attacks_from(ep_square, PL::opp_player()));
 
                 for orig in ep_cap {
-                    self.add_move::<L>(Move::build(
-                        orig,
-                        ep_square,
-                        None,
-                        MoveType::EN_PASSANT | MoveType::CAPTURE,
-                    ));
+                    self.add_move::<L>(unsafe {
+                        Move::build_unchecked(
+                            orig,
+                            ep_square,
+                            None,
+                            MoveType::EN_PASSANT | MoveType::CAPTURE,
+                        )
+                    });
                 }
             }
         }
@@ -700,7 +710,9 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
                 s = direction(s);
             }
             if can_castle {
-                self.add_move::<L>(Move::build(ksq, k_to, None, MoveType::CASTLE));
+                self.add_move::<L>(unsafe {
+                    Move::build_unchecked(ksq, k_to, None, MoveType::CASTLE)
+                });
             }
         }
     }
@@ -728,7 +740,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
         ty: MoveType,
     ) {
         for dest in bb {
-            let mov = Move::build(orig, dest, None, ty);
+            let mov = unsafe { Move::build_unchecked(orig, dest, None, ty) };
             self.add_move::<L>(mov);
         }
     }
@@ -759,7 +771,9 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
         } else {
             MoveType::PROMOTION
         };
-        self.add_move::<L>(Move::build(orig, dest, Some(PieceType::Queen), move_ty));
+        self.add_move::<L>(unsafe {
+            Move::build_unchecked(orig, dest, Some(PieceType::Queen), move_ty)
+        });
     }
 
     /// Add the four possible promo moves (`=N`, `=B`, `=R`, `=Q`)
@@ -771,7 +785,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
             MoveType::PROMOTION
         };
         for piece in PROMO_PIECES {
-            self.add_move::<L>(Move::build(orig, dest, Some(piece), move_ty));
+            self.add_move::<L>(unsafe { Move::build_unchecked(orig, dest, Some(piece), move_ty) });
         }
     }
 
@@ -848,7 +862,8 @@ mod tests {
             let moves = self.position.generate::<BasicMoveList, Captures, Legal>();
 
             for mov in &moves {
-                self.position.make_move(mov);
+                // SAFETY: `mov` was generated for this unchanged position.
+                unsafe { self.position.make_move_unchecked(mov) };
                 self.perft(depth - 1);
                 self.position.unmake_move();
             }
