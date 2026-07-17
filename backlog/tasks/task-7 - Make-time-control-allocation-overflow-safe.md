@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 19:12'
+updated_date: '2026-07-17 19:13'
 labels:
   - search
   - uci
@@ -92,6 +92,12 @@ author: @codex
 created: 2026-07-17 19:12
 ---
 Merged to master as cbb8d06cba3fea9f64246f93d14da7cb17b29826. Post-merge verification: cargo fmt --check passed; cargo test --workspace passed.
+---
+
+author: @codex
+created: 2026-07-17 19:13
+---
+Correction: TASK-7's actual merge commit is f78173d (Merge task-7-overflow-safe-time-control). The earlier cbb8d06 reference was the current master tip after a concurrent TASK-6 lifecycle update.
 ---
 <!-- COMMENTS:END -->
 
