@@ -22,7 +22,8 @@ pub const MAX_MOVES: usize = 254;
 pub trait MoveList: Debug {
     /// Create an empty move list.
     fn empty() -> Self;
-    /// Add a `Move` to the end of the list.
+    /// Add a `Move` to the end of the list. Fixed-capacity implementations ignore the move when
+    /// the list is full.
     fn push(&mut self, mv: Move);
     /// The length of the move list.
     fn len(&self) -> usize;
@@ -31,7 +32,8 @@ pub trait MoveList: Debug {
 }
 
 /// Move-generation storage specialized for the hot perft path. This intentionally avoids both
-/// initialization of the 1 KiB backing array and a destructor on every node.
+/// initialization of the 1 KiB backing array and a destructor on every node. Pushes beyond the
+/// capacity are ignored.
 #[derive(Debug)]
 pub struct HotArrayVec<T, const N: usize> {
     inner: [MaybeUninit<T>; N],
@@ -264,11 +266,12 @@ impl MoveList for HotArrayVec<Move, MAX_MOVES> {
 
     #[inline(always)]
     fn push(&mut self, mv: Move) {
-        debug_assert!(self.len < MAX_MOVES);
-        // SAFETY: no legal chess position has more than 218 moves, below the capacity of 254.
-        // Avoiding initialization and checked push/drop overhead is measurable in perft.
-        unsafe { self.inner.get_unchecked_mut(self.len).write(mv) };
-        self.len += 1;
+        if self.len < MAX_MOVES {
+            // SAFETY: capacity was checked immediately above. Avoiding initialization and checked
+            // push/drop overhead is measurable in perft.
+            unsafe { self.inner.get_unchecked_mut(self.len).write(mv) };
+            self.len += 1;
+        }
     }
 
     #[inline(always)]
@@ -337,6 +340,9 @@ impl<'a> IntoIterator for &'a OverflowingMoveList {
 mod tests {
     use super::*;
 
+    use crate::init::init_globals;
+    use crate::mono_traits::{All, Legal};
+    use crate::position::Position;
     use std::mem;
 
     #[test]
@@ -345,11 +351,32 @@ mod tests {
     }
 
     #[test]
-    fn arrayvec_respects_its_generic_capacity() {
+    fn arrayvec_ignores_pushes_beyond_capacity() {
         let mut list = ArrayVec::<u8, 1>::new();
         list.push_val(1);
         list.push_val(2);
 
         assert_eq!(list.as_slice(), &[1]);
+    }
+
+    #[test]
+    fn hot_arrayvec_ignores_pushes_beyond_capacity() {
+        let mut list = BasicMoveList::empty();
+
+        for _ in 0..MAX_MOVES {
+            list.push(Move::null());
+        }
+        assert_eq!(list.len(), MAX_MOVES);
+
+        list.push(Move::null());
+        assert_eq!(list.len(), MAX_MOVES);
+    }
+
+    #[test]
+    fn start_position_retains_all_legal_moves() {
+        init_globals();
+        let moves = Position::start_pos().generate::<BasicMoveList, All, Legal>();
+
+        assert_eq!(moves.len(), 20);
     }
 }
