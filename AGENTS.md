@@ -5,6 +5,44 @@ Seaborg is a Rust workspace for a chess engine and UCI executable.
 For Rust changes, run `cargo fmt --check` and `cargo test --workspace` before
 finishing.
 
+## Task lifecycle
+
+Backlog task statuses have these meanings:
+
+- `To Do`: eligible for an implementation agent to claim.
+- `In Progress`: exclusively owned implementation or rework is underway.
+- `In Review`: implementation is committed and ready for independent review.
+- `Changes Requested`: blocking review findings must be resolved on the same task.
+- `Ready to Merge`: an independent reviewer approved a specific immutable commit.
+- `Needs Human`: automation cannot proceed safely without a decision or intervention.
+- `Done`: the approved work was merged successfully. Approval alone is not done.
+
+Use the repository skills for task processing:
+
+- `$implement` for selection, implementation, and review rework.
+- `$review` for independent review and Backlog verdict recording.
+
+Implementation agents must not approve their own work, move tasks to `Ready to
+Merge` or `Done`, or create follow-up tasks for review findings. Review agents
+must not fix the implementation they are reviewing. Blocking findings stay on
+the original task with stable finding IDs. Review only committed, immutable
+targets; any implementation change invalidates prior approval.
+
+Every task is implemented on one dedicated task branch in one dedicated
+worktree. Create or reattach that worktree before changing task state. Code,
+plans, handoffs, review findings, and approval metadata are committed on the
+task branch; do not mirror lifecycle edits onto the primary branch. Reviewers
+reuse the same branch and worktree (or reattach the existing branch if its local
+worktree was removed). The primary branch receives the complete task record
+only when the approved task branch is merged.
+
+Keep Backlog active-branch checking enabled so the board can surface task state
+from feature branches. A task invocation authorizes local, task-scoped commits
+in its worktree, but not pushing or merging.
+
+The transition rules, review format, and manual handoff procedure are defined in
+`TASK_LIFECYCLE.md`.
+
 <!-- BACKLOG.MD GUIDELINES START -->
 <!-- backlog.md-instructions-version: 1.48.0 -->
 

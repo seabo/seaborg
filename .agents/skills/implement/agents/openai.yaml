@@ -1,0 +1,4 @@
+interface:
+  display_name: "Implement"
+  short_description: "Implement tasks in isolated worktrees"
+  default_prompt: "Use $implement to create or reuse a task worktree, implement the Backlog.md task, commit it, and prepare it for review."
