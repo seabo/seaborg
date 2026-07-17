@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 19:07'
+updated_date: '2026-07-17 19:08'
 labels:
   - search
   - rules
@@ -35,5 +35,8 @@ The Position halfmove clock counts plies, but search declares a draw and evaluat
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Add a Position-level fifty-move threshold and predicate expressed in plies.\n2. Use the shared predicate in search and game terminal detection, and scale material evaluation over the same 100-ply window.\n3. Add FEN-based boundary tests for 99, 100, and 101 plies plus a regression assertion that evaluation remains nonzero at 50.\n4. Run focused tests, cargo fmt --check, and cargo test --workspace.
+1. Add a Position-level fifty-move threshold and predicate expressed in plies.
+2. Use the shared predicate in search and game terminal detection, and scale material evaluation over the same 100-ply window.
+3. Add FEN-based boundary tests for 99, 100, and 101 plies plus a regression assertion that evaluation remains nonzero at 50.
+4. Run focused tests, cargo fmt --check, and cargo test --workspace.
 <!-- SECTION:PLAN:END -->
