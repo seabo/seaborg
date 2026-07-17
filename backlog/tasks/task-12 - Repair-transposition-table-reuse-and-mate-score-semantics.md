@@ -1,7 +1,7 @@
 ---
 id: TASK-12
 title: Repair transposition-table reuse and mate-score semantics
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
@@ -51,3 +51,22 @@ Validation passed:
 - cargo fmt --check
 - cargo test --workspace
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @codex
+created: 2026-07-17 21:44
+---
+Implementation handoff
+Branch: task-12-tt-reuse-mate-scores
+Worktree: /Users/seabo/seaborg-worktrees/task-12-tt-reuse-mate-scores
+Base: 2c3a91b42c8810ca1897c4fc7675470aa4245ac0
+Implementation target: 2b1fe1624d1c9ea92f4638a1da619256699032c8
+Resolved findings: none
+Verification:
+- cargo fmt --check: passed
+- cargo test --workspace: passed (91 passed, 1 ignored)
+Known failures: none
+---
+<!-- COMMENTS:END -->
