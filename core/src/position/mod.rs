@@ -256,7 +256,10 @@ impl Position {
         self.zobrist.toggle_side_to_move();
 
         // Castling rights
-        let new_castling_rights = self.castling_rights.update(from);
+        let mut new_castling_rights = self.castling_rights.update(from);
+        if captured_piece.type_of() == PieceType::Rook {
+            new_castling_rights = new_castling_rights.update(to);
+        }
         self.zobrist
             .update_castling_rights(self.castling_rights, new_castling_rights);
         self.castling_rights = new_castling_rights;
@@ -1122,6 +1125,8 @@ pub fn u8_to_u64(s: u8) -> u64 {
 mod tests {
     use super::*;
 
+    use crate::init::init_globals;
+
     #[test]
     fn blank_position_rejects_move_before_mutation() {
         let mut position = Position::blank();
@@ -1140,5 +1145,53 @@ mod tests {
     #[should_panic(expected = "cannot make a null move")]
     fn position_rejects_null_move() {
         Position::blank().make_move(&Move::null());
+    }
+
+    #[test]
+    fn rook_captures_clear_castling_rights_and_unmake_restores_state() {
+        init_globals();
+
+        let cases = [
+            (
+                "4k3/8/8/8/8/8/1b6/R3K2R b KQ - 0 1",
+                Square::B2,
+                Square::A1,
+                CastlingRights::new(true, false, false, false),
+            ),
+            (
+                "4k3/8/8/8/8/8/6b1/R3K2R b KQ - 0 1",
+                Square::G2,
+                Square::H1,
+                CastlingRights::new(false, true, false, false),
+            ),
+            (
+                "r3k2r/1B6/8/8/8/8/8/4K3 w kq - 0 1",
+                Square::B7,
+                Square::A8,
+                CastlingRights::new(false, false, true, false),
+            ),
+            (
+                "r3k2r/6B1/8/8/8/8/8/4K3 w kq - 0 1",
+                Square::G7,
+                Square::H8,
+                CastlingRights::new(false, false, false, true),
+            ),
+        ];
+
+        for (fen, from, to, expected_rights) in cases {
+            let mut position = Position::from_fen(fen).unwrap();
+            let original = position.clone();
+            let mov = Move::build(from, to, None, MoveType::CAPTURE);
+
+            position.make_move(&mov);
+
+            assert_eq!(position.castling_rights(), expected_rights, "{fen}");
+            assert_ne!(position.zobrist(), original.zobrist(), "{fen}");
+
+            position.unmake_move();
+
+            assert_eq!(position, original, "{fen}");
+            assert_eq!(position.zobrist(), original.zobrist(), "{fen}");
+        }
     }
 }

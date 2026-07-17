@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 21:39'
+updated_date: '2026-07-17 21:43'
 labels:
   - core
   - movegen
@@ -14,6 +14,9 @@ dependencies: []
 references:
   - core/src/position/mod.rs
   - core/src/position/castling.rs
+  - core/src/movegen.rs
+modified_files:
+  - core/src/position/mod.rs
   - core/src/movegen.rs
 priority: high
 type: bug
@@ -42,3 +45,11 @@ Position updates castling rights only from the moving piece origin. Capturing a 
 3. Add focused position and move-generation regression tests for captures on a1, h1, a8, and h8, exact make/unmake state and Zobrist restoration, and stale-right FENs with missing or wrong-colored origin pieces.
 4. Run focused tests, cargo fmt --check, and cargo test --workspace; commit implementation and prepare the immutable review handoff.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented capture-destination castling-right invalidation for captured rooks, using the existing incremental Zobrist castling-right transition. Hardened castling generation to require the correctly colored king on e1/e8 and rook on a/h origin. Added four-square capture make/unmake regressions and stale-right FEN move-generation coverage for missing, displaced, and wrong-colored pieces.
+
+Verification passed: cargo test -p core rook_captures_clear_castling_rights_and_unmake_restores_state; cargo test -p core stale_castling_rights_require_correct_origin_pieces; cargo fmt --check; cargo test --workspace.
+<!-- SECTION:NOTES:END -->
