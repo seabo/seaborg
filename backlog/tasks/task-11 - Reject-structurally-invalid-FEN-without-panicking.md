@@ -67,4 +67,11 @@ Verification:
 - cargo test --workspace: passed (core 19; engine 39 passed, 1 ignored; build metadata 5; doc tests 0)
 Known failures: none
 ---
+
+author: @codex
+created: 2026-07-17 19:12
+---
+Handoff correction
+The exact implementation target is 1cc446b3e6115865b803128423d3cb38eade10e0. The earlier handoff comment expanded the correct abbreviated SHA (1cc446b) incorrectly; all other handoff fields and verification results are unchanged.
+---
 <!-- COMMENTS:END -->
