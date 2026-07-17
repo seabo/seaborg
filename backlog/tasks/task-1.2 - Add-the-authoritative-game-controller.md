@@ -1,11 +1,11 @@
 ---
 id: TASK-1.2
 title: Add the authoritative game controller
-status: Changes Requested
+status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 15:40'
-updated_date: '2026-07-17 18:12'
+updated_date: '2026-07-17 18:15'
 labels: []
 dependencies:
   - TASK-1.1
@@ -40,12 +40,10 @@ Add a single-owner game session that coordinates the human side, live Position, 
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Add a transport-independent GameController that owns Position, human side, revisions, move/SAN history, snapshots, terminal status, and active typed-search metadata.
-2. Validate revisioned human commands against the authoritative legal-move list; implement reset and undo with search cancellation and monotonically increasing revisions/search IDs.
-3. Poll typed search events/outcomes and apply a best move only when its search ID and originating revision still match the active game.
-4. Add SAN generation covering ambiguity, castling, captures, checks/checkmate, en passant, and promotion, and expose immutable snapshot values including engine state.
-5. Add focused controller tests for both sides, legal/illegal/stale play, lifecycle cancellation, reset/undo during search, special moves, SAN, repetition/move-count draws, mate, and stalemate.
-6. Run cargo fmt --check and cargo test --workspace, record evidence, and finalize the task.
+1. Integrate the committed task-1.1-typed-engine-api dependency branch into the existing TASK-1.2 branch without rewriting review history.
+2. Resolve controller compatibility with the finalized typed-search API and add or adjust regression coverage for REV-1-01.
+3. Run focused controller tests, cargo fmt --check, and cargo test --workspace; distinguish any verified baseline failures.
+4. Record resolution evidence and create a lifecycle-compliant immutable implementation handoff on the same task branch.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
@@ -54,6 +52,8 @@ Add a single-owner game session that coordinates the human side, live Position, 
 Implemented engine::game with an authoritative single-owner GameController, owned immutable snapshots, revision-checked human commands, monotonic search IDs, cancellation on undo/reset, stale-result validation, terminal detection, SAN history, and typed engine progress state. Added 8 focused tests covering both human sides, normal/illegal/stale play, asynchronous engine turns, cancellation and stale results, undo/reset, castling, en passant, promotion, SAN disambiguation/check/mate, repetition, checkmate, stalemate, and the fifty-move threshold.
 
 Verification so far: cargo fmt --check passes; all 8 game::tests pass; git diff --check passes. cargo test --workspace passes the core suite and all new controller tests, retaining only the two pre-existing engine failures already documented on TASK-1.1: search::tests::gives_correct_answers and tt::tests::gen_bound.
+
+Rework started for REV-1-01. Root cause confirmed: fa7e9b0 was based on 6e9502a and does not descend from the committed TASK-1.1 typed-search implementation.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
