@@ -1,7 +1,7 @@
 ---
 id: TASK-13
 title: Clear castling rights when a rook is captured
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
@@ -53,3 +53,24 @@ Implemented capture-destination castling-right invalidation for captured rooks, 
 
 Verification passed: cargo test -p core rook_captures_clear_castling_rights_and_unmake_restores_state; cargo test -p core stale_castling_rights_require_correct_origin_pieces; cargo fmt --check; cargo test --workspace.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @codex
+created: 2026-07-17 21:43
+---
+Implementation handoff
+Branch: task-13-rook-capture-castling
+Worktree: /Users/seabo/seaborg-worktrees/task-13-rook-capture-castling
+Base: 2c3a91b42c8810ca1897c4fc7675470aa4245ac0
+Implementation target: 31ad717e04bf7b101d75d3ecbdcb8983aa33ca4b
+Resolved findings: none
+Verification:
+- cargo test -p core rook_captures_clear_castling_rights_and_unmake_restores_state: passed
+- cargo test -p core stale_castling_rights_require_correct_origin_pieces: passed
+- cargo fmt --check: passed
+- cargo test --workspace: passed (87 tests passed, 1 ignored across unit/integration suites; doc tests passed)
+Known failures: none
+---
+<!-- COMMENTS:END -->
