@@ -1,11 +1,11 @@
 ---
 id: TASK-11
 title: Reject structurally invalid FEN without panicking
-status: In Review
+status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 19:12'
+updated_date: '2026-07-17 19:16'
 labels:
   - core
   - fen
@@ -29,10 +29,10 @@ FEN parsing can accept ranks with the wrong width and can construct positions wi
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Every FEN rank must represent exactly eight squares, including the final rank
-- [ ] #2 Missing, duplicate, or otherwise structurally invalid king data returns FenError rather than panicking
-- [ ] #3 Invalid structural input never reaches State or Zobrist initialization
-- [ ] #4 Regression tests cover short and long final ranks, empty boards, missing kings, and duplicate kings
+- [x] #1 Every FEN rank must represent exactly eight squares, including the final rank
+- [x] #2 Missing, duplicate, or otherwise structurally invalid king data returns FenError rather than panicking
+- [x] #3 Invalid structural input never reaches State or Zobrist initialization
+- [x] #4 Regression tests cover short and long final ranks, empty boards, missing kings, and duplicate kings
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -74,4 +74,26 @@ created: 2026-07-17 19:12
 Handoff correction
 The exact implementation target is 1cc446b3e6115865b803128423d3cb38eade10e0. The earlier handoff comment expanded the correct abbreviated SHA (1cc446b) incorrectly; all other handoff fields and verification results are unchanged.
 ---
+
+author: @codex
+created: 2026-07-17 19:16
+---
+Review attempt: 1
+Reviewed branch: task-11-reject-invalid-fen
+Reviewed implementation: 1cc446b3e6115865b803128423d3cb38eade10e0
+Verdict: approved
+
+All acceptance criteria are objectively verified. Rank widths are checked for every rank including the final rank, king multiplicity is rejected before Position construction, and regressions cover short/long final ranks, empty boards, missing kings, and duplicate kings without panics.
+
+Verification:
+- cargo fmt --check: passed
+- cargo test -p core position::fen::tests: passed (4 tests)
+- cargo test --workspace: passed (core 19; engine 39 passed, 1 ignored; build metadata 5; doc tests 0)
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Validated all eight FEN ranks and exactly one king per side before Position, State, or Zobrist construction. Verified by panic-guarded malformed-FEN regressions, cargo fmt --check, focused core tests, and cargo test --workspace.
+<!-- SECTION:FINAL_SUMMARY:END -->
