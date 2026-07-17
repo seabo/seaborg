@@ -1,11 +1,11 @@
 ---
 id: TASK-11
 title: Reject structurally invalid FEN without panicking
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 19:10'
+updated_date: '2026-07-17 19:12'
 labels:
   - core
   - fen
@@ -48,3 +48,23 @@ FEN parsing can accept ranks with the wrong width and can construct positions wi
 <!-- SECTION:NOTES:BEGIN -->
 Implemented rank-width completion checks, including the previously unchecked final rank, and reject any board without exactly one king per side before Position, State, or Zobrist construction. Added panic-guarded regressions for short/long final ranks, empty boards, each missing king, and duplicate kings.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @codex
+created: 2026-07-17 19:12
+---
+Implementation handoff
+Branch: task-11-reject-invalid-fen
+Worktree: /Users/seabo/seaborg-worktrees/task-11-reject-invalid-fen
+Base: 4e7c7089431de8122541bc430ff200beb954f2e1
+Implementation target: 1cc446b88c1cfa41d8b442bcb668427ea33ea786
+Resolved findings: none
+Verification:
+- cargo test -p core position::fen::tests: passed (4 tests)
+- cargo fmt --check: passed
+- cargo test --workspace: passed (core 19; engine 39 passed, 1 ignored; build metadata 5; doc tests 0)
+Known failures: none
+---
+<!-- COMMENTS:END -->
