@@ -1,7 +1,7 @@
 ---
 id: TASK-9
 title: Correct quiescence search check and TT semantics
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
@@ -158,6 +158,12 @@ Issue (medium) — false checkmate score on abort in quiescence in-check branch.
 In quiesce()'s in-check evasion loop (engine/src/search.rs), the mate decision keys off move_count. If moves is non-empty but stopping is true on the first iteration, move_count remains zero and the node returns a bogus mate score despite legal evasions. The main search avoids this by handling stopping before mate determination.
 
 Expected fix: return a neutral/current bound on stop or base checkmate on generated-list emptiness rather than searched move count. The other two observations were split into separate tickets.
+---
+
+author: @codex
+created: 2026-07-17 21:35
+---
+Merged approved TASK-9 branch into master as 25f7fdd. Post-merge verification passed: cargo fmt --check; cargo test -p engine quiescence -- --nocapture (6 passed); cargo test --workspace (all passed, 1 ignored).
 ---
 <!-- COMMENTS:END -->
 
