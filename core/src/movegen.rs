@@ -5,7 +5,7 @@ use crate::mono_traits::{
 };
 use crate::mov::{Move, MoveType};
 use crate::movelist::MoveList;
-use crate::position::{CastleType, PieceType, Player, Position, Square, PROMO_PIECES};
+use crate::position::{CastleType, Piece, PieceType, Player, Position, Square, PROMO_PIECES};
 use crate::precalc::boards::{between_bb, king_moves, knight_moves, line_bb, pawn_attacks_from};
 use crate::precalc::magic;
 
@@ -668,18 +668,18 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
     // Generates castling for a single side
     #[inline(always)]
     fn castling_side<PL: Side, L: Legality>(&mut self, side: CastleType) {
-        if self.position.can_castle(PL::player(), side)
+        let player = PL::player();
+        let king_orig = player.relative_square(Square::E1);
+        let rook_orig = self.position.castling_rook_square(side);
+
+        if self.position.can_castle(player, side)
             && !self.position.castle_impeded(side)
-            && self
-                .position
-                .piece_at_sq(self.position.castling_rook_square(side))
-                .type_of()
-                == PieceType::Rook
+            && self.position.piece_at_sq(king_orig) == Piece::make(player, PieceType::King)
+            && self.position.piece_at_sq(rook_orig) == Piece::make(player, PieceType::Rook)
         {
             let king_side = side == CastleType::Kingside;
-            let ksq = self.position.king_sq(PL::player());
-            let k_to =
-                PL::player().relative_square(if king_side { Square::G1 } else { Square::C1 });
+            let ksq = king_orig;
+            let k_to = player.relative_square(if king_side { Square::G1 } else { Square::C1 });
             let enemies = self.them_occ;
             let direction: fn(Square) -> Square = if king_side {
                 |x: Square| x - Square(1)
@@ -827,6 +827,26 @@ mod tests {
         let pos = Position::from_fen(fen).unwrap();
         let captures = pos.generate::<BasicMoveList, Captures, Legal>();
         captures.len()
+    }
+
+    fn generates_castle(fen: &str) -> bool {
+        let pos = Position::from_fen(fen).unwrap();
+        pos.generate::<BasicMoveList, All, Legal>()
+            .iter()
+            .any(|mov| mov.is_castle())
+    }
+
+    #[test]
+    fn stale_castling_rights_require_correct_origin_pieces() {
+        init_globals();
+
+        assert!(generates_castle("4k3/8/8/8/8/8/8/4K2R w K - 0 1"));
+        assert!(!generates_castle("4k3/8/8/8/8/8/8/4K3 w K - 0 1"));
+        assert!(!generates_castle("4k3/8/8/8/8/8/8/4K2r w K - 0 1"));
+        assert!(!generates_castle("4k3/8/8/8/8/8/8/3K3R w K - 0 1"));
+        assert!(generates_castle("4k2r/8/8/8/8/8/8/4K3 b k - 0 1"));
+        assert!(!generates_castle("4k2R/8/8/8/8/8/8/4K3 b k - 0 1"));
+        assert!(!generates_castle("3k3r/8/8/8/8/8/8/4K3 b k - 0 1"));
     }
 
     struct Perft<'a> {
