@@ -1,9 +1,11 @@
 ---
 id: TASK-14
 title: Make UCI parsing and command handling total
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-17 17:14'
+updated_date: '2026-07-17 21:39'
 labels:
   - uci
   - input
@@ -30,3 +32,12 @@ The UCI parser contains panic paths and unchecked numeric narrowing, while sever
 - [ ] #4 Every parsed standard UCI command is either implemented or rejected without emitting non-protocol stdout
 - [ ] #5 Parser and driver tests cover reserved standalone tokens, oversized numbers, malformed commands, setoption, and ucinewgame
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Make command parsing exhaustive, remove unchecked parser access/narrowing, and enforce end-of-command consistently.
+2. Give every parsed command an explicit driver outcome: implement setoption and ucinewgame state handling, and route invalid/unsupported input only to stderr.
+3. Add parser and driver regression tests for reserved tokens, overflow, malformed/trailing input, setoption, and ucinewgame.
+4. Run focused tests, cargo fmt --check, and cargo test --workspace; commit implementation and prepare the review handoff.
+<!-- SECTION:PLAN:END -->
