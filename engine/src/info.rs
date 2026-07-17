@@ -1,67 +1,93 @@
-//! An engine info report.
-use super::score::Score;
-use core::mov::Move;
+//! Formatting typed search reports for the UCI protocol.
 
-/// A UCI info report.
-#[derive(Debug)]
-pub enum Info {
-    Pv(PvInfo),
-    CurrMove(CurrMoveInfo),
-}
+use super::search::{SearchEvent, SearchOutcome};
 
-impl std::fmt::Display for Info {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use Info::*;
-        match self {
-            Pv(i) => i.fmt(f),
-            CurrMove(i) => i.fmt(f),
+/// Format a typed search event as a UCI `info` line.
+pub fn format_search_event(event: &SearchEvent) -> String {
+    match event {
+        SearchEvent::Progress(progress) => {
+            let pv = progress
+                .principal_variation
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!(
+                "info depth {} multipv 1 score {} nodes {} nps {} hashfull {} time {} pv {}",
+                progress.depth,
+                progress.score,
+                progress.nodes,
+                progress.nps,
+                progress.hashfull,
+                progress.elapsed.as_millis(),
+                pv
+            )
         }
+        SearchEvent::CurrentMove(current) => format!(
+            "info depth {} currmove {} currmovenumber {}",
+            current.depth, current.current_move, current.number
+        ),
     }
 }
 
-/// A UCI PV report.
-///
-/// These are usually issued at the end of each iterative deepening iteration.
-#[derive(Debug)]
-pub struct PvInfo {
-    pub(super) depth: u8,
-    pub(super) time: usize,
-    pub(super) nodes: usize,
-    pub(super) pv: String,
-    pub(super) score: Score,
-    pub(super) hashfull: u16,
-    pub(super) nps: u32,
+/// Format a typed final search outcome as a UCI `bestmove` line.
+pub fn format_search_outcome(outcome: &SearchOutcome) -> String {
+    format!("bestmove {}", outcome.result().best_move)
 }
 
-impl std::fmt::Display for PvInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "info ")?;
-        write!(f, "depth {} ", self.depth)?;
-        // write!(f, "seldepth {}", self.seldepth)?; // TODO
-        write!(f, "multipv 1 ")?; // TODO: we don't have an option to send further PVs, so always
-                                  // send this.
-        write!(f, "score {} ", self.score)?;
-        write!(f, "nodes {} ", self.nodes)?;
-        write!(f, "nps {} ", self.nps)?;
-        write!(f, "hashfull {} ", self.hashfull)?;
-        write!(f, "time {} ", self.time)?;
-        write!(f, "pv {}", self.pv)
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::score::Score;
+    use crate::search::{CurrentMove, SearchProgress, SearchResult};
+    use core::mov::Move;
+    use core::position::Position;
+    use std::time::Duration;
+
+    #[test]
+    fn formats_progress_as_uci_info() {
+        let mut position = Position::start_pos();
+        let best_move = position.make_uci_move("e2e4").unwrap();
+        let event = SearchEvent::Progress(SearchProgress {
+            depth: 4,
+            score: Score::cp(23),
+            elapsed: Duration::from_millis(17),
+            nodes: 1200,
+            nps: 70_588,
+            hashfull: 12,
+            principal_variation: vec![best_move],
+        });
+
+        assert_eq!(
+            format_search_event(&event),
+            "info depth 4 multipv 1 score cp 23 nodes 1200 nps 70588 hashfull 12 time 17 pv e2e4"
+        );
     }
-}
 
-/// A UCI current move report.
-#[derive(Debug)]
-pub struct CurrMoveInfo {
-    pub(super) depth: u8,
-    pub(super) currmove: Move,
-    pub(super) number: u8,
-}
+    #[test]
+    fn formats_current_move_as_uci_info() {
+        let mut position = Position::start_pos();
+        let current_move = position.make_uci_move("g1f3").unwrap();
+        let event = SearchEvent::CurrentMove(CurrentMove {
+            depth: 8,
+            current_move,
+            number: 3,
+        });
 
-impl std::fmt::Display for CurrMoveInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "info ")?;
-        write!(f, "depth {} ", self.depth)?;
-        write!(f, "currmove {} ", self.currmove)?;
-        write!(f, "currmovenumber {} ", self.number)
+        assert_eq!(
+            format_search_event(&event),
+            "info depth 8 currmove g1f3 currmovenumber 3"
+        );
+    }
+
+    #[test]
+    fn formats_outcome_as_uci_bestmove() {
+        let outcome = SearchOutcome::Cancelled(SearchResult {
+            score: Score::zero(),
+            best_move: Move::null(),
+            depth: 0,
+        });
+
+        assert_eq!(format_search_outcome(&outcome), "bestmove Null");
     }
 }
