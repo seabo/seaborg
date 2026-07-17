@@ -1,11 +1,11 @@
 ---
 id: TASK-9
 title: Correct quiescence search check and TT semantics
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 20:19'
+updated_date: '2026-07-17 20:21'
 labels:
   - search
   - correctness
@@ -45,6 +45,8 @@ Quiescence currently allows stand-pat behavior while in check and reuses transpo
 
 <!-- SECTION:NOTES:BEGIN -->
 Implemented complete legal evasion search at checked quiescence nodes, with mate detection and repetition/fifty-move termination. TT hits now apply only as non-PV alpha-beta bounds; stored search scores are never reused as static evaluation. Added focused regression coverage for quiet evasions, horizon mate, exact/lower/upper TT hits, null TT moves, and PV static-evaluation separation.
+
+Resolved REV-1-01: quiescence now distinguishes signature-valid TT hits from clashes, retains clash slots only for replacement, and ignores their stored bounds. Added a forced one-slot collision regression test. Verification passed: cargo fmt --check; cargo test -p engine quiescence -- --nocapture (5 passed); cargo test --workspace (all passed, 1 ignored).
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -87,5 +89,21 @@ Verification:
 - cargo test -p engine quiescence -- --nocapture: passed (4 tests)
 - cargo test --workspace: passed (1 ignored)
 - Static control-flow reproduction against Table::probe and WritableEntry::read: confirmed clash entry is non-empty and its bound is consumed
+---
+
+author: @codex
+created: 2026-07-17 20:21
+---
+Implementation handoff
+Branch: task-9-quiescence-semantics
+Worktree: /Users/seabo/seaborg-worktrees/task-9-quiescence-semantics
+Base: 4e7c7089431de8122541bc430ff200beb954f2e1
+Implementation target: d4d2ae6
+Resolved findings: REV-1-01
+Verification:
+- cargo fmt --check: passed
+- cargo test -p engine quiescence -- --nocapture: passed (5 tests)
+- cargo test --workspace: passed (1 ignored)
+Known failures: none
 ---
 <!-- COMMENTS:END -->
