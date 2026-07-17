@@ -1,9 +1,11 @@
 ---
 id: TASK-9
 title: Correct quiescence search check and TT semantics
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-17 17:14'
+updated_date: '2026-07-17 19:07'
 labels:
   - search
   - correctness
@@ -30,3 +32,12 @@ Quiescence currently allows stand-pat behavior while in check and reuses transpo
 - [ ] #4 Quiescence never recurses with an empty or inverted alpha-beta window
 - [ ] #5 Regression tests cover quiet check evasions, checkmate at the horizon, and TT hit variants
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Refactor quiescence TT probing so valid hit scores are applied only as depth-qualified alpha-beta bounds, never as stand-pat evaluations.
+2. Separate in-check quiescence from stand-pat logic and search every legal evasion, returning mate when none exist.
+3. Add focused regression tests for quiet evasions, horizon mate, TT exact/lower/upper and insufficient-depth behavior, plus window invariants.
+4. Run formatting and workspace tests, commit the implementation, then record an immutable In Review handoff.
+<!-- SECTION:PLAN:END -->
