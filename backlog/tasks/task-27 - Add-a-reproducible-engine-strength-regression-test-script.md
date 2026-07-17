@@ -1,11 +1,11 @@
 ---
 id: TASK-27
 title: Add a reproducible engine strength-regression test script
-status: Changes Requested
+status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 18:54'
-updated_date: '2026-07-17 19:32'
+updated_date: '2026-07-17 20:20'
 labels: []
 dependencies: []
 references:
@@ -58,10 +58,10 @@ The implementation should be practical on a dedicated or self-hosted machine. It
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Resolve REV-1-01 by routing argparse failures through the infrastructure-error verdict and exit code.
-2. Recover an explicitly supplied output path on parse failure so a machine-readable error report is preserved when possible.
-3. Add real entry-point regression tests for missing arguments and invalid typed values, including verdict, exit-code, and report assertions.
-4. Run focused tests and repository quality gates, record the finding resolution, commit a new immutable target, and hand off for review.
+1. Resolve REV-2-01 by making verdict rendering conditional on complete result statistics.
+2. Add orchestration-level tests for malformed, incomplete, crash-marked, and nonzero runner outcomes.
+3. Verify every failure preserves the infrastructure report and returns exit 3 without a secondary exception.
+4. Run focused tests and repository quality gates, record the resolution, commit a new immutable target, and hand off for review.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
