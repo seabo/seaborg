@@ -300,7 +300,7 @@ fn position_status(position: &Position) -> GameStatus {
         }
     } else if position.in_threefold() {
         GameStatus::Draw(DrawReason::ThreefoldRepetition)
-    } else if position.half_move_clock() >= 100 {
+    } else if position.fifty_move_rule_reached() {
         GameStatus::Draw(DrawReason::FiftyMoveRule)
     } else {
         GameStatus::Ongoing

@@ -472,7 +472,7 @@ impl<'engine> Search<'engine> {
         }
 
         // Step 2. check for immediate draw.
-        if self.pos.in_threefold() || self.pos.half_move_clock() >= 50 {
+        if self.pos.in_threefold() || self.pos.fifty_move_rule_reached() {
             return Score::zero();
         }
 
@@ -750,7 +750,9 @@ impl<'engine> Search<'engine> {
     #[inline(always)]
     fn evaluate(&mut self) -> Score {
         let material = (self.pos.material_eval() * self.pov()) as f32;
-        let hmc = (50 - std::cmp::min(self.pos.half_move_clock(), 50)) as f32 / 50.;
+        let threshold = Position::FIFTY_MOVE_RULE_PLIES;
+        let remaining = threshold - std::cmp::min(self.pos.half_move_clock(), threshold);
+        let hmc = remaining as f32 / threshold as f32;
         let scaled_material = (material * hmc).round() as i16;
         Score::cp(scaled_material)
     }
@@ -1184,7 +1186,7 @@ mod tests {
                 ("7k/2R5/8/8/6q1/7p/7P/7K w - - 0 1", 6, Score::cp(0), Score::cp(0), "c7h7"),
 
                 // Pawn race
-                ("8/6pk/8/8/8/8/P7/K7 w - - 0 1", 22, Score::cp(700), Score::cp(920), "a1b1"),
+                ("8/6pk/8/8/8/8/P7/K7 w - - 0 1", 22, Score::cp(450), Score::cp(920), "a1b1"),
         ]
     }
 
@@ -1194,6 +1196,33 @@ mod tests {
         assert!(should_razor(1, Score::cp(-1_000), Score::cp(0)));
         assert!(!should_razor(1, Score::cp(-1_000), Score::mate(5)));
         assert!(!should_razor(1, Score::cp(-1_000), Score::INF_P));
+    }
+
+    #[test]
+    fn fifty_move_rule_uses_halfmove_boundary() {
+        core::init::init_globals();
+
+        for (halfmove_clock, expected) in [(99, false), (100, true), (101, true)] {
+            let fen = format!("4k3/8/8/8/8/8/P7/Q3K3 w - - {halfmove_clock} 1");
+            let pos = Position::from_fen(&fen).unwrap();
+            assert_eq!(pos.fifty_move_rule_reached(), expected);
+
+            let flag = AtomicBool::new(false);
+            let tt = Table::new(1);
+            let mut search = Search::new(pos, &flag, None, &tt);
+            let result = search.run::<Master>(1).unwrap();
+            assert_eq!(result.score == Score::zero(), expected);
+        }
+    }
+
+    #[test]
+    fn material_evaluation_scales_over_one_hundred_halfmoves() {
+        let pos = Position::from_fen("4k3/8/8/8/8/8/8/Q3K3 w - - 50 1").unwrap();
+        let flag = AtomicBool::new(false);
+        let tt = Table::new(1);
+        let mut search = Search::new(pos, &flag, None, &tt);
+
+        assert_eq!(search.evaluate(), Score::cp(450));
     }
 
     /// A regression test to ensure that our search routine produces the expected results for a
@@ -1211,9 +1240,9 @@ mod tests {
             let mut search = Search::new(pos, &flag, None, &tt);
             let result = search.run::<Master>(depth).unwrap();
 
-            assert!(lo <= result.score);
-            assert!(result.score <= hi);
-            assert_eq!(result.best_move.unwrap().to_uci_string(), bm);
+            assert!(lo <= result.score, "{fen}: {} < {lo}", result.score);
+            assert!(result.score <= hi, "{fen}: {} > {hi}", result.score);
+            assert_eq!(result.best_move.unwrap().to_uci_string(), bm, "{fen}");
         }
     }
 

@@ -124,8 +124,8 @@ pub struct Position {
     pub(crate) castling_rights: CastlingRights,
     /// A square on which an en passant capture is allowed, if any.
     pub(crate) ep_square: Option<Square>,
-    /// The number of moves since the 50-move rule counter was last reset by a pawn move or
-    /// capture.
+    /// The number of halfmoves since the fifty-move rule counter was last reset by a pawn move
+    /// or capture.
     pub(crate) half_move_clock: u32,
     /// Full move number of the current position in the game being played.
     pub(crate) move_number: u32,
@@ -147,6 +147,9 @@ pub struct Position {
 }
 
 impl Position {
+    /// Number of halfmoves without a pawn move or capture that triggers the fifty-move rule.
+    pub const FIFTY_MOVE_RULE_PLIES: u32 = 100;
+
     /// Creates a 'blank' `Position` struct. This method is safe to call even
     /// before `init_globals()`.
     pub fn blank() -> Self {
@@ -198,6 +201,10 @@ impl Position {
 
     pub fn half_move_clock(&self) -> u32 {
         self.half_move_clock
+    }
+
+    pub fn fifty_move_rule_reached(&self) -> bool {
+        self.half_move_clock >= Self::FIFTY_MOVE_RULE_PLIES
     }
 
     pub fn zobrist(&self) -> Zobrist {
