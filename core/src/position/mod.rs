@@ -63,8 +63,8 @@ impl Player {
     /// Returns the relative square from a given square.
     #[inline(always)]
     pub fn relative_square(self, sq: Square) -> Square {
-        assert!(sq.is_okay());
-        sq ^ Square((self.0) as u8 * 56)
+        // `Square` guarantees `sq < 64`; XOR with 0 or 56 preserves that range.
+        Square(sq.0 ^ (self.0 as u8 * 56))
     }
 
     /// Returns the offset for a single move pawn push.
@@ -223,6 +223,25 @@ impl Position {
     pub fn make_move(&mut self, mov: &Move) {
         self.assert_valid_move_input(mov);
 
+        // SAFETY: `assert_valid_move_input` established the complete contract.
+        unsafe { self.make_move_unchecked(mov) }
+    }
+
+    /// Makes a move without validating it against the current position.
+    ///
+    /// # Safety
+    ///
+    /// `mov` must be a non-null, structurally valid move generated for this
+    /// exact position. Its origin must contain a piece belonging to the side to
+    /// move; its destination must not contain a friendly piece; capture,
+    /// castling, en-passant, and promotion metadata must agree with the board
+    /// and position state. Violating this contract may corrupt the position and
+    /// can make later unchecked engine operations unsound.
+    ///
+    /// This operation is intended only for audited move-generation, search, and
+    /// perft paths. Call [`Position::make_move`] at untrusted boundaries.
+    #[inline(always)]
+    pub unsafe fn make_move_unchecked(&mut self, mov: &Move) {
         // Add an undoable move to the position history
         let undoable_move = mov.to_undoable(&self);
         self.history.push(undoable_move);
@@ -278,8 +297,8 @@ impl Position {
             if captured_piece.type_of() == PieceType::Pawn {
                 if mov.is_en_passant() {
                     match us {
-                        Player::WHITE => cap_sq -= Square(8),
-                        Player::BLACK => cap_sq += Square(8),
+                        Player::WHITE => cap_sq = unsafe { cap_sq.offset_unchecked(-8) },
+                        Player::BLACK => cap_sq = unsafe { cap_sq.offset_unchecked(8) },
                     };
 
                     debug_assert_eq!(moving_piece.type_of(), PieceType::Pawn);
@@ -437,8 +456,8 @@ impl Position {
                     let mut cap_sq = dest;
                     if undoable_move.is_en_passant() {
                         match us {
-                            Player::WHITE => cap_sq -= Square(8),
-                            Player::BLACK => cap_sq += Square(8),
+                            Player::WHITE => cap_sq = unsafe { cap_sq.offset_unchecked(-8) },
+                            Player::BLACK => cap_sq = unsafe { cap_sq.offset_unchecked(8) },
                         };
                     }
                     self.put_piece_c(Piece::make(!us, captured_piece), cap_sq);
@@ -1127,18 +1146,40 @@ mod tests {
 
     use crate::init::init_globals;
 
-    #[test]
-    fn blank_position_rejects_move_before_mutation() {
-        let mut position = Position::blank();
+    fn assert_move_rejected_without_mutation(mut position: Position, mov: Move) {
         let original = position.clone();
-        let mov = Move::build(Square::E2, Square::E4, None, MoveType::QUIET);
-
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             position.make_move(&mov);
         }));
 
         assert!(result.is_err());
         assert_eq!(position, original);
+    }
+
+    #[test]
+    fn blank_position_rejects_move_before_mutation() {
+        let mov = Move::build(Square::E2, Square::E4, None, MoveType::QUIET);
+        assert_move_rejected_without_mutation(Position::blank(), mov);
+    }
+
+    #[test]
+    fn position_rejects_friendly_capture_before_mutation() {
+        let mov = Move::build(Square::E1, Square::E2, None, MoveType::CAPTURE);
+        assert_move_rejected_without_mutation(Position::start_pos(), mov);
+    }
+
+    #[test]
+    fn position_rejects_invalid_special_move_metadata_before_mutation() {
+        let castle = Move::build(Square::E2, Square::E4, None, MoveType::CASTLE);
+        assert_move_rejected_without_mutation(Position::start_pos(), castle);
+
+        let en_passant = Move::build(
+            Square::E2,
+            Square::E3,
+            None,
+            MoveType::CAPTURE | MoveType::EN_PASSANT,
+        );
+        assert_move_rejected_without_mutation(Position::start_pos(), en_passant);
     }
 
     #[test]

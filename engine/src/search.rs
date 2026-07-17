@@ -625,7 +625,8 @@ impl<'engine> Search<'engine> {
                 //          TODO
 
                 // Step 18. Make the move.
-                self.pos.make_move(mov);
+                // SAFETY: ordered moves originate from move generation for `self.pos`.
+                unsafe { self.pos.make_move_unchecked(mov) };
 
                 // Step 19. Search non-PV move with null window.
                 if !Node::pv() || move_count > 1 {
@@ -868,7 +869,8 @@ impl<'engine> Search<'engine> {
                     break 'move_loop;
                 }
 
-                self.pos.make_move(mov);
+                // SAFETY: quiescence moves originate from move generation for `self.pos`.
+                unsafe { self.pos.make_move_unchecked(mov) };
                 score = self.quiesce::<T, Node>(-beta, -alpha).neg().inc_mate();
                 self.pos.unmake_move();
 

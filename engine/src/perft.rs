@@ -280,7 +280,8 @@ impl<'a> Perft<'a> {
                 }
 
                 if self.options.checks {
-                    self.position.make_move(mov);
+                    // SAFETY: perft only traverses moves generated for this position.
+                    unsafe { self.position.make_move_unchecked(mov) };
                     if self.position.in_checkmate() {
                         self.data.checkmate += 1;
                     }
@@ -295,7 +296,8 @@ impl<'a> Perft<'a> {
 
     #[inline(always)]
     fn recurse(&mut self, mov: &Move, depth: usize) {
-        self.position.make_move(mov);
+        // SAFETY: the recursive caller supplies a move generated for this position.
+        unsafe { self.position.make_move_unchecked(mov) };
         self.perft_inner(depth);
         self.position.unmake_move();
     }
