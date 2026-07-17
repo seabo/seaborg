@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 18:54'
-updated_date: '2026-07-17 18:56'
+updated_date: '2026-07-17 18:57'
 labels: []
 dependencies: []
 references:
@@ -54,3 +54,9 @@ The implementation should be practical on a dedicated or self-hosted machine. It
 - [ ] #12 The task does not implement automatic functional-code detection, path-based invocation rules, or a policy deciding which changes require the script; invocation remains an agent judgment outside this scope.
 - [ ] #13 Existing project quality gates continue to pass, including cargo fmt --check and cargo test --workspace.
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Add a dependency-light Python orchestration tool with strict argument validation, executable hashing/identity capture, UCI preflight, pinned opening validation, deterministic cutechess command construction, and fail-closed output parsing/verdict mapping.\n2. Add a small repository-owned/versioned EPD opening suite with provenance and a baked checksum, plus authoritative paired-colour/equal-resource defaults and a visibly non-authoritative bounded smoke mode.\n3. Add automated unit tests using fake engines/runner transcripts to cover configuration, pairing, validation, parsing, verdict/exit mappings, caps, crashes, and malformed output without playing a full match.\n4. Document prerequisites, statistical contract/limitations, costs, invocation, artifacts, reruns, calibration, and immutable build/identity expectations.\n5. Run focused tests, cargo fmt --check, and cargo test --workspace; commit implementation and create the In Review handoff.
+<!-- SECTION:PLAN:END -->
