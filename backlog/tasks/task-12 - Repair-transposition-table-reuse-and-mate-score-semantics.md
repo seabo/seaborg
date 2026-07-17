@@ -1,11 +1,11 @@
 ---
 id: TASK-12
 title: Repair transposition-table reuse and mate-score semantics
-status: Changes Requested
+status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 23:07'
+updated_date: '2026-07-17 23:14'
 labels:
   - search
   - tt
@@ -36,10 +36,10 @@ Search unconditionally clears the shared transposition table because of a known 
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Define ply-aware transposition-table score encoding/decoding and apply it consistently to main-search and quiescence probes/writes.
-2. Remove automatic table invalidation from Search::run; expose documented SearchEngine clear/new-game ownership and wire UCI/game reset operations to it.
-3. Add regression tests for sequential reuse, explicit/new-game invalidation, mate scores probed at different plies, and concurrent workers retaining the same generation.
-4. Run focused tests, cargo fmt --check, and cargo test --workspace; commit implementation and record the immutable In Review handoff.
+1. Resolve REV-1-01: this engine uses a POSITION-RELATIVE mate convention (checkmate leaf returns constant Score::mate(0); inc_mate accumulates distance on unwind), so a node's mate score is the distance-from-that-position and is invariant to the ply at which the position is reached. The Stockfish-style +ply/-ply TT adjustment is only valid for a root-relative convention and corrupts distances on cross-ply transpositions. Revert it: remove Score::to_tt/from_tt and the ply plumbing threaded through WritableEntry::write/read and quiesce/quiesce_evasions, restoring identity (position-relative) TT storage that existed at the base.
+2. Preserve the legitimate task improvements: removed unconditional Search::run tt.clear(); SearchEngine::clear_hash/new_game ownership; UCI ucinewgame and GameController reset wiring that stops workers before advancing generation; reuse/concurrency tests.
+3. Tests: replace the incorrect mate_scores_decode_relative_to_the_probe_ply / tt_mate_scores_are_adjusted_for_probe_ply tests with assertions that a stored mate score round-trips through the TT unchanged (position-relative distance is preserved for a probe at any ply). Retain reuse/explicit-clear/concurrent-probe tests and the gives_correct_answers mate suite (now exercises a warm TT across iterative-deepening iterations).
+4. Run cargo fmt --check and cargo test --workspace; commit implementation; record Resolved REV-1-01 and a fresh In Review handoff.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
