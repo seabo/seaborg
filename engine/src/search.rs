@@ -19,6 +19,10 @@ use separator::Separatable;
 use std::ops::Neg;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+fn should_razor(depth: u8, eval: Score, alpha: Score) -> bool {
+    depth <= 6 && alpha.is_cp() && eval + Score::cp(426 + 252 * depth as i16 * depth as i16) < alpha
+}
+
 /// Trait to monomorphize search functionality over different thread types: master and worker.
 ///
 /// The master thread will perform slightly different functionality, such as printing UCI info
@@ -369,7 +373,7 @@ impl<'engine> Search<'engine> {
         // Step 7. Razoring.
         // When eval is very low, check with quiescence whether it has any hope of raising alpha. If
         // not, return a fail low.
-        if depth <= 6 && eval + Score::cp(426 + 252 * depth as i16 * depth as i16) < alpha {
+        if should_razor(depth, eval, alpha) {
             let value = self.quiesce::<Master, NonPv>(alpha - Score::cp(1), alpha);
             if value < alpha {
                 return value;
@@ -996,6 +1000,14 @@ mod tests {
                 // Pawn race
                 ("8/6pk/8/8/8/8/P7/K7 w - - 0 1", 22, Score::cp(700), Score::cp(920), "a1b1"),
         ]
+    }
+
+    /// Razoring relies on a static centipawn evaluation, so mate and infinity bounds are excluded.
+    #[test]
+    fn razoring_only_applies_to_centipawn_bounds() {
+        assert!(should_razor(1, Score::cp(-1_000), Score::cp(0)));
+        assert!(!should_razor(1, Score::cp(-1_000), Score::mate(5)));
+        assert!(!should_razor(1, Score::cp(-1_000), Score::INF_P));
     }
 
     /// A regression test to ensure that our search routine produces the expected results for a
