@@ -1,9 +1,11 @@
 ---
 id: TASK-12
 title: Repair transposition-table reuse and mate-score semantics
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-17 17:14'
+updated_date: '2026-07-17 21:39'
 labels:
   - search
   - tt
