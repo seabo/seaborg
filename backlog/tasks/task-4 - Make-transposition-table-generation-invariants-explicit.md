@@ -1,11 +1,11 @@
 ---
 id: TASK-4
 title: Make transposition-table generation invariants explicit
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-17 16:44'
-updated_date: '2026-07-17 18:47'
+updated_date: '2026-07-17 18:48'
 labels: []
 dependencies: []
 references:
@@ -46,3 +46,23 @@ Transposition-table generations are six-bit epoch identifiers, with 0 reserved a
 <!-- SECTION:NOTES:BEGIN -->
 Implemented a checked Generation type for live epochs 1..=63 and made GenBound construction require it. Generation zero remains available only through the default empty packed representation. Reworked Table::clear so wraparound zeroes every slot before publishing generation 1, and added tests for invalid inputs, valid bounds, empty encoding, normal invalidation, and physical wrap invalidation.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @codex
+created: 2026-07-17 18:48
+---
+Implementation handoff
+Branch: task-4-tt-generation-invariants
+Worktree: /Users/seabo/seaborg-worktrees/task-4-tt-generation-invariants
+Base: ff4276b3b26928053f042776231fc6a9e8d4c163
+Implementation target: c4de7e4f35739315344b0ee06250a2f4d215dab5
+Resolved findings: none
+Verification:
+- cargo test -p engine tt::tests: passed (7 passed, 1 ignored)
+- cargo fmt --check: passed
+- cargo test --workspace: passed
+Known failures: none
+---
+<!-- COMMENTS:END -->
