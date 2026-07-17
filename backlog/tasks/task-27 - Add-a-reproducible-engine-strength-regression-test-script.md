@@ -1,11 +1,11 @@
 ---
 id: TASK-27
 title: Add a reproducible engine strength-regression test script
-status: In Review
+status: Changes Requested
 assignee:
   - '@codex'
 created_date: '2026-07-17 18:54'
-updated_date: '2026-07-17 19:08'
+updated_date: '2026-07-17 19:17'
 labels: []
 dependencies: []
 references:
@@ -101,5 +101,27 @@ Implementation handoff correction
 The Implementation target in comment #1 was transcribed incorrectly.
 Correct Implementation target: 613ba0c013b6c2ce14d364beecb539d56f6f28bf
 All other handoff fields and verification evidence remain unchanged.
+---
+
+author: @codex
+created: 2026-07-17 19:17
+---
+Review attempt: 1
+Reviewed branch: task-27-strength-regression
+Reviewed implementation: 613ba0c013b6c2ce14d364beecb539d56f6f28bf
+Verdict: changes_requested
+
+REV-1-01 [P1] CLI validation errors masquerade as an inconclusive strength result
+Location: tools/strength/strength_test.py:72
+Impact: Missing required arguments and invalid argparse-typed values exit directly through argparse with status 2. The documented contract reserves 2 for an actual INCONCLUSIVE match, so configuration/invocation failures can be misclassified by automation and do not print the required INFRASTRUCTURE ERROR verdict or preserve a report. This violates acceptance criteria 4, 6, and 10.
+Reproduction: Run `python3 tools/strength/strength_test.py` with no arguments; it exits 2 after argparse usage output, rather than infrastructure status 3 and the human-readable infrastructure verdict.
+Expected: All invalid or incomplete invocation/configuration paths map to INFRASTRUCTURE ERROR (exit 3), with clear output and report preservation where an output path is available; automated tests must exercise the real command/entry path and distinguish this from INCONCLUSIVE.
+
+Verification:
+- `python3 tools/strength/strength_test.py`: exits 2 (reproduced)
+- `python3 -m unittest discover -s tools/strength -p 'test_*.py' -v`: PASS (7 tests; missing end-to-end invalid-CLI coverage)
+- `cargo fmt --check`: PASS
+- `cargo test --workspace`: FAIL only at pre-existing engine::tt::tests::gen_bound on recorded base
+- `git diff --check dc8f6cef131c0cdfdb3feb3e914dd6e938c3a87d..613ba0c013b6c2ce14d364beecb539d56f6f28bf`: PASS
 ---
 <!-- COMMENTS:END -->
