@@ -211,10 +211,10 @@ impl GameController {
                 received: revision,
             });
         }
-        self.cancel_search();
         if self.position.unmake_move().is_none() {
             return Err(CommandError::NothingToUndo);
         }
+        self.cancel_search();
         self.history.pop();
         while self.position.turn() != self.human_side && self.position.unmake_move().is_some() {
             self.history.pop();
@@ -462,6 +462,31 @@ mod tests {
             EngineStatus::Thinking { search_id, .. } => assert!(search_id > old_id),
             _ => panic!("reset did not start the engine"),
         }
+    }
+
+    #[test]
+    fn empty_undo_preserves_the_opening_engine_turn() {
+        let mut game = controller(core::position::START_POSITION, Player::BLACK);
+        let initial = game.snapshot();
+        let initial_search_id = match initial.engine_status {
+            EngineStatus::Thinking { search_id, .. } => search_id,
+            _ => panic!("opening engine search was not started"),
+        };
+
+        assert_eq!(
+            game.undo(initial.revision),
+            Err(CommandError::NothingToUndo)
+        );
+
+        let after = game.snapshot();
+        assert_eq!(after.revision, initial.revision);
+        assert_eq!(after.fen, initial.fen);
+        assert!(matches!(
+            after.engine_status,
+            EngineStatus::Thinking { search_id, .. } if search_id == initial_search_id
+        ));
+        wait_for_engine(&mut game);
+        assert_eq!(game.snapshot().side_to_move, Player::BLACK);
     }
 
     #[test]

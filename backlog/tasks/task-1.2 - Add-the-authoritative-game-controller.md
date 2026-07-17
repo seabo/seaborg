@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 15:40'
-updated_date: '2026-07-17 18:33'
+updated_date: '2026-07-17 18:35'
 labels: []
 dependencies:
   - TASK-1.1
@@ -56,6 +56,8 @@ Verification so far: cargo fmt --check passes; all 8 game::tests pass; git diff 
 Rework started for REV-1-01. Root cause confirmed: fa7e9b0 was based on 6e9502a and does not descend from the committed TASK-1.1 typed-search implementation.
 
 Resolved REV-1-01: merged the complete task-1.1-typed-engine-api branch (0625ec3), adapted GameController to optional completed search results and optional best moves, and added a regression test proving zero-time/incomplete outcomes do not mutate the game. Verification: cargo fmt --check passed; cargo test -p engine game::tests -- --nocapture passed 9/9; cargo test --workspace passed all affected tests and failed only tt::tests::gen_bound, reproduced identically on task-1.1-typed-engine-api (assertion gen < 64); git diff --check passed.
+
+Resolved REV-2-01: undo now attempts to unmake a move before cancelling the active search, so NothingToUndo leaves the opening engine turn and revision unchanged. Added empty_undo_preserves_the_opening_engine_turn, which verifies search identity is preserved and the engine can complete its move. Verification: cargo fmt --check passed; cargo test -p engine game::tests -- --nocapture passed 10/10; git diff --check passed; cargo test --workspace --no-fail-fast passed all controller and affected tests, with only the documented baseline tt::tests::gen_bound failure.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
