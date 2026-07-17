@@ -1,11 +1,11 @@
 ---
 id: TASK-1.2
 title: Add the authoritative game controller
-status: Changes Requested
+status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 15:40'
-updated_date: '2026-07-17 18:32'
+updated_date: '2026-07-17 18:33'
 labels: []
 dependencies:
   - TASK-1.1
@@ -40,10 +40,10 @@ Add a single-owner game session that coordinates the human side, live Position, 
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Integrate the committed task-1.1-typed-engine-api dependency branch into the existing TASK-1.2 branch without rewriting review history.
-2. Resolve controller compatibility with the finalized typed-search API and add or adjust regression coverage for REV-1-01.
-3. Run focused controller tests, cargo fmt --check, and cargo test --workspace; distinguish any verified baseline failures.
-4. Record resolution evidence and create a lifecycle-compliant immutable implementation handoff on the same task branch.
+1. Reproduce REV-2-01 and change undo ordering so an empty undo leaves the active engine turn intact.
+2. Add a regression test for undo with no history while the opening engine search is active, including stable revision and search identity.
+3. Run focused controller tests and required workspace formatting/tests, recording any verified baseline failure.
+4. Record the REV-2-01 resolution, commit the immutable implementation target, and return TASK-1.2 to In Review with a lifecycle-compliant handoff.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
@@ -129,5 +129,11 @@ Verification:
 - cargo test -p engine game::tests -- --nocapture: passed (9 tests)
 - cargo test --workspace: controller and affected tests passed; failed only tt::tests::gen_bound
 - Baseline check on task-1.1-typed-engine-api: cargo test -p engine tt::tests::gen_bound -- --exact --nocapture failed identically
+---
+
+author: @codex
+created: 2026-07-17 18:33
+---
+Rework started for REV-2-01 on the existing task branch and worktree.
 ---
 <!-- COMMENTS:END -->
