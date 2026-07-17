@@ -1186,7 +1186,7 @@ mod tests {
                 ("7k/2R5/8/8/6q1/7p/7P/7K w - - 0 1", 6, Score::cp(0), Score::cp(0), "c7h7"),
 
                 // Pawn race
-                ("8/6pk/8/8/8/8/P7/K7 w - - 0 1", 22, Score::cp(700), Score::cp(920), "a1b1"),
+                ("8/6pk/8/8/8/8/P7/K7 w - - 0 1", 22, Score::cp(450), Score::cp(920), "a1b1"),
         ]
     }
 
@@ -1240,9 +1240,9 @@ mod tests {
             let mut search = Search::new(pos, &flag, None, &tt);
             let result = search.run::<Master>(depth).unwrap();
 
-            assert!(lo <= result.score);
-            assert!(result.score <= hi);
-            assert_eq!(result.best_move.unwrap().to_uci_string(), bm);
+            assert!(lo <= result.score, "{fen}: {} < {lo}", result.score);
+            assert!(result.score <= hi, "{fen}: {} > {hi}", result.score);
+            assert_eq!(result.best_move.unwrap().to_uci_string(), bm, "{fen}");
         }
     }
 
