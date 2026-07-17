@@ -1,11 +1,11 @@
 ---
 id: TASK-13
 title: Clear castling rights when a rook is captured
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 22:56'
+updated_date: '2026-07-17 22:58'
 labels:
   - core
   - movegen
