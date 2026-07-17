@@ -1,11 +1,11 @@
 ---
 id: TASK-5
 title: Seal chess domain safety boundaries
-status: Changes Requested
+status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 19:08'
+updated_date: '2026-07-17 19:24'
 labels:
   - safety
   - core
@@ -37,10 +37,10 @@ Public safe domain types currently allow invalid squares, moves, and positions t
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Make `Square` representation private, add checked public constructors/conversions and explicit crate-internal construction for proven indices, then migrate callers.
-2. Harden `Move` construction and board access so safe inputs cannot reach unchecked indexing or inconsistent move encodings.
-3. Validate `Position::make_move` before mutation, including null, empty-origin, ownership, destination, and special-move invariants; add regression coverage for blank positions.
-4. Run focused tests, `cargo fmt --check`, and `cargo test --workspace`; commit implementation and create the immutable review handoff.
+1. Rework public Bitboard-to-Square conversions so empty bitboards cannot produce an invalid Square in any build profile.
+2. Migrate all callers to handle the checked result while preserving behavior for proven non-empty iteration paths.
+3. Add regression tests for empty conversion/pop and the Board boundary described by REV-1-01.
+4. Run focused debug/release tests plus repository-required formatting and workspace tests; commit the rework and create a new immutable review handoff.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
