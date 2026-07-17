@@ -1,11 +1,11 @@
 ---
 id: TASK-8
 title: Make the UCI driver event loop blocking and EOF safe
-status: In Review
+status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 18:37'
+updated_date: '2026-07-17 18:41'
 labels:
   - uci
   - concurrency
@@ -28,11 +28,11 @@ After the typed search lifecycle lands, the UCI driver still busy-polls commands
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The idle UCI process blocks without continuously consuming a CPU core
-- [ ] #2 Search events, search completion, and incoming commands are serviced without unbounded polling
-- [ ] #3 stdin EOF, stdin read failure, or command-channel disconnection shuts the engine down cleanly without panicking or log flooding
-- [ ] #4 Starting, stopping, replacing, and quitting an active search has deterministic serialized behavior
-- [ ] #5 Integration tests cover EOF, stdin read failure, idle readiness, replacement search, stop, and quit
+- [x] #1 The idle UCI process blocks without continuously consuming a CPU core
+- [x] #2 Search events, search completion, and incoming commands are serviced without unbounded polling
+- [x] #3 stdin EOF, stdin read failure, or command-channel disconnection shuts the engine down cleanly without panicking or log flooding
+- [x] #4 Starting, stopping, replacing, and quitting an active search has deterministic serialized behavior
+- [x] #5 Integration tests cover EOF, stdin read failure, idle readiness, replacement search, stop, and quit
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -71,4 +71,26 @@ Verification:
 - cargo test --workspace --no-fail-fast: 40 passed, 1 ignored; one known baseline failure
 Known failures: tt::tests::gen_bound asserts gen < 64, previously documented and reproduced on master during TASK-1.1 review.
 ---
+
+author: @codex
+created: 2026-07-17 18:41
+---
+Review attempt: 1
+Reviewed branch: task-8-uci-blocking-eof-safe
+Reviewed implementation: 1a3f4be19ea783038905d954c153927bd7f303d1
+Verdict: approved
+
+Verification:
+- cargo fmt --check: passed
+- cargo test -p engine engine::tests -- --nocapture: 4 passed
+- cargo test --workspace --no-fail-fast: TASK-8 coverage passed; 40 tests passed, 1 ignored, with the documented pre-existing tt::tests::gen_bound failure
+- git diff --check 46aa66ed04ba91d9526114dd01c5f06fe5668ee4..1a3f4be19ea783038905d954c153927bd7f303d1: passed
+- immutable target validation: base is an ancestor and post-target commit changes only TASK-8 handoff metadata
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Approved implementation 1a3f4be19ea783038905d954c153927bd7f303d1. The UCI driver now blocks while idle, selects between commands and typed search events while active, shuts down cleanly on EOF/read failure/channel closure, and serializes search replacement, stop, and quit by cancelling and joining the active search. Verified by formatting, four focused driver tests, diff checks, and the workspace suite; the sole workspace failure is the documented pre-existing tt::tests::gen_bound assertion.
+<!-- SECTION:FINAL_SUMMARY:END -->
