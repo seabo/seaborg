@@ -1,11 +1,11 @@
 ---
 id: TASK-5
 title: Seal chess domain safety boundaries
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 19:24'
+updated_date: '2026-07-17 19:26'
 labels:
   - safety
   - core
@@ -49,6 +49,8 @@ Public safe domain types currently allow invalid squares, moves, and positions t
 Sealed `Square` behind a private external representation with checked raw conversion and checked arithmetic. Hardened Board placement, Move construction, and pre-mutation Position move validation. Migrated engine consumers to the public square index accessor and added debug/release regression coverage for invalid square, board, move, null-move, and blank-position inputs.
 
 Workspace verification note: `cargo test --workspace` passed all core tests and 36/37 non-ignored engine tests; pre-existing `engine::tt::tests::gen_bound` fails because the test deliberately passes generation 64 to a function with `debug_assert!(gen < 64)`. The same contradictory test and assertion are present at the base commit.
+
+Resolved REV-1-01: `Bitboard::to_square` now returns `Option<Square>` unless exactly one bit is set, and `pop_lsb_and_bit` uses a release-active assertion before constructing a square. Migrated king and SEE callers and added debug/release regressions covering empty and multi-bit conversions, empty direct pop, and safe composition with Board indexing.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -98,5 +100,22 @@ Verification:
 - cargo test -p core: passed (22 tests, 1 compile-fail doctest)
 - cargo test -p core --release: passed (22 tests, 1 compile-fail doctest), but lacks the empty-bitboard regression
 - external release reproduction: safe API produced Square(64)
+---
+
+author: @codex
+created: 2026-07-17 19:26
+---
+Implementation handoff
+Branch: task-5-domain-safety
+Worktree: /Users/seabo/seaborg-worktrees/task-5-domain-safety
+Base: ff4276b3b26928053f042776231fc6a9e8d4c163
+Implementation target: 91c1dc33cacfdb274ff153f66fac743701574792
+Resolved findings: REV-1-01
+Verification:
+- cargo fmt --all --check: passed
+- cargo test -p core: passed (25 unit tests, 1 compile-fail doctest)
+- cargo test -p core --release: passed (25 unit tests, 1 compile-fail doctest)
+- cargo test --workspace: core passed 25/25; engine passed 36/37 non-ignored tests
+Known failures: engine::tt::tests::gen_bound fails at engine/src/tt.rs:34 because the test passes generation 64 to existing debug_assert!(gen < 64); unchanged from the recorded base and prior implementation handoff.
 ---
 <!-- COMMENTS:END -->
