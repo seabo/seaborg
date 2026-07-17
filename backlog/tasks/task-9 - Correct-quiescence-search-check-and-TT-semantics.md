@@ -1,11 +1,11 @@
 ---
 id: TASK-9
 title: Correct quiescence search check and TT semantics
-status: Changes Requested
+status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 19:27'
+updated_date: '2026-07-17 20:19'
 labels:
   - search
   - correctness
@@ -36,10 +36,9 @@ Quiescence currently allows stand-pat behavior while in check and reuses transpo
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Refactor quiescence TT probing so every hit meets the encoded quiescence depth requirement (depth zero) and scores are applied only as non-PV alpha-beta bounds, never as stand-pat evaluations.
-2. Separate in-check quiescence from stand-pat logic and search every legal evasion, returning mate when none exist and terminating draw cycles.
-3. Add focused regression tests for quiet evasions, horizon mate, TT exact/lower/upper hits, null stored moves, and static-evaluation separation.
-4. Run formatting and workspace tests, commit the implementation, then record an immutable In Review handoff.
+1. Preserve the writable replacement slot from TT probes while applying quiescence scores and bounds only for signature-valid Probe::Hit entries.
+2. Add a focused regression test proving an indexed TT clash cannot alter the quiescence result.
+3. Run formatting, focused quiescence tests, and the full workspace test suite; commit the rework and record a new immutable review handoff.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
