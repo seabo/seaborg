@@ -5,7 +5,7 @@ status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-17 18:54'
-updated_date: '2026-07-17 19:07'
+updated_date: '2026-07-17 19:08'
 labels: []
 dependencies: []
 references:
@@ -92,5 +92,14 @@ Verification:
 - sha256sum tools/strength/openings-v1.epd: PASS (embedded checksum eca44927b4cabdaa96cb9ab24a66c54e7c7444ac1c3e28d97b4436c110c4e275)
 - cargo test --workspace: FAIL on pre-existing engine::tt::tests::gen_bound assertion gen < 64
 Known failures: engine::tt::tests::gen_bound fails on recorded base dc8f6ce; TASK-27 changes no Rust sources, and current primary contains an independent later fix.
+---
+
+author: @codex
+created: 2026-07-17 19:08
+---
+Implementation handoff correction
+The Implementation target in comment #1 was transcribed incorrectly.
+Correct Implementation target: 613ba0c013b6c2ce14d364beecb539d56f6f28bf
+All other handoff fields and verification evidence remain unchanged.
 ---
 <!-- COMMENTS:END -->
