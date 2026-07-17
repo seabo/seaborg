@@ -1,11 +1,11 @@
 ---
 id: TASK-6
 title: Make fixed-capacity move lists memory safe
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 19:07'
+updated_date: '2026-07-17 19:12'
 labels:
   - safety
   - movegen
@@ -82,6 +82,12 @@ Verification:
 - cargo test --workspace: TASK-6 coverage passed; 36 engine tests passed, 1 ignored, with one unrelated pre-existing failure in engine::tt::tests::gen_bound
 - cargo test -p engine tt::tests::gen_bound -- --exact: reproduced unchanged baseline failure
 - git diff --exit-code ff4276b3b26928053f042776231fc6a9e8d4c163..64f9abb4798645dbedc4d4c83a84ff2eff4ecd0b -- engine/src/tt.rs: passed (file unchanged)
+---
+
+author: @codex
+created: 2026-07-17 19:12
+---
+Merged approved task branch task-6-memory-safe-movelists into master at f78173d403ca4e25c4f181cdf924004f6c6171c9. Post-merge verification: cargo fmt --check passed; cargo test -p core movelist::tests passed (4 tests); cargo test --release -p core movelist::tests passed (4 tests).
 ---
 <!-- COMMENTS:END -->
 
