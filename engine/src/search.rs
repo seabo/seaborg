@@ -783,34 +783,25 @@ impl<'engine> Search<'engine> {
             return Score::zero();
         }
 
-        // Step 1. Check for an immediate draw or max ply reached.
-        //         TODO
+        // Step 1. Check for an immediate draw. Quiet check evasions can repeat positions, so this
+        // must happen before following another evasion.
+        if self.pos.in_threefold() || self.pos.half_move_clock() >= 50 {
+            return Score::zero();
+        }
 
         // Step 2. Load transposition table entry.
-        let (tt_entry, tt_value) = {
+        let (tt_entry, tt_hit) = {
             use super::tt::Probe::*;
             match self.tt.probe(&self.pos) {
                 Hit(entry) => {
-                    let e = entry.read();
-                    if e.mov.is_null() {
-                        (entry, None)
-                    } else {
-                        let mov = e.mov.to_move(&self.pos);
-                        let val = e.score;
-                        if self.pos.valid_move(&mov) {
-                            self.trace.hash_hit();
-                            (entry, Some(val))
-                        } else {
-                            self.trace.hash_collision();
-                            (entry, None)
-                        }
-                    }
+                    self.trace.hash_hit();
+                    (entry, true)
                 }
                 Clash(entry) => {
                     self.trace.hash_clash();
-                    (entry, None)
+                    (entry, false)
                 }
-                Empty(entry) => (entry, None),
+                Empty(entry) => (entry, false),
             }
         };
 
@@ -818,20 +809,23 @@ impl<'engine> Search<'engine> {
         if !Node::pv() {
             let entry = tt_entry.read();
 
-            if !entry.is_empty() {
+            // A quiescence node has depth zero, so results from quiescence or any deeper main
+            // search are sufficiently deep. The stored score remains an alpha-beta bound; it is
+            // never a replacement for the position's static evaluation.
+            if tt_hit && !entry.is_empty() {
                 match entry.bound() {
                     Bound::Exact => {
                         return entry.score;
                     }
                     Bound::Lower => {
-                        if entry.score > beta {
+                        if entry.score >= beta {
                             return entry.score;
                         } else if entry.score > alpha {
                             alpha = entry.score
                         }
                     }
                     Bound::Upper => {
-                        if entry.score < alpha {
+                        if entry.score <= alpha {
                             return entry.score;
                         } else if entry.score < beta {
                             beta = entry.score
@@ -840,40 +834,34 @@ impl<'engine> Search<'engine> {
                 }
             }
 
-            if alpha == beta {
+            if alpha >= beta {
                 return alpha;
             }
         }
 
-        // Step 4. Static evaluation.
-        let stand_pat = match tt_value {
-            Some(s) => s,
-            None => self.evaluate(),
-        };
+        let in_check = self.pos.in_check();
 
-        if stand_pat >= beta {
-            return beta;
-        }
+        // Step 4. Static evaluation. Stand pat is not a legal option while in check.
+        if !in_check {
+            let stand_pat = self.evaluate();
 
-        if alpha < stand_pat {
-            alpha = stand_pat;
-        }
+            if stand_pat >= beta {
+                return beta;
+            }
 
-        // TODO: deal with this by looking at quiet check evasions, rather than going back to main
-        // search.
-        if self.pos.in_check() {
-            // A one move search extension. The main alphabeta function will tell us if we are in
-            // checkmate or stalemate, and if not, it will try the possible evasions.
-
-            // Commenting out as this is currently causing stack overflows. We need to generate
-            // evasions when in check, instead of dropping back to main search.
-            // return self.search::<T, Pv>(alpha, beta, 1);
+            if alpha < stand_pat {
+                alpha = stand_pat;
+            }
         }
 
         let mut score: Score;
-        let mut moves = OrderedMoves::new();
+        if in_check {
+            let moves = self.pos.generate::<BasicMoveList, AllGen, Legal>();
+            return self.quiesce_evasions::<T, Node>(alpha, beta, &moves);
+        }
 
         // Step 5. Loop through all the moves until no moves remain or a beta cutoff occurs.
+        let mut moves = OrderedMoves::new();
         'move_loop: while moves.load_next_phase(QMoveLoader::from(self)) {
             for mov in &moves {
                 if self.stopping() {
@@ -891,6 +879,37 @@ impl<'engine> Search<'engine> {
                 if score > alpha {
                     alpha = score;
                 }
+            }
+        }
+
+        alpha
+    }
+
+    fn quiesce_evasions<T: Thread, Node: NodeType>(
+        &mut self,
+        mut alpha: Score,
+        beta: Score,
+        moves: &BasicMoveList,
+    ) -> Score {
+        if moves.is_empty() {
+            return Score::mate(0);
+        }
+
+        for mov in moves {
+            if self.stopping() {
+                break;
+            }
+
+            self.pos.make_move(mov);
+            let score = self.quiesce::<T, Node>(-beta, -alpha).neg().inc_mate();
+            self.pos.unmake_move();
+
+            if score >= beta {
+                return beta;
+            }
+
+            if score > alpha {
+                alpha = score;
             }
         }
 
@@ -1216,6 +1235,80 @@ mod tests {
     }
 
     #[test]
+    fn quiescence_searches_quiet_check_evasions() {
+        core::init::init_globals();
+
+        let position = Position::from_fen("k3r3/8/8/8/8/8/8/4K3 w - - 0 1").unwrap();
+        let flag = AtomicBool::new(false);
+        let table = Table::new(1);
+        let mut search = Search::new(position, &flag, None, &table);
+
+        let score = search.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P);
+
+        assert_eq!(score, Score::cp(-495));
+        assert!(search.trace.q_nodes_visited() > 1);
+    }
+
+    #[test]
+    fn quiescence_detects_checkmate_at_the_horizon() {
+        core::init::init_globals();
+
+        let position = Position::from_fen("7k/6Q1/6K1/8/8/8/8/8 b - - 0 1").unwrap();
+        let flag = AtomicBool::new(false);
+        let table = Table::new(1);
+        let mut search = Search::new(position, &flag, None, &table);
+
+        assert_eq!(
+            search.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P),
+            Score::mate(0)
+        );
+    }
+
+    #[test]
+    fn quiescence_abort_with_legal_evasions_is_not_checkmate() {
+        core::init::init_globals();
+
+        let position = Position::from_fen("k3r3/8/8/8/8/8/8/4K3 w - - 0 1").unwrap();
+        let moves = position.generate::<BasicMoveList, AllGen, Legal>();
+        assert!(!moves.is_empty());
+
+        let flag = AtomicBool::new(true);
+        let table = Table::new(1);
+        let mut search = Search::new(position, &flag, None, &table);
+
+        assert_eq!(
+            search.quiesce_evasions::<Master, Pv>(Score::INF_N, Score::INF_P, &moves),
+            Score::INF_N
+        );
+    }
+
+    #[test]
+    fn quiescence_uses_tt_scores_only_with_valid_bound_semantics() {
+        core::init::init_globals();
+
+        let position = Position::from_fen("7k/8/8/8/8/8/8/K7 w - - 0 1").unwrap();
+        let flag = AtomicBool::new(false);
+
+        for (bound, stored, expected) in [
+            (Bound::Exact, Score::cp(12), Score::cp(12)),
+            (Bound::Lower, Score::cp(70), Score::cp(70)),
+            (Bound::Upper, Score::cp(-70), Score::cp(-70)),
+        ] {
+            let table = Table::new(1);
+            table
+                .probe(&position)
+                .into_inner()
+                .write(&position, stored, 0, bound, &Move::null());
+            let mut search = Search::new(position.clone(), &flag, None, &table);
+
+            assert_eq!(
+                search.quiesce::<Master, NonPv>(Score::cp(-50), Score::cp(-49)),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn material_evaluation_scales_over_one_hundred_halfmoves() {
         let pos = Position::from_fen("4k3/8/8/8/8/8/8/Q3K3 w - - 50 1").unwrap();
         let flag = AtomicBool::new(false);
@@ -1223,6 +1316,56 @@ mod tests {
         let mut search = Search::new(pos, &flag, None, &tt);
 
         assert_eq!(search.evaluate(), Score::cp(450));
+    }
+
+    #[test]
+    fn quiescence_does_not_use_a_search_score_as_static_evaluation() {
+        core::init::init_globals();
+
+        let position = Position::from_fen("7k/8/8/8/8/8/8/K7 w - - 0 1").unwrap();
+        let flag = AtomicBool::new(false);
+        let table = Table::new(1);
+        table.probe(&position).into_inner().write(
+            &position,
+            Score::cp(300),
+            8,
+            Bound::Exact,
+            &Move::null(),
+        );
+        let mut search = Search::new(position, &flag, None, &table);
+
+        assert_eq!(
+            search.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P),
+            Score::zero()
+        );
+    }
+
+    #[test]
+    fn quiescence_ignores_tt_slot_clashes() {
+        core::init::init_globals();
+
+        let position = Position::from_fen("7k/8/8/8/8/8/8/K7 w - - 0 1").unwrap();
+        let clashing_position = Position::from_fen("7k/8/8/8/8/8/8/K7 b - - 0 1").unwrap();
+        let flag = AtomicBool::new(false);
+        let table = Table::new(0);
+        assert_eq!(table.capacity_entries(), 1);
+        table.probe(&clashing_position).into_inner().write(
+            &clashing_position,
+            Score::cp(300),
+            8,
+            Bound::Exact,
+            &Move::null(),
+        );
+        assert!(matches!(
+            table.probe(&position),
+            super::super::tt::Probe::Clash(_)
+        ));
+        let mut search = Search::new(position, &flag, None, &table);
+
+        assert_eq!(
+            search.quiesce::<Master, NonPv>(Score::cp(-1), Score::zero()),
+            Score::zero()
+        );
     }
 
     /// A regression test to ensure that our search routine produces the expected results for a
