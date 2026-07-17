@@ -1,11 +1,11 @@
 ---
 id: TASK-14
 title: Make UCI parsing and command handling total
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 22:57'
+updated_date: '2026-07-17 22:58'
 labels:
   - uci
   - input
