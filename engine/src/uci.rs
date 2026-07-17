@@ -213,9 +213,7 @@ impl<'a> Parser<'a> {
                 Token::Kw(Keyword::Move) => self.parse_move(),
                 Token::Kw(Keyword::Config) => self.parse_config(),
                 Token::Kw(Keyword::Perft) => self.parse_perft(),
-                Token::String(_) => self.unexpected_token(),
-
-                _ => todo!(),
+                Token::String(_) | Token::Kw(_) => self.unexpected_token(),
             },
             None => Err(Error::NoInput),
         }
@@ -337,11 +335,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_stop(&mut self) -> PResult {
-        Ok(Command::Stop)
+        self.expect_end(Ok(Command::Stop))
     }
 
     fn parse_quit(&mut self) -> PResult {
-        Ok(Command::Quit)
+        self.expect_end(Ok(Command::Quit))
     }
 
     fn parse_time_control(&mut self) -> PResult {
@@ -351,8 +349,8 @@ impl<'a> Parser<'a> {
         let mut binc: u64 = 0;
         let mut moves_to_go: Option<u64> = None;
 
-        while self.peek().is_some() {
-            match self.advance().unwrap() {
+        while let Some(token) = self.advance() {
+            match token {
                 Token::Kw(Keyword::Wtime) => {
                     wtime = Some(self.parse_u64()?);
                 }
@@ -372,13 +370,13 @@ impl<'a> Parser<'a> {
             }
         }
 
-        if wtime.is_none() || btime.is_none() {
+        let (Some(wtime), Some(btime)) = (wtime, btime) else {
             return Err(Error::IncompleteTimeControl);
-        }
+        };
 
         Ok(Command::Go(TimingMode::Timed(TimeControl::new(
-            wtime.expect("should not be None"),
-            btime.expect("should not be None"),
+            wtime,
+            btime,
             winc,
             binc,
             moves_to_go,
@@ -388,8 +386,11 @@ impl<'a> Parser<'a> {
     fn parse_depth(&mut self) -> PResult {
         self.advance().ok_or(Error::UnexpectedEnd)?;
 
-        let depth = self.parse_integer()? as u8;
-        Ok(Command::Go(TimingMode::Depth(depth)))
+        let depth = u8::try_from(self.parse_integer()?).map_err(|_| Error::ExpectedNumber)?;
+        if depth == 0 {
+            return Err(Error::ExpectedNumber);
+        }
+        self.expect_end(Ok(Command::Go(TimingMode::Depth(depth))))
     }
 
     fn parse_infinite(&mut self) -> PResult {
@@ -409,12 +410,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_debug(&mut self) -> PResult {
-        match self.advance() {
-            Some(Token::Kw(Keyword::On)) => Ok(Command::SetOption(EngineOpt::DebugMode(true))),
-            Some(Token::Kw(Keyword::Off)) => Ok(Command::SetOption(EngineOpt::DebugMode(false))),
-            Some(_) => self.unexpected_token(),
-            None => self.unexpected_end(),
-        }
+        let command = match self.advance() {
+            Some(Token::Kw(Keyword::On)) => Command::SetOption(EngineOpt::DebugMode(true)),
+            Some(Token::Kw(Keyword::Off)) => Command::SetOption(EngineOpt::DebugMode(false)),
+            Some(_) => return self.unexpected_token(),
+            None => return self.unexpected_end(),
+        };
+        self.expect_end(Ok(command))
     }
 
     fn parse_setoption(&mut self) -> PResult {
@@ -430,13 +432,16 @@ impl<'a> Parser<'a> {
         self.expect_kw(Keyword::Value)?;
 
         let v = self.parse_integer()?;
+        if !(1..=1024).contains(&v) {
+            return Err(Error::ExpectedNumber);
+        }
 
-        Ok(Command::SetOption(EngineOpt::Hash(v)))
+        self.expect_end(Ok(Command::SetOption(EngineOpt::Hash(v))))
     }
 
     fn parse_display(&mut self) -> PResult {
-        if self.peek().is_some() {
-            match self.advance().unwrap() {
+        if let Some(token) = self.advance() {
+            match token {
                 Token::Kw(Keyword::Lichess) => self.parse_display_lichess(),
                 _ => self.unexpected_token(),
             }
@@ -460,7 +465,7 @@ impl<'a> Parser<'a> {
 
     fn parse_perft(&mut self) -> PResult {
         let d = self.parse_integer()?;
-        Ok(Command::Perft(d))
+        self.expect_end(Ok(Command::Perft(d)))
     }
 }
 
@@ -519,6 +524,92 @@ impl<'a> Token<'a> {
 mod tests {
     use super::*;
     use core::position::Player;
+
+    #[test]
+    fn reserved_standalone_tokens_return_errors_without_panicking() {
+        let reserved = [
+            "debug",
+            "on",
+            "off",
+            "setoption",
+            "name",
+            "value",
+            "register",
+            "ucinewgame extra",
+            "position",
+            "fen",
+            "startpos",
+            "moves",
+            "go",
+            "searchmoves",
+            "ponder",
+            "wtime",
+            "btime",
+            "winc",
+            "binc",
+            "movestogo",
+            "depth",
+            "nodes",
+            "mate",
+            "movetime",
+            "infinite",
+            "ponderhit",
+            "lichess",
+        ];
+
+        for input in reserved {
+            let result = std::panic::catch_unwind(|| Parser::parse(input));
+            assert!(result.is_ok(), "parser panicked for {input:?}");
+            assert!(result.unwrap().is_err(), "parser accepted {input:?}");
+        }
+    }
+
+    #[test]
+    fn oversized_and_invalid_numeric_values_are_rejected() {
+        for input in [
+            "go depth 0",
+            "go depth 256",
+            "go depth 999999999999999999999999999999999999",
+            "go movetime 999999999999999999999999999999999999",
+            "setoption name Hash value 0",
+            "setoption name Hash value 1025",
+            "perft 999999999999999999999999999999999999",
+        ] {
+            assert!(Parser::parse(input).is_err(), "parser accepted {input:?}");
+        }
+    }
+
+    #[test]
+    fn commands_reject_trailing_tokens_consistently() {
+        for input in [
+            "uci extra",
+            "isready extra",
+            "ucinewgame extra",
+            "stop extra",
+            "quit extra",
+            "debug on extra",
+            "setoption name Hash value 16 extra",
+            "go depth 1 extra",
+            "go infinite extra",
+            "go movetime 1 extra",
+            "move e2e4 extra",
+            "perft 1 extra",
+        ] {
+            assert!(Parser::parse(input).is_err(), "parser accepted {input:?}");
+        }
+    }
+
+    #[test]
+    fn parses_setoption_and_ucinewgame() {
+        assert!(matches!(
+            Parser::parse("setoption name Hash value 32"),
+            Ok(Command::SetOption(EngineOpt::Hash(32)))
+        ));
+        assert!(matches!(
+            Parser::parse("ucinewgame"),
+            Ok(Command::UciNewGame)
+        ));
+    }
 
     #[test]
     fn parses_move_time_above_u32_max_without_narrowing() {
