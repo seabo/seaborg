@@ -190,7 +190,7 @@ impl fmt::Display for Move {
 
 /// A struct containing enough information to allow undoing a move on a
 /// `Position`. This struct contains more data (like captured piece and
-/// previous castling rights) than a basic `Move` struct. This is 16 bytes
+/// previous castling rights) than a basic `Move` struct. This is 64 bytes
 /// in size, and is only used for undoing moves to save space.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct UndoableMove {
@@ -273,7 +273,7 @@ mod tests {
     }
 
     #[test]
-    fn undoable_move_is_56_bytes() {
-        assert_eq!(mem::size_of::<UndoableMove>(), 56);
+    fn undoable_move_is_64_bytes() {
+        assert_eq!(mem::size_of::<UndoableMove>(), 64);
     }
 }
