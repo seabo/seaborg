@@ -1,11 +1,11 @@
 ---
 id: TASK-27
 title: Add a reproducible engine strength-regression test script
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-17 18:54'
-updated_date: '2026-07-17 23:20'
+updated_date: '2026-07-17 23:31'
 labels: []
 dependencies: []
 references:
@@ -74,6 +74,12 @@ Verification found the task branch original base fails engine::tt::tests::gen_bo
 Resolved REV-1-01: argparse now raises InfrastructureError for missing/invalid CLI values, so the real entry point emits INFRASTRUCTURE ERROR and exits 3. When --output is recoverable, parse failures preserve report.json. Added subprocess-level regression coverage for both missing arguments and invalid typed values.
 
 Resolved REV-2-01: infrastructure-error rendering now prints SPRT statistics only when a complete parsed result exists. Malformed, incomplete, crash-marked, and nonzero runner outcomes preserve report.json, emit INFRASTRUCTURE ERROR, and return exit 3 without a secondary exception. Added orchestration-level regression coverage for all representative failure paths.
+
+Resolved REV-3-01: build_command now emits '-rounds max_games/2 -games 2 -repeat 2' so cutechess plays each opening twice with colours reversed (canonical fishtest paired setup). Total games still equal max_games (validated even), so cap/max_games accounting is unchanged. Added test_command_plays_each_opening_as_colour_reversed_pair asserting -games=2, -repeat=2, -rounds=max_games/2, and rounds*games==max_games. cutechess-cli is not installed in this environment; flags were verified against the cutechess-cli.6 manual and canonical fishtest usage rather than a live binary.
+
+Resolved REV-3-02: added test_run_success_path_passes_and_records_results, which mocks setup and a PASS runner output at exit 0 and asserts exit 0, report verdict PASS, populated results (games/W/D/L) and sprt (llr/lower_bound/upper_bound). Extracted a shared run_with_mocks harness reused by the failure tests.
+
+Resolved REV-3-03: removed the dead write_report() (run() inlines dir creation and report.json writes); documented Result.forfeits and Result.crashes as reserved fail-closed-zero counters in both the dataclass and docs/strength-testing.md, since any crash/forfeit fails closed to INFRASTRUCTURE ERROR before a Result exists.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -202,5 +208,24 @@ Verification:
 - python3 -m unittest discover -s tools/strength -p 'test_*.py': PASS (11 tests)
 - shasum -a 256 tools/strength/openings-v1.epd: PASS (matches embedded SUITE_SHA256 eca44927b4cabdaa96cb9ab24a66c54e7c7444ac1c3e28d97b4436c110c4e275)
 Note: REV-1-01 and REV-2-01 confirmed resolved. The pre-existing engine::tt::tests::gen_bound failure on the recorded base is unrelated to this diff (no Rust sources changed).
+---
+
+author: @codex
+created: 2026-07-17 23:31
+---
+Implementation handoff
+Branch: task-27-strength-regression
+Worktree: /Users/seabo/seaborg-worktrees/task-27-strength-regression
+Base: dc8f6cef131c0cdfdb3feb3e914dd6e938c3a87d
+Implementation target: 73a318213f6f4c1aa323cc95fceef554e6666ac1
+Resolved findings: REV-3-01, REV-3-02, REV-3-03
+Verification:
+- python3 -m unittest discover -s tools/strength -p 'test_*.py': PASS (13 tests)
+- cargo fmt --check: PASS
+- git diff --check dc8f6ce..73a3182: PASS
+- shasum -a 256 tools/strength/openings-v1.epd: PASS (matches embedded SUITE_SHA256 eca44927b4cabdaa96cb9ab24a66c54e7c7444ac1c3e28d97b4436c110c4e275)
+- cargo test --workspace: FAIL only at pre-existing engine::tt::tests::gen_bound (assertion gen < 64) on recorded base
+Known failures: engine::tt::tests::gen_bound fails on recorded base dc8f6ce; TASK-27 changes no Rust sources (git diff --name-only dc8f6ce..73a3182 -- '*.rs' is empty). Current primary (299f5ec) independently reworked engine/src/tt.rs after this base, replacing the debug_assert!(gen < 64) path.
+Note: cutechess-cli is not installed in this environment; the paired-pairing flags were verified against the cutechess-cli.6 manual and canonical fishtest usage.
 ---
 <!-- COMMENTS:END -->
