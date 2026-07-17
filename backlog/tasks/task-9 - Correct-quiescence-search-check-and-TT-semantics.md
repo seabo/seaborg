@@ -36,9 +36,9 @@ Quiescence currently allows stand-pat behavior while in check and reuses transpo
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Refactor quiescence TT probing so valid hit scores are applied only as depth-qualified alpha-beta bounds, never as stand-pat evaluations.
-2. Separate in-check quiescence from stand-pat logic and search every legal evasion, returning mate when none exist.
-3. Add focused regression tests for quiet evasions, horizon mate, TT exact/lower/upper and insufficient-depth behavior, plus window invariants.
+1. Refactor quiescence TT probing so every hit meets the encoded quiescence depth requirement (depth zero) and scores are applied only as non-PV alpha-beta bounds, never as stand-pat evaluations.
+2. Separate in-check quiescence from stand-pat logic and search every legal evasion, returning mate when none exist and terminating draw cycles.
+3. Add focused regression tests for quiet evasions, horizon mate, TT exact/lower/upper hits, null stored moves, and static-evaluation separation.
 4. Run formatting and workspace tests, commit the implementation, then record an immutable In Review handoff.
 <!-- SECTION:PLAN:END -->
 
