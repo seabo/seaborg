@@ -1,9 +1,11 @@
 ---
 id: TASK-30
 title: Restore move-generation performance without weakening domain safety
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-17 20:57'
+updated_date: '2026-07-17 21:29'
 labels:
   - performance
   - safety
@@ -39,3 +41,13 @@ Move generation and perft regressed after the domain-safety work introduced at c
 - [ ] #6 If the resulting full Criterion measurements show a repeatable improvement over the documented baseline, BENCHMARKS.md is updated to the improved values, commit, hardware, and toolchain; a single noisy run does not move the baseline
 - [ ] #7 cargo fmt --check and cargo test --workspace pass
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Establish baseline profiles and isolate release-mode validation costs in move construction and position mutation.
+2. Add narrowly scoped validation-eliding APIs with documented safety contracts, keeping all existing safe public entry points fully checked.
+3. Route only audited generated-move paths in move generation, search, ordering, and perft through those trusted operations; retain safe validation at parser/UI/external boundaries.
+4. Extend or preserve invalid-input regression coverage, then run formatting, workspace tests, and focused release checks.
+5. Run full idle-machine Criterion measurements on the implementation commit, update BENCHMARKS.md only if repeatable results justify it, and record confidence intervals in the review handoff.
+<!-- SECTION:PLAN:END -->
