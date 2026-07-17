@@ -1,11 +1,11 @@
 ---
 id: TASK-12
 title: Repair transposition-table reuse and mate-score semantics
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 23:14'
+updated_date: '2026-07-17 23:22'
 labels:
   - search
   - tt
@@ -50,6 +50,10 @@ Removed per-search generation advancement and made SearchEngine owners responsib
 Validation passed:
 - cargo fmt --check
 - cargo test --workspace
+
+Rework (attempt 2): Resolved REV-1-01. This engine scores mate POSITION-RELATIVE — the checkmate leaf returns a constant Score::mate(0) (search.rs) and inc_mate accumulates distance-to-mate on unwind, so a node's mate score is the distance from that position and is invariant to the ply at which the position is reached. The prior ply-relative (Stockfish-style +ply/-ply) TT adjustment was only valid for a root-relative convention; applied here it made the same position report different mate distances by probe ply and wrote scores outside the [-20_100, 20_100] mate range. Removed Score::to_tt/from_tt and reverted the ply plumbing threaded through WritableEntry::write/read and quiesce/quiesce_evasions back to the base position-relative storage. Removing the unconditional Search::run tt.clear() means iterative-deepening iterations now reuse a warm TT, so gives_correct_answers additionally exercises mate scores read from a warm table across iterations. Replaced the incorrect mate_scores_decode_relative_to_the_probe_ply / tt_mate_scores_are_adjusted_for_probe_ply tests with mate_scores_are_stored_position_relative, asserting a stored mate distance round-trips unchanged. Preserved all other task work (clear_hash/new_game ownership, UCI ucinewgame and GameController reset wiring, reuse/concurrency tests).
+
+Verification: cargo fmt --check passed; cargo test --workspace passed (engine lib 59 passed/1 ignored, engine integration 31 passed, build_metadata 5 passed, doc-tests passed).
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -92,5 +96,22 @@ Verification:
 - cargo test --workspace: passed (60 + 5 + docs; masks the latent bug per above)
 - cargo fmt --check: passed
 - standalone Score-encoding reproduction (rustc -O): intrinsic mate(1) written@ply2 -> raw 20101 (out of range); read@ply2 -> mate(1); read@ply4 -> mate(3) [same position, different mate distance]
+---
+
+author: @codex
+created: 2026-07-17 23:22
+---
+Resolved REV-1-01 [P1]: TT mate encoding is now position-relative (identity), matching this engine's constant-mate-leaf + inc_mate convention, so a stored mate distance is returned unchanged for a probe at any ply and cross-ply transpositions preserve mate distance. Removed Score::to_tt/from_tt and the ply plumbing; scores are stored verbatim. Behavior change verified by mate_scores_are_stored_position_relative and the warm-TT gives_correct_answers mate suite (exact mate(5)/mate(7) distances), plus cargo test --workspace and cargo fmt --check.
+
+Implementation handoff
+Branch: task-12-tt-reuse-mate-scores
+Worktree: /Users/seabo/seaborg-worktrees/task-12-tt-reuse-mate-scores
+Base: 2c3a91b42c8810ca1897c4fc7675470aa4245ac0
+Implementation target: de1ccb9f1092c9b4b9ba649a02b67452c37c61ed
+Resolved findings: REV-1-01
+Verification:
+- cargo fmt --check: passed
+- cargo test --workspace: passed (engine lib 59 passed, 1 ignored; engine integration 31 passed; build_metadata 5 passed; doc-tests passed)
+Known failures: none
 ---
 <!-- COMMENTS:END -->
