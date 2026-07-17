@@ -1,11 +1,11 @@
 ---
 id: TASK-7
 title: Make time-control allocation overflow safe
-status: In Review
+status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 19:01'
+updated_date: '2026-07-17 19:07'
 labels:
   - search
   - uci
@@ -27,10 +27,10 @@ Ordinary timed searches can panic after move 40 or underflow when the per-move a
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Timed search allocation does not panic or wrap for move numbers above the average game length
-- [ ] #2 Allocations at very low remaining time saturate safely instead of underflowing
-- [ ] #3 Large protocol time values are handled without lossy narrowing
-- [ ] #4 Tests cover late-game move numbers, sub-buffer clocks, increments, and explicit moves-to-go values
+- [x] #1 Timed search allocation does not panic or wrap for move numbers above the average game length
+- [x] #2 Allocations at very low remaining time saturate safely instead of underflowing
+- [x] #3 Large protocol time values are handled without lossy narrowing
+- [x] #4 Tests cover late-game move numbers, sub-buffer clocks, increments, and explicit moves-to-go values
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -69,4 +69,28 @@ Verification:
 - cargo test --workspace: 43 engine tests passed; one known unrelated failure below
 Known failures: tt::tests::gen_bound fails at engine/src/tt.rs:34 because the base implementation supplies a generation >= 64; this is outside TASK-7 and is being addressed by TASK-4.
 ---
+
+author: @codex
+created: 2026-07-17 19:07
+---
+Review attempt: 1
+Reviewed branch: task-7-overflow-safe-time-control
+Reviewed implementation: 27cb863518265f4fd78858e8344434ebe4d439a7
+Verdict: approved
+
+All acceptance criteria are objectively verified. The base-to-target diff is task-scoped, the implementation target descends from the recorded base, and the post-target handoff commit contains only TASK-7 metadata.
+
+Verification:
+- cargo fmt --check: passed
+- cargo test -p engine time::tests: 5 passed
+- cargo test -p engine uci::tests: 2 passed
+- u64::MAX Duration/Instant deadline check: passed
+- cargo test --workspace: TASK-7 tests passed; unchanged pre-existing tt::tests::gen_bound failure at engine/src/tt.rs:34
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Made UCI timing values explicitly u64 end to end and made late-game, low-clock, increment, and moves-to-go allocation arithmetic saturating. Verified with cargo fmt --check, cargo test -p engine time::tests (5 passed), cargo test -p engine uci::tests (2 passed), an extreme u64::MAX Instant deadline check, and cargo test --workspace (all TASK-7 coverage passed; only the unchanged pre-existing tt::tests::gen_bound failure remains).
+<!-- SECTION:FINAL_SUMMARY:END -->
