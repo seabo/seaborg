@@ -1,11 +1,11 @@
 ---
 id: TASK-27
 title: Add a reproducible engine strength-regression test script
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-17 18:54'
-updated_date: '2026-07-17 19:24'
+updated_date: '2026-07-17 19:26'
 labels: []
 dependencies: []
 references:
@@ -70,6 +70,8 @@ The implementation should be practical on a dedicated or self-hosted machine. It
 Implemented a Python 3 cutechess-cli SPRT orchestrator, pinned CC0 opening suite, fail-closed UCI/runner validation, immutable JSON/log/PGN artifacts, smoke-mode gate isolation, unit fixtures, and operator/statistical documentation. No automatic change classification or invocation policy was added.
 
 Verification found the task branch original base fails engine::tt::tests::gen_bound (assertion gen < 64); TASK-27 modifies no Rust sources. The current primary branch contains an independent fix after TASK-27's recorded base.
+
+Resolved REV-1-01: argparse now raises InfrastructureError for missing/invalid CLI values, so the real entry point emits INFRASTRUCTURE ERROR and exits 3. When --output is recoverable, parse failures preserve report.json. Added subprocess-level regression coverage for both missing arguments and invalid typed values.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -122,5 +124,18 @@ Verification:
 - `cargo fmt --check`: PASS
 - `cargo test --workspace`: FAIL only at pre-existing engine::tt::tests::gen_bound on recorded base
 - `git diff --check dc8f6cef131c0cdfdb3feb3e914dd6e938c3a87d..613ba0c013b6c2ce14d364beecb539d56f6f28bf`: PASS
+---
+
+author: @codex
+created: 2026-07-17 19:26
+---
+Implementation handoff
+Branch: task-27-strength-regression
+Worktree: /Users/seabo/seaborg-worktrees/task-27-strength-regression
+Base: dc8f6cef131c0cdfdb3feb3e914dd6e938c3a87d
+Implementation target: e044fd54e019efff8dbbd64c91d014cfb07a7605
+Resolved findings: REV-1-01
+Verification:
+- python3 -m unittest discover -s tools/strength -p 'test_*.py' -v: PASS (9 tests)\n- python3 tools/strength/strength_test.py: PASS (emits INFRASTRUCTURE ERROR and exits 3 as required)\n- cargo fmt --check: PASS\n- git diff --check: PASS\n- cargo test --workspace: FAIL only at pre-existing engine::tt::tests::gen_bound assertion gen < 64\nKnown failures: engine::tt::tests::gen_bound fails on recorded base dc8f6ce; TASK-27 changes no Rust sources, and current primary contains an independent later fix.
 ---
 <!-- COMMENTS:END -->
