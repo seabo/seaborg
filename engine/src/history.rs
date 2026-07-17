@@ -36,7 +36,7 @@ where
     /// This method will panic if the squares passed are not valid squares (i.e. they satisfy
     /// `square.is_okay() == true`).
     pub fn inc(&mut self, from: Square, to: Square, amt: T) {
-        self.data[from.0 as usize][to.0 as usize] += amt;
+        self.data[from.index() as usize][to.index() as usize] += amt;
     }
 }
 
@@ -51,7 +51,7 @@ where
     /// This method will panic if the squares passed are not valid squares (i.e. they satisfy
     /// `square.is_okay() == true`).
     pub fn get(&self, from: Square, to: Square) -> T {
-        self.data[from.0 as usize][to.0 as usize]
+        self.data[from.index() as usize][to.index() as usize]
     }
 
     /// Get a value without bounds checks.
@@ -66,8 +66,8 @@ where
 
         *self
             .data
-            .get_unchecked(from.0 as usize)
-            .get_unchecked(to.0 as usize)
+            .get_unchecked(from.index() as usize)
+            .get_unchecked(to.index() as usize)
     }
 }
 

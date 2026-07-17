@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 18:55'
+updated_date: '2026-07-17 19:02'
 labels:
   - safety
   - core
@@ -42,3 +42,11 @@ Public safe domain types currently allow invalid squares, moves, and positions t
 3. Validate `Position::make_move` before mutation, including null, empty-origin, ownership, destination, and special-move invariants; add regression coverage for blank positions.
 4. Run focused tests, `cargo fmt --check`, and `cargo test --workspace`; commit implementation and create the immutable review handoff.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Sealed `Square` behind a private external representation with checked raw conversion and checked arithmetic. Hardened Board placement, Move construction, and pre-mutation Position move validation. Migrated engine consumers to the public square index accessor and added debug/release regression coverage for invalid square, board, move, null-move, and blank-position inputs.
+
+Workspace verification note: `cargo test --workspace` passed all core tests and 36/37 non-ignored engine tests; pre-existing `engine::tt::tests::gen_bound` fails because the test deliberately passes generation 64 to a function with `debug_assert!(gen < 64)`. The same contradictory test and assertion are present at the base commit.
+<!-- SECTION:NOTES:END -->

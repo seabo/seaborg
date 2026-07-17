@@ -206,11 +206,15 @@ impl Position {
 
     /// Make a move on the Board and update the `Position`.
     ///
-    /// The supplied `Move` must be legal in the current position, otherwise undefined behaviour
-    /// will occur.
+    /// The supplied `Move` must be legal in the current position.
+    ///
+    /// # Panics
+    ///
+    /// Panics before mutating the position if the move is null, has no piece of the
+    /// side to move at its origin, captures a friendly piece, or has inconsistent
+    /// capture or special-move metadata.
     pub fn make_move(&mut self, mov: &Move) {
-        // In debug mode, check the move isn't somehow null
-        debug_assert_ne!(mov.orig(), mov.dest());
+        self.assert_valid_move_input(mov);
 
         // Add an undoable move to the position history
         let undoable_move = mov.to_undoable(&self);
@@ -316,6 +320,82 @@ impl Position {
         // Update "invisible" state
         self.turn = them;
         self.state = State::from_position(&self);
+    }
+
+    fn assert_valid_move_input(&self, mov: &Move) {
+        assert!(!mov.is_null(), "cannot make a null move");
+        assert_ne!(mov.orig(), mov.dest(), "a chess move must change squares");
+
+        let moving_piece = self.piece_at_sq(mov.orig());
+        assert_ne!(moving_piece, Piece::None, "move origin is empty");
+        assert_eq!(
+            moving_piece.player(),
+            self.turn(),
+            "piece is not side to move"
+        );
+
+        let destination_piece = self.piece_at_sq(mov.dest());
+        assert!(
+            destination_piece == Piece::None || destination_piece.player() != self.turn(),
+            "cannot capture a friendly piece"
+        );
+
+        if mov.is_castle() {
+            assert_eq!(
+                moving_piece.type_of(),
+                PieceType::King,
+                "only a king can castle"
+            );
+            assert_eq!(
+                destination_piece,
+                Piece::None,
+                "castling destination must be empty"
+            );
+        } else if mov.is_en_passant() {
+            assert_eq!(
+                moving_piece.type_of(),
+                PieceType::Pawn,
+                "only a pawn can capture en passant"
+            );
+            assert_eq!(
+                Some(mov.dest()),
+                self.ep_square,
+                "invalid en passant destination"
+            );
+            assert_eq!(
+                destination_piece,
+                Piece::None,
+                "en passant destination must be empty"
+            );
+            let captured_square = match self.turn() {
+                Player::WHITE => mov.dest() - Square(8),
+                Player::BLACK => mov.dest() + Square(8),
+            };
+            assert_eq!(
+                self.piece_at_sq(captured_square),
+                Piece::make(!self.turn(), PieceType::Pawn),
+                "en passant capture square has no enemy pawn"
+            );
+        } else {
+            assert_eq!(
+                mov.is_capture(),
+                destination_piece != Piece::None,
+                "capture flag does not match destination"
+            );
+        }
+
+        if mov.is_promo() {
+            assert_eq!(
+                moving_piece.type_of(),
+                PieceType::Pawn,
+                "only a pawn can promote"
+            );
+            assert_eq!(
+                self.turn().relative_rank(mov.dest().rank()),
+                7,
+                "promotion must end on the back rank"
+            );
+        }
     }
 
     /// Unmake the most recent move, returning the `Position` to the previous state.
@@ -1018,14 +1098,38 @@ pub fn file_of_sq(s: u8) -> u8 {
     s & 0b0000_0111
 }
 
-/// Given a square (u8) that is valid, returns the bitboard representation
-/// of that square.
+/// Given a valid raw square index, returns its bitboard representation.
 ///
-/// # Safety
+/// # Panics
 ///
-/// If the input is greater than 63, an empty u64 will be returned.
+/// Panics if the input is greater than 63.
 #[inline]
 pub fn u8_to_u64(s: u8) -> u64 {
-    debug_assert!(s < 64);
-    (1 as u64).wrapping_shl(s as u32)
+    assert!(s < 64, "square index must be in 0..64");
+    (1 as u64) << s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blank_position_rejects_move_before_mutation() {
+        let mut position = Position::blank();
+        let original = position.clone();
+        let mov = Move::build(Square::E2, Square::E4, None, MoveType::QUIET);
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            position.make_move(&mov);
+        }));
+
+        assert!(result.is_err());
+        assert_eq!(position, original);
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot make a null move")]
+    fn position_rejects_null_move() {
+        Position::blank().make_move(&Move::null());
+    }
 }

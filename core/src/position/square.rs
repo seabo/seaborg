@@ -1,22 +1,34 @@
 use crate::bb::Bitboard;
 use std::fmt;
-use std::ops::*;
+use std::ops::{Add, AddAssign, BitXor, Sub, SubAssign};
 
 /// Represents a single square of a chess board.
+///
+/// The representation is private, so values outside the board cannot be
+/// constructed through safe code. Use [`Square::try_from`] for raw indices.
+///
+/// ```compile_fail
+/// use core::position::Square;
+/// let invalid = Square(64);
+/// ```
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd)]
 #[repr(transparent)]
-pub struct Square(pub u8);
-
-impl_bit_ops!(Square, u8);
+pub struct Square(pub(crate) u8);
 
 impl Square {
     /// Creates a square from a rank and a file. This is slow because it performs assertions to
     /// ensure that the rank and file are within bounds. It should never be needed in hot engine
     /// paths, just in places like parsing notation.
     pub fn from_rank_file(rank: usize, file: usize) -> Self {
-        assert!(rank <= 7);
-        assert!(file <= 7);
+        assert!(rank <= 7, "rank must be in 0..=7");
+        assert!(file <= 7, "file must be in 0..=7");
         Square((rank * 8 + file) as u8)
+    }
+
+    /// Returns the zero-based board index of this square.
+    #[inline(always)]
+    pub const fn index(self) -> u8 {
+        self.0
     }
 
     #[inline]
@@ -63,6 +75,52 @@ impl Square {
     #[inline]
     pub fn to_bb(self) -> Bitboard {
         Bitboard((1 as u64).wrapping_shl(self.0 as u32))
+    }
+}
+
+impl TryFrom<u8> for Square {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        if value < 64 {
+            Ok(Self(value))
+        } else {
+            Err(())
+        }
+    }
+}
+
+impl From<Square> for u8 {
+    fn from(square: Square) -> Self {
+        square.0
+    }
+}
+
+macro_rules! checked_square_op {
+    ($trait:ident, $method:ident, $op:ident) => {
+        impl $trait for Square {
+            type Output = Self;
+
+            fn $method(self, rhs: Self) -> Self::Output {
+                Self::try_from(self.0.$op(rhs.0)).expect("square arithmetic left the board")
+            }
+        }
+    };
+}
+
+checked_square_op!(Add, add, wrapping_add);
+checked_square_op!(Sub, sub, wrapping_sub);
+checked_square_op!(BitXor, bitxor, bitxor);
+
+impl AddAssign for Square {
+    fn add_assign(&mut self, rhs: Self) {
+        *self = *self + rhs;
+    }
+}
+
+impl SubAssign for Square {
+    fn sub_assign(&mut self, rhs: Self) {
+        *self = *self - rhs;
     }
 }
 
@@ -219,5 +277,23 @@ impl fmt::Display for Square {
         };
 
         write!(f, "{}{}", file_name, rank.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raw_square_indices_are_checked() {
+        assert_eq!(Square::try_from(63), Ok(Square::H8));
+        assert_eq!(Square::try_from(64), Err(()));
+        assert_eq!(Square::try_from(u8::MAX), Err(()));
+    }
+
+    #[test]
+    #[should_panic(expected = "square arithmetic left the board")]
+    fn square_arithmetic_cannot_create_an_invalid_value() {
+        let _ = Square::A1 - Square::A2;
     }
 }
