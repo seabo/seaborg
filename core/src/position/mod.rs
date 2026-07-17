@@ -872,7 +872,9 @@ impl Position {
     /// Returns the king square for the given player.
     #[inline]
     pub fn king_sq(&self, player: Player) -> Square {
-        self.piece_bb(player, PieceType::King).to_square()
+        self.piece_bb(player, PieceType::King)
+            .to_square()
+            .expect("position must contain exactly one king for each player")
     }
 
     /// Returns the pinned pieces of the given player.

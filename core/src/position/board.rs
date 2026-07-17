@@ -133,4 +133,12 @@ mod tests {
     fn board_rejects_empty_piece_placement() {
         Board::new().place(Square::A1, Player::WHITE, PieceType::None);
     }
+
+    #[test]
+    fn empty_bitboard_cannot_reach_board_indexing() {
+        let board = Board::new();
+        let square = crate::bb::Bitboard::empty().to_square();
+
+        assert_eq!(square.map(|sq| board.piece_at_sq(sq)), None);
+    }
 }
