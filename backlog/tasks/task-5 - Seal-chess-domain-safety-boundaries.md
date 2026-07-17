@@ -1,11 +1,11 @@
 ---
 id: TASK-5
 title: Seal chess domain safety boundaries
-status: In Review
+status: Changes Requested
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 19:03'
+updated_date: '2026-07-17 19:08'
 labels:
   - safety
   - core
@@ -69,5 +69,34 @@ Verification:
 - cargo test -p engine --lib tt::tests::packed_entry_round_trips: passed
 - cargo test --workspace: core passed 21/21; engine passed 36/37 non-ignored tests
 Known failures: engine::tt::tests::gen_bound fails at engine/src/tt.rs:34 because the base test passes generation 64 to existing debug_assert!(gen < 64); unchanged from base.
+---
+
+author: @codex
+created: 2026-07-17 19:07
+---
+Review attempt: 1\nReviewed branch: task-5-domain-safety\nReviewed implementation: 68dfdba\nVerdict: changes_requested\n\nREV-1-01 [P1] Empty bitboards still construct invalid squares through safe APIs\nLocation: core/src/bb.rs:105-134; core/src/position/board.rs:22-27\nImpact: In release builds, the public safe calls Bitboard::empty().to_square() and Bitboard::empty().pop_lsb_and_bit() construct Square(64). Passing that value to safe Board::piece_at_sq reaches get_unchecked(64), so caller-controlled safe values can still cause undefined behavior. This blocks acceptance criteria 1-4.\nReproduction: Link a small external caller against the release core crate and evaluate Bitboard::empty().to_square().index(); it prints 64. The debug build panics only because to_square uses debug_assert, so behavior differs by profile.\nExpected: No public safe Bitboard conversion may return an invalid Square. Empty input must be represented by Option/Result or rejected with a non-debug assertion before constructing Square, and regression tests must cover the release behavior and the Board boundary.\n\nVerification:\n- cargo fmt --all --check: passed\n- cargo test -p core: passed (22 tests, 1 compile-fail doctest)\n- cargo test -p core --release: passed (22 tests, 1 compile-fail doctest), but lacks the empty-bitboard regression\n- external release reproduction: safe API produced Square(64)
+---
+
+author: @codex
+created: 2026-07-17 19:08
+---
+Formatting correction for review comment #2:
+
+Review attempt: 1
+Reviewed branch: task-5-domain-safety
+Reviewed implementation: 68dfdba
+Verdict: changes_requested
+
+REV-1-01 [P1] Empty bitboards still construct invalid squares through safe APIs
+Location: core/src/bb.rs:105-134; core/src/position/board.rs:22-27
+Impact: In release builds, the public safe calls Bitboard::empty().to_square() and Bitboard::empty().pop_lsb_and_bit() construct Square(64). Passing that value to safe Board::piece_at_sq reaches get_unchecked(64), so caller-controlled safe values can still cause undefined behavior. This blocks acceptance criteria 1-4.
+Reproduction: Link a small external caller against the release core crate and evaluate Bitboard::empty().to_square().index(); it prints 64. The debug build panics only because to_square uses debug_assert, so behavior differs by profile.
+Expected: No public safe Bitboard conversion may return an invalid Square. Empty input must be represented by Option/Result or rejected with a non-debug assertion before constructing Square, and regression tests must cover the release behavior and the Board boundary.
+
+Verification:
+- cargo fmt --all --check: passed
+- cargo test -p core: passed (22 tests, 1 compile-fail doctest)
+- cargo test -p core --release: passed (22 tests, 1 compile-fail doctest), but lacks the empty-bitboard regression
+- external release reproduction: safe API produced Square(64)
 ---
 <!-- COMMENTS:END -->
