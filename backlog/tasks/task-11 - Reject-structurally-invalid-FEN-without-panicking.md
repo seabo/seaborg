@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 19:07'
+updated_date: '2026-07-17 19:10'
 labels:
   - core
   - fen
@@ -14,6 +14,8 @@ dependencies: []
 references:
   - core/src/position/fen.rs
   - core/src/position/state.rs
+modified_files:
+  - core/src/position/fen.rs
 priority: high
 type: bug
 ordinal: 16000
@@ -40,3 +42,9 @@ FEN parsing can accept ranks with the wrong width and can construct positions wi
 2. Add regression tests for short/long final ranks, empty and missing-king boards, duplicate kings, and valid parsing.
 3. Run focused tests plus cargo fmt --check and cargo test --workspace, then commit an immutable implementation and record the review handoff.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented rank-width completion checks, including the previously unchecked final rank, and reject any board without exactly one king per side before Position, State, or Zobrist construction. Added panic-guarded regressions for short/long final ranks, empty boards, each missing king, and duplicate kings.
+<!-- SECTION:NOTES:END -->

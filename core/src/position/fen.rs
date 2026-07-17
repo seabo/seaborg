@@ -30,6 +30,7 @@ pub enum FenErrorType {
     PiecePositionsInvalidNumber,
     PiecePositionsRowTooLong,
     PiecePositionsRowTooShort,
+    PiecePositionsInvalidKings,
 }
 
 impl std::fmt::Display for FenErrorType {
@@ -60,6 +61,9 @@ impl std::fmt::Display for FenErrorType {
             FenErrorType::PiecePositionsRowTooLong => write!(f, "piece positions row is too long"),
             FenErrorType::PiecePositionsRowTooShort => {
                 write!(f, "piece positions row is too short")
+            }
+            FenErrorType::PiecePositionsInvalidKings => {
+                write!(f, "piece positions must contain exactly one king per side")
             }
         }
     }
@@ -148,9 +152,9 @@ impl Position {
         let mut last_was_number = false;
 
         for c in piece_positions.chars() {
-            if file_counter == 8 {
+            if file_counter >= 8 {
                 match c {
-                    '/' => {
+                    '/' if file_counter == 8 => {
                         last_was_number = false;
                         file_counter = 0;
                         rank_counter += 1;
@@ -284,6 +288,31 @@ impl Position {
                     })
                 }
             }
+        }
+
+        if file_counter != 8 {
+            return Err(FenError {
+                ty: if file_counter < 8 {
+                    FenErrorType::PiecePositionsRowTooShort
+                } else {
+                    FenErrorType::PiecePositionsRowTooLong
+                },
+                msg: format!(
+                    "row {} ({}) represents {} files; expected 8",
+                    rank_counter, rows[rank_counter as usize], file_counter
+                ),
+            });
+        }
+
+        if white_king.popcnt() != 1 || black_king.popcnt() != 1 {
+            return Err(FenError {
+                ty: FenErrorType::PiecePositionsInvalidKings,
+                msg: format!(
+                    "found {} white kings and {} black kings; expected exactly one of each",
+                    white_king.popcnt(),
+                    black_king.popcnt()
+                ),
+            });
         }
 
         let white_pieces =
@@ -564,4 +593,44 @@ fn rank_file_to_idx(rank: u32, file: u8) -> u8 {
     // fen string, so `rank` = 0 means the rank usually labelled as 8 in
     // algebraic chess notation
     (7 - rank as u8) * 8 + file
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::init::init_globals;
+
+    fn assert_invalid_fen(piece_positions: &str) {
+        let fen = format!("{piece_positions} w - - 0 1");
+        let result = std::panic::catch_unwind(|| Position::from_fen(&fen));
+
+        assert!(result.is_ok(), "invalid FEN panicked: {fen}");
+        assert!(result.unwrap().is_err(), "invalid FEN was accepted: {fen}");
+    }
+
+    #[test]
+    fn rejects_short_and_long_final_ranks() {
+        assert_invalid_fen("4k3/8/8/8/8/8/8/3K3");
+        assert_invalid_fen("4k3/8/8/8/8/8/8/4K4");
+    }
+
+    #[test]
+    fn rejects_empty_and_missing_king_boards() {
+        assert_invalid_fen("8/8/8/8/8/8/8/8");
+        assert_invalid_fen("4k3/8/8/8/8/8/8/8");
+        assert_invalid_fen("8/8/8/8/8/8/8/4K3");
+    }
+
+    #[test]
+    fn rejects_duplicate_kings() {
+        assert_invalid_fen("4k3/8/8/8/8/8/4K3/4K3");
+        assert_invalid_fen("4k3/4k3/8/8/8/8/8/4K3");
+    }
+
+    #[test]
+    fn accepts_exactly_one_king_per_side() {
+        init_globals();
+
+        assert!(Position::from_fen("4k3/8/8/8/8/8/8/4K3 w - - 0 1").is_ok());
+    }
 }
