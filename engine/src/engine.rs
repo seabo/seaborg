@@ -1,27 +1,20 @@
-use super::search::{Master, Search, Worker};
+use super::info::{format_search_event, format_search_outcome};
+use super::search::{SearchEngine, SearchHandle, SearchLimit};
 use super::time::TimingMode;
-use super::tt::Table;
 use super::uci::{self, Command};
 use core::position::Position;
 
 use crossbeam_channel::unbounded;
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::{
-    io,
-    thread::{self, Scope},
-};
-
-const MAX_DEPTH: u8 = 255;
+use std::time::Duration;
+use std::{io, thread};
 
 /// Launch the engine process.
 pub fn launch() {
     core::init::init_globals();
 
-    let stop_flag = AtomicBool::new(false);
-    let flag = &stop_flag;
-
-    let tt = Table::new(16);
+    let search_engine = SearchEngine::new(16);
+    let mut active_search: Option<SearchHandle> = None;
 
     let mut pos = Position::start_pos();
 
@@ -59,33 +52,36 @@ pub fn launch() {
         loop {
             match uci_rx.try_recv() {
                 Ok(Command::Quit) => {
-                    stop_flag.store(true, Ordering::Relaxed);
+                    if let Some(search) = active_search.take() {
+                        search.cancel();
+                        finish_search(search);
+                    }
                     break;
                 }
                 Ok(Command::Stop) => {
-                    stop_flag.store(true, Ordering::Relaxed);
+                    if let Some(search) = &active_search {
+                        search.cancel();
+                    }
                 }
-                Ok(Command::Go(d)) => match d {
-                    TimingMode::Depth(depth) => {
-                        stop_flag.store(false, Ordering::Relaxed);
-                        launch_search(s, flag, None, 1, depth, pos.clone(), &tt);
+                Ok(Command::Go(timing)) => {
+                    if let Some(search) = active_search.take() {
+                        search.cancel();
+                        finish_search(search);
                     }
-                    TimingMode::Infinite => {
-                        stop_flag.store(false, Ordering::Relaxed);
-                        launch_search(s, flag, None, 1, MAX_DEPTH, pos.clone(), &tt);
-                    }
-                    TimingMode::Timed(tc) => {
-                        let move_time = tc.to_move_time(pos.move_number(), pos.turn());
-                        let stop_time = std::time::Instant::now()
-                            + std::time::Duration::from_millis(move_time.into());
-                        launch_search(s, flag, Some(stop_time), 1, MAX_DEPTH, pos.clone(), &tt);
-                    }
-                    TimingMode::MoveTime(t) => {
-                        let stop_time =
-                            std::time::Instant::now() + std::time::Duration::from_millis(t as u64);
-                        launch_search(s, flag, Some(stop_time), 1, MAX_DEPTH, pos.clone(), &tt);
-                    }
-                },
+
+                    let limit = match timing {
+                        TimingMode::Depth(depth) => SearchLimit::Depth(depth),
+                        TimingMode::Infinite => SearchLimit::Infinite,
+                        TimingMode::Timed(tc) => {
+                            let move_time = tc.to_move_time(pos.move_number(), pos.turn());
+                            SearchLimit::Time(Duration::from_millis(move_time.into()))
+                        }
+                        TimingMode::MoveTime(time) => {
+                            SearchLimit::Time(Duration::from_millis(time as u64))
+                        }
+                    };
+                    active_search = Some(search_engine.start(pos.clone(), limit));
+                }
                 Ok(Command::SetPosition((fen, moves))) => match Position::from_fen(&fen) {
                     Ok(mut p) => {
                         for mov in moves {
@@ -129,28 +125,31 @@ pub fn launch() {
                 Ok(cmd) => println!("{:?}: not yet implemented", cmd),
                 Err(_err) => {}
             }
+
+            if let Some(search) = &active_search {
+                report_search_events(search);
+            }
+            if active_search
+                .as_ref()
+                .is_some_and(SearchHandle::is_finished)
+            {
+                finish_search(active_search.take().unwrap());
+            }
         }
     });
 }
 
-fn launch_search<'scope, 'engine>(
-    s: &'scope Scope<'scope, 'engine>,
-    flag: &'engine AtomicBool,
-    stop_time: Option<std::time::Instant>,
-    num_threads: u8,
-    depth: u8,
-    pos: Position,
-    tt: &'engine Table,
-) {
-    for i in 0..num_threads {
-        let thread_pos = pos.clone();
-        s.spawn(move || {
-            let mut search = Search::new(thread_pos, flag, stop_time, tt);
-            if i == 0 {
-                search.run::<Master>(depth);
-            } else {
-                search.run::<Worker>(depth);
-            }
-        });
+fn report_search_events(search: &SearchHandle) {
+    for event in search.events().try_iter() {
+        println!("{}", format_search_event(&event));
     }
+}
+
+fn finish_search(search: SearchHandle) {
+    let events = search.events().clone();
+    let outcome = search.wait();
+    for event in events.try_iter() {
+        println!("{}", format_search_event(&event));
+    }
+    println!("{}", format_search_outcome(&outcome));
 }
