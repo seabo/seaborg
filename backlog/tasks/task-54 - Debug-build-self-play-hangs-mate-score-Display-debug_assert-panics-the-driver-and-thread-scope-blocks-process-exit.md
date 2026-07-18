@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-18 20:11'
-updated_date: '2026-07-18 22:38'
+updated_date: '2026-07-18 22:55'
 labels:
   - engine
   - search
@@ -56,3 +56,21 @@ Related: TASK-36 (illegal PV moves on mate lines, Done) and TASK-12 (TT reuse an
 3. Refactor production UCI input ownership so the stdin reader is not scope-joined during driver unwinding, and add focused coverage plus a documented subprocess/manual non-zero-exit check.
 4. Run focused mate/search/UCI tests, required Rust checks, and the specified debug FastChess WAC self-play stress run (at least several hundred games, concurrency 8); record evidence and hand off the immutable commit for review.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Root cause: Score's Display parity assertions are real invariants for exact position-relative mate scores; search violated them. The failing WAC line reduces to FEN 2k5/8/b1p5/Pq2r1p1/8/5PpP/3p2P1/Q2R2K1 b - - 1 61 at depth 5. Before the fix, the root reported raw score 20066 = Score::mate(34), an impossible positive/even distance, and formatting panicked. Two root-relative assumptions conflicted with the engine's position-relative convention established in TASK-12: recursive alpha/beta windows were merely negated instead of applying the inverse of neg().inc_mate(), and mate-distance pruning used root draft in local node bounds. Added Score::child_bound(), transformed main/quiescence child windows, and made non-root mate limits position-relative (mate(0)..mate(1)). The regression now returns Score::mate(7), formats as UCI mate 4, and would panic/fail on the pre-fix code.
+
+Production launch now detaches the stdin reader and runs the UCI driver on main; normal tests retain a scoped adapter for borrowed inputs. This ensures main-thread panic unwinding cannot join a reader blocked on host-kept-open stdin. driver_panic_exits_the_process_nonzero launches an ignored subprocess probe with deliberately open input and an injected output panic; it exits non-zero within the 2-second watchdog. The companion in-process test confirms prompt unwind.
+
+Validation:
+- cargo test -p engine child_mate_windows_preserve_distance_parity: passed; pre-fix behavior reproduced manually as raw Score::mate(34)/20066 and Display parity panic at the recorded FEN/depth
+- cargo test -p engine driver_panic_exits_the_process_nonzero: passed
+- cargo fmt --check: passed
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: passed
+- cargo test --workspace: passed (core 35; engine 165 passed/2 ignored; build metadata 5; core doc-test 1)
+- cargo test --release -p engine: passed (165 passed/2 ignored)
+- FastChess debug self-play, WAC EPD random, depth 5, concurrency 8, 400 games: completed in two resume segments (146 + remaining 254); 27,742 bestmove responses, 0 panic/assertion log entries, final engine processes exited normally with status 0.
+Known failures: none.
+<!-- SECTION:NOTES:END -->

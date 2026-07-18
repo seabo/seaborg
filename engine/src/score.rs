@@ -55,6 +55,22 @@ impl Score {
         }
     }
 
+    /// Convert a bound at the current position into the equivalent bound for a child position.
+    ///
+    /// Search scores mates relative to the position being searched. Returning from a child
+    /// negates its score and increments its mate distance, so a window passed in the other
+    /// direction must apply the inverse operation. Plain centipawn and infinity bounds only need
+    /// negation.
+    pub fn child_bound(self) -> Self {
+        if self.0 < -20_000 && self.0 > -30_000 {
+            Score(-self.0 + 1)
+        } else if self.0 > 20_000 && self.0 < 30_000 {
+            Score(-self.0 - 1)
+        } else {
+            -self
+        }
+    }
+
     /// Construct a score representing a mate-in-`n`.
     pub fn mate(n: i8) -> Self {
         debug_assert!(n.abs() <= 100);
@@ -216,5 +232,21 @@ mod tests {
         assert!(Score::mate(1) > Score::cp(300));
         assert!(Score::cp(0) > Score::INF_N);
         assert!(Score::cp(0) < Score::INF_P);
+    }
+
+    #[test]
+    fn child_bounds_invert_parent_mate_distance_conversion() {
+        for score in [
+            Score::mate(-8),
+            Score::mate(-1),
+            Score::cp(-42),
+            Score::cp(42),
+            Score::mate(1),
+            Score::mate(9),
+            Score::INF_N,
+            Score::INF_P,
+        ] {
+            assert_eq!(score.child_bound().neg().inc_mate(), score);
+        }
     }
 }
