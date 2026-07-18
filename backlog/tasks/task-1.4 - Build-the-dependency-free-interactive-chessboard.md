@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 15:40'
-updated_date: '2026-07-18 20:11'
+updated_date: '2026-07-18 20:13'
 labels: []
 dependencies:
   - TASK-1.3
@@ -53,6 +53,12 @@ Implemented the dependency-free browser board as strict TypeScript compiled to c
 Frontend verification: strict tsc passed; a clean temporary compilation matched both committed JavaScript files byte-for-byte; node --test passed 7 model tests covering FENs/all piece kinds, both orientations, keyboard coordinate mapping, ordinary/en-passant targets, all promotion choices, both castling directions, en-passant transitions, and assistive labels. A real Chrome run against the built loopback binary rendered 64 squares/32 pieces at 1440x1000 and 390x844 with no overflow, console/CSP error, or external resource; it applied click-click, keyboard, mouse-drag, pen-drag, and touch-drag moves, reconstructed Black orientation, showed invalid-drop snapback and live engine-thinking lockout, and reduced animation duration to 0.001ms under emulated prefers-reduced-motion.
 
 Rust verification: cargo fmt --check passed; cargo clippy --workspace --all-targets --all-features -- -D warnings passed; cargo test --workspace passed 200 tests with 0 failures and 1 ignored; cargo build passed. No move-generation or search hot path changed, so benchmarks were not applicable.
+
+Rework after human feedback:
+
+Resolved HUMAN-2 in 9370e8f. The board now declares eight explicit minmax(0, 1fr) rows and columns, and squares have zero minimum dimensions, so intrinsic SVG or empty-row contents cannot resize a track. The focused embedded-asset regression passed. Chrome geometry verification measured all 64 squares: desktop occupied and sparse/stressed positions both stayed exactly 735.625px square with every cell 91.953125px; at 390px viewport the board stayed 348.03125px square with only normal subpixel distribution (43.5-43.515625px).
+
+HUMAN-1 remains pending human choice. Lichess COPYING.md declares its default public/piece/cburnett set GPLv2+, not MIT, so it was not imported. Lichess declares fantasy, spatial, and celtic piece sets MIT; its separate public/images/staunton collection is also MIT except named subdirectories, but it is not the default 2D set.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
