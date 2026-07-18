@@ -1,11 +1,11 @@
 ---
 id: TASK-38
 title: Time allocation starves the opening at fast time controls
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-18 11:45'
-updated_date: '2026-07-18 12:54'
+updated_date: '2026-07-18 13:18'
 labels:
   - engine
   - time
