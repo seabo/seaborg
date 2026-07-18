@@ -630,6 +630,10 @@ mod tests {
             panic!("expected a timed go command");
         };
 
-        assert_eq!(control.to_move_time(1, Player::WHITE), 8_589_934_441);
+        // (85899345900 - 30) / 20 + 4294967296, well clear of the share cap. The point is that
+        // neither the clock nor the increment narrows to u32 on the way through.
+        let move_time = control.to_move_time(1, Player::WHITE);
+        assert_eq!(move_time, 8_589_934_589);
+        assert!(move_time > u64::from(u32::MAX));
     }
 }
