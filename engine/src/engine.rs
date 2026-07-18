@@ -390,7 +390,9 @@ mod tests {
         let (output, errors) = run_script("ucinewgame\nisready\nquit\n");
         assert!(output.contains("readyok"));
         assert!(!output.contains("UciNewGame: not yet implemented"));
-        assert!(errors.is_empty());
+        // `ucinewgame` is handled silently: beyond the startup banner on the
+        // diagnostic channel, no error diagnostics are produced.
+        assert_eq!(diagnostics_after_banner(&errors), "");
     }
 
     #[test]
