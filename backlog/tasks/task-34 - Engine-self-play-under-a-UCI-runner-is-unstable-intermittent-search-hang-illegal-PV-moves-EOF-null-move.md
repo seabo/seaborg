@@ -3,11 +3,11 @@ id: TASK-34
 title: >-
   Engine self-play under a UCI runner is unstable: intermittent search hang,
   illegal PV moves, EOF null move
-status: In Review
+status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-18 00:25'
-updated_date: '2026-07-18 12:08'
+updated_date: '2026-07-18 12:24'
 labels:
   - engine
   - search
@@ -49,9 +49,9 @@ No engine code fixes should land under this ticket; its deliverable is the inves
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [x] #1 This ticket produces investigation findings, not engine fixes: no changes to engine search/stop/UCI-I/O code land under it
-- [ ] #2 Each of the three failure modes (intermittent search/UCI deadlock; illegal PV moves; EOF null-move abort) is reproduced and root-caused, with documented evidence (repro conditions, captured state at the failure, offending positions/PVs, and the relevant code paths)
+- [x] #2 Each of the three failure modes (intermittent search/UCI deadlock; illegal PV moves; EOF null-move abort) is reproduced and root-caused, with documented evidence (repro conditions, captured state at the failure, offending positions/PVs, and the relevant code paths)
 - [x] #3 The investigation determines whether the failures are independent or share a common root cause, and records any coupling with TASK-32 (time allocation) so overlapping fixes are not duplicated
-- [ ] #4 One or more fresh, well-scoped implementation tickets are created that spec the fix for each defect (or root cause), each with its own acceptance criteria so it can be implemented and reviewed independently; those tickets carry forward the original fix-level requirements (no hang under repeated self-play, only-legal PV moves, legal best-so-far move on stdin EOF, and regression coverage of the stop/abort and EOF paths)
+- [x] #4 One or more fresh, well-scoped implementation tickets are created that spec the fix for each defect (or root cause), each with its own acceptance criteria so it can be implemented and reviewed independently; those tickets carry forward the original fix-level requirements (no hang under repeated self-play, only-legal PV moves, legal best-so-far move on stdin EOF, and regression coverage of the stop/abort and EOF paths)
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -353,4 +353,92 @@ Known failures: none from this change. Baseline (pre-existing, unrelated): bench
 fails to compile (E0423, Square tuple-struct private field), which is why the test command is
 scoped to --lib/--bins/--tests.
 ---
+
+author: @codex
+created: 2026-07-18 12:24
+---
+Review attempt: 2
+Reviewed branch: task-34-investigate-selfplay-robustness
+Reviewed implementation: b6387bc62ebf428ef7bc27c1c88f265efc5ebb89
+Verdict: approved
+
+Scope and immutability. Base 40a9747 (current master tip, merged in at 80a4af6) is an
+ancestor of the target; the target is an ancestor of the branch tip. 40a9747..b6387bc
+touches 7 files, all under backlog/; 'git diff --stat 40a9747 b6387bc -- :(exclude)backlog'
+is empty, so AC #1 holds by construction and no hot-path benchmarks were required (zero
+source lines changed). The tip commit 4f561a7 changes only the task-34 file. Previously
+approved target f81ee26 remains an ancestor.
+
+Rework item 1 - merge conflict resolution. Verified: no conflict markers anywhere under
+backlog/; task-34 carries all five comments in chronological order including master's
+@georgeseabridge 11:46 comment at #3; task-32 retains 3 comments with both sides preserved.
+backlog doctor reports no duplicate IDs.
+
+Rework item 2 - Defect 3 re-verification. Independently re-ran all five EOF variants
+against a fresh release build of this branch. Every one matched the handoff exactly:
+  go depth 25                          -> bestmove a2a3  (was 0000 on d9a138c)
+  position startpos / go depth 8       -> bestmove a2a3
+  position fen <Kiwipete> / go depth 20-> bestmove e2a6
+  position startpos / go infinite      -> bestmove a2a3
+  position startpos / go depth 25/quit -> bestmove a2a3
+Terminal positions still correctly emit bestmove 0000 (7k/5QQ1/8/8/8/8/8/7K b checkmate,
+7k/5Q2/6K1/8/8/8/8/8 b stalemate), so the guarantee did not overreach into the one case
+where 0000 is the correct UCI answer.
+
+Mechanism verified by inspection, not accepted on assertion. Every code reference doc-2 and
+TASK-37 cite is accurate: search.rs:366 declares min_search_complete; stopping() at
+search.rs:763 returns false while it is unset, suppressing both the deadline and the
+cancellation flag; search.rs:468 arms it after the first iteration; engine.rs:90 handles
+Input::Closed -> stop_search, confirming EOF reaches the search through exactly the
+suppressed cancellation flag. Step 4 of the original root-cause chain can therefore no
+longer occur, as claimed.
+
+TASK-37's narrowing rather than retirement is the right call and its stated coverage gap is
+real, not asserted. The four TASK-32 tests it names all exist (search.rs:1568, 1591, 1605,
+1647), and a search for a driver-level Input::Closed test returns nothing, so the
+end-to-end EOF path and the terminal-position case are genuinely unpinned. Retiring TASK-37
+would have orphaned AC #4's requirement to carry forward EOF regression coverage.
+
+Rework items 3 and 4. TASK-39 coordination is recorded on TASK-35, TASK-37 and as a reply on
+TASK-39 itself, and correctly identifies that TASK-37 and TASK-39 pull on the same window in
+opposite directions and that any narrowing must preserve the EOF guarantee. Ordinal collision
+cleared: all task ordinals are now unique (TASK-35 40000, TASK-36 41000, TASK-37 42000).
+
+AC #4 carry-forward mapping confirmed against the actual ticket files: no hang under repeated
+self-play -> TASK-35 #1; only-legal PV moves -> TASK-36 #1/#2; legal best-so-far on stdin EOF
+-> TASK-37 #1; regression coverage of the stop/abort and EOF paths -> TASK-35 #3, TASK-36 #3,
+TASK-37 #1/#2/#3. TASK-37 #3 (tests must fail if min_search_complete is stubbed out) is a
+particularly good addition, since it prevents the tests passing incidentally.
+
+Verification:
+- git diff --stat 40a9747 b6387bc: 7 files, backlog/ only, 629 insertions
+- git diff --stat 40a9747 b6387bc -- ':(exclude)backlog': empty
+- git diff --stat b6387bc 4f561a7: task-34 file only
+- git merge-base --is-ancestor 40a9747 b6387bc / b6387bc 4f561a7: both pass
+- cargo fmt --all --check: clean
+- cargo test --workspace --lib --bins --tests: 114 passed, 0 failed, 1 ignored
+- Five EOF variants + two terminal positions: as tabulated above, all reproduced
+- Code references at search.rs:366/468/763 and engine.rs:90: all verified present
+- backlog doctor: no duplicate task IDs; no duplicate ordinals
+
+Limitations carried forward from review attempt 1 (unchanged, non-blocking):
+- Defect 1's hang was not independently reproduced by either reviewer; a 120-game debug
+  self-play run completed cleanly. The finding rests on the implementer's captured thread
+  samples plus elimination of the retained-sender and buffered-output alternatives. doc-2
+  itself describes the hang as nondeterministic, so this does not contradict it, but the
+  stated repro rate should be treated as optimistic and 'upgrade crossbeam-channel' should
+  not be treated as a proven remedy. TASK-35's ACs are behavioural and prescriptive, so the
+  fix stands regardless of whether the upstream attribution is exact.
+- Defect 2 was not re-derived this attempt; per the merge-eject comment it was independently
+  reproduced in attempt 1 (40x 'Illegal PV move - move c5f8', FEN recovered and validated
+  with python-chess) and confirmed still open on master by the TASK-32 reviewer.
+
+All four acceptance criteria are proven. Approving target b6387bc.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Investigation-only ticket: root-caused three self-play robustness defects and spec'd the fixes as fresh tickets, with no engine code changed (base..target diff touches backlog/ only). Defect 1 (search/UCI completion deadlock) traced to a lost channel-disconnect wakeup, driver parked in crossbeam select! after the worker exited -> TASK-35. Defect 2 (illegal PV moves) traced to the triangular PVTable splicing stale sibling rows on fail-high nodes, reproduced at FEN 8/3n1P2/6R1/4k1P1/P1Q5/8/4N3/4K3 b - - 0 53 with PV ply 4 c5f8 illegal -> TASK-36. Defect 3 (bestmove 0000 on stdin EOF) shared TASK-32's root cause and was fixed by it; re-verified as no longer reproducing, so TASK-37 was narrowed to regression coverage of the untested driver-level EOF path. Findings in doc-2. Verified with: empty diff excluding backlog/ (AC #1); five EOF variants all returning legal moves plus terminal positions still emitting 0000; cargo fmt --all --check clean; cargo test --workspace --lib --bins --tests 114 passed, 0 failed, 1 ignored; backlog doctor clean with no ordinal collisions.
+<!-- SECTION:FINAL_SUMMARY:END -->
