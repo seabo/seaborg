@@ -1,7 +1,7 @@
 ---
 id: TASK-39
 title: Investigate UCI stop responsiveness under the guaranteed-minimum search
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-18 11:46'
@@ -103,5 +103,29 @@ TASK-34's investigation covers three self-play robustness defects. Boundary agai
 Consequence worth carrying into TASK-39's design work: any change that narrows or removes the suppressed window must preserve the EOF guarantee, because EOF and 'stop' both reach the search through the same cancellation flag. Of the candidate directions listed in this ticket's description, 'honor cancellation once any legal root move has been recorded' preserves it by construction; simply re-enabling the cancellation flag during ply 1 would reintroduce the 'bestmove 0000' forfeit that TASK-32 fixed. TASK-37's acceptance criteria were written to assert only that a legal move is returned (not a depth or timing) so they stay valid whichever direction TASK-39 chooses.
 
 TASK-34 needed no code investigation in this ticket's area beyond confirming the above, so there is no duplicated work to reconcile.
+---
+
+author: @codex
+created: 2026-07-18 19:41
+---
+Implementation handoff
+Branch: task-39-stop-responsiveness
+Worktree: /Users/seabo/seaborg-worktrees/task-39-stop-responsiveness
+Base: 9c4cc1896a6f9b121412bb9c5cf86b338891367d
+Implementation target: 2bea51d9d3fc2926560003673d94b0732cd2e6a4
+Resolved findings: none
+Verification:
+- ruby -c tools/task39_stop_probe.rb: Syntax OK
+- fresh probe smoke, 100 samples x 10 positions: 1,000/1,000 legal non-null bestmoves
+- cargo fmt --check: clean
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean
+- cargo test --workspace: passed (core 35; engine 159 passed/1 ignored; metadata 5; doc tests passed)
+Known failures: none
+---
+
+author: @codex
+created: 2026-07-18 19:41
+---
+Handoff correction: the full implementation target SHA is 2bea51d6e7d5fcc850e1573fa2d2eb4a37e1e06a (the abbreviated 2bea51d in the preceding handoff was correct; its manually expanded suffix was not). All other handoff metadata is unchanged.
 ---
 <!-- COMMENTS:END -->
