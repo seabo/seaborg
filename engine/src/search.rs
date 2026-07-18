@@ -359,6 +359,11 @@ pub struct Search<'engine> {
     stopping: &'engine AtomicBool,
     /// Time to at which to end search.
     stop_time: Option<Instant>,
+    /// Whether the guaranteed-minimum search (one full ply) has completed. Both abort signals (the
+    /// cancellation flag and the time deadline) are suppressed until this is set, so a search
+    /// always returns a completed legal root move whenever one exists, even when the allotted
+    /// budget is zero or already elapsed or an immediate stop arrives.
+    min_search_complete: bool,
     /// Destination for typed search progress events.
     events: Option<Sender<SearchEvent>>,
     search_depth: u8,
@@ -404,6 +409,7 @@ impl<'engine> Search<'engine> {
             events,
             search_depth: 0,
             depth_reached: 0,
+            min_search_complete: false,
         }
     }
 
@@ -417,6 +423,7 @@ impl<'engine> Search<'engine> {
 
         self.trace.commence_search();
         self.search_depth = d;
+        self.min_search_complete = false;
 
         let result = self.iterative_deepening::<T>(d);
         self.trace.end_search();
@@ -455,6 +462,10 @@ impl<'engine> Search<'engine> {
                     self.emit_progress(d, value);
                 }
             }
+
+            // The first full ply is guaranteed to run to completion; from here on the time-based
+            // deadline is honored so deeper iterations respect the allotted clock.
+            self.min_search_complete = true;
         }
 
         result
@@ -750,6 +761,15 @@ impl<'engine> Search<'engine> {
 
     #[inline(always)]
     fn stopping(&self) -> bool {
+        // The guaranteed-minimum search (the first full ply) always runs to completion so a legal
+        // root move is available to return. Until it completes, neither the cancellation flag nor
+        // the time deadline may abort the search; this prevents `bestmove 0000` forfeits at
+        // zero/near-zero budgets and on an immediate `stop`. The first ply is finite, so this can
+        // never hang.
+        if !self.min_search_complete {
+            return false;
+        }
+
         self.stopping.load(Ordering::Relaxed)
             || self
                 .stop_time
@@ -1287,6 +1307,10 @@ mod tests {
         let flag = AtomicBool::new(true);
         let table = Table::new(1);
         let mut search = Search::new(position, &flag, None, &table);
+        // Aborts are only honored once the guaranteed first ply has completed, which is the only
+        // state in which an in-flight `quiesce_evasions` can be interrupted at runtime. Emulate
+        // that armed state so the cancellation flag actually stops the search.
+        search.min_search_complete = true;
 
         assert_eq!(
             search.quiesce_evasions::<Master, Pv>(Score::INF_N, Score::INF_P, &moves),
@@ -1541,14 +1565,82 @@ mod tests {
     }
 
     #[test]
-    fn zero_time_limit_has_no_fabricated_result() {
+    fn zero_time_limit_still_returns_a_legal_move() {
+        core::init::init_globals();
+
+        let position = Position::start_pos();
+        let engine = SearchEngine::new(1);
+        let search = engine.start(position.clone(), SearchLimit::Time(Duration::ZERO));
+        let outcome = search.wait();
+
+        // A zero budget must never forfeit: the guaranteed-minimum ply completes and yields a
+        // legal move rather than an absent result (which UCI would emit as `bestmove 0000`).
+        assert!(matches!(outcome, SearchOutcome::Completed(_)));
+        let result = outcome.result().expect("a legal move must be returned");
+        assert!(result.depth >= 1);
+        let best_move = result
+            .best_move
+            .expect("non-terminal position has a legal move");
+        assert!(
+            position.valid_move(&best_move),
+            "returned move must be legal"
+        );
+    }
+
+    #[test]
+    fn near_zero_time_budget_completes_the_guaranteed_ply() {
+        core::init::init_globals();
+
+        let position = Position::start_pos();
+        let engine = SearchEngine::new(1);
+        let search = engine.start(position.clone(), SearchLimit::Time(Duration::from_nanos(1)));
+        let result = search.wait().result().cloned();
+
+        let result = result.expect("near-zero budget must still return a legal move");
+        assert!(result.depth >= 1);
+        assert!(position.valid_move(&result.best_move.unwrap()));
+    }
+
+    #[test]
+    fn aborts_are_suppressed_only_until_the_first_ply_completes() {
+        core::init::init_globals();
+
+        let position = Position::start_pos();
+        // Both abort sources are active from the outset: the cancellation flag is set and the time
+        // deadline has already elapsed.
+        let flag = AtomicBool::new(true);
+        let table = Table::new(1);
+        let mut search = Search::new(position, &flag, Some(Instant::now()), &table);
+
+        // Before the guaranteed ply completes, neither an elapsed deadline nor a set cancellation
+        // flag may abort the search, so a legal root move is always produced.
+        assert!(!search.stopping());
+
+        // Once the guaranteed ply is complete the same signals are honored.
+        search.min_search_complete = true;
+        assert!(search.stopping());
+    }
+
+    #[test]
+    fn time_limited_search_honors_the_budget_after_the_guaranteed_ply() {
         core::init::init_globals();
 
         let engine = SearchEngine::new(1);
-        let search = engine.start(Position::start_pos(), SearchLimit::Time(Duration::ZERO));
+        let search = engine.start(
+            Position::start_pos(),
+            SearchLimit::Time(Duration::from_millis(20)),
+        );
         let outcome = search.wait();
 
-        assert!(matches!(outcome, SearchOutcome::Completed(None)));
+        // The search returns of its own accord (the deadline aborts it) rather than running to the
+        // maximum depth, and it still reports a completed legal move.
+        assert!(matches!(outcome, SearchOutcome::Completed(_)));
+        let result = outcome.result().expect("a legal move must be returned");
+        assert!(result.depth >= 1);
+        assert!(
+            result.depth < MAX_DEPTH,
+            "the budget must bound the search depth"
+        );
     }
 
     #[test]
