@@ -1,11 +1,11 @@
 ---
 id: TASK-39
 title: Investigate UCI stop responsiveness under the guaranteed-minimum search
-status: Changes Requested
+status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-18 11:46'
-updated_date: '2026-07-18 20:17'
+updated_date: '2026-07-18 21:22'
 labels:
   - engine
   - search
@@ -60,16 +60,7 @@ Related: TASK-34 covers separate self-play robustness defects (intermittent sear
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-REV-1-01 rework: supply structural ply-1 quiescence evidence.
-
-1. Build an offline quiescence-reachability explorer as a new engine example (engine/examples/, NOT engine/src search/stop/UCI code, per AC#1). It replicates quiesce/quiesce_evasions move selection exactly — non-check q-nodes expand QueenPromotions+Captures (QMoveLoader), in-check q-nodes expand all legal evasions (quiesce_evasions) — and its only terminations are quiesce Step 1 (in_threefold, half_move_clock >= 50) plus an explicit ply cap. Omitting stand-pat/alpha-beta pruning makes it a sound UPPER BOUND on the reachable ply-1 q-tree.
-2. Report per-position structural metrics: q-nodes, max q-ply, and max consecutive quiet-check-evasion chain length, measured over each depth-1 root child (the actual ply-1 quiescence work).
-3. Systematically search for adversarial positions rather than asserting them: sweep the existing 10-position corpus, repo test-suite FENs, hand-constructed mutual-perpetual-check/discovered-check batteries, and randomly generated positions reached by random play. Rank by max q-ply and quiet-check-chain length.
-4. Establish the structural argument for why deep quiet-check chains are hard to reach: a quiet check can only be generated from an in-check node (QMoveLoader::load_quiets is gated on in_check and quiesce returns to quiesce_evasions first), so an unbounded quiet chain requires mutual alternating check, which threefold/fifty-move then cuts.
-5. Re-run tools/task39_stop_probe.rb extended with the worst positions found, recording their real bestmove latency so the structural worst case is tied to measured latency.
-6. Add a fast regression test pinning the structural bound on the worst discovered position.
-7. Update doc-3 with method, structural results, the adversarial search procedure and its negative/positive result, and revised conclusions; keep AC#3/#4/#5 judgements consistent with what the new evidence shows.
-8. Run cargo fmt --check, strict clippy, cargo test --workspace; record Resolved REV-1-01 and hand off.
+REV-2-01 rework: align the TASK-45 outcome specification with the investigation.\n\n1. Revise TASK-45's rationale to state that TASK-29 caps quiet check-extension chains on its own merits but does not bound capture/promotion interleaving or the total depth-1 quiescence tree.\n2. Revise TASK-45 acceptance criterion #5 so TASK-45 preserves unchanged time-deadline behavior without assigning the total depth-1 bound to TASK-29.\n3. Verify TASK-45 against doc-3 and the TASK-29 interaction finding; run repository-required checks; record Resolved REV-2-01 and hand off a new immutable target.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
