@@ -1652,17 +1652,17 @@ mod tests {
         let position = Position::start_pos();
         let flag = AtomicBool::new(false);
 
-        // Measure the deterministic depth-one work, then stop a fresh search as it enters the
-        // candidate depth-two search. The first iteration is guaranteed to ignore aborts, so the
-        // threshold fires inside the next search invocation, before it can produce a score.
-        let baseline_table = Table::new(1);
+        // Measure the deterministic depth-one work, then stop a fresh search in the first child
+        // of the candidate depth-two root. The root itself is the first new node and its child is
+        // the second, so this threshold proves that a move was made and a subtree was entered.
+        let baseline_table = Table::new(16);
         let mut baseline = Search::new(position.clone(), &flag, None, &baseline_table);
         let expected = baseline.run::<Master>(1).unwrap();
         let expected_pv = baseline.pvt.pv().copied().collect::<Vec<_>>();
         let completed_iteration_nodes = baseline.trace.all_nodes_visited();
-        let abort_after = completed_iteration_nodes + 1;
+        let abort_after = completed_iteration_nodes + 2;
 
-        let table = Table::new(1);
+        let table = Table::new(16);
         let mut search = Search::new(position.clone(), &flag, None, &table);
         search.abort_after_nodes = Some(abort_after);
         let result = search.run::<Master>(3).unwrap();
@@ -1677,6 +1677,37 @@ mod tests {
         assert_eq!(
             root_entry.mov.to_move(&position),
             expected.best_move.unwrap()
+        );
+    }
+
+    #[test]
+    fn aborted_child_cannot_score_or_write_its_parent() {
+        core::init::init_globals();
+
+        let position = Position::start_pos();
+        let start_zob = position.zobrist();
+        let flag = AtomicBool::new(false);
+        let table = Table::new(16);
+        let mut search = Search::new(position.clone(), &flag, None, &table);
+
+        // Permit the test abort immediately and fire it in the first child: the root consumes one
+        // node, makes a move, and the recursive search consumes the second node before stopping.
+        search.min_search_complete = true;
+        search.search_depth = 2;
+        search.abort_after_nodes = Some(2);
+
+        let result = search.search::<Master, Root>(Score::INF_N, Score::INF_P, 2);
+
+        assert_eq!(result, None, "an aborted child must not yield a score");
+        assert_eq!(search.trace.all_nodes_visited(), 2);
+        assert_eq!(search.pos.zobrist(), start_zob, "the root move is restored");
+        assert!(
+            search.pvt.pv().next().is_none(),
+            "an aborted child must not become the principal move"
+        );
+        assert!(
+            table.probe(&position).into_inner().read().is_empty(),
+            "an ancestor whose child aborted must not write a TT entry"
         );
     }
 
