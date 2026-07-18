@@ -1,11 +1,11 @@
 ---
 id: TASK-1.3
 title: Add the loopback UI server and `--ui` lifecycle
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-17 15:40'
-updated_date: '2026-07-18 13:46'
+updated_date: '2026-07-18 14:02'
 labels: []
 dependencies:
   - TASK-1.2
@@ -73,6 +73,25 @@ Self-review before handoff found and fixed seven issues, each with a regression 
 - A panicking server thread exited 0; the CLI now reports and exits 1.
 
 Verification: cargo fmt --check passed; cargo test --workspace passed 182 tests with zero failures; the 67 ui tests passed on 5 consecutive runs with no flakes; cargo clippy -p engine --all-targets produced zero warnings in the new code; git diff --check passed. Also exercised the real binary: played a 6-ply game against the engine, and confirmed the token, Host, Origin, content-type, method, path-traversal, size-limit, SSE streaming, and SSE reconnection behaviours over curl.
+
+Review attempt 1 rework (base target 7b7225a).
+
+Resolved REV-1-01. The accept loop called thread::spawn per connection with no cap, on the accept-loop thread; thread::spawn panics when the OS refuses a thread, so the panic unwound UiServer::run and the process exited 1 mid-game. Connections now acquire a ConnectionPermit from a MAX_CONNECTIONS (64) pool via compare-and-swap, released on any thread exit including a panic unwind, and over-cap peers receive 503 too_many_connections. Spawning moved to thread::Builder so a failed spawn is stepped over like a failed accept; the closure owns the stream and permit, so a rejected spawn drops both. Refusals are written on the accept thread under a short write timeout plus a 100ms poll-bounded drain, so a refused peer can neither stall the loop nor lose its 503 to an RST. Verified live: the reviewer's repro killed the process at 4106 bare connections; the rebuilt binary absorbed 5000, answered 503, logged no panic, and returned to normal service and gameplay once they closed.
+
+Resolved REV-1-02. DRAIN_TIMEOUT was installed as a per-read socket timeout, so a client sending one byte per 2s kept the drain productive to the 1 MiB cap. drain_rejected_request now recomputes the time remaining before every read against an absolute DRAIN_DEADLINE, mirroring http::apply_deadline. Verified live: the reviewer observed a connection held for the full 60.2s after 40 of 20000 bytes; it now closes after 4.5s having accepted 3, with the 413 still delivered. The trade this makes is deliberate and documented: a client that keeps sending past the deadline forfeits its response to the reset, because the thread matters more than the courtesy. A client that stops sending still receives the 413.
+
+Non-blocking observations, all fixed here rather than deferred, so no follow-ups were filed.
+- check_origin_headers: comment only, behaviour unchanged. The stated rationale for accepting a missing Origin did not hold for GET. Requiring Origin on GET would break top-level navigation, so the comment now gives the reasons that do hold (no CORS headers, nosniff, exact content types, frame-ancestors none) and points at MAX_CONNECTIONS for the residual DoS surface the reviewer identified.
+- Session::shutdown now stores running under published before notify_all, closing the lost-wakeup window against wait_for_update.
+- write_score special-cases INF_P/INF_N ahead of the mate branches, as Score's Display does. app.js switches on the score tag rather than assuming anything untagged is centipawns.
+- json hex4 requires four actual hex digits, and number was replaced with a JSON-grammar scanner.
+- http read_line returns Option so EOF is distinguishable from the blank line ending the headers.
+
+Regression tests: six new tests, each confirmed to FAIL against the previous implementation before being kept (drain deadline, connection cap, wire infinities, json escapes, json numbers, http truncation).
+
+One deliberate omission for the reviewer to weigh. The shutdown lost-wakeup has no regression test. The window is a few instructions between wait_for_update reading running and wait_timeout parking, and the waiter holds the published lock across all of it, so it is not reachable from outside the type. A 400-round stress test was written and discarded because it passed with the bug present, which would have been false assurance. The fix is justified by locking discipline and the reasoning is recorded at the call site.
+
+Verification: cargo fmt --check passed; cargo clippy -p engine --all-targets reported zero warnings in engine/src/ui and src/cmdline.rs (the remainder are pre-existing in core/engine); cargo test --workspace --no-fail-fast passed 188 tests, 0 failures, 1 pre-existing ignored; cargo test -p engine ui:: passed 73/73 on 5 consecutive runs with no flakes; git diff --check clean.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -193,5 +212,34 @@ Verification:
 - AC#7 reviewed for substance, not presence: the 67 tests assert distinct error codes,
   boundary cases (body exactly at MAX_BODY, truncated and extended tokens), and that rejected
   commands leave the revision unchanged.
+---
+
+author: @codex
+created: 2026-07-18 14:02
+---
+Implementation handoff
+Branch: task-1.3-ui-server
+Worktree: /Users/seabo/seaborg-worktrees/task-1.3-ui-server
+Base: 8ceb480cdfd3af94de0bd82849aa027bb1c99519
+Implementation target: 7e472552cb398199352d5c47f2214d2bba763373
+Resolved findings: REV-1-01, REV-1-02
+Verification:
+- cargo fmt --check: passed
+- cargo clippy -p engine --all-targets: 0 warnings in engine/src/ui and src/cmdline.rs (remainder pre-existing in core/engine)
+- cargo test --workspace --no-fail-fast: passed, 188 tests, 0 failures, 1 pre-existing ignored
+- cargo test -p engine ui:: (5 consecutive runs): 73/73 each run, no flakes
+- git diff --check: passed
+- Regression tests: each of the 6 new tests was confirmed to fail against the previous implementation before being kept
+- Live REV-1-01 (release binary, --ui --ui-port 8742 --no-open): 5000 bare connections absorbed where the review repro died at 4106; 503 too_many_connections returned, no panic logged, full recovery to 200 and a played move (e2e4, revision 1, engine replied to revision 2) after release
+- Live REV-1-02: oversized POST then a 1-byte drip; 413 delivered, connection closed after 4.5s having accepted 3 of 20000 bytes, against the 60.2s/40-byte hold in the review
+Known failures: none
+
+Notes for the reviewer. Two points worth your judgement rather than silent acceptance.
+
+First, REV-1-02's fix makes a deliberate trade. Bounding the drain by wall time means a client still sending when the deadline passes has its connection closed with data queued, so the kernel sends RST and that client loses its 413. A client that stops sending still receives it, which oversized_requests_are_refused_before_the_body_is_buffered covers. I took thread safety over response delivery for a peer that is by then misbehaving; say if you would rather it went the other way.
+
+Second, the shutdown lost-wakeup observation is fixed but has no regression test, which is the one place this handoff falls short of the standard I applied elsewhere. The window is a few instructions wide and the waiter holds the published lock across all of it, so I could not reach it from outside the type. I wrote a 400-round stress test, confirmed it passed with the bug still present, and deleted it rather than bank false assurance. The reasoning is recorded at the call site in session.rs.
+
+All five non-blocking observations were fixed in place, so no follow-up tickets were filed and none are requested. The json.rs and read_line changes are the largest of those; if you would rather they had been separate tickets, they are cleanly separable commits-worth of the diff.
 ---
 <!-- COMMENTS:END -->
