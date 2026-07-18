@@ -347,6 +347,30 @@ mod tests {
         (output.contents(), errors.contents())
     }
 
+    fn bestmove_from(output: &str) -> &str {
+        let mut bestmoves = output
+            .lines()
+            .filter_map(|line| line.strip_prefix("bestmove "));
+        let bestmove = bestmoves.next().expect("driver must emit a bestmove");
+        assert!(
+            bestmoves.next().is_none(),
+            "driver emitted multiple bestmoves"
+        );
+        bestmove
+    }
+
+    fn assert_eof_returns_legal_move(mut position: Position, position_command: &str) {
+        let (output, errors) = run_script(&format!("{position_command}go infinite\n"));
+        let bestmove = bestmove_from(&output);
+
+        assert_ne!(bestmove, "0000", "non-terminal EOF returned a null move");
+        assert!(
+            position.make_uci_move(bestmove).is_some(),
+            "EOF returned illegal move {bestmove} for {position_command:?}"
+        );
+        assert_eq!(diagnostics_after_banner(&errors), "");
+    }
+
     /// Diagnostics emitted after the startup banner has been stripped.
     fn diagnostics_after_banner(errors: &str) -> &str {
         errors
@@ -376,6 +400,27 @@ mod tests {
         run(TEST_INFO, FailingReader, output.clone(), errors.clone());
         assert_eq!(output.contents(), "");
         assert_eq!(diagnostics_after_banner(&errors.contents()), "");
+    }
+
+    #[test]
+    fn stdin_eof_during_search_emits_a_legal_bestmove() {
+        assert_eof_returns_legal_move(Position::start_pos(), "");
+    }
+
+    #[test]
+    fn stdin_eof_emits_null_bestmove_only_for_terminal_positions() {
+        // Keep a non-terminal control in this boundary test: besides distinguishing terminal
+        // positions, it makes the test sensitive to removal of the minimum-search guarantee.
+        assert_eof_returns_legal_move(Position::start_pos(), "position startpos\n");
+
+        for fen in [
+            "7k/5QQ1/8/8/8/8/8/7K b - - 0 1",
+            "7k/5Q2/6K1/8/8/8/8/8 b - - 0 1",
+        ] {
+            let (output, errors) = run_script(&format!("position fen {fen}\ngo infinite\n"));
+            assert_eq!(bestmove_from(&output), "0000", "terminal FEN: {fen}");
+            assert_eq!(diagnostics_after_banner(&errors), "");
+        }
     }
 
     #[test]

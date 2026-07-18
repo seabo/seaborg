@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-18 01:21'
-updated_date: '2026-07-18 23:10'
+updated_date: '2026-07-18 23:11'
 labels:
   - engine
   - search
@@ -56,6 +56,14 @@ Coordination: TASK-39 asks whether TASK-32's abort-suppressed window bounds UCI 
 3. Add a driver-level terminal-position regression for checkmate and stalemate, retaining a non-terminal control so the test also detects removal of the guaranteed-minimum-search behavior while asserting terminal positions emit bestmove 0000.
 4. Prove test sensitivity by temporarily disabling the min_search_complete guard, restore production code, then run focused tests and all repository-required checks.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Added driver-level stdin EOF regression coverage in engine/src/engine.rs. The tests exercise the real reader, Input::Closed handling, search cancellation, outcome formatting, and stdout path. Non-terminal outputs are parsed and applied to the original Position to prove legality; checkmate and stalemate pin bestmove 0000. A non-terminal control in each test makes both sensitive to the guaranteed-minimum-search behavior.
+
+Mutation evidence: temporarily changed Search::stopping so min_search_complete no longer suppressed cancellation, then ran cargo test -p engine engine::tests::stdin_eof_. Both tests failed because the non-terminal EOF path emitted bestmove 0000. Restored search.rs unchanged before verification.
+<!-- SECTION:NOTES:END -->
 
 ## Comments
 
