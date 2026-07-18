@@ -507,14 +507,21 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_search_outcomes_are_ignored() {
+    fn zero_time_engine_turn_still_produces_a_legal_move() {
         init_globals();
+        // The engine (White) is given a zero time budget. It must not stall or forfeit: the
+        // guaranteed-minimum search completes a legal move, which the controller applies.
         let mut game = GameController::new(Player::BLACK, SearchLimit::Time(Duration::ZERO), 1);
-        let original = game.snapshot().fen;
+        let original = game.snapshot();
+        assert_eq!(original.side_to_move, Player::WHITE);
+
         wait_for_engine(&mut game);
-        assert_eq!(game.snapshot().fen, original);
-        assert_eq!(game.snapshot().side_to_move, Player::WHITE);
-        assert_eq!(game.snapshot().engine_status, EngineStatus::Idle);
+
+        let after = game.snapshot();
+        assert_ne!(after.fen, original.fen);
+        assert_eq!(after.move_history.len(), 1);
+        assert_eq!(after.side_to_move, Player::BLACK);
+        assert_eq!(after.engine_status, EngineStatus::Idle);
     }
 
     #[test]
