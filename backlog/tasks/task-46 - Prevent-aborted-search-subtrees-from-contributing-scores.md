@@ -1,11 +1,11 @@
 ---
 id: TASK-46
 title: Prevent aborted search subtrees from contributing scores
-status: In Review
+status: Changes Requested
 assignee:
   - '@codex'
 created_date: '2026-07-18 18:29'
-updated_date: '2026-07-18 21:55'
+updated_date: '2026-07-18 22:14'
 labels: []
 dependencies: []
 references:
@@ -71,5 +71,85 @@ Verification:
 - cargo test --workspace: passed (198 passed, 1 ignored)
 - cargo test -p engine search::tests: passed (25 passed)
 Known failures: none
+---
+
+author: @codex
+created: 2026-07-18 22:14
+---
+Review attempt: 1
+Reviewed branch: task-46-aborted-search-subtrees
+Reviewed implementation: 4905c1e5cfa5d5f585cec89b45c170c4c644bcbd
+Verdict: changes_requested
+
+REV-1-01 [P1] The AC#4 regression test passes without the fix
+Location: engine/src/search.rs:1649 (mid_subtree_abort_keeps_the_last_completed_iteration), specifically the threshold at engine/src/search.rs:1661
+Impact: AC#4 requires a regression test that drives a search to abort mid-subtree
+and pins the last fully completed iteration. The committed test does drive a
+mid-subtree abort, but it does not discriminate fixed from unfixed behavior: it
+passes unchanged against the recorded base commit e301527, where aborted
+subtrees still return Score::zero() and the aborted iteration's PV table is
+never restored. A regression test that cannot fail on the pre-fix code provides
+no protection against this bug recurring, so AC#4 is not provable as written.
+The abort threshold `all_nodes_visited() + 5` lands in a region where base and
+target behave identically.
+Reproduction:
+1. git worktree add --detach /tmp/task46-base e301527
+2. Graft onto base only the test-only hook and the test body under review: the
+   `#[cfg(test)] abort_after_nodes: Option<usize>` field, its `None`
+   initializer, the `abort_after_nodes` early-return block in `stopping()`, and
+   `mid_subtree_abort_keeps_the_last_completed_iteration` verbatim.
+3. cargo test -p engine mid_subtree_abort_keeps_the_last_completed_iteration
+   -> passes on the unfixed base commit.
+Supporting evidence: an identical 300-point sweep of abort thresholds
+(all_nodes_visited() + 1 ..= + 300) run on base and on the implementation
+target differs at exactly two thresholds (+1 and +104), and only in the PV
+field. `result` (score/best_move/depth) and the root TT entry depth are
+identical at all 300 thresholds. The behavior this patch actually changes is PV
+restoration, and +5 does not sample it.
+Expected: The regression test must fail on the pre-fix code and pass on the
+fixed code. Changing the threshold at engine/src/search.rs:1661 from
+`all_nodes_visited() + 5` to `all_nodes_visited() + 1` achieves exactly that
+and needs no other edit: verified FAILED on base (left: None, right:
+Some(Move { orig: Square(8), dest: Square(16), ... }) at the
+`search.pvt.pv().next()` assertion) and ok on target 4905c1e. Please also
+confirm the chosen threshold remains a genuine mid-subtree abort rather than a
+pre-first-move abort, and consider asserting the full PV line rather than only
+its first move.
+
+Verification:
+- cargo fmt --check: passed
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: passed
+  (re-run with a clean CARGO_TARGET_DIR to defeat lint caching; passed)
+- cargo test --workspace: passed (203 passed, 1 ignored, 0 failed)
+- grafted AC#4 test on base e301527: PASSED (should have failed) -> REV-1-01
+- grafted AC#4 test on base e301527 with threshold +1: FAILED as required
+- same test with threshold +1 on target 4905c1e: passed
+- 300-threshold base-vs-target sweep: differs only at +1 and +104, PV field only
+- cargo bench --bench perft --bench movegen (target): generate moves
+  190.30 ns (BENCHMARKS.md investigate above 193.83 ns), perft 5 22.352 ms
+  (investigate above 22.472 ms) -> both under threshold, and search.rs has no
+  call path into either bench
+
+Non-blocking observations (no action required for this verdict):
+- The `search startpos depth 7` bench is repeatably ~1-6% slower on target than
+  on base across three interleaved rounds (base 39.1/40.7/39.1 us, target
+  41.6/41.3/41.4 us). That bench is degenerate (it reuses one warm Search and
+  Table, so it measures TT-hit returns rather than real search work) and the
+  machine was not perfectly idle, so this is reported for visibility rather than
+  as a blocking regression. Worth re-confirming on an idle machine if search
+  throughput matters.
+- The regression test uses Table::new(1), which holds a single entry, so every
+  node in the search collides on one slot. The `root_entry.depth == 1` assertion
+  is therefore weaker than it looks; a larger table would make the "aborted node
+  wrote no TT entry" claim for AC#2 more direct.
+
+Reviewed the full base-to-target diff. The production change itself is sound:
+NodeResult = Option<Score> is propagated correctly through search, razoring,
+quiesce, and quiesce_evasions; every abort path unmakes the move before
+unwinding (corroborated by the existing start_zob assertion in run()); aborted
+nodes return before the Step 24 TT write; and iterative_deepening restores the
+prior completed PV table. The TODO at the old engine/src/search.rs:815 is gone
+(AC#5) and the diff adds no #[allow]. Only engine/src/search.rs and the task
+file changed. The single blocker is the strength of the AC#4 test.
 ---
 <!-- COMMENTS:END -->
