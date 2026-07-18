@@ -1,10 +1,11 @@
 ---
 id: TASK-37
 title: Add regression coverage for the stdin-EOF / stop-abort bestmove path
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-18 01:21'
-updated_date: '2026-07-18 12:03'
+updated_date: '2026-07-18 23:10'
 labels:
   - engine
   - search
@@ -46,6 +47,15 @@ Coordination: TASK-39 asks whether TASK-32's abort-suppressed window bounds UCI 
 - [ ] #4 The tests assert only that a legal move is returned, not a specific depth, move, or timing, so they remain valid if TASK-39 changes the abort-suppression window
 - [ ] #5 No engine behaviour change lands under this ticket: the diff is tests-only (plus any test-support plumbing), and the existing search and UCI test suites still pass
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Extend the existing engine driver test harness in engine/src/engine.rs with helpers that run the real reader/driver/search path through EOF and extract the single emitted bestmove.
+2. Add a non-terminal infinite-search EOF regression that validates the emitted UCI move against the searched Position, without asserting move choice, depth, or timing.
+3. Add a driver-level terminal-position regression for checkmate and stalemate, retaining a non-terminal control so the test also detects removal of the guaranteed-minimum-search behavior while asserting terminal positions emit bestmove 0000.
+4. Prove test sensitivity by temporarily disabling the min_search_complete guard, restore production code, then run focused tests and all repository-required checks.
+<!-- SECTION:PLAN:END -->
 
 ## Comments
 
