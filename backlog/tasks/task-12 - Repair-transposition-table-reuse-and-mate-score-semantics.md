@@ -5,7 +5,7 @@ status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-17 23:45'
+updated_date: '2026-07-18 00:10'
 labels:
   - search
   - tt
@@ -140,10 +140,38 @@ Verification:
 - cargo test --workspace: passed (core 31; engine lib 59 passed, 1 ignored; build_metadata 5; doc-tests 1)
 - grep for to_tt/from_tt/ply-adjust remnants: none in engine/src
 ---
+
+author: @codex
+created: 2026-07-18 00:09
+---
+Review attempt: 2 (post-merge re-verification)
+Reviewed branch: task-12-tt-reuse-mate-scores
+Reviewed implementation: 2c89538efe184b54a8d3c8dbd662a089390b7181 (merge of approved de1ccb9 with master 7326e93)
+Verdict: approved (reconfirmed)
+
+Merged current master into the branch at user request. Master added a review-process requirement (7326e93): run relative speed benchmarks on hot-path changes. The merge modified implementation code (one conflict in engine.rs), which supersedes the earlier de1ccb9 approval, so this is a fresh verdict on the merged tip.
+
+Merge conflict resolution (engine.rs):
+- Command loop: master/task-14 and task-12 each added a Command::UciNewGame arm at different textual locations, so git text-merged BOTH, producing a duplicate arm. Kept task-12's 'search_engine.new_game()' (the documented generation-boundary behavior that is the point of this task, verified by AC#2/#4) and removed master's duplicate 'SearchEngine::new(hash_size_mb)' reallocation. Result compiles with no unreachable_patterns warning.
+- Tests: kept all three tests (task-12's uci_new_game_is_an_owner_handled_hash_boundary plus master's standard_state_commands_are_silent_and_supported and malformed_and_unsupported_commands_only_write_to_stderr). master's standard_state test now additionally exercises the new_game() arm.
+- handle_command fall-through adopted master's 4-arg (errors) signature.
+
+Hot-path benchmark (new review requirement): cargo bench --bench perft --bench movegen, same idle machine (Apple M3 Pro), master 7326e93 vs merged tip 2c89538. task-12 changes touch only engine TT/search orchestration, not core movegen/perft, so no regression is expected and none observed:
+- generate moves: +0.99% [+0.72%, +1.24%] — within run-to-run variance (187.4-188.8 ns across repeats), far below the 5% BENCHMARKS.md threshold.
+- perft 5: -1.03% [-1.62%, -0.20%] — merged tip marginally faster, not a regression.
+
+Re-verification on merged tip:
+- cargo build --workspace: clean (no unreachable-pattern warnings)
+- cargo fmt --check: passed
+- cargo test --workspace: passed (core 35; engine lib 65 passed, 1 ignored; build_metadata 5; doc-tests 1)
+- Targeted: searches_reuse_the_shared_table_until_the_owner_clears_it, concurrent_searches_do_not_invalidate_the_shared_generation, concurrent_probes_share_the_live_generation, mate_scores_are_stored_position_relative, uci_new_game_is_an_owner_handled_hash_boundary, standard_state_commands_are_silent_and_supported, gives_correct_answers — all pass.
+
+All five acceptance criteria remain satisfied on the merged tip. Ready to Merge; branch tip 2c89538 is up to date with master and can be fast-track merged by a human.
+---
 <!-- COMMENTS:END -->
 
 ## Final Summary
 
 <!-- SECTION:FINAL_SUMMARY:BEGIN -->
-Restored TT reuse and correct position-relative mate semantics. Removed the unconditional per-search tt.clear() so iterative-deepening iterations and concurrent workers reuse a warm shared table; added owner-only clear_hash/new_game (documented generation/ownership) wired into the UCI ucinewgame handler and GameController position reset, both of which stop and join active workers before advancing the shared generation. Reverted the attempt-1 Stockfish-style ply-relative TT mate encoding (removed Score::to_tt/from_tt and all ply plumbing) because this engine scores mate position-relative (constant Score::mate(0) leaf + inc_mate on unwind), so scores are stored verbatim and a transposed position preserves its mate distance at any ply. Verified: cargo fmt --check passed; cargo test --workspace passed (core 31; engine lib 59 passed, 1 ignored; build_metadata 5; doc-tests 1), including reuse, explicit-clear, position-relative mate round-trip, concurrent-probe/concurrent-search regressions and the warm-TT gives_correct_answers mate(5)/mate(7) suite.
+Restored TT reuse and correct position-relative mate semantics, then merged current master. Removed the unconditional per-search tt.clear() so iterative-deepening iterations and concurrent workers reuse a warm shared table; added owner-only clear_hash/new_game (documented generation/ownership) wired into the UCI ucinewgame handler and GameController position reset, both of which stop and join active workers before advancing the shared generation. Reverted the attempt-1 Stockfish-style ply-relative TT mate encoding because this engine scores mate position-relative (constant Score::mate(0) leaf + inc_mate on unwind), so scores are stored verbatim and a transposed position preserves its mate distance at any ply. Merged master (7326e93) into the branch (tip 2c89538): resolved an engine.rs conflict by keeping task-12's new_game() UciNewGame arm over master/task-14's duplicate SearchEngine::new reallocation, and kept all UCI totality tests. Verified on the merged tip: cargo build clean (no unreachable-pattern warnings), cargo fmt --check passed, cargo test --workspace passed (core 35; engine 65 passed, 1 ignored; build_metadata 5; doc-tests 1), and the new hot-path benchmark requirement (cargo bench --bench perft --bench movegen, master vs merged tip on the same idle machine) shows no regression (generate moves +0.99%, perft 5 -1.03%, both within noise/below the 5% threshold).
 <!-- SECTION:FINAL_SUMMARY:END -->
