@@ -1,11 +1,11 @@
 ---
 id: TASK-35
 title: Fix intermittent search/UCI completion deadlock (lost search-done wakeup)
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-18 01:20'
-updated_date: '2026-07-18 20:19'
+updated_date: '2026-07-18 21:24'
 labels:
   - engine
   - search
@@ -140,6 +140,19 @@ Verification:
 - git diff 9c4cc18..a9f4c85: no PV reconstruction or time-allocation changes
 
 TASK-54 is a separately reproduced pre-existing mate-score Display panic in an additional mate-rich debug scenario; it does not invalidate this target or the qualifying debug/release stress evidence.
+---
+
+author: @codex
+created: 2026-07-18 21:24
+---
+Merged approved implementation a9f4c85 via integration commit 7e8fdfc against primary tip 5b592eb.
+
+Merge verification:
+- cargo fmt --check: pass
+- fresh CARGO_TARGET_DIR cargo clippy --workspace --all-targets --all-features -- -D warnings: pass, 0 warnings
+- cargo test --workspace: pass, 201 passed, 1 ignored
+- primary-tip compare-and-swap: pass; primary remained at 5b592eb before fast-forward
+- overlap check: primary changes since base added TASK-46..53 backlog files only; no overlap with TASK-35 implementation files
 ---
 <!-- COMMENTS:END -->
 
