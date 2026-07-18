@@ -1,10 +1,11 @@
 ---
 id: TASK-39
 title: Investigate UCI stop responsiveness under the guaranteed-minimum search
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-18 11:46'
-updated_date: '2026-07-18 12:03'
+updated_date: '2026-07-18 18:24'
 labels:
   - engine
   - search
@@ -53,6 +54,12 @@ Related: TASK-34 covers separate self-play robustness defects (intermittent sear
 - [ ] #5 Whether 'quit' and process shutdown share the suppressed window, and any resulting teardown delay, is established and recorded
 - [ ] #6 The outcome is either a recorded justification for keeping current behavior plus a regression test pinning the bound, or one or more fresh well-scoped implementation tickets that spec the fix with their own acceptance criteria and preserve the TASK-32 guarantee that a legal move is always returned
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Trace the guaranteed first iteration, quiescence recursion, cancellation, and UCI driver shutdown paths; identify what can and cannot bound the suppressed interval.\n2. Build a release UCI binary and measure immediate-stop latency in a persistent-process harness over representative and adversarial FENs, including dense tactics, long capture sequences, and check-extension chains; repeat enough samples to report distributions and a conservative threshold.\n3. Compare the evidence with UCI prompt-stop semantics and common tournament-runner timeout margins, and determine whether TASK-29's proposed quiescence cap alone supplies a sufficient bound.\n4. Record the investigation in Backlog documentation without changing engine search/stop/UCI code. If the evidence supports keeping behavior, add only regression coverage that pins a robust bound; otherwise create well-scoped implementation ticket(s) preserving TASK-32's legal-move guarantee.\n5. Run focused verification plus the repository-required formatting, strict Clippy, and workspace tests; commit the immutable investigation target and create the In Review handoff.
+<!-- SECTION:PLAN:END -->
 
 ## Comments
 
