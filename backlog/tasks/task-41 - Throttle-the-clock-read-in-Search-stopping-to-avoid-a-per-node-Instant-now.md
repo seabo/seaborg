@@ -3,11 +3,11 @@ id: TASK-41
 title: >-
   Throttle the clock read in Search::stopping() to avoid a per-node
   Instant::now()
-status: Changes Requested
+status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-18 12:17'
-updated_date: '2026-07-18 23:41'
+updated_date: '2026-07-18 23:42'
 labels:
   - engine
   - search
@@ -44,10 +44,10 @@ Identified during the TASK-38 investigation and deliberately left out of that ti
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Establish a representative baseline with the existing `search startpos depth 7` Criterion benchmark and a clock-read-elided comparison, recording time and NPS evidence.
-2. If the measured cost is material, preserve the guaranteed-first-ply early return and unthrottled cancellation load while sampling only deadline reads at a documented node interval.
-3. Add focused tests for deadline tolerance and stop responsiveness, and confirm the existing zero/near-zero budget regressions.
-4. Re-run the hot-path benchmark against the baseline, record before/after NPS, then run all repository-required checks and prepare the immutable review handoff.
+1. Reproduce REV-1-01 with the optimized focused deadline test and inspect the stopping/unwind call sequence.
+2. Latch a sampled expired deadline for the remainder of the run while preserving the guaranteed-first-ply gate and per-call cancellation load.
+3. Add a regression proving repeated stopping checks at the same node remain true after expiry, then run focused debug and release tests.
+4. Re-run the hot-path benchmark and all repository-required checks, record REV-1-01 resolution evidence, and prepare a new immutable review handoff.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
@@ -100,5 +100,11 @@ Verification:
 - debug timing/cancellation/TASK-32 regressions: passed
 - optimized focused deadline test: failed to terminate within 5 seconds
 - base/target `cargo bench --bench perft --bench movegen`: no task-introduced regression (movegen medians 196.06 ns base vs 194.03 ns target; perft medians 22.776 ms base vs 22.980 ms target, approximately +0.9% and within measurement noise)
+---
+
+author: @codex
+created: 2026-07-18 23:42
+---
+Rework started for REV-1-01. The deadline-expired decision will be latched across unwind checks; cancellation responsiveness and the guaranteed-first-ply gate remain unchanged.
 ---
 <!-- COMMENTS:END -->
