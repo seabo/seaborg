@@ -1,11 +1,11 @@
 ---
 id: TASK-39
 title: Investigate UCI stop responsiveness under the guaranteed-minimum search
-status: In Review
+status: Changes Requested
 assignee:
   - '@codex'
 created_date: '2026-07-18 11:46'
-updated_date: '2026-07-18 20:12'
+updated_date: '2026-07-18 20:17'
 labels:
   - engine
   - search
@@ -198,5 +198,26 @@ Verification:
 Known failures: none
 
 Note for review: the AC#4 verdict has changed from the previous attempt. The earlier report treated a TASK-29 quiescence check-extension cap as sufficient for the time-deadline path; the new structural evidence shows it would almost never bind, because quiet check chains top out at 5 while the large ply-1 trees come from capture/promotion interleaving. That finding is recorded as a comment on TASK-29 as well as in doc-3.
+---
+
+author: @codex
+created: 2026-07-18 20:17
+---
+Review attempt: 2
+Reviewed branch: task-39-stop-responsiveness
+Reviewed implementation: f5e942f
+Verdict: changes_requested
+
+REV-2-01 [P1] Outcome ticket contradicts the investigation on TASK-29
+Location: backlog/tasks/task-45 - Honor-UCI-cancellation-after-recording-a-legal-root-fallback.md:28-39
+Impact: Acceptance criterion #6 requires a well-scoped implementation ticket specifying the fix. TASK-45 says the current window lacks a bound "until TASK-29 caps quiescence check extensions" and its criterion #5 assigns TASK-29 responsibility for "bounding depth-1 quiescence work". The reworked investigation and TASK-29 comment establish the opposite: a check-extension cap does not bound capture/promotion interleaving or the overall suppressed window. Leaving the implementation ticket internally stale can cause TASK-45/TASK-29 to be accepted under a false division of responsibility, so the required outcome spec is not yet sound.
+Reproduction: Compare TASK-45 description and AC #5 with doc-3 sections "Interaction with TASK-29" and "Conclusion", plus the updated TASK-29 comment.
+Expected: Revise TASK-45 through the Backlog CLI so its rationale and acceptance criteria match the structural finding: TASK-45 owns prompt explicit cancellation after a legal fallback; TASK-29 may cap check extensions on its own merits but does not bound the total depth-1 quiescence tree. Preserve the unchanged time-deadline behavior requirement without claiming TASK-29 supplies that bound.
+
+Verification:
+- cargo fmt --check: passed
+- fresh-target cargo clippy --workspace --all-targets --all-features -- -D warnings: passed
+- cargo test --workspace: passed (core 35; engine 159 passed/1 ignored; metadata 5; doc tests passed)
+- immutable target and handoff-only successor checks: passed
 ---
 <!-- COMMENTS:END -->
