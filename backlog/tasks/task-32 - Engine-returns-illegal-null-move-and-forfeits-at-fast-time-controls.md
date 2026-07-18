@@ -1,11 +1,11 @@
 ---
 id: TASK-32
 title: Engine returns illegal null move and forfeits at fast time controls
-status: Ready to Merge
+status: Done
 assignee:
   - '@georgeseabridge'
 created_date: '2026-07-18 00:09'
-updated_date: '2026-07-18 11:39'
+updated_date: '2026-07-18 11:56'
 labels:
   - engine
   - search
