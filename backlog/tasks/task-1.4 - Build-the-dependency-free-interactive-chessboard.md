@@ -1,7 +1,7 @@
 ---
 id: TASK-1.4
 title: Build the dependency-free interactive chessboard
-status: Changes Requested
+status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 15:40'
@@ -37,11 +37,12 @@ Create the owned HTML, CSS, TypeScript, and SVG board experience that renders au
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Extend authoritative game snapshots and browser JSON with an explicit in-check flag, with Rust coverage, so the client can highlight check without implementing chess rules.
-2. Replace the placeholder page with a responsive semantic board shell and a locally embedded SVG piece sprite; add fixed server routes and protocol tests for every shipped asset.
-3. Implement strict TypeScript board/model modules compiled to committed ES modules: FEN rendering in both orientations, legal-target/capture derivation, pointer drag and click-click input, roving keyboard controls, promotion dialog, lockout, status highlights, and transition metadata for ordinary moves, captures, castling, en passant, and rejected-move snapback.
-4. Add focused dependency-free frontend tests for FEN parsing, orientation, move selection/promotion, capture classification, and special-move transitions; verify the generated JavaScript matches the TypeScript build.
-5. Exercise the board in a real local browser at desktop and narrow sizes, including both orientations, keyboard/pointer flows, special moves, check, rejection, engine lockout, and reduced-motion behavior; then run all repository-required Rust checks and prepare the immutable review handoff.
+Rework after human feedback on target 9319c0d27963a721fd1c04c3d02e8cb2e8f56eb0.
+
+1. Resolve HUMAN-2 by defining all eight board grid rows explicitly as equal minmax(0, 1fr) tracks, retaining the fixed 1:1 board container and zero-minimum square sizing.
+2. Add a browser regression that compares every row and column rectangle in sparse and occupied positions at desktop and narrow widths, proving that piece contents cannot affect geometry.
+3. Keep Lichess cburnett out of the repository because its declared GPLv2+ licence fails the requested MIT condition. Present the verified MIT-compatible Lichess alternatives and wait for the human artwork choice before resolving HUMAN-1.
+4. After the artwork choice, replace the sprite with the selected licensed source plus attribution, rerun frontend/browser verification and all required Rust gates, then create a new immutable review target.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
