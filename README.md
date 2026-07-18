@@ -23,6 +23,9 @@ sees..! Later in the game, Seaborg is often able to crush weaker
 opponents tactically, even after emerging from the opening with a
 horrible position.
 
+Repository-owned, reproducible engine strength comparisons are documented in
+[docs/strength-testing.md](docs/strength-testing.md).
+
 During the initial development, I wanted to build a solid internal board
 representation, fast move generation, a variety of standard search features,
 including transposition tables, as well as the UCI protocol. All of this
