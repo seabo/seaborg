@@ -1,11 +1,11 @@
 ---
 id: TASK-49
 title: Correct static exchange evaluation for pawn promotions
-status: Changes Requested
+status: In Progress
 assignee:
-  - '@claude'
+  - '@codex'
 created_date: '2026-07-18 18:30'
-updated_date: '2026-07-18 20:17'
+updated_date: '2026-07-18 21:22'
 labels: []
 dependencies: []
 references:
@@ -39,13 +39,10 @@ TODO site: engine/src/see.rs:134.
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Decide approach: correct the SEE swap loop rather than add a search extension. SEE is consumed as a move-ordering score in Search::score_captures/QMoveLoader::score_captures, where an extension cannot help; the swap-loop fix is local and costs one rank comparison per attacker selection.
-2. Model promotion in engine/src/see.rs::see as: a pawn arriving on its back rank gains (queen - pawn) material, and the piece it leaves on 'to' for the opponent to capture is a queen, not a pawn.
-3. Restructure the swap loop so the next attacker is selected before gain[d] is computed, since gain[d] is the payoff of move d+1 and must include that move's promotion bonus.
-4. Seed the first ply from Search::pos.turn() so a promotion on the initial move (capturing or non-capturing) is counted in gain[0].
-5. Clear the origin square from atta_def with AND-NOT instead of XOR. For a non-capturing promotion the pawn is not an attacker of 'to', so XOR would insert a stale bit and let the moved pawn be re-selected later.
-6. Replace the TODO block in the see.rs test module with asserting promotion cases: the Arasan reference position from the linked thread, an initial capture-promotion, and a non-capturing promotion opening the exchange. Add any pruning-distorted case to the existing documented pruning block rather than asserting a wrong value silently.
-7. Run cargo fmt --check, strict clippy, and cargo test --workspace.
+1. Reproduce REV-1-01 and trace the pruning state for a capture-promotion followed by recapture.
+2. Preserve the existing SEE pruning approximation for ordinary exchanges while preventing it from discarding a recapture of a newly promoted piece.
+3. Change the promotion-recapture regression to assert its true +400 material result and run focused SEE tests.
+4. Record the finding resolution, run cargo fmt --check, strict workspace Clippy, and cargo test --workspace, then commit a new immutable implementation target and hand it to review.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
