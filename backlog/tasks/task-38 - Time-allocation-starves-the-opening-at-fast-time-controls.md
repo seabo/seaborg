@@ -1,11 +1,11 @@
 ---
 id: TASK-38
 title: Time allocation starves the opening at fast time controls
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-18 11:45'
-updated_date: '2026-07-18 12:10'
+updated_date: '2026-07-18 12:27'
 labels:
   - engine
   - time
@@ -57,3 +57,100 @@ Do not regress TASK-7 (allocation overflow safety) or TASK-32 (guaranteed legal 
 8. File a follow-up ticket for the out-of-scope search-side time work: no soft/hard limit split, no prediction of whether the next deepening iteration fits the budget, and Instant::now() called per node in stopping() with no node-count throttle.
 9. Commit the implementation, append notes, and hand off to review.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+## Investigation
+
+Confirmed the defect is confined to the allocation policy, not the surrounding pipeline. The subsystem is a clean four-file path: uci.rs parses `go` into TimingMode, engine.rs:118-129 is the single production caller of to_move_time, search.rs:152-158 turns the result into an absolute Instant deadline, and search.rs:767 checks it in stopping(). That factoring is sound, so this is a rewrite of the policy inside one pure function rather than a subsystem refactor (course of action agreed with the user before implementing).
+
+The investigation found a second latent defect alongside the reported one. Nothing clamped the allocation against the remaining clock; the only thing preventing an over-allocation was the flat buffer that causes the reported bug. TimeControl::new(1000, 1000, 1000, 1000, Some(1)) allotted 1850ms against a 1000ms clock on master. Removing the buffer without adding a cap would therefore have traded a strength defect for a forfeit defect, so the share cap is part of the fix rather than an extra.
+
+## Change
+
+engine/src/time.rs: replaced PER_MOVE_BUFFER_TIME (150ms, subtracted per move) with MOVE_OVERHEAD (30ms, deducted from the clock once) and MAX_CLOCK_SHARE_DIVISOR (4, capping one move at three quarters of the usable clock).
+
+    usable    = base_time - MOVE_OVERHEAD        (0 -> return 0)
+    allocation = usable / est_remaining_moves + inc
+    cap        = usable - usable / 4             (subtraction, so it cannot overflow)
+    result     = allocation.min(cap).max(1)
+
+Both terms of the allocation now scale with the time control, so it degrades proportionally instead of collapsing at a fixed threshold. All arithmetic stays u64 and saturating. A clock at or below the overhead still returns 0, which TASK-32 makes survivable.
+
+## Tests changed rather than added
+
+Two existing tests asserted the old behavior as correct and could not simply be kept:
+
+- time.rs sub_buffer_allocation_saturates_at_zero encoded the defect itself (a 100ms clock allotting 0ms). Removed, and replaced by a_clock_at_or_below_the_overhead_allots_no_time and a_clock_just_above_the_overhead_still_allots_time, which pin the intended boundary.
+- uci.rs parses_large_timed_control_values_without_narrowing asserted a literal computed under the old formula. Its no-narrowing purpose is preserved and strengthened with an explicit assertion that the result exceeds u32::MAX.
+
+The remaining pre-existing expectations changed value with the formula and are annotated with their derivation.
+
+New coverage: allocation_never_exceeds_the_remaining_clock (288 combinations of clock, increment, movestogo and move number, including 1-5ms clocks), allocation_degrades_proportionally_as_the_clock_shrinks (halving the clock halves the allocation from 64s down to 250ms), fast_time_controls_receive_a_positive_proportional_allocation, and huge_increment_cannot_allocate_more_than_the_clock_holds.
+
+## Self-play evidence
+
+Five 40-game FastChess matches (200 games), openings-v1.epd, concurrency 4, release builds of master (baseline) and this branch (fixed).
+
+Clock usage at 2+0.05, like-for-like self-play:
+
+    baseline vs baseline:  2.06 s/game searched, 21.0% of moves at depth 1,
+                           514/520 opening moves at 0.000s, mean opening depth 1.01
+    fixed vs fixed:        4.65 s/game searched,  0.0% of moves at depth 1,
+                           0/520 opening moves at 0.000s, mean opening depth 6.67
+
+Head-to-head at 2+0.05: fixed +284.85 +/- 144.85 Elo (31W 4L 5D, LOS 100%).
+
+Zero depth-1 moves and zero 0.000s opening moves at all three controls:
+
+    2+0.05   4.65 s/game, mean 77.4 ms/move, mean opening depth 6.67
+    10+0.1  14.87 s/game, mean 241.7 ms/move, mean opening depth 7.48
+    1+0.01   1.57 s/game, mean  22.7 ms/move, mean opening depth 5.87
+
+Terminations across all 200 games: 200 'normal'. Zero time forfeits, zero losses on time, zero illegal played moves.
+
+Note for the reviewer: the FastChess log contains 2 'Illegal PV move' warnings across the 200 games, both from the baseline binary and none from fixed. These concern PV reporting, not played moves, and are the pre-existing defect tracked by TASK-34.
+
+## Follow-ups filed
+
+Two search-side issues found during the investigation, deliberately out of scope here (scope confirmed with the user):
+
+- TASK-40: no soft/hard limit split, and the deepening loop starts iterations it cannot finish and discards the work.
+- TASK-41: stopping() calls Instant::now() on every node with no node-count throttle.
+
+## Analysis caveat
+
+The PGN analysis script initially mis-attributed moves because several openings in openings-v1.epd are black-to-move, so ply 0 is not always White's. The corrected script reads the side to move from the FEN header. The figures above are from the corrected version; the raw PGNs are at /tmp/task38/ if the reviewer wants to re-derive them.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @codex
+created: 2026-07-18 12:27
+---
+Implementation handoff
+Branch: task-38-time-allocation-fast-controls
+Worktree: /Users/seabo/seaborg-worktrees/task-38-time-allocation-fast-controls
+Base: 40a97475317ead3cf251d550bcde864542559bc5
+Implementation target: abbf022
+Resolved findings: none (first implementation attempt)
+Verification:
+- cargo fmt --all: clean
+- cargo test -p engine: PASS (79 passed, 0 failed, 1 ignored)
+- cargo test -p core: PASS (35 passed + 1 passed, 0 failed)
+- cargo test (workspace, integration): PASS (5 passed, 0 failed)
+- cargo clippy --all-targets: no errors; warnings are pre-existing and none are in time.rs or uci.rs
+- TASK-7 + TASK-32 regression tests run explicitly by name: PASS (8/8)
+- FastChess 5 x 40 games at 2+0.05, 10+0.1, 1+0.01: 200/200 games terminated 'normal', zero time forfeits, zero illegal played moves
+Known failures: none
+
+Reviewer notes:
+- Two pre-existing tests changed rather than merely extended, both deliberately: time.rs sub_buffer_allocation_saturates_at_zero asserted the defect as correct behavior and is replaced; uci.rs parses_large_timed_control_values_without_narrowing asserted a literal computed under the old formula and keeps its no-narrowing purpose with a strengthened bound. Please confirm you agree these were the right calls.
+- The share cap (MAX_CLOCK_SHARE_DIVISOR) is not requested by the ticket text but is load-bearing: on master the flat buffer was the only thing preventing an over-allocation against the clock, so removing it without a cap would have introduced a forfeit risk.
+- MOVE_OVERHEAD = 30ms and the three-quarters cap are judgement calls. Both are pinned by tests, so disagreement about the constants is a cheap change.
+- 2 'Illegal PV move' warnings appear in the FastChess log, both from the baseline binary, none from this build. That is TASK-34's pre-existing PV-reporting defect, not a played-move illegality.
+- Acceptance criteria are left unchecked for the independent reviewer.
+---
+<!-- COMMENTS:END -->
