@@ -1,9 +1,11 @@
 ---
 id: TASK-46
 title: Prevent aborted search subtrees from contributing scores
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-18 18:29'
+updated_date: '2026-07-18 21:51'
 labels: []
 dependencies: []
 references:
@@ -33,3 +35,12 @@ TODO site: engine/src/search.rs:815 (is this robust?).
 - [ ] #4 A regression test drives a search to abort mid-subtree and asserts the returned bestmove matches the last fully completed iteration
 - [ ] #5 The is this robust? TODO at engine/src/search.rs:815 is resolved and removed
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Introduce an explicit aborted node-search outcome and propagate it through main search, razoring, quiescence, and check-evasion recursion while always unmaking moves before unwinding.
+2. Make iterative deepening commit scores and PV state only after a fully completed iteration, restoring the prior completed PV on abort.
+3. Add deterministic regression coverage for a mid-subtree abort, last-completed bestmove/PV preservation, and absence of TT writes from the aborted node.
+4. Run focused tests and all repository-required formatting, strict Clippy, and workspace tests; commit implementation and record the immutable review handoff.
+<!-- SECTION:PLAN:END -->
