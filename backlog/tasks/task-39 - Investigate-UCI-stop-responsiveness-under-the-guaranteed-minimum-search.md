@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-18 11:46'
-updated_date: '2026-07-18 21:22'
+updated_date: '2026-07-18 21:23'
 labels:
   - engine
   - search
@@ -60,7 +60,11 @@ Related: TASK-34 covers separate self-play robustness defects (intermittent sear
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-REV-2-01 rework: align the TASK-45 outcome specification with the investigation.\n\n1. Revise TASK-45's rationale to state that TASK-29 caps quiet check-extension chains on its own merits but does not bound capture/promotion interleaving or the total depth-1 quiescence tree.\n2. Revise TASK-45 acceptance criterion #5 so TASK-45 preserves unchanged time-deadline behavior without assigning the total depth-1 bound to TASK-29.\n3. Verify TASK-45 against doc-3 and the TASK-29 interaction finding; run repository-required checks; record Resolved REV-2-01 and hand off a new immutable target.
+REV-2-01 rework: align the TASK-45 outcome specification with the investigation.
+
+1. Revise TASK-45's rationale to state that TASK-29 caps quiet check-extension chains on its own merits but does not bound capture/promotion interleaving or the total depth-1 quiescence tree.
+2. Revise TASK-45 acceptance criterion #5 so TASK-45 preserves unchanged time-deadline behavior without assigning the total depth-1 bound to TASK-29.
+3. Verify TASK-45 against doc-3 and the TASK-29 interaction finding; run repository-required checks; record Resolved REV-2-01 and hand off a new immutable target.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
@@ -100,6 +104,10 @@ That gap is the substantive finding: responsiveness rests entirely on pruning ef
 AC#4 answer changed as a result. A quiescence check-extension ply cap alone does NOT bound this window: chains never exceed 5, so a cap would almost never bind, while the large trees come from capture/promotion interleaving that resets the halfmove clock and that a check-extension cap does not touch. Recorded on TASK-29 as a comment so the finding is not lost when it is picked up. Bounding this window structurally would need a total q-node or q-ply budget.
 
 doc-3 rewritten with method, the reachability-upper-bound caveat, all four corpora, the latency table, and revised AC#3/#4/#5/#6 judgements. No timing regression test added: it would pass on this hardware and corpus while the adversarial failure mode stayed open. TASK-45 remains the primary outcome and preserves the TASK-32/TASK-37 legal-move guarantee by construction.
+
+Review attempt 2 rework.
+
+Resolved REV-2-01: revised TASK-45 through the Backlog CLI so its rationale and acceptance criteria match the structural evidence. TASK-45 now owns prompt explicit cancellation after a legal root fallback. It explicitly records that TASK-29 may cap consecutive quiet check extensions on its own merits but does not bound capture/promotion interleaving or the total depth-1 quiescence tree. The unchanged time-deadline behavior requirement remains in TASK-45 without assigning that structural bound to TASK-29.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
