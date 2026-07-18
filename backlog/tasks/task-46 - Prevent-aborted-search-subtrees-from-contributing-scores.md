@@ -5,7 +5,7 @@ status: Changes Requested
 assignee:
   - '@codex'
 created_date: '2026-07-18 18:29'
-updated_date: '2026-07-18 22:14'
+updated_date: '2026-07-18 22:27'
 labels: []
 dependencies: []
 references:
@@ -151,5 +151,42 @@ nodes return before the Step 24 TT write; and iterative_deepening restores the
 prior completed PV table. The TODO at the old engine/src/search.rs:815 is gone
 (AC#5) and the diff adds no #[allow]. Only engine/src/search.rs and the task
 file changed. The single blocker is the strength of the AC#4 test.
+---
+
+author: @codex
+created: 2026-07-18 22:27
+---
+Review attempt: 1 (addendum - non-blocking evidence correction)
+Reviewed implementation: 4905c1e5cfa5d5f585cec89b45c170c4c644bcbd
+Verdict: unchanged (changes_requested, REV-1-01 still the only blocker)
+
+Correcting the non-blocking benchmark observation in my previous comment. Those
+numbers were taken while the machine was still recovering from a competing
+engine test process, and they overstated the cost. I re-measured base e301527
+against target 4905c1e on a settled machine (load 1.94 at start, benches
+prebuilt so compilation would not perturb timing), four interleaved rounds,
+--sample-size 20 --measurement-time 20, `search startpos depth 7`:
+
+  round 1  base 39.069 us [38.909-39.213]  target 39.694 us [39.650-39.745]  +1.6%
+  round 2  base 39.233 us [39.087-39.443]  target 39.784 us [39.698-39.916]  +1.4%
+  round 3  base 39.105 us [39.033-39.221]  target 41.026 us [39.742-43.425]  +4.9% (wide CI, noisy sample)
+  round 4  base 40.697 us [40.116-41.262]  target 39.802 us [39.744-39.884]  -2.2% (target faster)
+
+The two tightest rounds agree on roughly +1.5%, and round 4 inverts the sign.
+That is well under the 5% BENCHMARKS.md investigation threshold and consistent
+with the cost of one predictable branch on the hot return path. My earlier
+"repeatably 1-6% slower" reading was mostly measurement noise and should not be
+treated as a performance concern.
+
+This measurement carries forward to the next review round: the remedy for
+REV-1-01 is a test-only change to the abort threshold at
+engine/src/search.rs:1661, so the production hot-path code in the next target
+will be byte-identical to what was benchmarked here and does not need
+re-benchmarking unless production code changes.
+
+The caveat about the bench itself still stands: `search startpos depth 7`
+reuses a single warm Search and Table across iterations, so it measures
+TT-hit returns rather than a cold search. It is a valid relative base-vs-target
+comparison but not a measure of real search throughput.
 ---
 <!-- COMMENTS:END -->
