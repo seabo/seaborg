@@ -482,6 +482,11 @@ impl<'engine> Search<'engine> {
         let draft = self.search_depth - depth;
         let mut tt_move = false;
 
+        // The PV row for this ply is rebuilt from scratch on every visit, so clear it before any
+        // early return can leave a previously searched sibling's line in place for this node's
+        // parent to splice into its own PV. See `PVTable::clear_at`.
+        self.pvt.clear_at(depth);
+
         debug_assert!(Score::INF_N <= alpha);
         debug_assert!(alpha < beta);
         debug_assert!(beta <= Score::INF_P);
@@ -570,12 +575,7 @@ impl<'engine> Search<'engine> {
 
         // Step 5. Straight to quiescence search if depth <= 0.
         if depth == 0 {
-            let score = self.quiesce::<T, Node>(alpha, beta);
-            if score == Score::mate(0) {
-                self.pvt.pv_leaf_at(0);
-            }
-
-            return score;
+            return self.quiesce::<T, Node>(alpha, beta);
         }
 
         // Step 6. Static evaluation.
@@ -604,13 +604,7 @@ impl<'engine> Search<'engine> {
         //          TODO
 
         // Step 12. If depth <= 0, run quiescence search.
-        // if depth == 0 {
-        //     let score = self.quiesce::<T>(alpha, beta);
-        //     if score == Score::mate(0) {
-        //         self.pvt.pv_leaf_at(0);
-        //     }
-        //     return score;
-        // }
+        //          Handled earlier, at Step 5.
 
         // Step 13. In non-PV nodes with depth >= 7 and not in TT, decrease depth by 2.
         //          TODO
@@ -685,9 +679,14 @@ impl<'engine> Search<'engine> {
                     if value > alpha {
                         best_move = *mov;
 
-                        self.pvt.copy_to(depth, *mov);
-
                         if Node::pv() && value < beta {
+                            // Only an exact score at a PV node establishes a variation worth
+                            // reporting. A fail-high returns a lower bound whose "best" move was
+                            // never searched with a full window, so publishing it would splice a
+                            // non-PV continuation into the reported line. The root always lands
+                            // here: its beta is `INF_P` and `value` is asserted below it.
+                            self.pvt.copy_to(depth, *mov);
+
                             alpha = value;
                             did_raise_alpha = true;
                             // TODO: reduce depth on remaining moves.
@@ -722,8 +721,7 @@ impl<'engine> Search<'engine> {
 
         // Step 23. Check for mate and stalemate.
         if move_count == 0 {
-            self.pvt.pv_leaf_at(depth);
-
+            // The row was already emptied on entry, so this terminal node reports no continuation.
             best_value = if self.pos.in_check() {
                 Score::mate(0)
             } else {
@@ -1684,5 +1682,108 @@ mod tests {
         let outcome = search.wait();
 
         assert!(matches!(outcome, SearchOutcome::Completed(_)));
+    }
+
+    /// The self-play game, replayed verbatim from the FastChess record, whose final position made
+    /// seaborg report `info depth 4 ... score mate -2 ... pv d7f8 g6a6 f8g6 c5f8` — a line whose
+    /// fourth ply `c5f8` is illegal. The move list is used rather than the equivalent FEN because
+    /// the repetition history it builds up is part of what the search sees.
+    const ILLEGAL_MATE_PV_GAME: &str = "a2a3 a7a6 b2b3 a6a5 c2c3 b7b6 d2d3 b6b5 e2e3 a5a4 b3a4 \
+        b5a4 f2f3 c7c6 g2g3 c6c5 h2h3 d7d6 c3c4 d6d5 c4d5 d8d5 d3d4 c5d4 e3d4 e7e6 g3g4 e6e5 d4e5 \
+        d5a5 e1f2 a5e5 a1a2 f7f6 a2e2 f8c5 f2e1 e5e2 f1e2 a8a5 c1d2 a5a7 d1c2 a7b7 b1c3 e8d8 c3b5 \
+        b8d7 d2a5 c5b6 c2a4 b6a5 a4a5 d8e7 f3f4 g7g6 g4g5 f6g5 a5c3 g8f6 f4g5 h7h6 c3e3 e7f8 e3c1 \
+        f8e7 c1e3 e7f8 e3c3 f8e7 c3b4 e7e6 e2c4 e6e5 b4b2 e5f4 g5f6 h8e8 g1e2 f4g5 b2c1 g5h5 b5d6 \
+        e8e5 a3a4 b7c7 d6f7 g6g5 h3h4 c8b7 h1h2 e5e4 h4g5 h5g6 h2h6 g6f5 f7d6 f5e5 d6e4 c7c4 c1c4 \
+        b7e4 f6f7 e4g6 h6g6";
+
+    /// Positions whose reported PVs are checked for legality: the pinned self-play reproduction,
+    /// two opening positions, and the mate and tactical positions from the search suite, which are
+    /// the mate-scored/shallow lines the defect surfaced on.
+    fn pv_legality_positions() -> Vec<(String, Position)> {
+        let mut positions = vec![(
+            format!("startpos moves {ILLEGAL_MATE_PV_GAME}"),
+            position_after(ILLEGAL_MATE_PV_GAME),
+        )];
+
+        for fen in ["rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"]
+            .into_iter()
+            .chain(suite().iter().map(|entry| entry.0))
+        {
+            positions.push((fen.to_owned(), Position::from_fen(fen).unwrap()));
+        }
+
+        positions
+    }
+
+    fn position_after(moves: &str) -> Position {
+        let mut position = Position::start_pos();
+
+        for uci in moves.split_whitespace() {
+            position
+                .make_uci_move(uci)
+                .unwrap_or_else(|| panic!("{uci} should be legal in {}", position.to_fen()));
+        }
+
+        position
+    }
+
+    /// Replays a reported principal variation exactly as a UCI GUI would: each move must be legal
+    /// in the position reached by playing the preceding PV moves.
+    fn assert_pv_is_legal(label: &str, root: &Position, depth: u8, pv: &[Move]) {
+        let mut position = root.clone();
+
+        for (index, mov) in pv.iter().enumerate() {
+            let uci = mov.to_uci_string();
+            assert!(
+                position.make_uci_move(&uci).is_some(),
+                "illegal PV move at ply {} ({uci}) of depth-{depth} pv [{}] \
+                 reported for `{label}`; illegal in {}",
+                index + 1,
+                pv.iter()
+                    .map(|m| m.to_uci_string())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                position.to_fen(),
+            );
+        }
+    }
+
+    /// Collects every principal variation the search reports over the typed event channel.
+    fn reported_pvs(engine: &SearchEngine, root: &Position, depth: u8) -> Vec<(u8, Vec<Move>)> {
+        let search = engine.start(root.clone(), SearchLimit::Depth(depth));
+        let events = search.events().clone();
+        let _ = search.wait();
+
+        events
+            .try_iter()
+            .filter_map(|event| match event {
+                SearchEvent::Progress(progress) => {
+                    Some((progress.depth, progress.principal_variation))
+                }
+                SearchEvent::CurrentMove(_) => None,
+            })
+            .collect()
+    }
+
+    /// Every move of every reported PV must be legal in the position it is played from. Regression
+    /// for illegal deep PV plies spliced up from a stale sibling row or published by a fail-high
+    /// node, which produced `pv d7f8 g6a6 f8g6 c5f8` scored `mate -2` in self-play.
+    #[test]
+    fn reported_principal_variations_are_legal() {
+        core::init::init_globals();
+
+        for (label, root) in pv_legality_positions() {
+            // A fresh engine per position keeps the transposition table cold; the second pass
+            // reuses the warm table, which is the state self-play actually reports from.
+            let engine = SearchEngine::new(1);
+
+            for _ in 0..2 {
+                for depth in 1..=6 {
+                    for (reported_depth, pv) in reported_pvs(&engine, &root, depth) {
+                        assert_pv_is_legal(&label, &root, reported_depth, &pv);
+                    }
+                }
+            }
+        }
     }
 }
