@@ -3,11 +3,11 @@ id: TASK-34
 title: >-
   Engine self-play under a UCI runner is unstable: intermittent search hang,
   illegal PV moves, EOF null move
-status: In Review
+status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-18 00:25'
-updated_date: '2026-07-18 01:27'
+updated_date: '2026-07-18 11:39'
 labels:
   - engine
   - search
@@ -48,10 +48,10 @@ No engine code fixes should land under this ticket; its deliverable is the inves
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 This ticket produces investigation findings, not engine fixes: no changes to engine search/stop/UCI-I/O code land under it
-- [ ] #2 Each of the three failure modes (intermittent search/UCI deadlock; illegal PV moves; EOF null-move abort) is reproduced and root-caused, with documented evidence (repro conditions, captured state at the failure, offending positions/PVs, and the relevant code paths)
-- [ ] #3 The investigation determines whether the failures are independent or share a common root cause, and records any coupling with TASK-32 (time allocation) so overlapping fixes are not duplicated
-- [ ] #4 One or more fresh, well-scoped implementation tickets are created that spec the fix for each defect (or root cause), each with its own acceptance criteria so it can be implemented and reviewed independently; those tickets carry forward the original fix-level requirements (no hang under repeated self-play, only-legal PV moves, legal best-so-far move on stdin EOF, and regression coverage of the stop/abort and EOF paths)
+- [x] #1 This ticket produces investigation findings, not engine fixes: no changes to engine search/stop/UCI-I/O code land under it
+- [x] #2 Each of the three failure modes (intermittent search/UCI deadlock; illegal PV moves; EOF null-move abort) is reproduced and root-caused, with documented evidence (repro conditions, captured state at the failure, offending positions/PVs, and the relevant code paths)
+- [x] #3 The investigation determines whether the failures are independent or share a common root cause, and records any coupling with TASK-32 (time allocation) so overlapping fixes are not duplicated
+- [x] #4 One or more fresh, well-scoped implementation tickets are created that spec the fix for each defect (or root cause), each with its own acceptance criteria so it can be implemented and reviewed independently; those tickets carry forward the original fix-level requirements (no hang under repeated self-play, only-legal PV moves, legal best-so-far move on stdin EOF, and regression coverage of the stop/abort and EOF paths)
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -96,4 +96,94 @@ Verification:
 - Defect 1 repro: debug-build self-play concurrency>=8 hangs; sample shows driver in select! with worker thread exited
 Known failures: none
 ---
+
+author: @codex
+created: 2026-07-18 11:39
+---
+Review attempt: 1
+Reviewed branch: task-34-investigate-selfplay-robustness
+Reviewed implementation: f81ee2636db97be18df6cb2f327fcfe6e47645d0
+Verdict: approved
+
+Scope: base d9a138c..f81ee26 touches only backlog/ (doc-2, task-32 comment, task-34, and
+new task-35/36/37). No engine, search, or UCI-I/O source changed, so AC #1 holds by
+construction and no hot-path benchmarks were required. Handoff commit e40495b changes only
+the task-34 file. No doc-id or task-id collisions with master or any active branch.
+
+Independent verification of the findings (not merely re-reading the doc):
+
+AC #2 - Defect 3 (EOF null move): reproduced independently.
+  printf 'uci\nisready\ngo depth 25\n' | ./target/release/seaborg -u  =>  bestmove 0000
+  Root cause confirmed by inspection: iterative_deepening only records a SearchResult when
+  !self.stopping() (search.rs:447-457), so a cancel landing before depth 1 leaves
+  Cancelled(None), which format_search_outcome maps to "bestmove 0000" (info.rs:34-38).
+  Also observed the same null move when 'quit' races 'go', i.e. EOF is one trigger of a
+  wider abort path - consistent with the TASK-32 coupling recorded in AC #3.
+
+AC #2 - Defect 2 (illegal PV): reproduced independently and root cause confirmed concretely.
+  fastchess -engine cmd=./target/release/seaborg args=-u name=A -engine (same) name=B
+    -each proto=uci depth=4 -rounds 20 -games 2 -concurrency 4
+  => 40x "Warning; Illegal PV move - move c5f8", matching doc-2's PV exactly
+  ("score mate -2 ... pv d7f8 g6a6 f8g6 c5f8"). All 40 games were byte-identical
+  (deterministic), so the case is reliably regenerable.
+  Recovered the offending position, which doc-2 does not record (see note below):
+    FEN 8/3n1P2/6R1/4k1P1/P1Q5/8/4N3/4K3 b - - 0 53
+    (= position startpos moves <the 105-move game>; cold TT, go depth 4)
+  python-chess 1.11.2 validation of that position: not checkmate, 6 legal moves
+  [d7f8 d7b8 d7f6 d7b6 d7c5 e5f5]; PV plies 1-3 (d7f8, g6a6, f8g6) are legal and ply 4
+  (c5f8) is illegal - exactly FastChess's warning. Note c5f8 is a knight move from c5,
+  reachable only via the sibling branch d7c5, which directly corroborates doc-2's
+  "stale sibling row spliced up via copy_within" mechanism. Confirmed structurally that
+  best_move is data[depth-1], i.e. always the actual root move, so doc-2's claim that this
+  is a PV-reporting and not a move-selection defect is sound.
+
+AC #2 - Defect 1 (completion deadlock): root cause accepted, but see limitation below.
+  Verified the checkable parts of the claim: crossbeam-channel is 0.5.6 as stated; the
+  SearchEvent Sender is moved into the single search thread and dropped on exit with no
+  retained clone (search.rs:150-172; the Worker thread type spawns no real threads), so a
+  retained-sender explanation is ruled out; and output is io::stdout(), a LineWriter, so a
+  buffered-but-unflushed "bestmove" is also ruled out. With those two alternatives
+  eliminated, a lost disconnect wakeup is the only explanation consistent with the recorded
+  thread-sample state (driver parked in select! on the active-search branch while the worker
+  has exited).
+
+Verification:
+- git diff --stat d9a138c f81ee26: backlog/ only, 6 files, no engine source
+- git diff --stat f81ee26 e40495b: task-34 file only
+- cargo fmt --check: clean
+- cargo test --workspace: ok (35 + 68 + 5 + 1 passed, 0 failed, 1 ignored)
+- Defect 3 repro: bestmove 0000 (reproduced)
+- Defect 2 repro: 40x "Illegal PV move - move c5f8" (reproduced); FEN + python-chess
+  legality check as above
+- Defect 1 repro: NOT reproduced - see limitation
+
+Limitation recorded honestly (non-blocking):
+- I could not independently reproduce the Defect 1 hang. A debug-build self-play run under
+  doc-2's stated conditions (depth=5, concurrency=8, 120 games) completed all 120 games with
+  no hang and no orphaned engine processes, i.e. well past the "~48-72 completed games"
+  threshold doc-2 reports. This does not contradict the finding - doc-2 and TASK-34 both
+  describe the hang as nondeterministic, and doc-2 itself notes a 400-game release run that
+  did not hang - but the stated repro rate should be treated as optimistic. Accepting this
+  does not weaken TASK-35, whose ACs are behavioural (#1 no hang under stress) and
+  prescriptive (#2 do not depend on a disconnect-only completion signal); that fix is correct
+  whether or not the upstream attribution to crossbeam 0.5.6 is exact, so the "upgrade
+  crossbeam-channel" candidate should not be treated as a proven remedy.
+- doc-2 records the offending PV but not the offending position for Defect 2. The FEN above
+  is supplied here so TASK-36 AC #3 (regression test on the d7f8 g6a6 f8g6 c5f8 mate line)
+  can be implemented directly; a plain position+go depth 4 with a cold TT is sufficient, no
+  warm transposition-table state is needed.
+
+AC #3 and AC #4 verified: independence/coupling is recorded in doc-2 and mirrored as a
+comment on TASK-32; TASK-35/36/37 exist with their own ACs and carry forward all four
+fix-level requirements (no hang under repeated self-play -> TASK-35 #1; only-legal PV moves
+-> TASK-36 #1/#2; legal best-so-far on stdin EOF -> TASK-37 #1; regression coverage of the
+stop/abort and EOF paths -> TASK-35 #3, TASK-36 #3, TASK-37 #4). TASK-37 records the
+TASK-32 dependency.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Investigation-only ticket: root-caused the three self-play robustness defects and specced the fixes as fresh tickets, with no engine code changed (base d9a138c..f81ee26 touches backlog/ only). Findings recorded in doc-2: Defect 3 (EOF null move) is Cancelled(None) reaching format_search_outcome because iterative_deepening records no SearchResult when a cancel lands before depth 1; Defect 2 (illegal PV) is the triangular PVTable splicing stale sibling rows via copy_within on cutoff/mate-leaf paths; Defect 1 (completion deadlock) is the driver's search-completion signal depending solely on a dropped-Sender channel disconnect waking a parked select!. Defects 1 and 2 are independent; Defect 3 shares TASK-32's root cause (no guaranteed legal root move before an abort), recorded on both tickets. Fixes specced as TASK-35 (deadlock), TASK-36 (illegal PV) and TASK-37 (EOF, depends on TASK-32). Verified by review: cargo fmt --check clean and cargo test --workspace green (109 passed, 0 failed); Defect 3 reproduced (bestmove 0000 from startpos); Defect 2 reproduced via FastChess depth=4 self-play (40x 'Illegal PV move - move c5f8') and the offending position recovered (FEN 8/3n1P2/6R1/4k1P1/P1Q5/8/4N3/4K3 b - - 0 53) with python-chess confirming PV plies 1-3 legal and ply 4 illegal. Defect 1's hang did not reproduce in an independent 120-game debug self-play run, so its stated repro rate is optimistic; the finding stands on the recorded thread samples plus review confirmation that retained-Sender and output-buffering explanations are both ruled out.
+<!-- SECTION:FINAL_SUMMARY:END -->
