@@ -1,11 +1,11 @@
 ---
 id: TASK-46
 title: Prevent aborted search subtrees from contributing scores
-status: Changes Requested
+status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-18 18:29'
-updated_date: '2026-07-18 23:27'
+updated_date: '2026-07-18 23:30'
 labels: []
 dependencies: []
 references:
@@ -41,9 +41,9 @@ TODO site: engine/src/search.rs:815 (is this robust?).
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Rework REV-2-01 with a deterministic +2-node abort that fires in the first child of the candidate depth-two root, and use a non-colliding transposition table.
-2. Add direct node-level assertions that the child abort propagates as None, restores the position, and suppresses the ancestor TT write, while retaining the iterative-deepening assertion that bestmove/PV come from depth one.
-3. Verify the focused regression against the fixed branch and demonstrate the corresponding unfixed-base behavior, then run all required checks and create a new immutable review handoff.
+1. Resolve REV-3-01 by sizing the direct regression test PV table to the depth-two search so its PV assertion observes the row actually written.
+2. Run the focused regression and verify it remains discriminating against the recorded base evidence from review attempt 3.
+3. Run all repository-required checks, commit the rework, and record a new immutable implementation handoff.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
