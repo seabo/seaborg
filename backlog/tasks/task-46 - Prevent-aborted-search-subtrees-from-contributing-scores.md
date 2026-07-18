@@ -1,14 +1,16 @@
 ---
 id: TASK-46
 title: Prevent aborted search subtrees from contributing scores
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-18 18:29'
-updated_date: '2026-07-18 21:54'
+updated_date: '2026-07-18 21:55'
 labels: []
 dependencies: []
 references:
+  - engine/src/search.rs
+modified_files:
   - engine/src/search.rs
 priority: high
 type: bug
@@ -50,3 +52,24 @@ TODO site: engine/src/search.rs:815 (is this robust?).
 <!-- SECTION:NOTES:BEGIN -->
 Implemented explicit `Option<Score>` node outcomes across main search, razoring, quiescence, and check-evasion recursion. Aborted children unwind only after restoring the position and cannot update alpha, best move, PV, or ancestor TT entries. Iterative deepening now restores the prior completed PV when a candidate iteration aborts. Added a deterministic node-threshold regression that aborts within the depth-two subtree and verifies the depth-one result/PV/root TT entry remain authoritative.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @codex
+created: 2026-07-18 21:55
+---
+Implementation handoff
+Branch: task-46-aborted-search-subtrees
+Worktree: /Users/seabo/seaborg-worktrees/task-46-aborted-search-subtrees
+Base: e30152795f22a10d8a50fc028dedf1dbb3567d90
+Implementation target: 4905c1e5cfa5d5f585cec89b45c170c4c644bcbd
+Resolved findings: none
+Verification:
+- cargo fmt --check: passed
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: passed
+- cargo test --workspace: passed (198 passed, 1 ignored)
+- cargo test -p engine search::tests: passed (25 passed)
+Known failures: none
+---
+<!-- COMMENTS:END -->
