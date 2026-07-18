@@ -126,6 +126,17 @@ class StrengthTestTests(unittest.TestCase):
         command = st.build_command(self.config(), Path("games.pgn"))
         self.assertEqual(command.count("args=-u"), 2)
 
+    def test_command_restarts_engine_processes_between_games(self):
+        command = st.build_command(self.config(), Path("games.pgn"))
+        # restart=on must sit inside the -each per-engine options so FastChess
+        # actually restarts both engines between games (default is off).
+        each_index = command.index("-each")
+        following = command[each_index + 1:]
+        each_options = following[:next(
+            (i for i, token in enumerate(following) if token.startswith("-")),
+            len(following))]
+        self.assertIn("restart=on", each_options)
+
     def test_parse_complete_result(self):
         result = st.parse_result(CLEAN_LOG)
         self.assertEqual((result.games, result.wins, result.losses, result.draws),

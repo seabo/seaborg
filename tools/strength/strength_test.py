@@ -245,7 +245,12 @@ def runner_version(runner: str) -> str:
 
 
 def build_command(args: argparse.Namespace, pgn: Path) -> list[str]:
-    each = ["proto=uci", args.limit,
+    # restart=on makes FastChess restart each engine process between games so no
+    # stale in-process state (e.g. the transposition table) can leak across the
+    # games of a pair or between pairs. This backs the report's
+    # restart_between_games claim and the task's between-game isolation
+    # requirement; FastChess defaults restart to off.
+    each = ["proto=uci", "restart=on", args.limit,
             f"option.Hash={args.hash_mb}", f"option.Threads={args.threads}"]
     each.extend(f"option.{item}" for item in args.engine_option)
     engine_args = " ".join(args.engine_arg)
