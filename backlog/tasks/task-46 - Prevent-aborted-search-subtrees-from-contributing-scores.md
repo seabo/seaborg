@@ -1,11 +1,11 @@
 ---
 id: TASK-46
 title: Prevent aborted search subtrees from contributing scores
-status: In Review
+status: Changes Requested
 assignee:
   - '@codex'
 created_date: '2026-07-18 18:29'
-updated_date: '2026-07-18 22:40'
+updated_date: '2026-07-18 22:51'
 labels: []
 dependencies: []
 references:
@@ -213,5 +213,81 @@ Verification:
 - cargo test -p engine mid_subtree_abort_keeps_the_last_completed_iteration: passed
 - reviewer graft of +1 threshold on base e301527: failed as required
 Known failures: none
+---
+
+author: @codex
+created: 2026-07-18 22:51
+---
+Review attempt: 2
+Reviewed branch: task-46-aborted-search-subtrees
+Reviewed implementation: 08d38b98004072e70c0db7fdebf6f5d25d2d22b0
+Base: e30152795f22a10d8a50fc028dedf1dbb3567d90
+Verdict: changes_requested
+
+REV-1-01 is resolved. I reproduced the discriminating claim independently:
+grafting the new test (plus the `abort_after_nodes` hook) onto base e301527
+fails there, so the test can now detect the pre-fix behavior.
+
+REV-2-01 [P1] The strengthened test no longer aborts mid-subtree, leaving AC#1, AC#2 and AC#4 unproven
+Location: engine/src/search.rs:1663 (`let abort_after = completed_iteration_nodes + 1;`)
+Impact: The +5 -> +1 threshold change bought discrimination by moving the abort
+out of the subtree entirely. AC#4 requires a test that "drives a search to abort
+mid-subtree"; this test aborts on entry to the depth-two root, before any child
+is searched, so no subtree is ever entered. Consequently the production
+machinery this task exists to protect - the `let Some(child) = ... else {
+self.pos.unmake_move(); return None }` unwind paths at engine/src/search.rs:706
+and :721, the `?` propagation through `quiesce`/`quiesce_evasions`, and the
+suppression of the Step 24 TT write for a node whose child aborted - is not
+exercised by any regression test. AC#1 ("an abort during a subtree search cannot
+raise alpha or be recorded as best_move") and AC#2 ("cannot write an entry to
+the transposition table") therefore have no test evidence at all: the only
+in-node abort coverage is `quiescence_abort_with_legal_evasions_is_not_checkmate`,
+a unit test that enters `quiesce_evasions` already stopping. The test name
+`mid_subtree_abort_keeps_the_last_completed_iteration` also misdescribes what it
+does.
+Reproduction:
+1. Instrumented the target test to print the aborted iteration's node count:
+   `completed_iteration_nodes=41 abort_after=42 final_total=42 depth2_nodes=1`.
+   The depth-two iteration visits exactly one node - its own root - and returns
+   `None` at Step 1 before making a move.
+2. Grafted the test onto base e301527 with the assertions reordered so each
+   reports separately. Only the PV assertion fails there:
+   `panicked at engine/src/search.rs:1662: assertion left == right failed: AC3 pv assertion`.
+   `assert_eq!(result, expected)` and both `root_entry` assertions pass unchanged
+   on the unfixed base, so they discriminate nothing. The test currently proves
+   AC#3 (iterative_deepening restores the prior completed PV table) and nothing
+   more.
+Expected: A regression test that aborts strictly inside the candidate
+iteration's subtree - the abort must fire after the root has made a move and
+recursed - and that still fails on base e301527. Note that a naive threshold
+bump is not sufficient on its own: attempt 1 established that
+`completed_iteration_nodes + 5` passes on base, so the chosen scenario must be
+shown to fail there. If no single node threshold both enters a subtree and
+diverges in the PV, the aborted subtree's effect on alpha/best_move and on the
+TT likely needs to be asserted directly rather than inferred from the root PV.
+A table larger than `Table::new(1)` would also make the AC#2 claim direct rather
+than an artifact of every node colliding on one slot (carried forward from
+attempt 1's non-blocking note).
+
+Non-blocking observations (no action required for this verdict):
+- The production change itself remains sound; I re-reviewed the full
+  base-to-target diff and confirm attempt 1's assessment. `NodeResult =
+  Option<Score>` propagates correctly through `search`, razoring, `quiesce` and
+  `quiesce_evasions`; every abort path unmakes the move before unwinding;
+  aborted nodes return before the Step 24 TT write; `iterative_deepening`
+  restores `completed_pvt`. The `is this robust?` TODO is gone, satisfying AC#5.
+- The rework delta from 4905c1e is confined entirely to `mod tests` (two hunks
+  at engine/src/search.rs:1652 and :1667), so the production hot path is
+  byte-identical to what attempt 1 benchmarked. Attempt 1's benchmark
+  carry-forward holds and no re-benchmarking was needed.
+- The diff adds no `#[allow]`. Only engine/src/search.rs and the task file
+  changed.
+
+Verification (on 08d38b9):
+- cargo fmt --check: passed
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: passed (also re-run with a clean CARGO_TARGET_DIR, no warnings)
+- cargo test --workspace: passed (203 passed, 1 ignored)
+- instrumented probe of the abort point on target: depth2_nodes=1 (abort at iteration root, not mid-subtree)
+- grafted test on base e301527: fails only on the PV assertion; result and TT assertions pass on unfixed base
 ---
 <!-- COMMENTS:END -->
