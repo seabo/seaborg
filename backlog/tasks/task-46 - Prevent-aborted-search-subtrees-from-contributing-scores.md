@@ -1,11 +1,11 @@
 ---
 id: TASK-46
 title: Prevent aborted search subtrees from contributing scores
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-18 18:29'
-updated_date: '2026-07-18 23:48'
+updated_date: '2026-07-18 23:49'
 labels: []
 dependencies: []
 references:
@@ -571,10 +571,24 @@ checks plus both TASK-46 regressions and TASK-54's mate-parity tests after
 resolving, since this rework changes production code and voids the prior
 approval.
 ---
+
+author: @codex
+created: 2026-07-18 23:49
+---
+Implementation handoff
+Branch: task-46-aborted-search-subtrees
+Worktree: /Users/seabo/seaborg-worktrees/task-46-aborted-search-subtrees
+Base: f476d4c8cfcbfd630235ad81067763b37af2e656
+Implementation target: 35b4994b5753d41d447e90de023b019775b5377b
+Resolved findings: REV-1-01, REV-2-01, REV-3-01; merge-attempt-1 TASK-54 child_bound collision
+Verification:
+- cargo test -p engine aborted_child_cannot_score_or_write_its_parent: passed (1 passed)
+- cargo test -p engine mid_subtree_abort_keeps_the_last_completed_iteration: passed (1 passed)
+- cargo test -p engine child_mate_windows_preserve_distance_parity: passed (1 passed)
+- cargo test -p engine child_bounds_invert_parent_mate_distance_conversion: passed (1 passed)
+- cargo fmt --check: passed
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: passed
+- cargo test --workspace: passed (204 passed, 2 ignored)
+Known failures: none
+---
 <!-- COMMENTS:END -->
-
-## Final Summary
-
-<!-- SECTION:FINAL_SUMMARY:BEGIN -->
-Aborted search subtrees can no longer contribute scores. `search`, `quiesce` and `quiesce_evasions` now return `NodeResult = Option<Score>` instead of a plausible `Score::zero()`; every abort path restores the position, unwinds as `None`, and returns before the single Step 24 transposition-table write, so an abandoned subtree cannot raise alpha, become best_move, enter the PV, or persist a TT entry. `iterative_deepening` restores the previously completed PV table when a candidate iteration aborts, and the `is this robust?` TODO is resolved. Verified with cargo fmt --check, cargo clippy --workspace --all-targets --all-features -- -D warnings (clean CARGO_TARGET_DIR), cargo test --workspace (204 passed, 1 ignored), and two regressions: `aborted_child_cannot_score_or_write_its_parent` (direct node-level abort inside the first child, proven to fail on base e301527) and `mid_subtree_abort_keeps_the_last_completed_iteration` (end-to-end bestmove and full-PV preservation).
-<!-- SECTION:FINAL_SUMMARY:END -->
