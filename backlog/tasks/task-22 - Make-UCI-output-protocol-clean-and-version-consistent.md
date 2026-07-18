@@ -1,11 +1,11 @@
 ---
 id: TASK-22
 title: Make UCI output protocol clean and version consistent
-status: Changes Requested
+status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:15'
-updated_date: '2026-07-18 00:48'
+updated_date: '2026-07-18 00:53'
 labels:
   - uci
   - release
@@ -38,12 +38,11 @@ The process emits unsolicited startup text and several diagnostics on protocol s
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Thread a single authoritative engine identity (name, version=CARGO_PKG_VERSION, author, commit=GIT_HASH) from the seaborg binary into engine::launch, replacing hardcoded '0.0.2' strings so id name, --version, and startup metadata share one source.
-2. Remove the unsolicited startup banner + 'commit:' line from protocol stdout; emit a single human diagnostic banner (with trimmed short commit) to stderr instead so no non-UCI stdout precedes the uci command.
-3. Update the 'uci' handshake to emit 'id name <name> <version>' derived from the threaded identity.
-4. Ensure errors/diagnostics never appear as invalid protocol messages on stdout (verify existing stderr routing; keep commit metadata on diagnostic channel).
-5. Add/strengthen integration tests asserting exact startup, uci handshake, error, and readiness stdout streams; update existing tests referencing the old banner.
-6. Run cargo build, cargo test, cargo fmt --check, cargo clippy.
+Rework for merge-eject finding (comment #3). Root cause: master advanced past base 299f5ec via TASK-12, whose test uci_new_game_is_an_owner_handled_hash_boundary asserts errors.is_empty() after 'ucinewgame\nisready\nquit'. TASK-22 routes the human startup banner to the stderr diagnostic channel, so stderr is never empty and that assertion fails when integrated.
+1. Rebase this task branch onto current primary (1ae6cce) to integrate TASK-12's landed test and new_game() handling; keep TASK-22 base-to-target diff clean.
+2. Reconcile the inherited test to assert diagnostics_after_banner(&errors) == "" (consistent with the other TASK-22 exact-stream tests) rather than errors.is_empty(), preserving both TASK-12's silent-ucinewgame check and TASK-22's banner-on-stderr behavior.
+3. Re-verify the full integrated result: cargo build, cargo test --workspace, cargo fmt --check, cargo clippy on changed files.
+4. Produce a fresh immutable target and hand off for re-review.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
