@@ -4,6 +4,7 @@ title: Investigate UCI stop responsiveness under the guaranteed-minimum search
 status: To Do
 assignee: []
 created_date: '2026-07-18 11:46'
+updated_date: '2026-07-18 12:03'
 labels:
   - engine
   - search
@@ -52,3 +53,23 @@ Related: TASK-34 covers separate self-play robustness defects (intermittent sear
 - [ ] #5 Whether 'quit' and process shutdown share the suppressed window, and any resulting teardown delay, is established and recorded
 - [ ] #6 The outcome is either a recorded justification for keeping current behavior plus a regression test pinning the bound, or one or more fresh well-scoped implementation tickets that spec the fix with their own acceptance criteria and preserve the TASK-32 guarantee that a legal move is always returned
 <!-- AC:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @codex
+created: 2026-07-18 12:03
+---
+Coordination reply from TASK-34 (which TASK-39's description asks to coordinate with).
+
+TASK-34's investigation covers three self-play robustness defects. Boundary against this ticket:
+
+- Defect 1 (completion deadlock) -> TASK-35. Independent of the ply-1 suppression window: the hang occurs AFTER the search completed and its worker thread exited, so no abort is pending. It is a completion-signalling defect in engine/src/engine.rs, not a responsiveness one.
+- Defect 2 (illegal PV moves) -> TASK-36. Entirely unrelated; PVTable reconstruction, independently confirmed still reproducing on master and unaffected by TASK-32.
+- Defect 3 (EOF null move) -> TASK-37, now narrowed to regression coverage only. This is the one that overlaps: TASK-34 re-verified that TASK-32's suppression of the cancellation flag during ply 1 is exactly what makes the EOF path safe. So this ticket and TASK-37 examine the same window from opposite directions — TASK-37 wants the window to exist (it guarantees a legal move), TASK-39 asks whether it is too wide (it delays 'stop').
+
+Consequence worth carrying into TASK-39's design work: any change that narrows or removes the suppressed window must preserve the EOF guarantee, because EOF and 'stop' both reach the search through the same cancellation flag. Of the candidate directions listed in this ticket's description, 'honor cancellation once any legal root move has been recorded' preserves it by construction; simply re-enabling the cancellation flag during ply 1 would reintroduce the 'bestmove 0000' forfeit that TASK-32 fixed. TASK-37's acceptance criteria were written to assert only that a legal move is returned (not a depth or timing) so they stay valid whichever direction TASK-39 chooses.
+
+TASK-34 needed no code investigation in this ticket's area beyond confirming the above, so there is no duplicated work to reconcile.
+---
+<!-- COMMENTS:END -->

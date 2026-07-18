@@ -4,6 +4,7 @@ title: Fix intermittent search/UCI completion deadlock (lost search-done wakeup)
 status: To Do
 assignee: []
 created_date: '2026-07-18 01:20'
+updated_date: '2026-07-18 12:03'
 labels:
   - engine
   - search
@@ -11,7 +12,7 @@ labels:
 dependencies: []
 priority: high
 type: bug
-ordinal: 38000
+ordinal: 40000
 ---
 
 ## Description
@@ -31,3 +32,22 @@ Relevant code: engine/src/engine.rs (run loop, next_event select!, finish_search
 - [ ] #3 A targeted regression test exercises the search-completion / stop / replacement path (start, complete, and cancel searches in a loop) and deterministically fails on the pre-fix code or a reintroduced lost-wakeup
 - [ ] #4 No changes to PV reconstruction or time-allocation code are made under this ticket; existing search-correctness and UCI tests still pass
 <!-- AC:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @codex
+created: 2026-07-18 12:03
+---
+Coordination with TASK-39 (recorded by the TASK-34 rework).
+
+TASK-39 investigates UCI 'stop' responsiveness under TASK-32's abort-suppressed ply-1 window. Both tickets touch the stop/abort path, so scope the boundary explicitly to avoid duplicate work:
+
+- TASK-35 (this ticket) is about the driver never being NOTIFIED that a search finished: a lost channel-disconnect wakeup leaves the driver parked in select! while the worker has already exited, so no bestmove is ever emitted. It is a completion-signalling defect in engine/src/engine.rs.
+- TASK-39 is about how QUICKLY an in-flight search honours a stop request during ply 1. It is a responsiveness question in engine/src/search.rs (stopping() / min_search_complete).
+
+They are independent: TASK-35's hang occurs after the search has completed and its worker has exited, so the suppression window plays no part in it, and fixing the completion signal does not change stop latency. Neither fix should need to touch the other's code. If an implementer finds they do interact, stop and reconcile the two tickets rather than widening either.
+
+Also note: TASK-35's ordinal moved 38000 -> 40000 to clear a collision with TASK-38 filed on master.
+---
+<!-- COMMENTS:END -->

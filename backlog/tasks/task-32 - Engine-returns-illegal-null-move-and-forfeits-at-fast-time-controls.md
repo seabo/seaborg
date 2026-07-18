@@ -65,7 +65,9 @@ created: 2026-07-18 01:22
 ---
 TASK-34 investigation (doc-2) found that the stdin-EOF null-move defect (then specced as TASK-37) shares this ticket's root cause: no guaranteed legal root move before an abort, yielding 'bestmove 0000'. Only the abort trigger differs (TASK-32: zero/near-zero time budget; TASK-37: stdin EOF/cancel). The shared 'always choose a legal move before any abort; return legal best-so-far' guarantee should be implemented once.
 
-Superseded by this ticket's own implementation: TASK-32's Search::min_search_complete suppresses both the time deadline and the cancellation flag until ply 1 completes, which covers the EOF/cancel trigger as well. TASK-34 re-verified this against the merged code and retired TASK-37 rather than implementing it. No further coordination is required.
+Resolved by this ticket's own implementation. Search::min_search_complete suppresses both the time deadline and the cancellation flag until ply 1 completes, and EOF reaches the search through that same cancellation flag (engine.rs:90 Input::Closed -> stop_search -> cancel()), so the EOF trigger is covered too. TASK-34 re-verified this against the merged code (release build d6c5679): five EOF variants all return legal moves where master d9a138c returned 'bestmove 0000', an abort after ply 1 returns the last completed iteration's move, and terminal positions still correctly emit 0000.
+
+The predicted single shared guarantee therefore landed here, once, as intended. TASK-37 was narrowed to regression coverage only (driver-level EOF path and terminal-position case, tests only, no engine change) rather than retired, so that TASK-34 AC #4's requirement to carry forward regression coverage of the stop/abort and EOF paths is not dropped. No further fix-level coordination is required. See also TASK-39, which asks whether this suppressed window bounds UCI 'stop' responsiveness; any narrowing of the window must preserve this EOF guarantee.
 ---
 
 author: @georgeseabridge

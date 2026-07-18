@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-18 00:25'
-updated_date: '2026-07-18 12:01'
+updated_date: '2026-07-18 12:05'
 labels:
   - engine
   - search
@@ -68,12 +68,30 @@ No engine code fixes should land under this ticket; its deliverable is the inves
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Investigation complete; no engine code changed under this ticket (working tree touches only backlog/). Findings recorded in doc-2 (backlog/docs/doc-2). All three failure modes reproduced and root-caused:
-- Defect 3 (EOF null move): deterministic repro 'printf uci/isready/go depth 25 | seaborg -u' -> bestmove 0000 from startpos. Root cause: EOF cancels the search before a depth completes; iterative_deepening records no result -> Cancelled(None) -> format_search_outcome emits 0000.
-- Defect 2 (illegal PV): FastChess depth=4 self-play flags 'Illegal PV move - move c5f8' for 'pv d7f8 g6a6 f8g6 c5f8' (score mate -2). Best move (first ply) is legal; deep PV plies corrupt. Root cause: triangular PVTable updated on fail-high/cutoff nodes (search.rs Step 22) splices stale sibling rows via copy_within; mate/leaf handling compounds it.
-- Defect 1 (completion deadlock): reproduced under debug-build self-play (concurrency>=8); all slots freeze, engines idle at ~0% CPU, no bestmove, no panic. Thread samples at the hang show the driver parked in crossbeam select! on the active-search branch while the search worker thread has already exited (only main+reader threads remain) -> lost channel-disconnect wakeup; finish_search never runs.
-Coupling: Defects 1 and 2 are independent of each other and TASK-32. Defect 3 shares TASK-32's root cause (no guaranteed legal move before an abort; differ only in trigger: time budget vs EOF).
-Fresh tickets: TASK-35 (Defect 1), TASK-36 (Defect 2), TASK-37 (Defect 3, depends on/coupled to TASK-32; coupling also noted on TASK-32).
+Investigation complete; no engine code changed under this ticket (base..target touches only backlog/). Findings recorded in doc-2 (backlog/docs/doc-2).
+
+All three failure modes were reproduced and root-caused:
+- Defect 3 (EOF null move): originally reproduced deterministically on master d9a138c ('printf uci/isready/go depth 25 | seaborg -u' -> bestmove 0000 from startpos, which has 20 legal moves). Root cause: EOF cancels the search before a depth completes; iterative_deepening records no result -> Cancelled(None) -> format_search_outcome emits 0000.
+- Defect 2 (illegal PV): FastChess depth=4 self-play flags 'Illegal PV move - move c5f8' for 'pv d7f8 g6a6 f8g6 c5f8' (score mate -2), offending position FEN 8/3n1P2/6R1/4k1P1/P1Q5/8/4N3/4K3 b - - 0 53 (cold TT, go depth 4); PV plies 1-3 legal, ply 4 illegal. Best move (first ply) is always legal, so this is an info-line PV defect, not a move-selection defect. Root cause: the triangular PVTable updated on fail-high/cutoff nodes (search.rs Step 22) splices stale sibling rows via copy_within; mate/leaf handling compounds it.
+- Defect 1 (completion deadlock): reproduced under debug-build self-play (concurrency>=8); all slots freeze, engines idle at ~0% CPU, no bestmove, no panic. Thread samples at the hang show the driver parked in crossbeam select! on the active-search branch while the search worker thread has already exited -> lost channel-disconnect wakeup; finish_search never runs.
+
+REWORK (after merge attempt 1 ejected on a textual conflict with master c851bba):
+
+Merged master into this branch (merge commit 80a4af6), resolving the task-34 and task-32 Comments-block conflicts by preserving both sides. No engine source was involved on either side of either conflict.
+
+Defect 3 was re-verified against the merged TASK-32 code (release build d6c5679) and NO LONGER REPRODUCES. TASK-32's Search::min_search_complete suppresses both the time deadline and the cancellation flag until ply 1 completes; EOF reaches the search through that same cancellation flag (engine.rs:90 Input::Closed -> stop_search -> cancel()), so a legal root move is always recorded first. Five EOF variants now all return legal moves (go depth 25, go depth 8, Kiwipete go depth 20, go infinite, go depth 25 + quit); an abort after ply 1 returns the last completed iteration's move (depth-10 result after ~3s of go infinite); terminal positions still correctly emit bestmove 0000. Evidence table in doc-2.
+
+Consequently TASK-37 was NARROWED to regression coverage only (driver-level EOF path plus terminal-position case, tests only, no engine change; priority high -> medium) rather than retired, because TASK-32's unit tests pin the search-level abort paths but nothing exercises the driver-level EOF path end to end. Retiring it outright would have left this ticket's AC #4 requirement to carry forward 'legal best-so-far move on stdin EOF, and regression coverage of the stop/abort and EOF paths' without a home.
+
+Defect 2 is confirmed still open on current master (independently reproduced by the TASK-32 reviewer: 33 'Illegal PV move' emissions in a 6-game match at tc=10+0.1, on both the TASK-32 base and branch). Defect 1 is unaffected.
+
+Coordination with TASK-39 (UCI stop responsiveness under the abort-suppressed window, filed on master while this was in review) recorded on TASK-35, TASK-37 and TASK-39: TASK-35 is a completion-signalling defect that occurs after the worker has exited and does not interact with the suppression window; TASK-37 and TASK-39 examine the same window from opposite directions, so any narrowing of it must preserve the EOF guarantee. TASK-37's ACs were written to assert only that a legal move is returned, not a depth or timing, so they stay valid whichever direction TASK-39 takes.
+
+Ordinals reassigned to clear the collision with TASK-38/TASK-39 filed on master: TASK-35 38000 -> 40000, TASK-36 39000 -> 41000, TASK-37 40000 -> 42000.
+
+Coupling: Defects 1 and 2 are independent of each other and of TASK-32. Defect 3 shared TASK-32's root cause (no guaranteed legal root move before an abort; differing only in trigger, time budget vs EOF), and the predicted single shared guarantee did in fact resolve both — implemented once, under TASK-32.
+
+Fresh tickets: TASK-35 (Defect 1, fix), TASK-36 (Defect 2, fix), TASK-37 (Defect 3, narrowed to regression coverage).
 <!-- SECTION:NOTES:END -->
 
 ## Comments

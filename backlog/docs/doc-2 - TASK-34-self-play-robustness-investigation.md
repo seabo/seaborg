@@ -3,19 +3,29 @@ id: doc-2
 title: TASK-34 self-play robustness investigation
 type: specification
 created_date: '2026-07-18 01:19'
-updated_date: '2026-07-18 01:22'
+updated_date: '2026-07-18 12:04'
 ---
 # TASK-34 — Self-play robustness investigation findings
 
 Investigation only. **No engine code changed under TASK-34.** Deliverable: root-cause
 evidence for the three failure modes plus fresh implementation tickets.
 
+> **Status update (2026-07-18, TASK-34 rework).** Defect 3 (EOF null move) **no longer
+> reproduces**: it was fixed as a side effect of TASK-32, merged at `8ceb480` after this
+> investigation was first written. The Defect 3 section below records the original
+> root-cause analysis against master `d9a138c` and remains accurate for that commit; see
+> [Defect 3 re-verification](#defect-3--re-verification-against-merged-task-32) for the
+> current state. Defects 1 and 2 are unaffected and still open.
+
 Environment: master @ `d9a138c`, macOS 15.6.1 (arm64), FastChess (`~/.local/bin/fastchess`),
 release and debug builds of `target/*/seaborg -u`, `python-chess` 1.11.2 for PV validation.
 
 ---
 
-## Defect 3 — Search aborts to the null move on stdin EOF
+## Defect 3 — Search aborts to the null move on stdin EOF (FIXED by TASK-32)
+
+*Analysis below is against master `d9a138c`. Superseded on current master — see the
+re-verification section.*
 
 **Reproduction (deterministic):**
 
@@ -139,6 +149,54 @@ completion-race regression test.
 
 ---
 
+## Defect 3 — re-verification against merged TASK-32
+
+Re-run on the TASK-34 branch with master merged in (release build, commit `d6c5679`,
+which contains TASK-32's `8ceb480`). Every EOF variant now returns a legal move:
+
+| Input (piped, stdin closes at end) | Before (`d9a138c`) | After (merged TASK-32) |
+| --- | --- | --- |
+| `uci/isready/go depth 25` (doc's original repro) | `bestmove 0000` | `bestmove a2a3` |
+| `uci/isready/position startpos/go depth 8` | `bestmove 0000` | `bestmove a2a3` |
+| `uci/isready/position fen <Kiwipete>/go depth 20` | — | `bestmove e2a6` |
+| `uci/isready/position startpos/go infinite` | — | `bestmove a2a3` |
+| `uci/isready/position startpos/go depth 25/quit` | — | `bestmove a2a3` |
+
+The post-ply-1 half of the path was checked separately: holding stdin open for ~3s during
+`go infinite` and then closing it returned the **depth-10** result (`bestmove a2a3`), i.e.
+an abort after ply 1 yields `Cancelled(Some(result))` and `SearchOutcome::result()` returns
+the last completed iteration's move rather than `None`. An explicit `stop` after 3s behaves
+identically.
+
+Terminal positions are unchanged and still correct: `7k/5QQ1/8/8/8/8/8/7K b` (checkmate) and
+`7k/5Q2/6K1/8/8/8/8/8 b` (stalemate) both emit `bestmove 0000`, which is conventional UCI.
+
+**Mechanism.** TASK-32 added `Search::min_search_complete` (`engine/src/search.rs:366`).
+`stopping()` (`search.rs:763`) returns `false` while that flag is unset, suppressing **both**
+the time deadline and the cancellation flag; `iterative_deepening` arms it only after the
+first iteration completes (`search.rs:468`). Step 4 of the original root-cause chain above —
+"if the cancel lands before even depth 1 completes, `result` stays `None`" — can therefore no
+longer occur. This works for EOF specifically because EOF reaches the search through the
+*cancellation flag*, the same path TASK-32 suppresses: `Input::Closed` (`engine.rs:90`) →
+`stop_search` → `cancel()`. TASK-32 suppressed the cancellation flag (not just the time
+deadline) deliberately, precisely so an immediate `stop` during ply 1 could not produce
+`bestmove 0000`.
+
+**Consequence for this investigation.** Defect 3 needs no fix. The prediction recorded below
+in "Independence and coupling" — that a single guarantee resolves both TASK-32 and Defect 3 —
+held exactly, and TASK-32's implementation of it was sufficient on its own. What remains is
+regression coverage: TASK-32's unit tests pin the search-level abort paths, but nothing
+exercises the driver-level EOF path end to end and nothing pins the terminal-position case.
+TASK-37 was narrowed to that tests-only scope rather than retired, so the fix-level
+requirement (legal best-so-far on stdin EOF, with regression coverage) is not dropped.
+
+**Coordination with TASK-39.** TASK-39 (filed on master) asks whether this same suppressed
+window makes UCI `stop` too slow. It and TASK-37 examine the window from opposite directions:
+TASK-37 depends on the window existing, TASK-39 asks whether it is too wide. Any narrowing of
+the window must preserve the EOF guarantee, since `stop` and EOF share the cancellation flag.
+
+---
+
 ## Independence and coupling with TASK-32
 
 - **Defect 1 (completion deadlock)** and **Defect 2 (illegal PV)** are **independent** of
@@ -160,7 +218,11 @@ completion-race regression test.
 - Defect 1 → **TASK-35** completion-deadlock fix (no hang under repeated self-play;
   regression coverage of the completion/stop signalling).
 - Defect 2 → **TASK-36** illegal-PV fix (only-legal PV moves; PV-legality regression).
-- Defect 3 → **TASK-37** EOF legal-move fix (legal best-so-far on stdin EOF; **depends on
-  and coupled to TASK-32**; regression coverage of the stop/abort and EOF paths). The
-  shared "legal move before any abort" guarantee is recorded on both TASK-37 and TASK-32
-  so the fix is implemented once.
+- Defect 3 → **TASK-37**, **narrowed to regression coverage only** after re-verification
+  showed TASK-32 already implements the shared "legal move before any abort" guarantee.
+  It now covers the driver-level EOF path and the terminal-position case as tests, with no
+  engine behaviour change. Priority dropped high → medium. The coupling and its resolution
+  are recorded on TASK-32, TASK-37 and TASK-39.
+
+Ordinals were reassigned (TASK-35 → 40000, TASK-36 → 41000, TASK-37 → 42000) to clear a
+collision with TASK-38 and TASK-39, filed on master while TASK-34 was in review.
