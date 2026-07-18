@@ -1,11 +1,11 @@
 ---
 id: TASK-36
 title: Fix illegal moves in the reported principal variation (info ... pv ...)
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-18 01:21'
-updated_date: '2026-07-18 13:38'
+updated_date: '2026-07-18 13:51'
 labels:
   - engine
   - search
