@@ -1,11 +1,11 @@
 ---
 id: TASK-39
 title: Investigate UCI stop responsiveness under the guaranteed-minimum search
-status: In Review
+status: Changes Requested
 assignee:
   - '@codex'
 created_date: '2026-07-18 11:46'
-updated_date: '2026-07-18 19:41'
+updated_date: '2026-07-18 19:52'
 labels:
   - engine
   - search
@@ -127,5 +127,27 @@ author: @codex
 created: 2026-07-18 19:41
 ---
 Handoff correction: the full implementation target SHA is 2bea51d6e7d5fcc850e1573fa2d2eb4a37e1e06a (the abbreviated 2bea51d in the preceding handoff was correct; its manually expanded suffix was not). All other handoff metadata is unchanged.
+---
+
+author: @codex
+created: 2026-07-18 19:52
+---
+Review attempt: 1
+Reviewed branch: task-39-stop-responsiveness
+Reviewed implementation: 2bea51d6e7d5fcc850e1573fa2d2eb4a37e1e06a
+Verdict: changes_requested
+
+REV-1-01 [P1] Deep check-extension adversary is not demonstrated
+Location: backlog/docs/doc-3 - TASK-39-UCI-stop-responsiveness-investigation.md (Empirical method / Results); tools/task39_stop_probe.rb:12-23
+Impact: Acceptance criterion #2 explicitly requires evidence from adversarial positions selected to maximize deep ply-1 quiescence/check-extension work. The report labels one FEN as repeated-check potential and another as forcing quiesce evasions, but the probe records only elapsed time and main-search depth-one nodes. It records no q-node count, maximum q-ply, check-evasion count, or line showing that any sample actually enters a deep quiet check-evasion chain. In particular, an in-check root position does not by itself force quiesce_evasions after the depth-1 root evasion. The resulting sub-6 ms measurements therefore characterize the named corpus, but do not objectively establish coverage of the adversarial mechanism that motivated this task.
+Reproduction: Run ruby tools/task39_stop_probe.rb target/release/seaborg 100 and inspect the JSON fields; only timing, depth_one_nodes, and returned moves are reported. Inspect the report's Results table; no quiescence-depth/work evidence is supplied.
+Expected: Add reproducible evidence that at least one validated corpus position drives a materially deep ply-1 quiescence quiet-check-evasion chain (or systematically search for such positions), report q-node/max-q-ply or equivalent structural evidence, and include its latency in the characterization. Keep any instrumentation outside engine search/stop/UCI-I/O production code as required by criterion #1.
+
+Verification:
+- ruby -c tools/task39_stop_probe.rb: passed
+- cargo build --release --bin seaborg && ruby tools/task39_stop_probe.rb target/release/seaborg 100: 1,000 samples, all non-null, max 1.198 ms
+- cargo fmt --check: passed
+- fresh-target cargo clippy --workspace --all-targets --all-features -- -D warnings: passed
+- cargo test --workspace: passed (core 35; engine 159 passed/1 ignored; metadata 5; doc tests passed)
 ---
 <!-- COMMENTS:END -->
