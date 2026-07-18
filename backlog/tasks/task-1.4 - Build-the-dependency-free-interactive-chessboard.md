@@ -1,11 +1,11 @@
 ---
 id: TASK-1.4
 title: Build the dependency-free interactive chessboard
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-17 15:40'
-updated_date: '2026-07-18 21:25'
+updated_date: '2026-07-18 21:47'
 labels: []
 dependencies:
   - TASK-1.3
@@ -128,6 +128,12 @@ author: @codex
 created: 2026-07-18 21:25
 ---
 Review attempt: 1\nReviewed branch: task-1.4-interactive-chessboard\nReviewed implementation: 9370e8ff108e3ec011a981c2524f201f3949670a\nVerdict: approved\n\nAll six acceptance criteria are proven by the immutable base-to-target diff, focused frontend/Rust tests, and the recorded live Chrome interaction and geometry verification. HUMAN-1 was explicitly parked by human direction; HUMAN-2 is resolved by rigid eight-track sizing and verified geometry.\n\nVerification:\n- cargo fmt --check: passed\n- clean CARGO_TARGET_DIR cargo clippy --workspace --all-targets --all-features -- -D warnings: passed, zero warnings\n- cargo test --workspace: passed, 201 tests, 0 failures, 1 ignored\n- tsc -p engine/src/ui/frontend/tsconfig.json: passed; committed JavaScript remained byte-identical\n- node --test engine/src/ui/frontend/board.test.mjs: passed, 7/7\n- recorded Chrome interaction and rigid-grid geometry run: passed at desktop and narrow viewports with mouse, touch, pen, click-click, keyboard, both orientations, snapback, lockout, reduced motion, CSP, and local-only resources
+---
+
+author: @codex
+created: 2026-07-18 21:47
+---
+Merge integration\nPrimary base: f4d741b10daf33d8d36bb89e7a7d68a85d0419c1\nMerge commit: 8c3c586cf3fee7d9c7aff558d8db1071663a3745\nApproved implementation: 9370e8ff108e3ec011a981c2524f201f3949670a\nVerification:\n- cargo fmt --check: passed\n- fresh CARGO_TARGET_DIR cargo clippy --workspace --all-targets --all-features -- -D warnings: passed, zero warnings\n- cargo test --workspace: passed, 202 tests, 0 failures, 1 ignored\n- benchmarks: not applicable; no move-generation or search hot paths changed\n- overlap: no files overlapped with TASK-35, the task landed since the recorded base
 ---
 <!-- COMMENTS:END -->
 
