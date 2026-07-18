@@ -124,6 +124,12 @@ impl fmt::Display for Perft<'_> {
     }
 }
 
+impl Default for PerftDataInternal {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PerftDataInternal {
     pub fn new() -> Self {
         Self {

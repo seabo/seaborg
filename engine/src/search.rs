@@ -630,7 +630,7 @@ impl<'engine> Search<'engine> {
 
                 // Start reporting which move we're considering after 3 seconds have elapsed.
                 if T::is_master() && Node::root() && self.trace.live_elapsed().as_millis() > 3000 {
-                    self.emit_current_move(depth, &mov, move_count);
+                    self.emit_current_move(depth, mov, move_count);
                 }
 
                 // Step 16. Reductions & extensions.
@@ -716,7 +716,11 @@ impl<'engine> Search<'engine> {
         }
 
         debug_assert!(
-            move_count > 0 || self.pos.generate::<BasicMoveList, AllGen, Legal>().len() == 0
+            move_count > 0
+                || self
+                    .pos
+                    .generate::<BasicMoveList, AllGen, Legal>()
+                    .is_empty()
         );
 
         // Step 23. Check for mate and stalemate.

@@ -154,13 +154,10 @@ impl PackedMove {
 
         let piece = pos.piece_at_sq(orig);
 
-        match pos.ep_square() {
-            Some(ep) => {
-                if ep == dest && piece.type_of() == PieceType::Pawn {
-                    move_type |= MoveType::EN_PASSANT | MoveType::CAPTURE;
-                }
+        if let Some(ep) = pos.ep_square() {
+            if ep == dest && piece.type_of() == PieceType::Pawn {
+                move_type |= MoveType::EN_PASSANT | MoveType::CAPTURE;
             }
-            None => {}
         }
 
         if piece.type_of() == PieceType::King {
@@ -383,8 +380,8 @@ impl Table {
     fn size_from_mb(size: usize) -> usize {
         let desired_entries = size * 1_024 * 1_024 / std::mem::size_of::<Entry>();
         let log_desired_entries = (desired_entries as f64).log(2.).round();
-        let actual_entries = 2_usize.pow(log_desired_entries as u32);
-        actual_entries
+
+        2_usize.pow(log_desired_entries as u32)
     }
 
     /// Returns the capacity of the transposition table in number of entries.

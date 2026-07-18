@@ -168,7 +168,7 @@ impl<'a> SanParser<'a> {
 
             self.piece_type = Some(piece_type);
         }
-        return self.parse_remainder_after_piece();
+        self.parse_remainder_after_piece()
     }
 
     fn parse_remainder_after_piece(&mut self) -> PResult<()> {
@@ -378,7 +378,7 @@ impl<'a> SanParser<'a> {
                 } else {
                     // The next character was somethign other than "+", "#" or a file,
                     // which doesn't make sense.
-                    return Err(ParseError::Invalid);
+                    Err(ParseError::Invalid)
                 }
             }
             None => Ok(true),
@@ -390,7 +390,7 @@ impl<'a> SanParser<'a> {
     }
 
     fn peek(&mut self) -> Option<&'a str> {
-        self.san.peek().map(|s| *s)
+        self.san.peek().copied()
     }
 
     fn is_file(c: &str) -> bool {

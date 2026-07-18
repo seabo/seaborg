@@ -96,7 +96,7 @@ impl Move {
         ]
         .contains(&promo_type));
 
-        let mut m = self.clone();
+        let mut m = *self;
         m.promo_piece_type = Some(promo_type);
         m
     }
@@ -222,7 +222,7 @@ impl Move {
     /// E.g. 'e2e4'
     pub fn to_uci_string(&self) -> String {
         if self.is_null() {
-            return format!("Null");
+            return "Null".to_string();
         }
 
         if let Some(promo_piece) = self.promo_piece_type {

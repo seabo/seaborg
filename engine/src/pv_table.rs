@@ -94,9 +94,40 @@ impl<'a> Iterator for PVIter<'a> {
     type Item = &'a Move;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.iter
-            .next()
-            .and_then(|m| if m.is_null() { None } else { Some(m) })
+        self.iter.next().filter(|&m| !m.is_null())
+    }
+}
+
+impl std::fmt::Debug for PVTable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let d = self.depth;
+
+        write!(f, "    │ ")?;
+        for col in 0..d {
+            write!(f, "{:^5} │ ", col)?;
+        }
+        writeln!(f)?;
+
+        write!(f, "    ├")?;
+        for _ in 0..(d - 1) {
+            write!(f, "───────┼")?;
+        }
+        writeln!(f, "───────┤")?;
+
+        for row in 0..d {
+            write!(f, " {:>2} │ ", row)?;
+            for col in 0..d {
+                let mov = self.data[col * d + (d - row - 1)];
+                if mov.is_null() {
+                    write!(f, "  *   │ ")?;
+                } else {
+                    write!(f, " {:>5} │ ", mov)?;
+                }
+            }
+            writeln!(f)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -179,38 +210,5 @@ mod tests {
         table.clear_at(0);
 
         assert_eq!(pv_of(&table), before);
-    }
-}
-
-impl std::fmt::Debug for PVTable {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let d = self.depth;
-
-        write!(f, "    │ ")?;
-        for col in 0..d {
-            write!(f, "{:^5} │ ", col)?;
-        }
-        writeln!(f)?;
-
-        write!(f, "    ├")?;
-        for _ in 0..(d - 1) {
-            write!(f, "───────┼")?;
-        }
-        writeln!(f, "───────┤")?;
-
-        for row in 0..d {
-            write!(f, " {:>2} │ ", row)?;
-            for col in 0..d {
-                let mov = self.data[col * d + (d - row - 1)];
-                if mov.is_null() {
-                    write!(f, "  *   │ ")?;
-                } else {
-                    write!(f, " {:>5} │ ", mov)?;
-                }
-            }
-            writeln!(f)?;
-        }
-
-        Ok(())
     }
 }

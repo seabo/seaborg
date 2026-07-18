@@ -139,7 +139,7 @@ impl<'a> Parser<'a> {
         Parser {
             toks: input
                 .split_whitespace()
-                .map(|t| Token::scan(t))
+                .map(Token::scan)
                 .collect::<Vec<Token>>(),
             cursor: 0,
         }

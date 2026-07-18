@@ -30,9 +30,8 @@ impl Zobrist {
         // Castling rights
         zob ^= castling_rights_keys(pos.castling_rights());
         // Ep square
-        match pos.ep_square() {
-            Some(sq) => zob ^= ep_file_keys(sq),
-            None => {}
+        if let Some(sq) = pos.ep_square() {
+            zob ^= ep_file_keys(sq)
         };
 
         zob
@@ -61,14 +60,12 @@ impl Zobrist {
 
     /// Update a Zobrist key from an old en passant square to a new one.
     pub fn update_ep_square(&mut self, old: Option<Square>, new: Option<Square>) {
-        match old {
-            Some(sq) => *self ^= ep_file_keys(sq),
-            None => {}
+        if let Some(sq) = old {
+            *self ^= ep_file_keys(sq)
         }
 
-        match new {
-            Some(sq) => *self ^= ep_file_keys(sq),
-            None => {}
+        if let Some(sq) = new {
+            *self ^= ep_file_keys(sq)
         }
     }
 }

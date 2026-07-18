@@ -96,20 +96,12 @@ impl Score {
 
     /// True if this `Score` represents a forced mate-in-n.
     pub fn is_mate(&self) -> bool {
-        if self.0 < -20_000 || self.0 > 20_000 {
-            true
-        } else {
-            false
-        }
+        self.0 < -20_000 || self.0 > 20_000
     }
 
     /// True if this `Score` represents a centipawn evaluation.
     pub fn is_cp(&self) -> bool {
-        if -10_000 <= self.0 && self.0 <= 10_000 {
-            true
-        } else {
-            false
-        }
+        -10_000 <= self.0 && self.0 <= 10_000
     }
 
     /// Increment the value of the score by 1, regardless of whether it is a centipawn score or a

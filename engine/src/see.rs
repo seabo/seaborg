@@ -94,7 +94,7 @@ impl<'engine> Search<'engine> {
             }
         }
 
-        return (PieceType::None, Bitboard::empty());
+        (PieceType::None, Bitboard::empty())
     }
 }
 

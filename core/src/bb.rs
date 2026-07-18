@@ -80,7 +80,7 @@ impl Bitboard {
     /// Toggles off the current lowest significant bit which is set.
     #[inline(always)]
     pub fn toggle_lsb(&mut self) {
-        *self &= *self - (1 as u64)
+        *self &= *self - 1_u64
     }
 
     /// Returns true iff the `Bitboard` has no bits set.
@@ -179,7 +179,7 @@ impl fmt::Display for Bitboard {
             }
         }
 
-        writeln!(f, "")?;
+        writeln!(f)?;
         writeln!(f, "   ┌────────────────────────┐")?;
         for (i, row) in squares.iter().rev().enumerate() {
             write!(f, " {} │", 8 - i)?;
@@ -190,7 +190,7 @@ impl fmt::Display for Bitboard {
                     write!(f, " . ")?;
                 }
             }
-            write!(f, "│\n")?;
+            writeln!(f, "│")?;
         }
         writeln!(f, "   └────────────────────────┘")?;
         writeln!(f, "     a  b  c  d  e  f  g  h ")

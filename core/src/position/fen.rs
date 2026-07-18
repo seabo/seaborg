@@ -108,13 +108,13 @@ impl Position {
     pub fn split_fen_fields(fen: &str) -> Result<[&str; 6], FenError> {
         let fields: Vec<&str> = fen.split(' ').collect();
         if fields.len() != 6 {
-            return Err(FenError {
+            Err(FenError {
                 ty: FenErrorType::IncorrectNumberOfFields,
                 msg: format!(
                     "{} space-delimited fields in fen string; expected 6",
                     fields.len()
                 ),
-            });
+            })
         } else {
             Ok([
                 fields[0], fields[1], fields[2], fields[3], fields[4], fields[5],
@@ -265,12 +265,10 @@ impl Position {
                             msg: "fen string contained consecutive numbers".to_string(),
                         });
                     } else {
-                        let skip = c.to_digit(10).expect(&format!(
-                            "{} matched as a number char ('1' to '8'), but didn't parse to a number",
-                            c
-                        ));
+                        let skip = c.to_digit(10).unwrap_or_else(|| panic!("{} matched as a number char ('1' to '8'), but didn't parse to a number",
+                            c));
 
-                        if skip < 1 || skip > 8 {
+                        if !(1..=8).contains(&skip) {
                             return Err(FenError {
                                 ty: FenErrorType::PiecePositionsInvalidNumber,
                                 msg: format!("invalid number {} found in piece position string; should be between 1-8", skip),
@@ -379,40 +377,40 @@ impl Position {
         for c in castling_rights.chars() {
             match c {
                 'K' => {
-                    if white_kingside == true {
+                    if white_kingside {
                         return Err(FenError {
                             ty: FenErrorType::CastlingRightsInvalid,
-                            msg: format!("invalid castling rights; white kingside castling was set more than once"),
+                            msg: "invalid castling rights; white kingside castling was set more than once".to_string(),
                         });
                     } else {
                         white_kingside = true;
                     }
                 }
                 'Q' => {
-                    if white_queenside == true {
+                    if white_queenside {
                         return Err(FenError {
                             ty: FenErrorType::CastlingRightsInvalid,
-                            msg: format!("invalid castling rights; white queenside castling was set more than once"),
+                            msg: "invalid castling rights; white queenside castling was set more than once".to_string(),
                     });
                     } else {
                         white_queenside = true;
                     }
                 }
                 'k' => {
-                    if black_kingside == true {
+                    if black_kingside {
                         return Err(FenError {
                             ty: FenErrorType::CastlingRightsInvalid,
-                            msg: format!("invalid castling rights; black kingside castling was set more than once"),
+                            msg: "invalid castling rights; black kingside castling was set more than once".to_string(),
                         });
                     } else {
                         black_kingside = true;
                     }
                 }
                 'q' => {
-                    if black_queenside == true {
+                    if black_queenside {
                         return Err(FenError {
                             ty: FenErrorType::CastlingRightsInvalid,
-                            msg: format!("invalid castling rights; black queenside castling was set more than once"),
+                            msg: "invalid castling rights; black queenside castling was set more than once".to_string(),
                         });
                     } else {
                         black_queenside = true;

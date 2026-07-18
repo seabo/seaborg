@@ -316,7 +316,7 @@ impl Index<usize> for OverflowingMoveList {
 
     #[inline(always)]
     fn index(&self, index: usize) -> &Move {
-        &*self.0.index(index)
+        self.0.index(index)
     }
 }
 

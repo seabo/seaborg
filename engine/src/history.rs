@@ -81,6 +81,12 @@ pub struct HistoryTable {
     black: Butterfly<u32>,
 }
 
+impl Default for HistoryTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HistoryTable {
     pub fn new() -> Self {
         HistoryTable {

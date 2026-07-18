@@ -62,13 +62,13 @@ impl Square {
     /// Returns the rank index (number) of a `SQ`.
     #[inline(always)]
     pub const fn rank_idx_of_sq(self) -> u8 {
-        (self.0 >> 3) as u8
+        self.0 >> 3
     }
 
     /// Returns the file index (number) of a `SQ`.
     #[inline(always)]
     pub const fn file_idx_of_sq(self) -> u8 {
-        (self.0 & 0b0000_0111) as u8
+        self.0 & 0b0000_0111
     }
 
     /// Returns the rank that the square lies on.
@@ -86,7 +86,7 @@ impl Square {
     /// Converts the given `Square` to its equivalent `Bitboard`.
     #[inline]
     pub fn to_bb(self) -> Bitboard {
-        Bitboard((1 as u64).wrapping_shl(self.0 as u32))
+        Bitboard(1_u64.wrapping_shl(self.0 as u32))
     }
 }
 
@@ -288,7 +288,7 @@ impl fmt::Display for Square {
             ),
         };
 
-        write!(f, "{}{}", file_name, rank.to_string())
+        write!(f, "{}{}", file_name, rank)
     }
 }
 
