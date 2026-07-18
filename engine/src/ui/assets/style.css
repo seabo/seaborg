@@ -1,0 +1,105 @@
+/* Placeholder styling for the local Seaborg UI. TASK-1.4 replaces this with the board. */
+
+:root {
+  color-scheme: light dark;
+  --surface: Canvas;
+  --ink: CanvasText;
+  --muted: color-mix(in srgb, CanvasText 60%, Canvas);
+  --line: color-mix(in srgb, CanvasText 20%, Canvas);
+}
+
+body {
+  margin: 0 auto;
+  padding: 2rem 1.5rem 4rem;
+  max-width: 44rem;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: system-ui, sans-serif;
+  line-height: 1.5;
+}
+
+h1 {
+  margin: 0 0 0.25rem;
+  font-size: 1.5rem;
+}
+
+h2 {
+  margin: 2rem 0 0.5rem;
+  font-size: 1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+#status {
+  margin: 0;
+  color: var(--muted);
+}
+
+dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 1rem;
+  margin: 0;
+}
+
+dt {
+  color: var(--muted);
+}
+
+dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+#fen {
+  font-family: ui-monospace, monospace;
+  font-size: 0.9em;
+}
+
+form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+label {
+  color: var(--muted);
+}
+
+input,
+button {
+  padding: 0.4rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 0.35rem;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--ink);
+}
+
+:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+#move-error:not(:empty) {
+  margin: 0.75rem 0 0;
+  padding: 0.5rem 0.7rem;
+  border-left: 3px solid currentcolor;
+  color: color-mix(in srgb, red 65%, CanvasText);
+}
+
+#history {
+  columns: 2;
+  margin: 0;
+  padding-left: 1.5rem;
+}

@@ -15,3 +15,4 @@ pub mod time;
 pub mod trace;
 pub mod tt;
 pub mod uci;
+pub mod ui;
