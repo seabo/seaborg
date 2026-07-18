@@ -1,11 +1,11 @@
 ---
 id: TASK-1.3
 title: Add the loopback UI server and `--ui` lifecycle
-status: In Review
+status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-17 15:40'
-updated_date: '2026-07-18 14:02'
+updated_date: '2026-07-18 14:12'
 labels: []
 dependencies:
   - TASK-1.2
@@ -26,13 +26,13 @@ Host the game controller through a deliberately narrow local HTTP interface, ser
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 `seaborg --ui` binds to 127.0.0.1 on an available port, prints the URL, and opens it only after the listener is ready
-- [ ] #2 `--ui-port` selects a fixed port and `--no-open` suppresses browser launch, with clear errors for bind or launch failures
-- [ ] #3 Embedded application assets and current state are available over GET, commands use bounded POST endpoints, and updates stream through a reconnectable Server-Sent Events endpoint
-- [ ] #4 Mutating requests require the process session token and unexpected Host or Origin values are rejected
-- [ ] #5 Responses set appropriate content types, no-store state caching, and a restrictive Content Security Policy
-- [ ] #6 `--ui`, `--uci`, and `--dev` cannot be selected together
-- [ ] #7 Protocol tests cover startup, state retrieval, command validation, SSE reconnection, request limits, and shutdown
+- [x] #1 `seaborg --ui` binds to 127.0.0.1 on an available port, prints the URL, and opens it only after the listener is ready
+- [x] #2 `--ui-port` selects a fixed port and `--no-open` suppresses browser launch, with clear errors for bind or launch failures
+- [x] #3 Embedded application assets and current state are available over GET, commands use bounded POST endpoints, and updates stream through a reconnectable Server-Sent Events endpoint
+- [x] #4 Mutating requests require the process session token and unexpected Host or Origin values are rejected
+- [x] #5 Responses set appropriate content types, no-store state caching, and a restrictive Content Security Policy
+- [x] #6 `--ui`, `--uci`, and `--dev` cannot be selected together
+- [x] #7 Protocol tests cover startup, state retrieval, command validation, SSE reconnection, request limits, and shutdown
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -242,4 +242,89 @@ Second, the shutdown lost-wakeup observation is fixed but has no regression test
 
 All five non-blocking observations were fixed in place, so no follow-up tickets were filed and none are requested. The json.rs and read_line changes are the largest of those; if you would rather they had been separate tickets, they are cleanly separable commits-worth of the diff.
 ---
+
+author: @codex
+created: 2026-07-18 14:12
+---
+Review attempt: 2
+Reviewed branch: task-1.3-ui-server
+Reviewed implementation: 7e472552cb398199352d5c47f2214d2bba763373
+Verdict: approved
+
+Both blocking findings from attempt 1 are resolved, each reproduced against the release binary
+built from this target and each carrying a regression test. All seven acceptance criteria remain
+proven. The full 8ceb480..7e47255 diff was re-reviewed, not only the fix delta.
+
+REV-1-01 resolved. The accept loop now claims a ConnectionPermit from a MAX_CONNECTIONS (64) pool
+by compare-and-swap before spawning, and the permit is owned by the connection closure so the slot
+returns on any thread exit including a panic unwind. Spawning moved to thread::Builder, so a
+refused thread is an io::Result stepped over with the accept backoff rather than a panic unwinding
+UiServer::run. Over-cap peers are answered 503 too_many_connections on the accept thread under a
+250ms write timeout and a 100ms poll-bounded drain, so a refused peer can neither stall the loop
+nor lose its status to an RST. UiHandle::shutdown still works at cap, because the accepting flag is
+checked before the permit is claimed. Verified live on this build: 5000 bare connections opened
+against --ui-port 8791 (the attempt-1 repro died at 4106); the probe received
+`HTTP/1.1 503 Service Unavailable` with `{"error":"too_many_connections"}`, the process stayed
+alive with no panic logged, and a probe after releasing the flood returned `HTTP/1.1 200 OK`.
+
+REV-1-02 resolved. drain_rejected_request now recomputes the time left against an absolute
+DRAIN_DEADLINE before every read, mirroring http::apply_deadline, while keeping the MAX_DRAIN byte
+cap. Verified live: an oversized POST followed by one byte every 1.5s received its 413, then the
+write failed after 4.5s having sent 3 bytes, against the 60.2s / 40-byte hold recorded in attempt
+1. The deliberate trade is accepted: a peer still sending when the deadline passes forfeits its
+response to the reset, while a peer that stops sending still receives the 413 — confirmed
+separately with a short body, which returned `HTTP/1.1 413 Payload Too Large`.
+
+The five non-blocking observations were all fixed in place and are correct as written.
+check_origin_headers now states reasoning that holds and points at MAX_CONNECTIONS for the residual
+surface. Session::shutdown stores `running` under `published` before notify_all, closing the
+lost-wakeup window against wait_for_update's read of the same flag under that lock. write_score
+takes INF_P/INF_N ahead of the mate branches as Score's Display does, and app.js switches on the
+score tag rather than assuming an untagged score is centipawns. json::hex4 requires four actual hex
+digits, and number() is a JSON-grammar scanner rather than a deferral to f64::from_str.
+http::read_line returns Option so EOF is distinguishable from the blank line ending the headers,
+and the header loop treats EOF as malformed.
+
+The absent regression test for the shutdown lost-wakeup is accepted. The window lies between
+wait_for_update reading `running` and wait_timeout parking, and the waiter holds `published` across
+all of it, so it is not reachable from outside the type; discarding a stress test that passed with
+the bug present was the right call over banking false assurance. The fix is justified by locking
+discipline and the reasoning is recorded at the call site.
+
+Non-blocking observation, no action required and no follow-up requested. Refusing a connection
+costs the accept loop up to REFUSE_DRAIN_POLL (10ms) for a peer that sent nothing, so a sustained
+flood degrades accept throughput. This is bounded, local-process only, and arises only once the cap
+is already reached — at which point the user is being refused regardless — so it is a fair trade
+for delivering the 503 rather than an RST.
+
+Verification (all at 7e47255):
+- cargo fmt --check: passed
+- cargo test --workspace --no-fail-fast: passed, 188 tests, 0 failures, 1 pre-existing ignored
+- cargo test -p engine ui:: (8 consecutive runs): 73/73 each run, no flakes
+- cargo clippy -p engine --all-targets: 0 warnings matching engine/src/ui or src/cmdline.rs after
+  touching both to force recompilation (remaining warnings are pre-existing in core/engine)
+- git diff --stat 7e47255..HEAD: only the task file, handoff metadata alone
+- Benchmarks not run: the diff is confined to engine/src/ui/*, one `pub mod ui;` line, and
+  src/cmdline.rs, and touches no movegen or search hot path
+- AC#1/#2 live: `--ui --ui-port 8791 --no-open` printed the URL, lsof confirmed a single
+  127.0.0.1:8791 IPv4 listener, and no browser was launched
+- AC#3 live: GET / returned the page, POST /api/move applied e2e4 (revision 1) and the engine
+  replied a7a6 (revision 2), and /api/events streamed `retry:`, `id:` and `data:` frames; resuming
+  at the current id replayed nothing and a future id 999999 correctly re-sent current state
+- AC#4 live: wrong token 403, `Host: evil.com` 403, cross-origin POST with a valid token 403
+- AC#5 live: exact content types, `Cache-Control: no-store`, the full CSP, nosniff and
+  `Referrer-Policy: no-referrer` on every response; path traversal 404, PUT 405, wrong
+  Content-Type 415
+- AC#6 live: `--ui --uci`, `--ui --dev` and `--uci --dev` each exit 2; `--ui-port` and `--no-open`
+  each require `--ui` and exit 2 alone
+- AC#7 reviewed for substance: the 73 tests assert distinct error codes and boundary cases, and the
+  six new ones (connection cap, drain deadline, wire infinities, json escapes, json numbers, http
+  truncation) each target a specific defect from attempt 1
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Added engine::ui, a dependency-free loopback HTTP/1.1 server over the TASK-1.2 GameController, plus the `--ui`/`--ui-port`/`--no-open` CLI lifecycle and mode exclusivity. Embedded assets and state are served over GET, the three commands are bounded POSTs gated on the per-process session token, and updates stream over a reconnectable SSE endpoint; every response carries a restrictive CSP, nosniff, no-store, and Referrer-Policy, and Host/Origin are validated against the server's own loopback authority. The accept loop is capped at MAX_CONNECTIONS with an RAII permit and a non-panicking spawn, and both the request and drain paths are bounded by absolute deadlines. Verified at 7e47255: cargo fmt --check clean, cargo clippy -p engine --all-targets with zero warnings in engine/src/ui and src/cmdline.rs, cargo test --workspace --no-fail-fast passing 188 tests with 0 failures, cargo test -p engine ui:: passing 73/73 on 8 consecutive runs, and live verification against the release binary of startup, gameplay, security headers, SSE streaming and reconnection, mode exclusivity, a 5000-connection flood answered 503 with full recovery, and a dripping client cut off after 4.5s.
+<!-- SECTION:FINAL_SUMMARY:END -->
