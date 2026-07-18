@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-18 11:46'
-updated_date: '2026-07-18 18:24'
+updated_date: '2026-07-18 19:41'
 labels:
   - engine
   - search
@@ -14,6 +14,8 @@ dependencies:
   - TASK-32
 references:
   - engine/src/search.rs
+documentation:
+  - doc-3
 priority: medium
 type: bug
 ordinal: 39000
@@ -58,8 +60,31 @@ Related: TASK-34 covers separate self-play robustness defects (intermittent sear
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Trace the guaranteed first iteration, quiescence recursion, cancellation, and UCI driver shutdown paths; identify what can and cannot bound the suppressed interval.\n2. Build a release UCI binary and measure immediate-stop latency in a persistent-process harness over representative and adversarial FENs, including dense tactics, long capture sequences, and check-extension chains; repeat enough samples to report distributions and a conservative threshold.\n3. Compare the evidence with UCI prompt-stop semantics and common tournament-runner timeout margins, and determine whether TASK-29's proposed quiescence cap alone supplies a sufficient bound.\n4. Record the investigation in Backlog documentation without changing engine search/stop/UCI code. If the evidence supports keeping behavior, add only regression coverage that pins a robust bound; otherwise create well-scoped implementation ticket(s) preserving TASK-32's legal-move guarantee.\n5. Run focused verification plus the repository-required formatting, strict Clippy, and workspace tests; commit the immutable investigation target and create the In Review handoff.
+1. Trace the guaranteed first iteration, quiescence recursion, cancellation, and UCI driver shutdown paths; identify what can and cannot bound the suppressed interval.
+2. Build a release UCI binary and measure immediate-stop latency in a persistent-process harness over representative and adversarial FENs, including dense tactics, long capture sequences, and check-extension chains; repeat enough samples to report distributions and a conservative threshold.
+3. Compare the evidence with UCI prompt-stop semantics and common tournament-runner timeout margins, and determine whether TASK-29's proposed quiescence cap alone supplies a sufficient bound.
+4. Record the investigation in Backlog documentation without changing engine search/stop/UCI code. If the evidence supports keeping behavior, add only regression coverage that pins a robust bound; otherwise create well-scoped implementation ticket(s) preserving TASK-32's legal-move guarantee.
+5. Run focused verification plus the repository-required formatting, strict Clippy, and workspace tests; commit the immutable investigation target and create the In Review handoff.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Investigation completed without engine search/stop/UCI-I/O changes.
+
+Added reproducible release-UCI probe tools/task39_stop_probe.rb and recorded full reasoning, corpus, measurements, 100 ms diagnostic threshold, TASK-29 interaction, and quit/EOF teardown analysis in doc-3.
+
+Evidence: 10 positions x 1,000 warmed immediate-stop samples (10,000 total) on Apple M3 Pro. Worst steady-state sample 1.069 ms; an earlier warm-transition run produced a retained 5.897 ms outlier. Fifty separate warmed-handshake go+quit processes on Kiwipete: median 0.887 ms, p95 1.247 ms, max 4.102 ms. All non-terminal cases returned legal moves.
+
+Decision: observed behavior is acceptable, but the uncapped quiescence check-evasion tree does not provide a practically small worst-case bound. A timing-only regression would not pin the structural risk, so none was added. TASK-29 must bound the separate time-deadline overrun. Created TASK-45 to record a legal root fallback and then honor explicit cancellation during depth 1, preserving TASK-32/TASK-37's legal-bestmove guarantee.
+
+Verification completed:
+- ruby -c tools/task39_stop_probe.rb: Syntax OK
+- Fresh probe smoke (100 samples x 10 positions): 1,000/1,000 legal non-null bestmoves
+- cargo fmt --check: clean
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean
+- cargo test --workspace: passed (core 35; engine 159 passed/1 ignored; metadata 5; doc tests passed)
+<!-- SECTION:NOTES:END -->
 
 ## Comments
 
