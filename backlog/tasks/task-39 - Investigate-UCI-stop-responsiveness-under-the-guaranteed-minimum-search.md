@@ -1,11 +1,11 @@
 ---
 id: TASK-39
 title: Investigate UCI stop responsiveness under the guaranteed-minimum search
-status: In Review
+status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-18 11:46'
-updated_date: '2026-07-18 21:24'
+updated_date: '2026-07-18 21:50'
 labels:
   - engine
   - search
@@ -49,12 +49,12 @@ Related: TASK-34 covers separate self-play robustness defects (intermittent sear
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 This ticket produces investigation findings, not engine fixes: no changes to engine search/stop/UCI-I/O code land under it
-- [ ] #2 The worst-case duration of the abort-suppressed window is characterized with evidence, including adversarial positions selected to maximize ply-1 quiescence work, and the measurements and the reasoning about the code path are both recorded
-- [ ] #3 A documented judgement is recorded on whether that worst case is acceptable against UCI 'stop' expectations and real tournament runner timeouts, naming the threshold used
-- [ ] #4 The interaction with TASK-29 (quiescence check-extension ply cap) is determined and recorded, including whether that cap alone would bound this window sufficiently
-- [ ] #5 Whether 'quit' and process shutdown share the suppressed window, and any resulting teardown delay, is established and recorded
-- [ ] #6 The outcome is either a recorded justification for keeping current behavior plus a regression test pinning the bound, or one or more fresh well-scoped implementation tickets that spec the fix with their own acceptance criteria and preserve the TASK-32 guarantee that a legal move is always returned
+- [x] #1 This ticket produces investigation findings, not engine fixes: no changes to engine search/stop/UCI-I/O code land under it
+- [x] #2 The worst-case duration of the abort-suppressed window is characterized with evidence, including adversarial positions selected to maximize ply-1 quiescence work, and the measurements and the reasoning about the code path are both recorded
+- [x] #3 A documented judgement is recorded on whether that worst case is acceptable against UCI 'stop' expectations and real tournament runner timeouts, naming the threshold used
+- [x] #4 The interaction with TASK-29 (quiescence check-extension ply cap) is determined and recorded, including whether that cap alone would bound this window sufficiently
+- [x] #5 Whether 'quit' and process shutdown share the suppressed window, and any resulting teardown delay, is established and recorded
+- [x] #6 The outcome is either a recorded justification for keeping current behavior plus a regression test pinning the bound, or one or more fresh well-scoped implementation tickets that spec the fix with their own acceptance criteria and preserve the TASK-32 guarantee that a legal move is always returned
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -238,4 +238,60 @@ Verification:
 - TASK-45 review against doc-3 and REV-2-01: rationale and AC #5 now explicitly state TASK-29 does not bound capture/promotion interleaving or the total depth-1 quiescence tree
 Known failures: none
 ---
+
+author: @codex
+created: 2026-07-18 21:50
+---
+Review attempt: 3
+Reviewed branch: task-39-stop-responsiveness
+Reviewed implementation: 60107a2c009974cdd7fea64a691513ff79d5f00a
+Verdict: approved
+
+REV-2-01 confirmed resolved. TASK-45 was revised through the Backlog CLI and no longer assigns TASK-29 responsibility for bounding depth-1 quiescence work. Its description now states that TASK-29 may cap check extensions on its own merits but does not bound capture/promotion interleaving or the total depth-1 quiescence tree, and AC #5 keeps the unchanged time-deadline requirement without that claim. This matches doc-3's 'Interaction with TASK-29' section and TASK-29 comments #2/#3. REV-1-01 remains resolved by engine/examples/task39_qtree.rs.
+
+Model fidelity independently verified against engine/src/search.rs, since all structural conclusions rest on it:
+- quiesce Step 1 terminations are exactly in_threefold() || half_move_clock() >= 50 (search.rs:821). Model matches.
+- in-check q-nodes divert to quiesce_evasions with All/Legal moves before the OrderedMoves loop (search.rs:891-894), and quiesce_evasions recurses into quiesce for every legal evasion (search.rs:932-948). Model matches.
+- non-check q-nodes expand QueenPromotions + Captures via QMoveLoader (search.rs:1162-1170); load_quiets is gated on in_check() and is unreachable from quiesce as the doc states. Model matches.
+- quiesce carries no ply argument and no ply cap, confirming the 'structurally unbounded' claim rather than merely asserting it.
+- iterative_deepening starts at d=1 and sets min_search_complete only after the first iteration (search.rs:445-468); stopping() returns false while it is false, suppressing both the cancellation flag and stop_time (search.rs:765-780). Confirms the window cannot widen with requested depth.
+The model omits only stand-pat, TT cutoff and alpha-beta, which prune, so the sound-upper-bound framing is correct.
+
+AC#5 verified in engine/src/engine.rs: Quit, EOF and input errors all call stop_search before breaking the driver loop, and stop_search calls cancel then finish_search, which blocks in SearchHandle::wait. Teardown therefore shares the suppressed interval as recorded.
+
+AC#1 verified: git diff --name-only 9c4cc18 60107a2 -- engine/src src core/src is empty. The only Rust addition is an example target, which is investigation tooling and does not link into engine hot paths.
+
+Verification:
+- cargo fmt --check: passed
+- cargo clippy --workspace --all-targets --all-features -- -D warnings with a clean CARGO_TARGET_DIR: passed, no warnings
+- cargo test --workspace: passed (core 35; engine 159 passed/1 ignored; seaborg 0; metadata 5; doc-tests core 1, engine 0; 0 failed)
+- cargo run --release -p engine --example task39_qtree -- corpus 20000000: reproduced doc-3's named-corpus table row for row, including capture_chain 26,132,625 and the six adv_* batteries at chain 1
+- cargo run --release -p engine --example task39_qtree -- wac 2000000: reproduced exactly, 300 positions, 201 truncated, max chain 4, histogram 2/24/38/216/20, and the same worst-five WAC.022/263/070/093/114 plus WAC.104 at chain 4
+- ruby tools/task39_stop_probe.rb target/release/seaborg 100 and 200: 1,600 and 3,200 samples over 16 positions, zero null bestmoves, overall max 0.962 ms, well inside the recorded 100 ms threshold
+- Immutability: 60107a2 is an ancestor of the tip; the only later commit 15034c7 touches solely the TASK-39 task file
+
+Benchmarks were not run and are not required: the base-to-target diff changes no engine/src, core/src or src/ file, so move generation and search hot paths are untouched.
+
+Non-blocking observations, recorded for the record and not requiring rework:
+1. tools/task39_stop_probe.rb:30 comments that chain 4 is the 'Highest quiet check-evasion chain (4) observed anywhere in the model sweep'. Four is the WAC maximum; the random sweep found two positions at 5, as doc-3 and TASK-29 comment #3 correctly record. The stale wording is confined to a tool comment and does not affect any conclusion, since chains cluster at 2-3 either way.
+2. The probe verifies bestmoves are non-null but does not machine-check their legality against the position; legality is asserted from inspection. The engine's own test suite covers the legal-move guarantee, so this does not weaken the outcome.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Investigated UCI stop responsiveness under the TASK-32 abort-suppressed window without changing engine search/stop/UCI-I/O code.
+
+Finding: the window is empirically small but structurally unbounded, and the two facts have different causes. Measured stop-to-bestmove latency stayed under 6 ms across 16,000 samples on 16 positions, but that smallness comes from stand-pat/TT/alpha-beta pruning, not from any bound in the suppression logic: the ply-1 quiescence tree is reachable to at least 55 ply and past 20 million nodes.
+
+Evidence: engine/examples/task39_qtree.rs, an offline reachability model that replicates quiesce/quiesce_evasions move selection and omits only pruning, so it is a sound upper bound. Run over four corpora (5,000-position random sweep, 300-position WAC suite, 16-position named corpus, six purpose-built check batteries) plus tools/task39_stop_probe.rb for latency. Threshold recorded: 100 ms, a project judgement, passed by more than an order of magnitude.
+
+AC#4 answer: a quiescence check-extension ply cap alone does NOT bound this window. Quiet check chains never exceeded 5 and cluster at 2-3, so a cap would almost never bind; the large trees come from capture/promotion interleaving that resets the halfmove clock. Recorded on TASK-29.
+
+AC#5: quit, stdin EOF and replacement go all route through stop_search -> cancel -> finish_search -> SearchHandle::wait, so they share the suppressed interval; teardown waits for depth 1 plus quiescence.
+
+Outcome: no timing regression test (it would pin this hardware and corpus while the adversarial failure mode stayed open). TASK-45 created to record a legal root fallback and then honor explicit cancellation during depth 1, preserving the TASK-32/TASK-37 legal-bestmove guarantee by construction.
+
+Verified independently at 60107a2c009974cdd7fea64a691513ff79d5f00a: cargo fmt --check, fresh-CARGO_TARGET_DIR cargo clippy --workspace --all-targets --all-features -- -D warnings, and cargo test --workspace (core 35; engine 159 passed/1 ignored; metadata 5; doc tests) all clean; qtree corpus and wac runs reproduced doc-3's tables exactly; 1,600 probe samples over 16 positions returned zero null bestmoves at max 0.962 ms.
+<!-- SECTION:FINAL_SUMMARY:END -->
