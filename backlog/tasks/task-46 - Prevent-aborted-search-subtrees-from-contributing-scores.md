@@ -1,11 +1,11 @@
 ---
 id: TASK-46
 title: Prevent aborted search subtrees from contributing scores
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-18 18:29'
-updated_date: '2026-07-18 23:05'
+updated_date: '2026-07-18 23:07'
 labels: []
 dependencies: []
 references:
@@ -52,6 +52,8 @@ TODO site: engine/src/search.rs:815 (is this robust?).
 Implemented explicit `Option<Score>` node outcomes across main search, razoring, quiescence, and check-evasion recursion. Aborted children unwind only after restoring the position and cannot update alpha, best move, PV, or ancestor TT entries. Iterative deepening now restores the prior completed PV when a candidate iteration aborts. Added a deterministic node-threshold regression that aborts within the depth-two subtree and verifies the depth-one result/PV/root TT entry remain authoritative.
 
 Resolved REV-1-01: changed the deterministic abort threshold to the reviewer-proven pre-fix failure point and now compare the complete restored PV, not only its first move. The threshold fires on entry to the candidate depth-two search after depth one has fully completed.
+
+Resolved REV-2-01: the iterative regression now aborts at completed-depth-one nodes + 2, which is the first recursive child of the depth-two root, and uses a 16 MiB TT. Added direct node-level coverage proving the aborted child returns None, restores the root move, contributes no PV move, and leaves the ancestor TT slot empty. On base e301527 the corresponding node API returns the plausible Score::zero() instead of an unusable outcome.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -289,5 +291,30 @@ Verification (on 08d38b9):
 - cargo test --workspace: passed (203 passed, 1 ignored)
 - instrumented probe of the abort point on target: depth2_nodes=1 (abort at iteration root, not mid-subtree)
 - grafted test on base e301527: fails only on the PV assertion; result and TT assertions pass on unfixed base
+---
+
+author: @codex
+created: 2026-07-18 23:07
+---
+Resolved REV-2-01: the abort now fires after the depth-two root makes its first move and enters the child (exactly two candidate-iteration nodes). Direct coverage asserts None propagation, position restoration, no PV move, and no root TT write; iterative coverage asserts the returned bestmove and full PV remain from depth one.
+---
+
+author: @codex
+created: 2026-07-18 23:07
+---
+Implementation handoff
+Branch: task-46-aborted-search-subtrees
+Worktree: /Users/seabo/seaborg-worktrees/task-46-aborted-search-subtrees
+Base: e30152795f22a10d8a50fc028dedf1dbb3567d90
+Implementation target: 043d75f6bb010689887a37d916928dc941811471
+Resolved findings: REV-1-01, REV-2-01
+Verification:
+- cargo fmt --check: passed
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: passed
+- cargo test --workspace: passed (203 passed, 1 ignored)
+- cargo test -p engine mid_subtree_abort_keeps_the_last_completed_iteration: passed
+- cargo test -p engine aborted_child_cannot_score_or_write_its_parent: passed
+- base e301527 code-path comparison: aborted node returns Score::zero() rather than None, so the direct outcome assertion discriminates the fix
+Known failures: none
 ---
 <!-- COMMENTS:END -->
