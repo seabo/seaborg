@@ -41,8 +41,21 @@ target, not only the latest fix. Check:
 - Correctness, regressions, failure behavior, concurrency, cancellation,
   resource ownership, protocol compatibility, and public API contracts.
 - Negative and boundary-case tests, not merely code presence.
-- Repository-required formatting, tests, and focused verification.
+- Repository-required formatting, linting, tests, and focused verification.
 - Scope discipline and accidental unrelated changes.
+
+Run the repository-required checks yourself on the implementation target rather
+than trusting the handoff: `cargo fmt --check`,
+`cargo clippy --workspace --all-targets --all-features -- -D warnings`, and
+`cargo test --workspace`. Strict Clippy is a gate, not advisory: outstanding
+warnings are a blocking finding, exactly as a failing test is. Cargo caches lint
+results, so a fast clean run can reflect a prior build; when Clippy conformance
+is load-bearing for the verdict, confirm it with a clean `CARGO_TARGET_DIR`.
+
+Check any `#[allow]` the diff adds: each must be local and carry a comment
+explaining why the warned construct is required. A broad or undocumented
+allowance that merely silences the gate is a blocking finding. Distinguish
+allowances the diff introduces from those already present at the base commit.
 
 When the diff may affect move generation or search hot paths, run the speed
 benchmarks and compare against `BENCHMARKS.md`. Because that baseline is locked

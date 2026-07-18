@@ -38,11 +38,21 @@ Perform the land from the primary worktree, against the live primary tip:
 2. Create a non-fast-forward merge commit `M` of the approved target into `T`.
    The approved SHA stays intact as a parent; `M` is the integrated artifact
    that gets verified. On a textual conflict, abort the merge and eject (below).
-3. Run the repository-required checks on `M`. When the diff may affect move
-   generation or search hot paths, also run `cargo bench --bench perft --bench
-   movegen` on `M` and compare relatively against the recorded base per
-   `BENCHMARKS.md`. A repeatable regression beyond its thresholds is a failing
-   result; differences within Criterion's confidence interval are noise.
+3. Run the repository-required checks on `M`: `cargo fmt --check`,
+   `cargo clippy --workspace --all-targets --all-features -- -D warnings`, and
+   `cargo test --workspace`. Strict Clippy is a gate, not advisory: warnings on
+   `M` are a failing integrated result and eject the task, exactly as a failing
+   test does. Verify Clippy on the merge commit specifically even when both
+   parents were clean — a textually clean merge can still produce new warnings,
+   for example when one side adds a caller for code the other side changed.
+   Cargo caches lint results across the trial merges of a retry loop, so
+   confirm the run reflects `M` rather than a previous tip.
+
+   When the diff may affect move generation or search hot paths, also run
+   `cargo bench --bench perft --bench movegen` on `M` and compare relatively
+   against the recorded base per `BENCHMARKS.md`. A repeatable regression beyond
+   its thresholds is a failing result; differences within Criterion's confidence
+   interval are noise.
 4. Re-read the primary tip. **If it still equals `T`**, advance primary to `M`.
    **If it moved**, discard `M` and restart from step 1 against the new tip; the
    verification against a stale tip is void.

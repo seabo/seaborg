@@ -58,7 +58,19 @@ Preserve unrelated changes. Do not edit the task's copy on the primary branch.
 
 1. Read `backlog instructions task-finalization` for evidence requirements, but
    leave acceptance checks and the final summary to the independent reviewer.
-2. Run repository-required checks and focused tests.
+2. Run the repository-required checks and focused tests. The required checks are
+   `cargo fmt --check`,
+   `cargo clippy --workspace --all-targets --all-features -- -D warnings`, and
+   `cargo test --workspace`. Strict Clippy is a gate, not advisory: a warning
+   fails the handoff exactly as a test failure does. Never hand a branch to
+   review with Clippy warnings outstanding, and record each check's result in
+   the handoff `Verification` block.
+
+   Fix warnings at the source rather than suppressing them. Use a local
+   `#[allow]` only where the warned construct is genuinely required, with a
+   comment stating why. If a warning is pre-existing and genuinely outside the
+   task's scope, say so explicitly under `Known failures` with evidence that it
+   reproduces at the base commit; do not silently leave it for the reviewer.
 3. Commit all task-scoped implementation changes. The resulting clean commit is
    the immutable implementation target.
 4. Append concise implementation notes and a handoff comment:

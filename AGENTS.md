@@ -2,8 +2,13 @@
 
 Seaborg is a Rust workspace for a chess engine and UCI executable.
 
-For Rust changes, run `cargo fmt --check` and `cargo test --workspace` before
-finishing.
+For Rust changes, run `cargo fmt --check`,
+`cargo clippy --workspace --all-targets --all-features -- -D warnings`, and
+`cargo test --workspace` before finishing. These three are the
+repository-required checks; strict Clippy is a gate, not advisory, so a warning
+fails the change exactly as a test failure does. Fix warnings at the source.
+Use a local `#[allow]` only where the warned construct is genuinely required,
+with a comment stating why.
 
 ## Task lifecycle
 
