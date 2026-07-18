@@ -1,11 +1,11 @@
 ---
 id: TASK-49
 title: Correct static exchange evaluation for pawn promotions
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-18 18:30'
-updated_date: '2026-07-18 21:23'
+updated_date: '2026-07-18 21:25'
 labels: []
 dependencies: []
 references:
@@ -158,5 +158,22 @@ Verification:
 - cargo test --workspace: pass (35 core; 159 engine passed, 1 ignored; 5 integration; 1 doc)
 - focused inspection of `2rr4/1P6/...` promotion-recapture row: fail, expected 400 but asserted/returned 1300
 - cargo bench --bench perft --bench movegen on target and base: no actionable patch signal; these benchmarks do not execute SEE, and sequential runs showed thermal/order variance
+---
+
+author: @codex
+created: 2026-07-18 21:25
+---
+Implementation handoff
+Branch: task-49-see-promotions
+Worktree: /Users/seabo/seaborg-worktrees/task-49-see-promotions
+Base: 5b592ebb9f71569007022cff33b03c747484badd
+Implementation target: 8f7ff249216ccb2f186ab1d2aeef907b984a6865
+Resolved findings: REV-1-01
+Verification:
+- cargo test -p engine see::tests::it_works: pass (1 passed)
+- cargo fmt --check: pass (clean)
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (no warnings)
+- cargo test --workspace: pass (35 core; 159 engine passed, 1 ignored; 5 integration; 1 doc)
+Known failures: none
 ---
 <!-- COMMENTS:END -->
