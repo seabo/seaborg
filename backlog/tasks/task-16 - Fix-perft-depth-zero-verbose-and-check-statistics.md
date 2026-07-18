@@ -1,11 +1,11 @@
 ---
 id: TASK-16
 title: 'Fix perft depth-zero, verbose, and check statistics'
-status: Ready to Merge
+status: Done
 assignee:
   - '@george'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-18 00:45'
+updated_date: '2026-07-18 00:52'
 labels:
   - perft
   - cli
