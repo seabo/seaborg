@@ -343,6 +343,20 @@ mod tests {
     use super::*;
     use core::init::init_globals;
 
+    /// A reference perft row: fen, depth, nodes, captures, en passant, castles,
+    /// promotions, checks, checkmates.
+    type PerftCase = (
+        &'static str,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+    );
+
     fn setup() {
         init_globals();
     }
@@ -390,8 +404,7 @@ mod tests {
     fn perft_detailed_statistics() {
         setup();
 
-        // (fen, depth, nodes, captures, en_passant, castles, promotions, checks, checkmates)
-        let cases: [(&str, usize, usize, usize, usize, usize, usize, usize, usize); 3] = [
+        let cases: [PerftCase; 3] = [
             (START_POSITION, 3, 8_902, 34, 0, 0, 0, 12, 0),
             ("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1", 2, 2_039, 351, 1, 91, 0, 3, 0),
             ("r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1", 3, 9_467, 1_021, 4, 0, 120, 38, 22),

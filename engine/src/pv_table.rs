@@ -7,8 +7,8 @@
 //!
 //! For future reference, possible enhancements are:
 //! * Use linked-lists, and only ever swap pointers around as the PV builds up. It should be
-//! possible to accomplish this but the code is gnarly. In theory, it should knock out loads of
-//! copies and make things much faster, but as above, it might not make an overall difference.
+//!   possible to accomplish this but the code is gnarly. In theory, it should knock out loads of
+//!   copies and make things much faster, but as above, it might not make an overall difference.
 //!
 //! PV tables are often not used when the search uses a transpostion table, since the principal
 //! variation can usually be recovered by inspecting this directly as needed.

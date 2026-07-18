@@ -18,10 +18,10 @@ use std::ops::{Add, Neg, Sub};
 /// * -10_000 - 10_000 -> centipawn evaluations
 /// * 20_000 - 20_100 -> positive mate-in-N (i.e. the player to move is mating the opponent)
 ///   * 20_100 represents mate-in-0, 20_099 represents mate-in-1 etc. This is so that shorter depth
-///   to mate is better.
+///     to mate is better.
 /// * -20_100 - -20_000 -> negative mate-in-N (i.e. the player to move is being mated)
 ///   * -20_100 represents mate-in-0, -20_099 represents mate-in-1 etc. This is so that longer depth
-///   to mate is better.
+///     to mate is better.
 /// * -30_000 -> negative infinity
 /// * 30_000 -> positive infinity
 #[derive(Copy, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]

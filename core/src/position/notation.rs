@@ -34,18 +34,14 @@ impl MoveDetails {
     /// Test whether the passed `Move` matches.
     pub fn matches(&self, pos: &Position, mov: Move) -> bool {
         if self.to_square.is_none() {
-            if self.is_ks_castle
-                && mov.move_type().contains(MoveType::CASTLE)
-                && mov.dest().0 > mov.orig().0
-            {
-                return true;
-            } else if self.is_qs_castle
-                && mov.move_type().contains(MoveType::CASTLE)
-                && mov.dest().0 < mov.orig().0
-            {
-                return true;
-            }
-            return false;
+            // A castle is notated without a destination square, so match on the
+            // direction the king travels: king-side moves towards the h-file
+            // (increasing index), queen-side towards the a-file.
+            let is_castle = mov.move_type().contains(MoveType::CASTLE);
+            let king_side = self.is_ks_castle && mov.dest().0 > mov.orig().0;
+            let queen_side = self.is_qs_castle && mov.dest().0 < mov.orig().0;
+
+            return is_castle && (king_side || queen_side);
         }
 
         if !(self.to_square.unwrap() == mov.dest()) {
@@ -394,17 +390,11 @@ impl<'a> SanParser<'a> {
     }
 
     fn is_file(c: &str) -> bool {
-        match c {
-            "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" => true,
-            _ => false,
-        }
+        matches!(c, "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h")
     }
 
     fn is_rank(c: &str) -> bool {
-        match c {
-            "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" => true,
-            _ => false,
-        }
+        matches!(c, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8")
     }
 }
 

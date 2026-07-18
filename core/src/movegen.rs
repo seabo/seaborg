@@ -1,7 +1,7 @@
 use crate::bb::Bitboard;
 use crate::mono_traits::{
-    All, Bishop, Black, Captures, Generate, King, Knight, Legal, Legality, Pawn, PieceTrait,
-    Promotions, Queen, QueenPromotions, Quiets, Rook, Side, White,
+    All, Bishop, Black, Captures, Generate, King, Knight, Legality, Pawn, PieceTrait, Promotions,
+    Queen, QueenPromotions, Quiets, Rook, Side, White,
 };
 use crate::mov::{Move, MoveType};
 use crate::movelist::MoveList;
@@ -73,7 +73,7 @@ impl MoveGen {
     /// means that the move may leave the king in check. Use this to determine if a move retrieved
     /// from transposition table or killer tables etc. are actually valid for the position.
     pub fn valid_move(position: &Position, mov: &Move) -> bool {
-        InnerMoveGen::<DummyMoveList>::valid_move::<All, Legal>(position, mov, &mut DummyMoveList)
+        InnerMoveGen::<DummyMoveList>::valid_move::<All>(position, mov, &mut DummyMoveList)
     }
 }
 
@@ -105,27 +105,23 @@ impl MoveList for DummyMoveList {
 impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
     /// Determine whether the passed move is a valid pseudolegal move in the given position.
     #[inline]
-    fn valid_move<G: Generate, L: Legality>(
-        position: &'a Position,
-        mov: &'a Move,
-        movelist: &mut MP,
-    ) -> bool {
+    fn valid_move<G: Generate>(position: &'a Position, mov: &'a Move, movelist: &mut MP) -> bool {
         if !mov.orig().is_okay() || !mov.dest().is_okay() {
             return false;
         }
 
         match position.turn() {
             Player::WHITE => {
-                InnerMoveGen::<MP>::valid_move_helper::<G, L, White>(position, mov, movelist)
+                InnerMoveGen::<MP>::valid_move_helper::<G, White>(position, mov, movelist)
             }
             Player::BLACK => {
-                InnerMoveGen::<MP>::valid_move_helper::<G, L, Black>(position, mov, movelist)
+                InnerMoveGen::<MP>::valid_move_helper::<G, Black>(position, mov, movelist)
             }
         }
     }
 
     #[inline]
-    fn valid_move_helper<G: Generate, L: Legality, PL: Side>(
+    fn valid_move_helper<G: Generate, PL: Side>(
         position: &'a Position,
         mov: &'a Move,
         movelist: &'a mut MP,
@@ -166,23 +162,23 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
 
             return match piece.type_of() {
                 PieceType::None => false,
-                PieceType::Pawn => movegen.valid_evasion::<G, PL, L, Pawn>(dest_bb, orig),
-                PieceType::Rook => movegen.valid_evasion::<G, PL, L, Rook>(dest_bb, orig),
-                PieceType::Knight => movegen.valid_evasion::<G, PL, L, Knight>(dest_bb, orig),
-                PieceType::Bishop => movegen.valid_evasion::<G, PL, L, Bishop>(dest_bb, orig),
-                PieceType::Queen => movegen.valid_evasion::<G, PL, L, Queen>(dest_bb, orig),
-                PieceType::King => movegen.valid_evasion::<G, PL, L, King>(dest_bb, orig),
+                PieceType::Pawn => movegen.valid_evasion::<G, PL, Pawn>(dest_bb, orig),
+                PieceType::Rook => movegen.valid_evasion::<G, PL, Rook>(dest_bb, orig),
+                PieceType::Knight => movegen.valid_evasion::<G, PL, Knight>(dest_bb, orig),
+                PieceType::Bishop => movegen.valid_evasion::<G, PL, Bishop>(dest_bb, orig),
+                PieceType::Queen => movegen.valid_evasion::<G, PL, Queen>(dest_bb, orig),
+                PieceType::King => movegen.valid_evasion::<G, PL, King>(dest_bb, orig),
             };
         }
 
         match piece.type_of() {
             PieceType::None => false,
-            PieceType::Pawn => movegen.valid_pawn_move::<G, PL, L>(dest_bb, orig.to_bb()),
-            PieceType::Rook => movegen.valid_move_per_piece::<G, PL, Rook, L>(dest_bb, orig),
-            PieceType::Knight => movegen.valid_move_per_piece::<G, PL, Knight, L>(dest_bb, orig),
-            PieceType::Bishop => movegen.valid_move_per_piece::<G, PL, Bishop, L>(dest_bb, orig),
-            PieceType::Queen => movegen.valid_move_per_piece::<G, PL, Queen, L>(dest_bb, orig),
-            PieceType::King => movegen.valid_move_per_piece::<G, PL, King, L>(dest_bb, orig),
+            PieceType::Pawn => movegen.valid_pawn_move::<G, PL>(dest_bb, orig.to_bb()),
+            PieceType::Rook => movegen.valid_move_per_piece::<G, PL, Rook>(dest_bb, orig),
+            PieceType::Knight => movegen.valid_move_per_piece::<G, PL, Knight>(dest_bb, orig),
+            PieceType::Bishop => movegen.valid_move_per_piece::<G, PL, Bishop>(dest_bb, orig),
+            PieceType::Queen => movegen.valid_move_per_piece::<G, PL, Queen>(dest_bb, orig),
+            PieceType::King => movegen.valid_move_per_piece::<G, PL, King>(dest_bb, orig),
         }
     }
 
@@ -349,7 +345,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
     }
 
     #[inline(always)]
-    fn valid_evasion<G: Generate, PL: Side, L: Legality, P: PieceTrait>(
+    fn valid_evasion<G: Generate, PL: Side, P: PieceTrait>(
         &mut self,
         target: Bitboard,
         orig: Square,
@@ -396,12 +392,12 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
 
                 return match P::kind() {
                     PieceType::None => unreachable!(), // checked for this earlier
-                    PieceType::Pawn => self.valid_pawn_move::<G, PL, L>(tgt, orig.to_bb()),
-                    PieceType::Rook => self.valid_move_per_piece::<G, PL, Rook, L>(tgt, orig),
-                    PieceType::Knight => self.valid_move_per_piece::<G, PL, Knight, L>(tgt, orig),
-                    PieceType::Bishop => self.valid_move_per_piece::<G, PL, Bishop, L>(tgt, orig),
-                    PieceType::Queen => self.valid_move_per_piece::<G, PL, Queen, L>(tgt, orig),
-                    PieceType::King => self.valid_move_per_piece::<G, PL, King, L>(tgt, orig),
+                    PieceType::Pawn => self.valid_pawn_move::<G, PL>(tgt, orig.to_bb()),
+                    PieceType::Rook => self.valid_move_per_piece::<G, PL, Rook>(tgt, orig),
+                    PieceType::Knight => self.valid_move_per_piece::<G, PL, Knight>(tgt, orig),
+                    PieceType::Bishop => self.valid_move_per_piece::<G, PL, Bishop>(tgt, orig),
+                    PieceType::Queen => self.valid_move_per_piece::<G, PL, Queen>(tgt, orig),
+                    PieceType::King => self.valid_move_per_piece::<G, PL, King>(tgt, orig),
                 };
             }
         }
@@ -438,7 +434,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
     }
 
     #[inline(always)]
-    fn valid_move_per_piece<G: Generate, PL: Side, P: PieceTrait, L: Legality>(
+    fn valid_move_per_piece<G: Generate, PL: Side, P: PieceTrait>(
         &mut self,
         target: Bitboard,
         orig: Square,
@@ -571,11 +567,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
     }
 
     #[inline(always)]
-    fn valid_pawn_move<G: Generate, PL: Side, L: Legality>(
-        &mut self,
-        target: Bitboard,
-        orig: Bitboard,
-    ) -> bool {
+    fn valid_pawn_move<G: Generate, PL: Side>(&mut self, target: Bitboard, orig: Bitboard) -> bool {
         let (rank_7, rank_3): (Bitboard, Bitboard) = if PL::player() == Player::WHITE {
             (Bitboard::RANK_7, Bitboard::RANK_3)
         } else {
@@ -834,6 +826,7 @@ pub fn queen_moves(occupied: Bitboard, sq: Square) -> Bitboard {
 mod tests {
     use super::*;
     use crate::init::init_globals;
+    use crate::mono_traits::Legal;
     use crate::movelist::BasicMoveList;
     use crate::position::Position;
 

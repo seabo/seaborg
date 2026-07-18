@@ -1,4 +1,8 @@
-/// Traits to allow for compile-time monomorphization of functions like movegen.
+//! Traits to allow for compile-time monomorphization of functions like movegen.
+
+use crate::bb::Bitboard;
+use crate::movegen::{Generation, LegalityKind};
+use crate::position::{PieceType, Player, Square};
 
 /// Defines a player, allowing for specific functions in relation to a certain
 /// player. This trait is applied to dummy structs `WhiteType` and `BlackType`
@@ -6,10 +10,6 @@
 /// monomorphizes these functions over the two types of player and we get better
 /// code reuse. We also inline all the functions in the implementation for speed
 /// in the compiled monomorphized code.
-use crate::bb::Bitboard;
-use crate::movegen::{Generation, LegalityKind};
-use crate::position::{PieceType, Player, Square};
-
 pub trait Side {
     /// Return the current `Player`.
     fn player() -> Player;

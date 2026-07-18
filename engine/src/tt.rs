@@ -451,7 +451,7 @@ impl Table {
 /// We can have three outcomes:
 /// * A `Hit`. We found the position we wanted (module hash collisions).
 /// * A `Clash`. We found a different position sharing the same hash table location. This is
-/// returned in case the caller would like to replace it with the result of a more recent search.
+///   returned in case the caller would like to replace it with the result of a more recent search.
 /// * `Empty`. The entry was empty, and can be written to.
 pub enum Probe<'a> {
     /// Represents finding the exact position we wanted. Note that this may still actually not be a
@@ -480,11 +480,7 @@ impl<'a> Probe<'a> {
 
     #[inline(always)]
     pub fn is_hit(&self) -> bool {
-        use Probe::*;
-        match self {
-            Hit(_) => true,
-            _ => false,
-        }
+        matches!(self, Probe::Hit(_))
     }
 }
 
