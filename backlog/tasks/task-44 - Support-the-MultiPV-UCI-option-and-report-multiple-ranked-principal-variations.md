@@ -4,6 +4,7 @@ title: Support the MultiPV UCI option and report multiple ranked principal varia
 status: To Do
 assignee: []
 created_date: '2026-07-18 14:02'
+updated_date: '2026-07-18 14:05'
 labels:
   - engine
   - search
@@ -21,13 +22,15 @@ MultiPV is currently not implemented. The "multipv 1" field in the emitted info 
 
 MultiPV matters for analysis rather than playing strength: it lets a GUI or the local browser UI show the top K candidate moves with their scores and lines, which is also the most useful view when debugging move ordering and evaluation.
 
-An enabling property of the current search is worth recording, because it is what makes this tractable and could silently stop being true: the root is searched with beta = INF_P and mate scores are bounded well below it, so the beta-cutoff branch is unreachable at the root and every root move is already searched with a full window and an exact score. Root move ordering and per-move exact values are therefore already available; what is missing is retaining the top K of them, keeping a separate PV per line, and reporting each with its own multipv index.
+Cost note, corrected. An earlier version of this task claimed the root already produces an exact score for every root move, making MultiPV nearly free. That is wrong and should not be relied on. The root uses principal variation search: at Step 19 of engine/src/search.rs only the first root move is searched with a full window, and moves 2 and later are searched with a null window first and re-searched fully at Step 20 only when they raise alpha. A root move scoring at or below alpha therefore carries an upper bound, not an exact score. What is true, and is a weaker property, is that beta at the root is INF_P and mate scores are bounded well below it, so the beta-cutoff branch is unreachable and no root move is ever skipped by a cutoff. Every root move is visited; not every root move is exactly scored.
+
+The implementation is therefore the conventional one: run K passes over the root, each excluding the already-selected best moves and each searching with a full window, retaining a separate PV and exact score per line.
+
+Sequencing, with the rework risk assessed rather than assumed. This work is a root-level construct and is largely stable under the search improvements that are still outstanding: late move reduction, other reductions, and extensions are TODO at Steps 16 and 17 but all apply below the root and do not disturb a root exclusion loop. The one genuine interaction is aspiration windows, which narrow the root window and would require per-line alpha and beta bookkeeping; that is an adjustment to the loop rather than a rewrite. The cost of this task is therefore roughly the same before or after the pending search work, and it is filed as Low priority because it buys analysis convenience rather than playing strength, not because deferring it avoids rework.
 
 Interaction to be aware of, not a blocking dependency: TASK-43 extends a single reported PV with validated transposition-table moves. Both tasks change how PV lines are stored and reported, so whichever lands second should apply its behaviour per line rather than to a single global PV. Neither blocks the other.
 
-Sequencing note: this is an analysis convenience and sits behind the outstanding search fundamentals (reductions, extensions and late move reduction are still TODO at Steps 16 and 17 of engine/src/search.rs). It is filed as Low priority deliberately.
-
-Relevant code: engine/src/info.rs (format_search_event), engine/src/uci.rs (option advertisement and setoption parsing), engine/src/search.rs (root move loop, emit_progress), engine/src/pv_table.rs. Background: TASK-36, TASK-43, backlog doc-1.
+Relevant code: engine/src/info.rs (format_search_event), engine/src/uci.rs (option advertisement and setoption parsing), engine/src/search.rs (root move loop at Steps 19 and 20, emit_progress), engine/src/pv_table.rs. Background: TASK-36, TASK-43, backlog doc-1.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
