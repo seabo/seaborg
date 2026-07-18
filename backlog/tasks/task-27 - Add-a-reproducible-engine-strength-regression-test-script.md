@@ -1,11 +1,11 @@
 ---
 id: TASK-27
 title: Add a reproducible engine strength-regression test script
-status: Changes Requested
+status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 18:54'
-updated_date: '2026-07-18 00:47'
+updated_date: '2026-07-18 00:53'
 labels: []
 dependencies: []
 references:
@@ -58,15 +58,12 @@ The implementation should be practical on a dedicated or self-hosted machine. It
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-Pivoted the runner from cutechess-cli to FastChess (an accepted runner per the task) so the tool is genuinely runnable in local dev and validated against a real binary.
-1. Retarget build_command/parse_result/runner_version to FastChess, verified against a real FastChess v1.5.0 (1eedf82) build.
-2. Add --engine-arg (both engines; use =-form for dashes, e.g. --engine-arg=-u) so seaborg's UCI mode works, and a robust interactive uci_preflight that keeps stdin open until bestmove.
-3. Generalise --time-control to --limit (tc/st/depth/nodes); authoritative mode requires a time-based limit.
-4. Add --match-timeout so a hung runner/engine fails closed instead of hanging the tool.
-5. Replace invented cutechess fixtures with REAL captured FastChess output; guard the Illegal-PV-move false positive; add a deterministic live runner-version test against the real binary.
-6. Resolve prior findings REV-3-01/02/03 (paired colour-reversal, run() PASS coverage, dead code / reserved fields) carried into the FastChess implementation.
-7. File seaborg-side defects found during validation as TASK-32 (time-allocation null move) and TASK-34 (self-play deadlock, illegal PV, EOF null move); these are out of TASK-27 scope.
-8. Update docs, run gates, commit an immutable target, hand off.
+Rework for REV-4-01 (P2): report/docs claim engine-process restart between games, but build_command never emits FastChess restart=on (default off), so processes are reused. Chosen resolution: genuinely restart processes between games (strongest isolation, matches task's 'isolation from stale engine state between games' requirement and the existing report/docs claim).
+1. Add restart=on to the -each per-engine options in build_command so FastChess restarts each engine process between games.
+2. Keep report field restart_between_games: True (now accurate) and docs/strength-testing.md restart wording (now accurate).
+3. Add a build_command test asserting restart=on is present in the -each options.
+4. Verify: python3 unittest suite, cargo fmt --check, opening-suite checksum; confirm fastchess accepts restart=on in -each against the real binary.
+5. Record Resolved REV-4-01 and hand off a new immutable target.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
