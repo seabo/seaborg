@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reproducible cutechess SPRT strength-test orchestrator."""
+"""Reproducible FastChess SPRT strength-test orchestrator."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import json
 import math
 import os
 import re
+import select
 import shlex
 import subprocess
 import sys
@@ -21,9 +22,16 @@ PASS, FAIL, INCONCLUSIVE, INFRA_ERROR = range(4)
 VERDICT_EXIT = {"PASS": PASS, "FAIL": FAIL, "INCONCLUSIVE": INCONCLUSIVE,
                 "INFRASTRUCTURE ERROR": INFRA_ERROR}
 SUITE_SHA256 = "eca44927b4cabdaa96cb9ab24a66c54e7c7444ac1c3e28d97b4436c110c4e275"
-FAILURE_WORDS = re.compile(
-    r"(disconnect|crash|illegal move|connection stalls|time forfeit|"
-    r"lost on time|failed to start|doesn't respond|invalid result)", re.I)
+# A time-based FastChess limit (equal wall-clock for both engines). Required by
+# the authoritative mode; smoke mode may also use depth=/nodes= for speed.
+TIME_LIMIT = re.compile(r"^(tc|st)=\S+$", re.I)
+# Real game-ending failures. "makes an illegal move"/"loses on time" are the
+# FastChess result phrasings; nonzero Timeouts/Crashed appear in its per-player
+# summary. "Illegal PV move" is deliberately NOT matched: FastChess emits it as
+# a harmless warning for a bad principal-variation line while the game finishes.
+FAILURE_PATTERNS = re.compile(
+    r"(makes an illegal move|loses on time|disconnects|connection stalls|"
+    r"Timeouts:\s*[1-9]|Crashed:\s*[1-9])", re.I)
 
 
 class InfrastructureError(RuntimeError):
@@ -92,7 +100,7 @@ def parser() -> argparse.ArgumentParser:
                    help="immutable revision/build identity")
     p.add_argument("--build-settings", required=True,
                    help="exact optimized build command/flags/target")
-    p.add_argument("--runner", default="cutechess-cli")
+    p.add_argument("--runner", default="fastchess")
     p.add_argument("--openings", type=Path, default=root / "openings-v1.epd")
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--mode", choices=("authoritative", "smoke"),
@@ -102,13 +110,26 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--alpha", type=probability, default=0.05)
     p.add_argument("--beta", type=probability, default=0.05)
     p.add_argument("--max-games", type=positive, default=10000)
-    p.add_argument("--time-control", default="10+0.1")
+    p.add_argument("--limit", default="tc=10+0.1",
+                   help="FastChess resource limit applied equally to both "
+                        "engines, e.g. tc=10+0.1, st=0.5, depth=8, nodes=200000; "
+                        "authoritative mode requires a time-based limit")
     p.add_argument("--concurrency", type=positive, default=1)
     p.add_argument("--threads", type=positive, default=1)
     p.add_argument("--hash-mb", type=positive, default=64)
+    p.add_argument("--engine-arg", action="append", default=[],
+                   metavar="ARG",
+                   help="command-line argument passed identically to both "
+                        "engine executables; repeatable. Use =-prefixed form "
+                        "for dash arguments, e.g. --engine-arg=-u for seaborg "
+                        "UCI mode")
     p.add_argument("--engine-option", action="append", default=[],
                    metavar="NAME=VALUE")
     p.add_argument("--preflight-timeout", type=positive, default=10)
+    p.add_argument("--match-timeout", type=positive, default=None,
+                   help="optional wall-clock seconds after which a running match "
+                        "is aborted and reported as INFRASTRUCTURE ERROR; guards "
+                        "against a hung runner or engine")
     return p
 
 
@@ -133,6 +154,12 @@ def validate(args: argparse.Namespace) -> None:
         raise InfrastructureError("max-games must be even for paired openings")
     if args.mode == "smoke" and args.max_games > 20:
         raise InfrastructureError("smoke mode is capped at 20 games")
+    if args.mode == "authoritative" and not TIME_LIMIT.match(args.limit):
+        raise InfrastructureError(
+            "authoritative mode requires a time-based limit "
+            f"(tc=... or st=...), got {args.limit!r}")
+    if "=" not in args.limit or not args.limit.split("=", 1)[1]:
+        raise InfrastructureError(f"invalid limit: {args.limit!r}")
     for item in args.engine_option:
         if "=" not in item or not item.split("=", 1)[0]:
             raise InfrastructureError(f"invalid engine option: {item!r}")
@@ -153,21 +180,56 @@ def validate(args: argparse.Namespace) -> None:
         raise InfrastructureError(f"output path already exists: {args.output}")
 
 
-def uci_preflight(engine: Path, timeout: int) -> dict[str, str]:
+def uci_preflight(engine: Path, engine_args: Sequence[str], timeout: int) -> dict[str, str]:
+    """Drive a real UCI handshake, keeping stdin open until a move is returned.
+
+    stdin stays open until ``bestmove`` arrives so engines that abort a search
+    on EOF still produce a legal move, and the whole exchange is bounded by
+    ``timeout``.
+    """
     started = time.monotonic()
     try:
-        proc = subprocess.run(
-            [str(engine)], input="uci\nisready\nucinewgame\nposition startpos\ngo depth 1\nquit\n",
-            text=True, capture_output=True, timeout=timeout, check=False)
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        proc = subprocess.Popen(
+            [str(engine), *engine_args], stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    except OSError as exc:
         raise InfrastructureError(f"UCI preflight failed for {engine}: {exc}") from exc
-    output = proc.stdout
-    if proc.returncode != 0 or "uciok" not in output or "readyok" not in output:
+    collected: list[str] = []
+    bestmove: str | None = None
+    deadline = started + timeout
+    with proc:  # closes the engine's pipes on exit
+        try:
+            assert proc.stdin and proc.stdout
+            proc.stdin.write("uci\nisready\nucinewgame\nposition startpos\ngo depth 4\n")
+            proc.stdin.flush()
+            while bestmove is None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise InfrastructureError(f"UCI preflight timed out for {engine}")
+                if not select.select([proc.stdout], [], [], remaining)[0]:
+                    continue
+                line = proc.stdout.readline()
+                if not line:
+                    break
+                collected.append(line)
+                match = re.match(r"bestmove\s+(\S+)", line)
+                if match:
+                    bestmove = match.group(1)
+            try:
+                proc.stdin.write("quit\n")
+                proc.stdin.flush()
+                proc.wait(timeout=5)
+            except (BrokenPipeError, OSError, subprocess.TimeoutExpired):
+                pass
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+    output = "".join(collected)
+    if "uciok" not in output or "readyok" not in output:
         raise InfrastructureError(f"incomplete UCI handshake for {engine}")
-    moves = re.findall(r"(?m)^bestmove\s+(\S+)", output)
-    if not moves or not re.fullmatch(r"(?:[a-h][1-8]){2}[qrbn]?", moves[-1]):
+    if not bestmove or not re.fullmatch(r"(?:[a-h][1-8]){2}[qrbn]?", bestmove):
         raise InfrastructureError(f"invalid or missing preflight bestmove for {engine}")
-    return {"bestmove": moves[-1], "duration_seconds": f"{time.monotonic()-started:.3f}"}
+    return {"bestmove": bestmove, "duration_seconds": f"{time.monotonic()-started:.3f}"}
 
 
 def runner_version(runner: str) -> str:
@@ -183,45 +245,53 @@ def runner_version(runner: str) -> str:
 
 
 def build_command(args: argparse.Namespace, pgn: Path) -> list[str]:
-    common = ["proto=uci", f"tc={args.time_control}", "restart=on",
-              f"option.Hash={args.hash_mb}", f"option.Threads={args.threads}"]
-    common.extend(f"option.{item}" for item in args.engine_option)
-    return [args.runner,
-            "-engine", "name=candidate", f"cmd={args.candidate}",
-            "-engine", "name=baseline", f"cmd={args.baseline}",
-            "-each", *common,
-            # -rounds counts opening pairs; -games 2 -repeat 2 plays each
-            # opening twice with colours reversed. Total games = rounds * 2 =
-            # max_games (validated even), so cap accounting stays consistent.
-            "-tournament", "round-robin", "-rounds", str(args.max_games // 2),
-            "-games", "2", "-repeat", "2",
-            "-openings", f"file={args.openings}", "format=epd",
-            "order=sequential", "policy=round",
+    each = ["proto=uci", args.limit,
+            f"option.Hash={args.hash_mb}", f"option.Threads={args.threads}"]
+    each.extend(f"option.{item}" for item in args.engine_option)
+    engine_args = " ".join(args.engine_arg)
+    engines: list[str] = []
+    for name, path in (("candidate", args.candidate), ("baseline", args.baseline)):
+        engines += ["-engine", f"name={name}", f"cmd={path}"]
+        if engine_args:
+            engines.append(f"args={engine_args}")
+    return [args.runner, *engines, "-each", *each,
+            # -rounds counts opening pairs; -games 2 -repeat 2 plays each opening
+            # twice with colours reversed. Total games = rounds * 2 = max_games
+            # (validated even), so cap accounting stays consistent.
+            "-rounds", str(args.max_games // 2), "-games", "2", "-repeat", "2",
+            "-openings", f"file={args.openings}", "format=epd", "order=sequential",
             "-concurrency", str(args.concurrency),
             "-sprt", f"elo0={args.elo0}", f"elo1={args.elo1}",
             f"alpha={args.alpha}", f"beta={args.beta}",
-            "-ratinginterval", "1", "-outcomeinterval", "1",
-            "-pgnout", str(pgn), "fi"]
+            "-pgnout", f"file={pgn}"]
 
 
 def parse_result(output: str) -> Result:
-    if FAILURE_WORDS.search(output):
-        raise InfrastructureError("runner reported a crash, forfeit, or protocol failure")
+    if FAILURE_PATTERNS.search(output):
+        raise InfrastructureError(
+            "runner reported a crash, forfeit, illegal move, or time loss")
     scores = re.findall(
-        r"Score of candidate vs baseline:\s*(\d+)\s*-\s*(\d+)\s*-\s*(\d+)", output)
+        r"Games:\s*(\d+),\s*Wins:\s*(\d+),\s*Losses:\s*(\d+),\s*Draws:\s*(\d+)",
+        output)
     states = re.findall(
-        r"SPRT:\s*llr\s+([-+\d.eE]+).*?lbound\s+([-+\d.eE]+).*?ubound\s+([-+\d.eE]+)",
-        output, re.I)
+        r"LLR:\s*([-+\d.eE]+)\s*\([^)]*\)\s*\(\s*([-+\d.eE]+),\s*([-+\d.eE]+)\s*\)",
+        output)
     if not scores or not states:
-        raise InfrastructureError("malformed runner output: missing score or SPRT state")
-    wins, losses, draws = map(int, scores[-1])
+        raise InfrastructureError("malformed runner output: missing Games or LLR line")
+    games, wins, losses, draws = map(int, scores[-1])
     llr, lower, upper = map(float, states[-1])
     if not all(math.isfinite(v) for v in (llr, lower, upper)) or lower >= upper:
         raise InfrastructureError("malformed runner output: invalid SPRT bounds")
-    ratings = re.findall(r"candidate\s+([-+\d.]+)\s+([-+\d.]+)\s+\d+", output)
-    ptnml = re.findall(r"Ptnml\(0-2\):\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+)", output, re.I)
-    return Result(wins + draws + losses, wins, draws, losses, llr, lower, upper,
-                  *(map(float, ratings[-1]) if ratings else (None, None)),
+    if games != wins + losses + draws:
+        raise InfrastructureError("malformed runner output: game totals disagree")
+    elo = re.findall(r"Elo:\s*([-+\d.]+)\s*\+/-\s*([-+\d.]+|nan)", output, re.I)
+    ptnml = re.findall(
+        r"Ptnml\(0-2\):\s*\[(\d+),\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\]", output)
+    elo_value = float(elo[-1][0]) if elo else None
+    elo_error = None
+    if elo and elo[-1][1].lower() != "nan":
+        elo_error = float(elo[-1][1])
+    return Result(games, wins, draws, losses, llr, lower, upper, elo_value, elo_error,
                   list(map(int, ptnml[-1])) if ptnml else None,
                   runner_finished="Finished match" in output)
 
@@ -246,13 +316,15 @@ def run(argv: Sequence[str] | None = None) -> int:
         args = parser().parse_args(raw_argv)
         validate(args)
         version = runner_version(args.runner)
-        preflight = {"baseline": uci_preflight(args.baseline, args.preflight_timeout),
-                     "candidate": uci_preflight(args.candidate, args.preflight_timeout)}
+        preflight = {
+            "baseline": uci_preflight(args.baseline, args.engine_arg, args.preflight_timeout),
+            "candidate": uci_preflight(args.candidate, args.engine_arg, args.preflight_timeout)}
         # Reserve an immutable artifact directory before the expensive match.
         args.output.mkdir(parents=True, exist_ok=False)
         output_created = True
         pgn = args.output / "games.pgn"
         command = build_command(args, pgn)
+        time_based = bool(TIME_LIMIT.match(args.limit))
         report = {
             "schema_version": 1, "mode": args.mode,
             "authority": "AUTHORITATIVE" if args.mode == "authoritative" else "NON-AUTHORITATIVE",
@@ -264,17 +336,34 @@ def run(argv: Sequence[str] | None = None) -> int:
             "runner_version": version,
             "openings": {"path": str(args.openings), "sha256": sha256(args.openings),
                          "identity": "seaborg-openings-v1"},
-            "settings": {"time_control": args.time_control, "concurrency": args.concurrency,
+            "settings": {"resource_limit": args.limit,
+                         "time_control": args.limit if time_based else None,
+                         "concurrency": args.concurrency,
                          "threads_per_engine": args.threads, "hash_mb_per_engine": args.hash_mb,
-                         "engine_options": args.engine_option, "restart_between_games": True,
+                         "engine_args": args.engine_arg, "engine_options": args.engine_option,
+                         "restart_between_games": True,
                          "paired_colour_reversal": True, "max_games": args.max_games},
             "sprt": {"elo0": args.elo0, "elo1": args.elo1,
                      "alpha": args.alpha, "beta": args.beta},
             "preflight": preflight, "command": shlex.join(command),
             "artifacts": {"runner_log": "runner.log", "games_pgn": "games.pgn"},
             "verdict": "INFRASTRUCTURE ERROR"}
-        proc = subprocess.run(command, text=True, stdout=subprocess.PIPE,
-                              stderr=subprocess.STDOUT, check=False)
+        try:
+            # Run inside the artifact dir so the runner's own config dump
+            # (FastChess writes config.json to its cwd) is archived, not left
+            # in the repository.
+            proc = subprocess.run(command, text=True, stdout=subprocess.PIPE,
+                                  stderr=subprocess.STDOUT, check=False,
+                                  cwd=str(args.output), timeout=args.match_timeout)
+        except subprocess.TimeoutExpired as exc:
+            # On timeout the partial output is returned undecoded even with
+            # text=True, so it may be bytes.
+            partial = exc.output or ""
+            if isinstance(partial, bytes):
+                partial = partial.decode(errors="replace")
+            (args.output / "runner.log").write_text(partial)
+            raise InfrastructureError(
+                f"match exceeded --match-timeout of {args.match_timeout}s") from exc
         raw = proc.stdout
         (args.output / "runner.log").write_text(raw)
         result = parse_result(raw)
