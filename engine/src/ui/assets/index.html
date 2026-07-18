@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Seaborg</title>
+    <!-- Replaced with this process's session token when the page is served. -->
+    <meta name="seaborg-token" content="__SEABORG_TOKEN__" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <h1>Seaborg</h1>
+    <p id="status" role="status">Connecting…</p>
+
+    <section aria-labelledby="position-heading">
+      <h2 id="position-heading">Position</h2>
+      <dl>
+        <dt>FEN</dt>
+        <dd id="fen">—</dd>
+        <dt>Side to move</dt>
+        <dd id="side-to-move">—</dd>
+        <dt>Game</dt>
+        <dd id="game-status">—</dd>
+        <dt>Engine</dt>
+        <dd id="engine-status">—</dd>
+      </dl>
+    </section>
+
+    <section aria-labelledby="move-heading">
+      <h2 id="move-heading">Play a move</h2>
+      <form id="move-form">
+        <label for="uci">Move in UCI notation</label>
+        <input id="uci" name="uci" autocomplete="off" placeholder="e2e4" required />
+        <button type="submit">Play</button>
+      </form>
+      <p id="move-error" role="alert"></p>
+      <p>
+        <button type="button" id="undo">Undo</button>
+        <button type="button" id="new-white">New game as white</button>
+        <button type="button" id="new-black">New game as black</button>
+      </p>
+    </section>
+
+    <section aria-labelledby="history-heading">
+      <h2 id="history-heading">Moves</h2>
+      <ol id="history"></ol>
+    </section>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
