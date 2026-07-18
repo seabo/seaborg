@@ -1,10 +1,11 @@
 ---
 id: TASK-35
 title: Fix intermittent search/UCI completion deadlock (lost search-done wakeup)
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-18 01:20'
-updated_date: '2026-07-18 12:03'
+updated_date: '2026-07-18 18:27'
 labels:
   - engine
   - search
@@ -32,6 +33,18 @@ Relevant code: engine/src/engine.rs (run loop, next_event select!, finish_search
 - [ ] #3 A targeted regression test exercises the search-completion / stop / replacement path (start, complete, and cancel searches in a loop) and deterministically fails on the pre-fix code or a reintroduced lost-wakeup
 - [ ] #4 No changes to PV reconstruction or time-allocation code are made under this ticket; existing search-correctness and UCI tests still pass
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Add an explicit, dedicated completion signal to the search worker: a bounded(1) `finished` channel in SearchHandle. The worker sends on it after dropping its SearchEvent Sender and before returning, so completion no longer depends on a dropped-Sender disconnect being observed.
+2. Make the driver's next_event structurally incapable of blocking forever on a finished search: select over commands, search events, and the new finished signal, with a `default(poll)` arm that consults SearchHandle::is_finished(). The poll is a wakeup-independent backstop; the explicit signal keeps normal-path bestmove latency unchanged.
+3. Replace DriverEvent::Search(Result<..>) with explicit SearchProgress/SearchComplete variants so every completion route converges on one finish_search call site.
+4. Upgrade crossbeam-channel off the pinned 0.5.6 implicated in doc-2, as defence in depth (not the primary fix).
+5. Regression test: add a test-only SearchEngine hook that retains a clone of the worker's event Sender so the events channel can never disconnect, then drive next_event over a start/complete/cancel loop under a watchdog thread with recv_timeout. This deterministically hangs (fails) on the pre-fix code and on any reintroduced disconnect-only dependency.
+6. Validate with a self-play stress harness (fastchess, seaborg-vs-seaborg, fixed depth, concurrency>=8) on both debug and release builds, several hundred games, and record evidence.
+7. No PV or time-allocation code is touched.
+<!-- SECTION:PLAN:END -->
 
 ## Comments
 
