@@ -1,11 +1,11 @@
 ---
 id: TASK-39
 title: Investigate UCI stop responsiveness under the guaranteed-minimum search
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-18 11:46'
-updated_date: '2026-07-18 21:23'
+updated_date: '2026-07-18 21:24'
 labels:
   - engine
   - search
@@ -218,5 +218,24 @@ Verification:
 - fresh-target cargo clippy --workspace --all-targets --all-features -- -D warnings: passed
 - cargo test --workspace: passed (core 35; engine 159 passed/1 ignored; metadata 5; doc tests passed)
 - immutable target and handoff-only successor checks: passed
+---
+
+author: @codex
+created: 2026-07-18 21:24
+---
+Implementation handoff
+Branch: task-39-stop-responsiveness
+Worktree: /Users/seabo/seaborg-worktrees/task-39-stop-responsiveness
+Base: 9c4cc1896a6f9b121412bb9c5cf86b338891367d
+Implementation target: 60107a2c009974cdd7fea64a691513ff79d5f00a
+Resolved findings: REV-2-01
+Verification:
+- cargo fmt --check: clean
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean
+- cargo test --workspace: passed (core 35; engine 159 passed/1 ignored; metadata 5; doc tests passed)
+- ruby -c tools/task39_stop_probe.rb: Syntax OK
+- git diff --name-only 9c4cc1896a6f9b121412bb9c5cf86b338891367d -- engine/src src core/src: empty, so AC#1 remains satisfied
+- TASK-45 review against doc-3 and REV-2-01: rationale and AC #5 now explicitly state TASK-29 does not bound capture/promotion interleaving or the total depth-1 quiescence tree
+Known failures: none
 ---
 <!-- COMMENTS:END -->
