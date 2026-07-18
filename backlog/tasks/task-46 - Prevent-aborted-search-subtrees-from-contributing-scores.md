@@ -1,7 +1,7 @@
 ---
 id: TASK-46
 title: Prevent aborted search subtrees from contributing scores
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-18 18:29'
@@ -416,5 +416,23 @@ author: @codex
 created: 2026-07-18 23:32
 ---
 Resolved REV-3-01: the direct abort regression now uses PVTable::new(2), making its no-principal-move assertion non-vacuous and discriminating against base e301527.
+---
+
+author: @codex
+created: 2026-07-18 23:32
+---
+Implementation handoff
+Branch: task-46-aborted-search-subtrees
+Worktree: /Users/seabo/seaborg-worktrees/task-46-aborted-search-subtrees
+Base: e30152795f22a10d8a50fc028dedf1dbb3567d90
+Implementation target: 0e4c7aca6bdc4715ddcc480f42ab21458ca7e691
+Resolved findings: REV-1-01, REV-2-01, REV-3-01
+Verification:
+- cargo test -p engine aborted_child_cannot_score_or_write_its_parent: passed (1 passed)
+- cargo fmt --check: passed
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: passed
+- cargo test --workspace: passed (204 passed, 1 ignored)
+- review-attempt-3 graft on base e301527 with PVTable::new(2): failed as required
+Known failures: none
 ---
 <!-- COMMENTS:END -->
