@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-18 18:29'
-updated_date: '2026-07-18 21:51'
+updated_date: '2026-07-18 21:54'
 labels: []
 dependencies: []
 references:
@@ -44,3 +44,9 @@ TODO site: engine/src/search.rs:815 (is this robust?).
 3. Add deterministic regression coverage for a mid-subtree abort, last-completed bestmove/PV preservation, and absence of TT writes from the aborted node.
 4. Run focused tests and all repository-required formatting, strict Clippy, and workspace tests; commit implementation and record the immutable review handoff.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented explicit `Option<Score>` node outcomes across main search, razoring, quiescence, and check-evasion recursion. Aborted children unwind only after restoring the position and cannot update alpha, best move, PV, or ancestor TT entries. Iterative deepening now restores the prior completed PV when a candidate iteration aborts. Added a deterministic node-threshold regression that aborts within the depth-two subtree and verifies the depth-one result/PV/root TT entry remain authoritative.
+<!-- SECTION:NOTES:END -->
