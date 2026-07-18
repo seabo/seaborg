@@ -1,11 +1,11 @@
 ---
 id: TASK-46
 title: Prevent aborted search subtrees from contributing scores
-status: In Review
+status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-18 18:29'
-updated_date: '2026-07-18 23:32'
+updated_date: '2026-07-18 23:38'
 labels: []
 dependencies: []
 references:
@@ -31,11 +31,11 @@ TODO site: engine/src/search.rs:815 (is this robust?).
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 An abort during a subtree search cannot cause that subtree value to raise alpha or be recorded as best_move
-- [ ] #2 An abort during a subtree search cannot write an entry to the transposition table
-- [ ] #3 An abort cannot corrupt the PV reported for the last completed iteration
-- [ ] #4 A regression test drives a search to abort mid-subtree and asserts the returned bestmove matches the last fully completed iteration
-- [ ] #5 The is this robust? TODO at engine/src/search.rs:815 is resolved and removed
+- [x] #1 An abort during a subtree search cannot cause that subtree value to raise alpha or be recorded as best_move
+- [x] #2 An abort during a subtree search cannot write an entry to the transposition table
+- [x] #3 An abort cannot corrupt the PV reported for the last completed iteration
+- [x] #4 A regression test drives a search to abort mid-subtree and asserts the returned bestmove matches the last fully completed iteration
+- [x] #5 The is this robust? TODO at engine/src/search.rs:815 is resolved and removed
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -435,4 +435,90 @@ Verification:
 - review-attempt-3 graft on base e301527 with PVTable::new(2): failed as required
 Known failures: none
 ---
+
+author: @codex
+created: 2026-07-18 23:38
+---
+Review attempt: 4
+Reviewed branch: task-46-aborted-search-subtrees
+Reviewed implementation: 0e4c7aca6bdc4715ddcc480f42ab21458ca7e691
+Base: e30152795f22a10d8a50fc028dedf1dbb3567d90
+Verdict: approved
+
+REV-3-01 is resolved. The rework delta from 043d75f is exactly the one-line
+remedy requested (`search.pvt = PVTable::new(2);` at engine/src/search.rs:1697)
+and is confined to `mod tests`. I re-proved the discrimination independently
+rather than relying on the handoff: grafting the `abort_after_nodes` hook and
+the current `aborted_child_cannot_score_or_write_its_parent` body onto base
+e301527 (dropping only `assert_eq!(result, None)`, which cannot typecheck
+there) now FAILS on the unfixed base at the PV assertion:
+
+  panicked at engine/src/search.rs:1292:
+  PV ASSERTION: an aborted child must not become the principal move
+  (got Some(Move { orig: Square(8), dest: Square(16), ... }))
+
+That is a2a3, the aborted child's root move spliced into the principal
+variation on base. The same test passes on target 0e4c7ac. The assertion is no
+longer vacuous and now carries direct evidence for AC#1.
+
+Acceptance criteria:
+- AC#1 proven. The direct regression asserts the aborted child yields `None`,
+  the root move is unmade (zobrist restored), and no principal move is
+  recorded; it fails on base and passes on target. Structurally, both child
+  call sites (engine/src/search.rs:706 and :721) unmake and `return None`
+  before `value` can reach the alpha/best_move update.
+- AC#2 proven. engine/src/search.rs:801 is the only production TT write;
+  `quiesce` never writes. The `if self.stopping() { return None; }` at
+  engine/src/search.rs:774 sits between the move loop and Step 24, and every
+  abort propagation path (`?` in razoring/quiesce, the `else` unwinds, Step 1)
+  returns earlier still. The test asserts the slot is empty using
+  `Table::new(16)`, so the claim is direct rather than a single-slot artifact.
+- AC#3 proven. `iterative_deepening` restores `completed_pvt` and breaks when a
+  candidate iteration aborts; the iterative regression asserts the full
+  restored PV equals the completed depth-one PV, and the direct regression
+  demonstrates the corruption this prevents on base.
+- AC#4 proven. `mid_subtree_abort_keeps_the_last_completed_iteration` aborts at
+  `completed_iteration_nodes + 2` and asserts the returned `SearchResult`
+  (score, best_move, depth) equals the depth-one result. I re-confirmed the
+  threshold is a genuine mid-subtree abort: `visit_node()` is the first
+  statement of `search`, so node n+1 is the depth-two root (which does not
+  stop) and node n+2 is its first recursive child, reached only after
+  `make_move`. The direct test's `assert_eq!(nodes, 2)` pins the same shape.
+- AC#5 proven. No `is this robust` TODO remains anywhere under engine/src.
+
+Verification (on 0e4c7ac):
+- cargo fmt --check: passed
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: passed,
+  re-run with a clean CARGO_TARGET_DIR to defeat lint caching, no warnings
+- cargo test --workspace: passed (204 passed, 1 ignored, 0 failed)
+- cargo test -p engine aborted_child_cannot_score_or_write_its_parent: passed
+- cargo test -p engine mid_subtree_abort_keeps_the_last_completed_iteration: passed
+- grafted direct test on base e301527: FAILED at the PV assertion as required
+- benchmarks: not re-run, and not required. I compared the pre-`#[cfg(test)]`
+  region of engine/src/search.rs at 4905c1e and 0e4c7ac programmatically and
+  they are byte-identical (6782 bytes each), so production code is exactly what
+  attempt 1 benchmarked on a settled machine (roughly +1.5% on the degenerate
+  `search startpos depth 7` bench, sign-inverting across rounds, well under the
+  BENCHMARKS.md 5% threshold; perft and movegen unaffected and not on any call
+  path from search.rs).
+
+Scope and hygiene: only engine/src/search.rs and the task file changed between
+base and target. The diff adds no `#[allow]`. The `abort_after_nodes` hook is
+`#[cfg(test)]`-gated on the field, the initializer, and the `stopping()` branch,
+so it cannot affect release behavior. The `run()` assertion
+`assert_eq!(start_zob, self.pos.zobrist())` corroborates position restoration
+across all abort paths under the full debug test suite. The new conservative
+tail in `quiesce` (`if self.stopping() { None } else { Some(alpha) }`) can only
+discard a value while the search is genuinely being abandoned, and
+`min_search_complete` still guarantees the first ply cannot abort, so
+`zero_time_limit_still_returns_a_legal_move` continues to hold.
+
+Approved implementation SHA: 0e4c7aca6bdc4715ddcc480f42ab21458ca7e691
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Aborted search subtrees can no longer contribute scores. `search`, `quiesce` and `quiesce_evasions` now return `NodeResult = Option<Score>` instead of a plausible `Score::zero()`; every abort path restores the position, unwinds as `None`, and returns before the single Step 24 transposition-table write, so an abandoned subtree cannot raise alpha, become best_move, enter the PV, or persist a TT entry. `iterative_deepening` restores the previously completed PV table when a candidate iteration aborts, and the `is this robust?` TODO is resolved. Verified with cargo fmt --check, cargo clippy --workspace --all-targets --all-features -- -D warnings (clean CARGO_TARGET_DIR), cargo test --workspace (204 passed, 1 ignored), and two regressions: `aborted_child_cannot_score_or_write_its_parent` (direct node-level abort inside the first child, proven to fail on base e301527) and `mid_subtree_abort_keeps_the_last_completed_iteration` (end-to-end bestmove and full-PV preservation).
+<!-- SECTION:FINAL_SUMMARY:END -->
