@@ -1652,13 +1652,15 @@ mod tests {
         let position = Position::start_pos();
         let flag = AtomicBool::new(false);
 
-        // Measure the deterministic depth-one work, then stop a fresh search a few nodes into its
-        // depth-two root. The first iteration is guaranteed to ignore aborts, so this threshold
-        // cannot fire until the next iteration is actively searching a subtree.
+        // Measure the deterministic depth-one work, then stop a fresh search as it enters the
+        // candidate depth-two search. The first iteration is guaranteed to ignore aborts, so the
+        // threshold fires inside the next search invocation, before it can produce a score.
         let baseline_table = Table::new(1);
         let mut baseline = Search::new(position.clone(), &flag, None, &baseline_table);
         let expected = baseline.run::<Master>(1).unwrap();
-        let abort_after = baseline.trace.all_nodes_visited() + 5;
+        let expected_pv = baseline.pvt.pv().copied().collect::<Vec<_>>();
+        let completed_iteration_nodes = baseline.trace.all_nodes_visited();
+        let abort_after = completed_iteration_nodes + 1;
 
         let table = Table::new(1);
         let mut search = Search::new(position.clone(), &flag, None, &table);
@@ -1667,7 +1669,7 @@ mod tests {
 
         assert_eq!(result, expected);
         assert!(search.trace.all_nodes_visited() >= abort_after);
-        assert_eq!(search.pvt.pv().next().copied(), expected.best_move);
+        assert_eq!(search.pvt.pv().copied().collect::<Vec<_>>(), expected_pv);
 
         // The aborted depth-two root must not replace the completed depth-one root entry.
         let root_entry = table.probe(&position).into_inner().read();
