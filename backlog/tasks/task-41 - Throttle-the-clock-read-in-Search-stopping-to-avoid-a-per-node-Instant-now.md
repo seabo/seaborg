@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-18 12:17'
-updated_date: '2026-07-18 23:20'
+updated_date: '2026-07-18 23:28'
 labels:
   - engine
   - search
@@ -49,3 +49,11 @@ Identified during the TASK-38 investigation and deliberately left out of that ti
 3. Add focused tests for deadline tolerance and stop responsiveness, and confirm the existing zero/near-zero budget regressions.
 4. Re-run the hot-path benchmark against the baseline, record before/after NPS, then run all repository-required checks and prepare the immutable review handoff.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Measurement (2026-07-19, Apple/macOS host, release Criterion `search startpos depth 7`, 30 samples after 2 s warm-up): the benchmark was given a far-future deadline so it actually exercised `Instant::now()`. Baseline median was 70.467 us for 579 visited nodes (about 8.22M NPS). Throttling reduced the median to 41.449 us (about 13.97M NPS), a 41.2% time reduction / 70.0% NPS increase. The removed clock-read work therefore cost about 29.018 us per search, or 50.1 ns per visited node on this workload, which is material and warrants throttling. Criterion reported the 95% change interval as -41.316% to -37.119% (p < 0.05).
+
+Implementation samples release-build deadlines every 8 visited nodes and debug-build deadlines once per newly visited node; repeated stopping checks within a node do not read the clock. The cancellation atomic remains the first check on every call. The first guaranteed ply still bypasses both abort sources unchanged. The wall-time regression uses a 20 ms budget with 100 ms scheduling tolerance.
+<!-- SECTION:NOTES:END -->
