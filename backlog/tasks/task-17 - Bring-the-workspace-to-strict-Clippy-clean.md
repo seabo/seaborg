@@ -1,11 +1,11 @@
 ---
 id: TASK-17
 title: Bring the workspace to strict Clippy clean
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-18 15:43'
+updated_date: '2026-07-18 15:52'
 labels:
   - quality
   - rust
@@ -72,6 +72,10 @@ The existing suite (200 tests, including perft node counts and detailed leaf sta
 Performance: paired benchmark runs on this branch against base 8adc347 under identical machine conditions. generate moves 193.01 and 197.27 ns on branch vs 195.15 and 203.78 ns on base; perft 5 23.385 and 23.849 ms on branch vs 23.164 and 22.634 ms on base. The branch is within run-to-run noise of base, with perft 5 marginally higher and generate moves marginally lower across both pairs.
 
 Caveat worth the reviewer's attention: both branch and base currently measure roughly 8 percent slower than the absolute baseline recorded in BENCHMARKS.md (184.60 ns and 21.402 ms), which means this machine was not idle during measurement. That gap is present on unmodified master and is therefore not attributable to this task, but it does mean these runs confirm only parity with base, not conformance to the documented baseline. Absolute baseline verification needs an idle machine.
+
+Merged into master as merge commit e5447b3 (approved target 6d89263 onto primary tip 516d910), textually clean with no conflicts. Integrated checks on the merge commit: cargo fmt --check exit 0; cargo clippy --workspace --all-targets --all-features -- -D warnings exit 0 with 0 warnings, run with a clean CARGO_TARGET_DIR so the result reflects the merge commit rather than a cached tip; cargo test --workspace 200 passed, 0 failed, 1 pre-existing ignored.
+
+Hot-path benchmarks on the merge commit were noise-dominated and are recorded as such rather than as a regression. The merge commit is byte-identical in compiled code to the approved target (git diff 6d89263..e5447b3 touches only markdown and backlog files), so it cannot differ in performance from the target's own clean measurement of generate moves 183.42 ns and perft 5 21.768 ms, both inside the BENCHMARKS.md thresholds of 193.83 ns and 22.472 ms. Two runs on the merge commit gave perft 5 22.286 ms and then 23.991 ms with progressively wider Criterion intervals as machine load average rose from 3.4 to 4.0 to 10.0 under external Chrome and Spotlight indexing activity; the same binary producing 21.768, 22.286 and 23.991 ms is measurement noise, not a code regression.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
