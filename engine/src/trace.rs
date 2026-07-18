@@ -136,18 +136,21 @@ impl Tracer {
     /// nodes visited so far divided by time since commence search was (last) called. This method
     /// should be used when reporting 'live' NPS from within an active search, as opposed to `nps`
     /// which is for reporting NPS after the end of a search.
+    ///
+    /// A search that completes in under a microsecond reports its rate as if it had taken one, so
+    /// that a fast search reports a rate rather than dividing by zero.
     pub fn live_nps(&self) -> usize {
-        let elapsed = self.start_time.elapsed().as_micros();
-        self.nodes_visited * 1_000_000 / (elapsed as usize)
+        nps_over(self.nodes_visited, self.start_time.elapsed())
     }
 
     /// Report the nodes per second (NPS) of the search process any time after it has terminated.
     /// This requires `end_search` to have been called at some point previously, and will return
     /// `None` if that is not the case.
+    ///
+    /// As with `live_nps`, a sub-microsecond search is treated as having taken one microsecond.
     pub fn nps(&self) -> Option<usize> {
-        self.elapsed.and_then(|duration| {
-            Some(self.all_nodes_visited() * 1_000_000 / (duration.as_micros() as usize))
-        })
+        self.elapsed
+            .map(|duration| nps_over(self.all_nodes_visited(), duration))
     }
 
     /// The time elapsed between start and end of the search.
@@ -173,6 +176,15 @@ impl Tracer {
     pub fn eff_branching(&self, depth: u8) -> f32 {
         eff_branching_factor(self.all_nodes_visited(), depth)
     }
+}
+
+/// Nodes per second for `nodes` visited over `elapsed`.
+///
+/// Durations are measured in whole microseconds, so a search faster than that measures as zero.
+/// Such a search is charged one microsecond, both to avoid dividing by zero and because a rate
+/// over a zero-length interval is not meaningful to report.
+fn nps_over(nodes: usize, elapsed: Duration) -> usize {
+    nodes * 1_000_000 / (elapsed.as_micros().max(1) as usize)
 }
 
 /// Used in Newton-Raphson iteration to calculate effective branching factor.
@@ -254,5 +266,25 @@ where
     /// Read the current average value from the `Averager`.
     pub fn avg(&self) -> f64 {
         Into::<f64>::into(self.cum) / (self.cnt as f64)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A search fast enough to measure as zero microseconds must still report a rate. Both NPS
+    /// accessors previously divided by that zero and panicked.
+    #[test]
+    fn nps_of_a_sub_microsecond_search_does_not_divide_by_zero() {
+        assert_eq!(nps_over(3, Duration::ZERO), 3_000_000);
+    }
+
+    #[test]
+    fn nps_is_a_per_second_rate() {
+        assert_eq!(nps_over(0, Duration::ZERO), 0);
+        assert_eq!(nps_over(7, Duration::from_micros(1)), 7_000_000);
+        assert_eq!(nps_over(1_500, Duration::from_millis(1)), 1_500_000);
+        assert_eq!(nps_over(4_200, Duration::from_secs(2)), 2_100);
     }
 }
