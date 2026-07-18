@@ -22,12 +22,39 @@ enum DriverEvent {
     Search(Result<SearchEvent, crossbeam_channel::RecvError>),
 }
 
-/// Launch the engine process.
-pub fn launch() {
-    run(io::stdin(), io::stdout(), io::stderr());
+/// Authoritative engine identity used for UCI `id` responses and human
+/// diagnostics. All fields are supplied by the host binary so that the UCI
+/// `id name`, the command-line `--version`, and any startup banner derive from
+/// a single package version rather than drifting hardcoded strings.
+#[derive(Clone, Copy, Debug)]
+pub struct EngineInfo {
+    /// Engine name, e.g. `seaborg`.
+    pub name: &'static str,
+    /// Package version, typically `env!("CARGO_PKG_VERSION")`.
+    pub version: &'static str,
+    /// Human-facing author string.
+    pub author: &'static str,
+    /// Full Git commit hash, typically `env!("GIT_HASH")`.
+    pub commit: &'static str,
 }
 
-fn run<R, W, E>(input: R, mut output: W, mut errors: E)
+impl EngineInfo {
+    /// Trimmed, human-facing form of the commit hash for diagnostics.
+    fn short_commit(&self) -> &str {
+        const SHORT_LEN: usize = 12;
+        match self.commit.char_indices().nth(SHORT_LEN) {
+            Some((idx, _)) => &self.commit[..idx],
+            None => self.commit,
+        }
+    }
+}
+
+/// Launch the engine process.
+pub fn launch(info: EngineInfo) {
+    run(info, io::stdin(), io::stdout(), io::stderr());
+}
+
+fn run<R, W, E>(info: EngineInfo, input: R, mut output: W, mut errors: E)
 where
     R: Read + Send,
     W: Write,
@@ -44,8 +71,17 @@ where
         let (uci_tx, uci_rx) = unbounded();
         scope.spawn(move || read_commands(BufReader::new(input), uci_tx));
 
-        let _ = writeln!(output, "seaborg 0.0.2 by George Seabridge");
-        let _ = writeln!(output, "commit: {}", env!("GIT_HASH"));
+        // Protocol stdout must contain only valid UCI traffic, so the human
+        // banner (including trimmed commit metadata) goes to the diagnostic
+        // channel and never precedes the `uci` handshake on stdout.
+        let _ = writeln!(
+            errors,
+            "{} {} by {} (commit {})",
+            info.name,
+            info.version,
+            info.author,
+            info.short_commit()
+        );
 
         loop {
             let event = next_event(&uci_rx, active_search.as_ref());
@@ -100,7 +136,7 @@ where
                     search_engine.new_game();
                 }
                 DriverEvent::Input(Ok(Input::Command(command))) => {
-                    handle_command(command, &mut pos, &mut output, &mut errors);
+                    handle_command(&info, command, &mut pos, &mut output, &mut errors);
                 }
                 DriverEvent::Search(Ok(event)) => {
                     let _ = writeln!(output, "{}", format_search_event(&event));
@@ -153,6 +189,7 @@ fn next_event(commands: &Receiver<Input>, search: Option<&SearchHandle>) -> Driv
 }
 
 fn handle_command<W: Write, E: Write>(
+    info: &EngineInfo,
     command: Command,
     pos: &mut Position,
     output: &mut W,
@@ -195,8 +232,8 @@ fn handle_command<W: Write, E: Write>(
             super::perft::Perft::divide(pos, depth, true, false);
         }
         Command::Uci => {
-            let _ = writeln!(output, "id name seaborg 0.0.2");
-            let _ = writeln!(output, "id author George Seabridge");
+            let _ = writeln!(output, "id name {} {}", info.name, info.version);
+            let _ = writeln!(output, "id author {}", info.author);
             let _ = writeln!(
                 output,
                 "option name Hash type spin default 16 min 1 max 1024"
@@ -262,23 +299,54 @@ mod tests {
         }
     }
 
+    /// Deterministic identity used to assert exact protocol streams without
+    /// depending on the crate's build-time version or commit hash.
+    const TEST_INFO: EngineInfo = EngineInfo {
+        name: "seaborg",
+        version: "9.9.9",
+        author: "George Seabridge",
+        commit: "0123456789abcdef0123",
+    };
+
+    /// The exact stderr banner emitted at startup for [`TEST_INFO`].
+    const TEST_BANNER: &str = "seaborg 9.9.9 by George Seabridge (commit 0123456789ab)\n";
+
     fn run_script(script: &str) -> (String, String) {
         let output = SharedWriter::default();
         let errors = SharedWriter::default();
-        run(script.as_bytes(), output.clone(), errors.clone());
+        run(TEST_INFO, script.as_bytes(), output.clone(), errors.clone());
         (output.contents(), errors.contents())
+    }
+
+    /// Diagnostics emitted after the startup banner has been stripped.
+    fn diagnostics_after_banner(errors: &str) -> &str {
+        errors
+            .strip_prefix(TEST_BANNER)
+            .expect("stderr must begin with the startup banner")
+    }
+
+    #[test]
+    fn startup_emits_no_stdout_and_a_trimmed_stderr_banner() {
+        let (output, errors) = run_script("");
+        // Acceptance #1: no unsolicited non-UCI stdout before the uci command.
+        assert_eq!(output, "");
+        // Acceptance #4: commit metadata is trimmed and lives on the
+        // diagnostic channel, never on protocol stdout.
+        assert_eq!(errors, TEST_BANNER);
+        assert!(!errors.contains("0123456789abcdef"));
     }
 
     #[test]
     fn eof_and_read_failure_shutdown_cleanly() {
         let (output, errors) = run_script("");
-        assert!(output.contains("seaborg 0.0.2"));
-        assert!(errors.is_empty());
+        assert_eq!(output, "");
+        assert_eq!(diagnostics_after_banner(&errors), "");
 
         let output = SharedWriter::default();
         let errors = SharedWriter::default();
-        run(FailingReader, output, errors.clone());
-        assert!(errors.contents().is_empty());
+        run(TEST_INFO, FailingReader, output.clone(), errors.clone());
+        assert_eq!(output.contents(), "");
+        assert_eq!(diagnostics_after_banner(&errors.contents()), "");
     }
 
     #[test]
@@ -286,7 +354,14 @@ mod tests {
         let (input_tx, input_rx) = unbounded::<Vec<u8>>();
         let output = SharedWriter::default();
         let thread_output = output.clone();
-        let driver = thread::spawn(move || run(ChannelReader(input_rx), thread_output, io::sink()));
+        let driver = thread::spawn(move || {
+            run(
+                TEST_INFO,
+                ChannelReader(input_rx),
+                thread_output,
+                io::sink(),
+            )
+        });
 
         thread::sleep(Duration::from_millis(25));
         assert!(!driver.is_finished());
@@ -307,7 +382,7 @@ mod tests {
     fn replacement_stop_and_quit_are_serialized() {
         let (output, errors) = run_script("go infinite\ngo depth 1\nstop\ngo infinite\nquit\n");
         assert_eq!(output.matches("bestmove ").count(), 3);
-        assert!(errors.is_empty());
+        assert_eq!(diagnostics_after_banner(&errors), "");
     }
 
     #[test]
@@ -315,7 +390,9 @@ mod tests {
         let (output, errors) = run_script("ucinewgame\nisready\nquit\n");
         assert!(output.contains("readyok"));
         assert!(!output.contains("UciNewGame: not yet implemented"));
-        assert!(errors.is_empty());
+        // `ucinewgame` is handled silently: beyond the startup banner on the
+        // diagnostic channel, no error diagnostics are produced.
+        assert_eq!(diagnostics_after_banner(&errors), "");
     }
 
     #[test]
@@ -327,7 +404,7 @@ mod tests {
         assert!(!output.contains("not yet implemented"));
         assert!(!output.contains("SetOption"));
         assert!(!output.contains("UciNewGame"));
-        assert!(errors.is_empty());
+        assert_eq!(diagnostics_after_banner(&errors), "");
     }
 
     #[test]
@@ -336,12 +413,35 @@ mod tests {
             "register\nsetoption name Missing value 1\nposition startpos moves invalid\nquit\n",
         );
 
-        assert!(!output.contains("register"));
-        assert!(!output.contains("InvalidOption"));
-        assert!(!output.contains("invalid move"));
+        // Acceptance #2: errors never surface as invalid protocol messages on
+        // stdout; the whole error stream stays empty here.
+        assert_eq!(output, "");
         assert!(errors.contains("UnexpectedToken"));
         assert!(errors.contains("InvalidOption"));
         assert!(errors.contains("invalid move"));
+    }
+
+    #[test]
+    fn uci_handshake_stream_is_exact() {
+        // Acceptance #3/#5: the id name derives from the authoritative version
+        // and the handshake is the only stdout traffic produced.
+        let (output, errors) = run_script("uci\nquit\n");
+        assert_eq!(
+            output,
+            "id name seaborg 9.9.9\n\
+             id author George Seabridge\n\
+             option name Hash type spin default 16 min 1 max 1024\n\
+             uciok\n"
+        );
+        assert_eq!(diagnostics_after_banner(&errors), "");
+    }
+
+    #[test]
+    fn readiness_stream_is_exact() {
+        // Acceptance #5: isready yields exactly readyok on stdout.
+        let (output, errors) = run_script("isready\nquit\n");
+        assert_eq!(output, "readyok\n");
+        assert_eq!(diagnostics_after_banner(&errors), "");
     }
 
     #[test]
@@ -349,7 +449,14 @@ mod tests {
         let (input_tx, input_rx) = unbounded::<Vec<u8>>();
         let output = SharedWriter::default();
         let thread_output = output.clone();
-        let driver = thread::spawn(move || run(ChannelReader(input_rx), thread_output, io::sink()));
+        let driver = thread::spawn(move || {
+            run(
+                TEST_INFO,
+                ChannelReader(input_rx),
+                thread_output,
+                io::sink(),
+            )
+        });
 
         input_tx.send(b"go depth 1\n".to_vec()).unwrap();
         for _ in 0..500 {

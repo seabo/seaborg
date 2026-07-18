@@ -27,10 +27,12 @@ pub fn cmdline() {
     let args = Args::parse();
 
     if args.uci {
-        engine::launch()
-        // Session::new().launch();
-        // let mut engine_sess = Session::new();
-        // engine_sess.main_loop();
+        engine::launch(engine::EngineInfo {
+            name: "seaborg",
+            version: env!("CARGO_PKG_VERSION"),
+            author: "George Seabridge",
+            commit: env!("GIT_HASH"),
+        })
     } else if args.dev {
         dev();
     } else {
