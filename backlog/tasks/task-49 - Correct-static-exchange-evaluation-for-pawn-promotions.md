@@ -1,11 +1,11 @@
 ---
 id: TASK-49
 title: Correct static exchange evaluation for pawn promotions
-status: In Review
+status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-18 18:30'
-updated_date: '2026-07-18 21:25'
+updated_date: '2026-07-18 21:51'
 labels: []
 dependencies: []
 references:
@@ -29,11 +29,11 @@ TODO site: engine/src/see.rs:134.
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 SEE returns the correct value for a pawn capture that promotes
-- [ ] #2 SEE returns the correct value when a non-capturing promotion is the first move of the exchange
-- [ ] #3 The currently commented-out promotion positions in the see.rs test module are enabled as asserting tests
-- [ ] #4 The chosen approach (corrected swap loop vs search extension) is recorded with its rationale in the implementation notes
-- [ ] #5 The promotion TODO at engine/src/see.rs:134 is removed
+- [x] #1 SEE returns the correct value for a pawn capture that promotes
+- [x] #2 SEE returns the correct value when a non-capturing promotion is the first move of the exchange
+- [x] #3 The currently commented-out promotion positions in the see.rs test module are enabled as asserting tests
+- [x] #4 The chosen approach (corrected swap loop vs search extension) is recorded with its rationale in the implementation notes
+- [x] #5 The promotion TODO at engine/src/see.rs:134 is removed
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -176,4 +176,44 @@ Verification:
 - cargo test --workspace: pass (35 core; 159 engine passed, 1 ignored; 5 integration; 1 doc)
 Known failures: none
 ---
+
+author: @claude
+created: 2026-07-18 21:51
+---
+Review attempt: 2
+Reviewed branch: task-49-see-promotions
+Reviewed implementation: 8f7ff249216ccb2f186ab1d2aeef907b984a6865
+Verdict: approved
+
+REV-1-01 resolved. The 2rr4/1P6/8/8/8/6k1/8/6K1 capture-promotion row now asserts +400 and the implementation returns it. Traced by hand: gain[0] = 500 + 800 = 1300, the promotion-aware cutoff retains ...Rd8xc8 so gain[1] = 900 - 1300 = -400, and the minimax fold yields -max(-1300, -400) = 400, matching the material accounting 500 + (900 - 100) - 900 = 400.
+
+Reviewed the full 5b592eb..8f7ff24 diff. Only engine/src/see.rs and the task file changed; no accidental work, no new #[allow], no TODO left in see.rs.
+
+Equivalence for non-promotion exchanges was checked structurally, not just empirically. Hoisting the attacker selection above the gain[d] store leaves gain[d] = value(attacker_d) - gain[d-1] unchanged when no promotion bonus applies; moving the occupancy/x-ray update above the cutoff is inert because the break discards all of occ, atta_def and processed; and AND-NOT equals XOR whenever from_set is a subset of atta_def, which holds for every attacker selected from atta_def and for the initial capturing attacker (including en passant, whose pawn does attack the target diagonally). The one case where they differ is exactly the back-rank push the fix targets.
+
+Acceptance criteria:
+- #1 pawn capture that promotes: proven by 2r5/1P6/... at +1300 (no recapture) and 2rr4/1P6/... at +400 (recapture), both matching independent material accounting.
+- #2 non-capturing promotion opening the exchange: proven by r7/4P3/... e8=Q Rxe8 Rxe8 at +400.
+- #3 the TODO block held only the note, not commented-out positions; it is now four asserting rows including the thread's reference position 2r5/1P4pk/... at +500. Each row was confirmed load-bearing by running it against the base commit's algorithm, where all four fail.
+- #4 the corrected-swap-loop choice and its rationale are recorded in the implementation notes.
+- #5 the promotion TODO is gone; grep for TODO in engine/src/see.rs returns nothing.
+
+Verification (run in the task worktree; target..HEAD touches only the task file, so code checks on HEAD cover 8f7ff24):
+- git diff --check 5b592eb 8f7ff24: clean
+- git diff --name-only 8f7ff24 HEAD: task file only
+- cargo fmt --check: pass
+- CARGO_TARGET_DIR=/tmp/task49-clean-clippy cargo clippy --workspace --all-targets --all-features -- -D warnings: pass, zero warnings on a cold target dir
+- cargo test --workspace: pass (35 core; 159 engine passed, 1 pre-existing ignored; 5 integration; 1 doc; 0 failed)
+- discrimination: scratch worktree at 5b592eb with only the four new rows added, assertions relaxed to prints - all four mismatch (500->300, 1300->500, 400->0, 400->500), the 20 pre-existing rows match
+
+Benchmarks were not run. The diff is confined to see.rs, and Search::see is reached only from MoveLoader/QMoveLoader::score_captures; the perft and movegen benches do not enter search, so they cannot observe this change. The added per-iteration cost is two piece-type/rank comparisons, and the cutoff skip fires only on the ply after a promotion.
+
+Non-blocking observation, no action required: the PieceType::None target path that enables AC #2 is exercised only by tests, since both production callers gate on mov.is_capture(). The function contract is correct and documented; wiring quiet promotions into move ordering would be separate work.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Corrected the SEE swap-off loop to account for pawn promotions instead of adding a search extension, on the grounds that SEE here is consumed only as a move-ordering score. gain[d] is now scored after the next attacker is selected so it carries that move's promotion gain; a promoting pawn leaves a queen on the exchange square; gain[0] seeds the promotion bonus so a non-capturing promotion can open the sequence (PieceType::None target); atta_def clears the origin square with AND-NOT rather than XOR, so a back-rank push no longer inserts a stale attacker; and the max(-gain[d-1], gain[d]) cutoff is skipped for one ply after a promotion so the recapture of the new queen reaches the minimax fold. Four asserting promotion rows replace the TODO note in see::tests::it_works. Verified on 8f7ff24 with cargo fmt --check, clean-CARGO_TARGET_DIR cargo clippy --workspace --all-targets --all-features -- -D warnings, and cargo test --workspace (35 core, 159 engine, 5 integration, 1 doc; 0 failed), plus a base-commit discrimination run showing all four new rows fail on the pre-change algorithm (500->300, 1300->500, 400->0, 400->500) while the 20 pre-existing rows are unaffected.
+<!-- SECTION:FINAL_SUMMARY:END -->
