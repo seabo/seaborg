@@ -1,9 +1,11 @@
 ---
 id: TASK-38
 title: Time allocation starves the opening at fast time controls
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-18 11:45'
+updated_date: '2026-07-18 12:10'
 labels:
   - engine
   - time
@@ -41,3 +43,17 @@ Do not regress TASK-7 (allocation overflow safety) or TASK-32 (guaranteed legal 
 - [ ] #4 TASK-7 overflow safety and TASK-32 guaranteed-legal-move behavior still hold, evidenced by their existing regression tests continuing to pass
 - [ ] #5 A FastChess self-play match at 2+0.05 shows the engine using a materially larger share of its clock than before (reported depth and time per move rise above depth 1 / 0.000s from the opening onward), with zero illegal moves and zero time forfeits
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Investigate the full time-management subsystem and confirm the defect is confined to the allocation policy in TimeControl::to_move_time rather than the uci -> engine -> search pipeline around it.
+2. Rewrite to_move_time with a proportional policy: subtract a fixed MOVE_OVERHEAD from the remaining clock once (not from the per-move slice), divide the usable clock by the moves-to-go estimate, add the increment, then clamp the result to a fraction of the usable clock so allocation can never exceed what is actually on the clock.
+3. Keep all arithmetic u64 and saturating, and express the clamp so it cannot overflow for very large clocks, preserving TASK-7.
+4. Update the existing tests that encode the old behavior (sub_buffer_allocation_saturates_at_zero asserts the bug as correct; the buffer-subtraction expectations in the other cases change), and add a test matrix covering proportional degradation across clock/increment/moves-to-go combinations including very small clocks, plus an explicit never-exceeds-the-clock test.
+5. Verify TASK-32 search regression tests still pass unchanged; allocation may now be small but positive rather than zero, and the guaranteed-ply behavior must be untouched.
+6. Run cargo fmt, clippy and the full test suite.
+7. Run FastChess self-play matches at 2+0.05, 10+0.1 and 1+0.01, recording per-move depth and time, illegal-move count and time-forfeit count as objective evidence for AC #2 and AC #5, and compare the 2+0.05 result against the pre-fix baseline.
+8. File a follow-up ticket for the out-of-scope search-side time work: no soft/hard limit split, no prediction of whether the next deepening iteration fits the budget, and Instant::now() called per node in stopping() with no node-count throttle.
+9. Commit the implementation, append notes, and hand off to review.
+<!-- SECTION:PLAN:END -->
