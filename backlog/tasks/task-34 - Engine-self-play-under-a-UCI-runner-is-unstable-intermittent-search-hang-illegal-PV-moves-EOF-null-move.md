@@ -3,11 +3,11 @@ id: TASK-34
 title: >-
   Engine self-play under a UCI runner is unstable: intermittent search hang,
   illegal PV moves, EOF null move
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-18 00:25'
-updated_date: '2026-07-18 12:24'
+updated_date: '2026-07-18 12:32'
 labels:
   - engine
   - search
