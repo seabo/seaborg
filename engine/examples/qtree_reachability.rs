@@ -26,9 +26,9 @@
 //! # Usage
 //!
 //! ```text
-//! cargo run --release -p engine --example task39_qtree -- corpus [node_cap]
-//! cargo run --release -p engine --example task39_qtree -- wac [node_cap]
-//! cargo run --release -p engine --example task39_qtree -- sweep <positions> <seed> [node_cap]
+//! cargo run --release -p engine --example qtree_reachability -- corpus [node_cap]
+//! cargo run --release -p engine --example qtree_reachability -- wac [node_cap]
+//! cargo run --release -p engine --example qtree_reachability -- sweep <positions> <seed> [node_cap]
 //! ```
 //!
 //! `wac` and `sweep` are the systematic adversarial search: every position is ranked by the depth
@@ -152,7 +152,7 @@ fn ply_one_qtree(pos: &mut Position, cap: u64) -> QStats {
     total
 }
 
-/// The corpus measured by `tools/task39_stop_probe.rb`, plus positions constructed specifically to
+/// The corpus measured by `tools/stop_latency_probe.rb`, plus positions constructed specifically to
 /// drive the quiet check-evasion mechanism.
 fn corpus() -> Vec<(&'static str, &'static str)> {
     vec![

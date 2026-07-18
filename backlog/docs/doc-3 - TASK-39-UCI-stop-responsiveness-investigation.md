@@ -3,7 +3,7 @@ id: doc-3
 title: TASK-39 UCI stop responsiveness investigation
 type: other
 created_date: '2026-07-18 18:28'
-updated_date: '2026-07-18 20:10'
+updated_date: '2026-07-18 22:01'
 ---
 # TASK-39 UCI stop responsiveness investigation
 
@@ -58,7 +58,7 @@ check-extension ply cap alone does **not** bound this window.
 
 ## Structural evidence
 
-Structural measurement uses `engine/examples/task39_qtree.rs`, an offline reachability model. It
+Structural measurement uses `engine/examples/qtree_reachability.rs`, an offline reachability model. It
 lives outside `engine/src` so that this ticket lands no change to search/stop/UCI-I/O production
 code (criterion #1). It replicates quiescence *move selection* exactly as described above, and its
 only terminations are `quiesce` Step 1 plus explicit ply/node caps.
@@ -75,9 +75,9 @@ bound).
 Reproduce with:
 
 ```
-cargo run --release -p engine --example task39_qtree -- corpus 20000000
-cargo run --release -p engine --example task39_qtree -- wac 2000000
-cargo run --release -p engine --example task39_qtree -- sweep 5000 1580315493 200000
+cargo run --release -p engine --example qtree_reachability -- corpus 20000000
+cargo run --release -p engine --example qtree_reachability -- wac 2000000
+cargo run --release -p engine --example qtree_reachability -- sweep 5000 1580315493 200000
 ```
 
 ### Named corpus (20M node cap)
@@ -176,7 +176,7 @@ it is the ordinary dense tactical position.
 
 ## Measured stop latency
 
-Harness `tools/task39_stop_probe.rb`, extended with the six structurally worst positions found
+Harness `tools/stop_latency_probe.rb`, extended with the six structurally worst positions found
 above so that measured latency is tied to the adversarial corpus rather than only to hand-picked
 positions.
 

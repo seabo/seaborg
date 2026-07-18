@@ -5,7 +5,7 @@ status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-18 11:46'
-updated_date: '2026-07-18 21:50'
+updated_date: '2026-07-18 22:02'
 labels:
   - engine
   - search
@@ -275,6 +275,32 @@ Benchmarks were not run and are not required: the base-to-target diff changes no
 Non-blocking observations, recorded for the record and not requiring rework:
 1. tools/task39_stop_probe.rb:30 comments that chain 4 is the 'Highest quiet check-evasion chain (4) observed anywhere in the model sweep'. Four is the WAC maximum; the random sweep found two positions at 5, as doc-3 and TASK-29 comment #3 correctly record. The stale wording is confined to a tool comment and does not affect any conclusion, since chains cluster at 2-3 either way.
 2. The probe verifies bestmoves are non-null but does not machine-check their legality against the position; legality is asserted from inspection. The engine's own test suite covers the legal-move guarantee, so this does not weaken the outcome.
+---
+
+author: @codex
+created: 2026-07-18 22:02
+---
+Post-approval rename, authorized by the human operator.
+
+The two investigation tooling files were renamed off the ticket-scoped naming convention so they read as durable tooling rather than disposable artifacts:
+- engine/examples/task39_qtree.rs -> engine/examples/qtree_reachability.rs
+- tools/task39_stop_probe.rb -> tools/stop_latency_probe.rb
+
+Forward references were updated: each file's own header docs, the probe's reference to the model, and doc-3 (via backlog doc update, sections 'Structural evidence', the reproduce block, and 'Measured stop latency').
+
+Historical records were deliberately NOT rewritten. REV-1-01's finding location, the earlier handoff comments, and the implementation notes above still cite the original paths, because they are an audit trail of what was reviewed at the time. Readers of those entries should map task39_qtree.rs -> qtree_reachability.rs and task39_stop_probe.rb -> stop_latency_probe.rb.
+
+Lifecycle note, recorded for transparency: this changes implementation files after the approval of 60107a2c009974cdd7fea64a691513ff79d5f00a, which under TASK_LIFECYCLE.md would normally invalidate that approval and require a fresh review. The human operator explicitly authorized proceeding without the full re-review round on the grounds that a pure rename with no behavioral change is low risk, and directed a smoke test instead.
+
+Smoke test after rename (clean run, same worktree):
+- cargo fmt --check: passed
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: passed, no warnings
+- cargo test --workspace: passed (core 35; engine 159 passed/1 ignored; seaborg 0; metadata 5; doc-tests core 1, engine 0; 0 failed)
+- cargo run --release -p engine --example qtree_reachability -- corpus 50000: runs under the new target name; every non-truncated row matches the pre-rename run exactly (startpos 20, in_check_quiet_evasions 4, check_heavy 212, and all six adv_* batteries)
+- ruby -c tools/stop_latency_probe.rb: Syntax OK
+- ruby tools/stop_latency_probe.rb target/release/seaborg 25: 16 positions, 400 samples, zero null bestmoves, max 2.057 ms
+
+No behavioral change: the rename touches file names, header comments and documentation references only. Task remains Ready to Merge.
 ---
 <!-- COMMENTS:END -->
 

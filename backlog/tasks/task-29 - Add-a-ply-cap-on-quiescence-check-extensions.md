@@ -4,7 +4,7 @@ title: Add a ply cap on quiescence check extensions
 status: To Do
 assignee: []
 created_date: '2026-07-17 20:29'
-updated_date: '2026-07-18 20:10'
+updated_date: '2026-07-18 22:02'
 labels:
   - search
   - performance
@@ -57,5 +57,18 @@ author: @codex
 created: 2026-07-18 20:10
 ---
 Correction to the preceding TASK-39 finding: the longest consecutive quiet check-evasion chain observed was 5, not 4. The 5,000-position random sweep (seed 1580315493) found two positions at chain length 5; WAC and the named corpus topped out at 4. The conclusion is unchanged and if anything reinforced: chains cluster at 2-3, so a check-extension cap at any plausible value would almost never bind, while reachable ply-1 q-trees run to 55 ply in that same sweep.
+---
+
+author: @codex
+created: 2026-07-18 22:02
+---
+Path correction to the TASK-39 findings above: the reachability model referenced in comment #2 was renamed before merge and now lives at engine/examples/qtree_reachability.rs (it was engine/examples/task39_qtree.rs). The companion latency harness is tools/stop_latency_probe.rb (was tools/task39_stop_probe.rb).
+
+Reproduce the corpus this ticket should validate a chosen cap against with:
+  cargo run --release -p engine --example qtree_reachability -- corpus 20000000
+  cargo run --release -p engine --example qtree_reachability -- wac 2000000
+  cargo run --release -p engine --example qtree_reachability -- sweep 5000 1580315493 200000
+
+The findings in comment #2 and the correction in comment #3 are otherwise unchanged.
 ---
 <!-- COMMENTS:END -->

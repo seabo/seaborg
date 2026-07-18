@@ -19,7 +19,7 @@ positions = {
   "mate_tactics_2" => "fen 6rk/p7/1pq1p2p/4P3/5BrP/P3Qp2/1P1R1K1P/5R2 b - - 0 34",
   "check_heavy" => "fen 3kB3/5K2/7p/3p4/3pn3/4NN2/8/1b4B1 w - - 0 1",
   # Positions ranked worst by the offline reachability model in
-  # engine/examples/task39_qtree.rs: each has a ply-1 quiescence tree exceeding two million
+  # engine/examples/qtree_reachability.rs: each has a ply-1 quiescence tree exceeding two million
   # reachable nodes at 41-46 ply. They are included so the measured stop latency is tied to the
   # structurally worst cases found, not only to the hand-picked corpus above.
   "model_worst_wac022" => "fen r1bqk2r/ppp1nppp/4p3/n5N1/2BPp3/P1P5/2P2PPP/R1BQK2R w KQkq - 0 1",
