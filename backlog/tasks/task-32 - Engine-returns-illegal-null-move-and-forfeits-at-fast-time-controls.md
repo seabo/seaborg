@@ -1,11 +1,11 @@
 ---
 id: TASK-32
 title: Engine returns illegal null move and forfeits at fast time controls
-status: In Progress
+status: In Review
 assignee:
   - '@georgeseabridge'
 created_date: '2026-07-18 00:09'
-updated_date: '2026-07-18 00:58'
+updated_date: '2026-07-18 01:27'
 labels:
   - engine
   - search
@@ -42,3 +42,40 @@ Discovered while validating the TASK-27 strength-regression tooling against a re
 4. Update the existing zero_time_limit test (which asserted the buggy Completed(None)) to assert a legal move is returned; add near-zero-budget and time-abort-honoring unit tests.
 5. Validate with FastChess seaborg self-play at a fast time control (e.g. 2+0.05 and 10+0.1): zero illegal moves, zero time forfeits.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implementation complete.
+
+Root cause: iterative_deepening() broke out of its loop as soon as Search::stopping() reported true. With a zero/near-zero time budget the stop_time is already elapsed, so the loop broke before recording any result; the SearchOutcome carried best_move=None and info::format_search_outcome emitted 'bestmove 0000', which runners reject as an illegal move -> forfeit.
+
+Fix (engine/src/search.rs): added Search::min_search_complete. stopping() returns false until the first full ply completes, suppressing BOTH the cancellation flag and the time deadline; it is armed (set true) after the first iterative-deepening iteration, so deeper iterations honor the clock. The first ply is finite, so this cannot hang. Net effect: a completed, searched, legal root move is always available whenever one exists, at any budget (including 0), and even on an immediate stop.
+
+Decision: suppressing the cancellation flag (not only the time deadline) during ply 1 was necessary because an immediate 'stop'/'quit' arriving during ply 1 otherwise still produced 'bestmove 0000' (reproduced manually). This makes AC #1 hold absolutely. The one pre-existing test that used the cancel flag to force an immediate abort (quiescence_abort_with_legal_evasions_is_not_checkmate) was updated to set min_search_complete=true first: at runtime an in-flight quiesce_evasions can only be aborted after ply 1, so the test now reflects the real precondition rather than masking a regression.
+
+Scope note: FastChess logs 'Warning; Illegal PV move' on mate scores. This is a pre-existing artifact of PV/mate reporting (PVTable population and info.rs formatting are untouched by this change) and concerns only the info-line PV, not the played move: all games terminate as real checkmates/draws with no illegal-move or time adjudications. Out of scope for TASK-32.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @georgeseabridge
+created: 2026-07-18 01:27
+---
+Implementation handoff
+Branch: task-32-illegal-null-move
+Worktree: /Users/seabo/seaborg-worktrees/task-32-illegal-null-move
+Base: d9a138ccdeb36f39dd28fc7e19d460635ec6be29
+Implementation target: f4a4643591d5349db80815fd8cec36cd947ee7f6
+Resolved findings: none (initial implementation)
+Verification:
+- cargo fmt --all --check: clean
+- cargo clippy --workspace --lib --bins --tests: no errors (pre-existing warnings only)
+- cargo test --workspace --lib --bins --tests: ok (35 + 71[1 ignored] + 5 passed, 0 failed)
+- Manual UCI, zero budget + immediate quit (echo 'uci/isready/go wtime 2000 btime 2000 winc 50 binc 50/quit' | seaborg --uci): 'bestmove a2a3' (legal), no 'bestmove 0000'
+- FastChess self-play 2+0.05, 40 games: all Termination=normal, 0 illegal-move forfeits, 0 time losses (20-20-0)
+- FastChess self-play 10+0.1, 20 games: all Termination=normal, 0 illegal-move forfeits, 0 time losses (6-6-8 W/L/D)
+Known failures: none from this change. Baseline (pre-existing, unrelated): 'benches/square.rs' fails to compile (E0423, Square tuple-struct private field) on master; excluded via --lib/--bins/--tests. FastChess 'Illegal PV move' warnings are a pre-existing PV-info-line artifact on mate scores (played moves are legal; games end normally).
+---
+<!-- COMMENTS:END -->
