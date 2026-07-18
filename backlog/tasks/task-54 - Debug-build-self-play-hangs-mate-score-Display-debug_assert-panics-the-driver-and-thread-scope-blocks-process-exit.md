@@ -3,9 +3,11 @@ id: TASK-54
 title: >-
   Debug-build self-play hangs: mate-score Display debug_assert panics the driver
   and thread::scope blocks process exit
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-18 20:11'
+updated_date: '2026-07-18 22:37'
 labels:
   - engine
   - search
