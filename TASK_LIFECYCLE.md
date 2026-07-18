@@ -1,8 +1,9 @@
 # Backlog task implementation and review lifecycle
 
-This workflow is for manually started implementation and review sessions.
-Backlog.md is the durable record. Invoke `$implement` and `$review` in Codex;
-harnesses may map them to `/implement` and `/review`.
+This workflow is for manually started implementation, review, and merge
+sessions. Backlog.md is the durable record. Invoke `$implement`, `$review`, and
+`$merge` in Codex; harnesses may map them to `/implement`, `/review`, and
+`/merge`.
 
 ## States
 
@@ -40,11 +41,14 @@ implementation, every rework attempt, and review. Prefer a branch such as
   reliably visible to a Backlog browser rooted in another worktree. Do not make
   matching status edits on the primary branch.
 - The primary branch receives the task file and its history through the final
-  merge. The human controls push and merge operations.
+  merge. A human triggers each merge by invoking `$merge`, and controls
+  pushing.
 
 Invoking `$implement` or `$review` authorizes local commits scoped to that task
 and worktree. It does not authorize pushing, merging, rewriting unrelated
-history, or disturbing changes in another worktree.
+history, or disturbing changes in another worktree. Invoking `$merge`
+additionally authorizes advancing the primary branch and recording `Done` for
+one approved task; it does not authorize pushing.
 
 Before creating or reattaching a worktree, inspect `git worktree list
 --porcelain`, the candidate branch, and the base commit. If required base or
@@ -110,6 +114,12 @@ The reviewer checks every acceptance criterion, linked documentation,
 repository requirement, boundary case, and relevant failure mode without
 modifying implementation files.
 
+Review validates the change in isolation against the immutable `base`-to-target
+diff. It deliberately does not test a prospective merge with the current
+primary tip: that would break target immutability and be stale the moment
+primary moves. The guarantee that primary stays green after integration lives
+in `$merge`, which re-verifies the merged result at merge time.
+
 ### Changes requested
 
 Blocking findings remain on the original task and receive stable IDs:
@@ -149,13 +159,39 @@ When objective evidence proves every acceptance criterion, the reviewer:
 4. Commits only the approval metadata on the task branch.
 
 The implementation SHA is the reviewed code target. Its task-only approval
-commit is the branch tip presented for human merge. The reviewer verifies no
+commit is the branch tip presented for merge. The reviewer verifies no
 implementation file changed between the two. Any later implementation change
 invalidates approval and requires a fresh review.
 
-After the human merges the approved branch, `Done` is recorded on the primary
-branch because it describes the result of the merge rather than branch-local
-work. This is the only normal lifecycle mutation made directly after merge.
+## Merge
+
+A human lands an approved task by invoking `$merge` (see
+`.agents/skills/merge/SKILL.md`). Human invocation serializes merges; that is a
+throughput assumption, not a correctness one. The skill:
+
+1. Requires the task to be `Ready to Merge`, every dependency to be `Done`, and
+   the approval intact (no implementation file changed after approval).
+2. Merges—never rebases—the immutable approved target into the live primary
+   tip, so the approved SHA stays intact as a parent and the merge commit is the
+   integrated artifact that gets verified.
+3. Runs the repository-required checks, and hot-path (perft/movegen)
+   benchmarks when relevant, on that integrated result.
+4. Advances primary only via a compare-and-swap: it re-reads the primary tip and
+   fast-forwards to the verified merge only if the tip is unchanged since it was
+   read, otherwise it discards the trial and retries against the new tip. This
+   keeps primary correct even if two invocations overlap.
+
+A clean, green integration advances primary and records `Done` on the primary
+branch, because `Done` describes the result of the merge rather than
+branch-local work. A textual conflict or a failing integrated check ejects the
+task to `Changes Requested` with evidence and never to `Done`.
+
+Landed code is the reviewed change forward-integrated and re-tested, not the
+exact reviewed bytes; test-suite depth is the primary automated net against a
+merge that is textually clean but semantically wrong. Automating this gate
+(a queue integrator, speculative or batched execution, and automatic overlap
+re-review) is a future enhancement tracked separately, warranted only once
+manual invocation is a measured throughput bottleneck.
 
 ## Human intervention
 

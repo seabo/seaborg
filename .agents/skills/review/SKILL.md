@@ -8,6 +8,12 @@ description: Independently review a committed Seaborg Backlog.md task implementa
 Follow `../../../TASK_LIFECYCLE.md`. Review the implementation independently and
 do not modify implementation files.
 
+Review validates the change in isolation against the immutable base-to-target
+diff. Do not test a prospective merge with the current primary tip: that breaks
+target immutability and is stale the moment primary moves. The guarantee that
+primary stays green after integration lives in `$merge`, which re-verifies the
+merged result at merge time.
+
 ## Enter the implementation worktree
 
 1. Run `backlog instructions overview`, read the task, and read
