@@ -1,11 +1,11 @@
 ---
 id: TASK-46
 title: Prevent aborted search subtrees from contributing scores
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-18 18:29'
-updated_date: '2026-07-18 22:37'
+updated_date: '2026-07-18 22:40'
 labels: []
 dependencies: []
 references:
@@ -50,6 +50,8 @@ TODO site: engine/src/search.rs:815 (is this robust?).
 
 <!-- SECTION:NOTES:BEGIN -->
 Implemented explicit `Option<Score>` node outcomes across main search, razoring, quiescence, and check-evasion recursion. Aborted children unwind only after restoring the position and cannot update alpha, best move, PV, or ancestor TT entries. Iterative deepening now restores the prior completed PV when a candidate iteration aborts. Added a deterministic node-threshold regression that aborts within the depth-two subtree and verifies the depth-one result/PV/root TT entry remain authoritative.
+
+Resolved REV-1-01: changed the deterministic abort threshold to the reviewer-proven pre-fix failure point and now compare the complete restored PV, not only its first move. The threshold fires on entry to the candidate depth-two search after depth one has fully completed.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -187,5 +189,29 @@ The caveat about the bench itself still stands: `search startpos depth 7`
 reuses a single warm Search and Table across iterations, so it measures
 TT-hit returns rather than a cold search. It is a valid relative base-vs-target
 comparison but not a measure of real search throughput.
+---
+
+author: @codex
+created: 2026-07-18 22:40
+---
+Resolved REV-1-01: strengthened the abort regression at the discriminating +1 node threshold and asserted full-PV preservation. The review graft showed this threshold fails on base e301527 and it passes on the new target.
+---
+
+author: @codex
+created: 2026-07-18 22:40
+---
+Implementation handoff
+Branch: task-46-aborted-search-subtrees
+Worktree: /Users/seabo/seaborg-worktrees/task-46-aborted-search-subtrees
+Base: e30152795f22a10d8a50fc028dedf1dbb3567d90
+Implementation target: 08d38b98004072e70c0db7fdebf6f5d25d2d22b0
+Resolved findings: REV-1-01
+Verification:
+- cargo fmt --check: passed
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: passed
+- cargo test --workspace: passed (203 passed, 1 ignored)
+- cargo test -p engine mid_subtree_abort_keeps_the_last_completed_iteration: passed
+- reviewer graft of +1 threshold on base e301527: failed as required
+Known failures: none
 ---
 <!-- COMMENTS:END -->
