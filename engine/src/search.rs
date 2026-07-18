@@ -409,8 +409,9 @@ pub struct Search<'engine> {
     stopping: &'engine AtomicBool,
     /// Time to at which to end search.
     stop_time: Option<Instant>,
-    /// Node count at the most recent deadline sample. Cancellation is deliberately checked on
-    /// every call; only the comparatively expensive clock read is throttled.
+    /// Node count at the most recent deadline sample. `usize::MAX` means that a sampled deadline
+    /// expired and remains latched while the search unwinds. Cancellation is deliberately checked
+    /// on every call; only the comparatively expensive clock read is throttled.
     last_deadline_check_nodes: Option<usize>,
     /// Whether the guaranteed-minimum search (one full ply) has completed. Both abort signals (the
     /// cancellation flag and the time deadline) are suppressed until this is set, so a search
@@ -840,15 +841,22 @@ impl<'engine> Search<'engine> {
         // responsive while still avoiding repeated reads within the same node.
         const DEADLINE_CHECK_INTERVAL_NODES: usize = if cfg!(debug_assertions) { 1 } else { 8 };
         let nodes = self.trace.all_nodes_visited();
-        if self
-            .last_deadline_check_nodes
-            .is_some_and(|last| nodes.saturating_sub(last) < DEADLINE_CHECK_INTERVAL_NODES)
-        {
-            return false;
+        if let Some(last) = self.last_deadline_check_nodes {
+            if last == usize::MAX {
+                return true;
+            }
+            if nodes.saturating_sub(last) < DEADLINE_CHECK_INTERVAL_NODES {
+                return false;
+            }
         }
 
-        self.last_deadline_check_nodes = Some(nodes);
-        stop_time <= Instant::now()
+        if stop_time <= Instant::now() {
+            self.last_deadline_check_nodes = Some(usize::MAX);
+            true
+        } else {
+            self.last_deadline_check_nodes = Some(nodes);
+            false
+        }
     }
 
     /// Returns the static evaluation, from the perspective of the side to move.
@@ -1714,6 +1722,22 @@ mod tests {
         assert!(
             search.stopping(),
             "cancellation must be read at the same node"
+        );
+    }
+
+    #[test]
+    fn expired_deadline_stays_latched_at_the_same_node() {
+        core::init::init_globals();
+
+        let flag = AtomicBool::new(false);
+        let table = Table::new(1);
+        let mut search = Search::new(Position::start_pos(), &flag, Some(Instant::now()), &table);
+        search.min_search_complete = true;
+
+        assert!(search.stopping(), "the elapsed deadline must stop search");
+        assert!(
+            search.stopping(),
+            "deadline expiry must remain latched during same-node unwind checks"
         );
     }
 
