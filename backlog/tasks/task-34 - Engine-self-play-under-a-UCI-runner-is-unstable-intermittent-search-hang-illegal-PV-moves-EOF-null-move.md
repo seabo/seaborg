@@ -3,11 +3,11 @@ id: TASK-34
 title: >-
   Engine self-play under a UCI runner is unstable: intermittent search hang,
   illegal PV moves, EOF null move
-status: Changes Requested
+status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-18 00:25'
-updated_date: '2026-07-18 11:48'
+updated_date: '2026-07-18 12:01'
 labels:
   - engine
   - search
@@ -57,10 +57,12 @@ No engine code fixes should land under this ticket; its deliverable is the inves
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Reproduce each of the three failure modes against the real FastChess build and scripted UCI input; capture concrete evidence (offending PV, bestmove 0000, thread samples at the hang).
-2. Root-cause each defect against the search/stop/UCI-I/O code paths (engine/src/engine.rs, search.rs, pv_table.rs, info.rs); determine independent vs shared cause and coupling with TASK-32.
-3. Record investigation findings as a durable backlog doc plus task notes (no engine code changes land under TASK-34).
-4. Create fresh, independently-implementable tickets speccing the fix for each root cause, each carrying forward the original fix-level requirements and regression-coverage expectations.
+1. Merge current master into the task branch; resolve the task-34 and task-32 Comments-block conflicts by preserving both sides (done: merge commit 80a4af6).
+2. Re-verify Defect 3 (EOF null move) against the merged TASK-32 code on this branch: run the isolated fixed-depth reproducer and the original depth-25 reproducer. Record evidence.
+3. If Defect 3 no longer reproduces, retire TASK-37 with that evidence rather than root-causing it; update the TASK-32 cross-reference comment accordingly and confirm no fix-level requirement is dropped (legal best-so-far on stdin EOF is now satisfied and covered by TASK-32's tests).
+4. Record TASK-39 coordination (UCI stop responsiveness under the abort-suppressed window) on TASK-34 and TASK-35, since it shares the stop/abort area.
+5. Fix the ordinal collision: TASK-35/36 carry 38000/39000, colliding with master's TASK-38/39.
+6. Update doc-2, task notes and the final summary to reflect the narrowed scope; re-run cargo fmt --check and cargo test --workspace; hand off to review.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
