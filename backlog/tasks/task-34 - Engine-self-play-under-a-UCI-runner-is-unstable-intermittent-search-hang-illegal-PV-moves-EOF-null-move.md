@@ -3,11 +3,11 @@ id: TASK-34
 title: >-
   Engine self-play under a UCI runner is unstable: intermittent search hang,
   illegal PV moves, EOF null move
-status: Ready to Merge
+status: Changes Requested
 assignee:
   - '@codex'
 created_date: '2026-07-18 00:25'
-updated_date: '2026-07-18 11:39'
+updated_date: '2026-07-18 11:48'
 labels:
   - engine
   - search
@@ -49,9 +49,9 @@ No engine code fixes should land under this ticket; its deliverable is the inves
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [x] #1 This ticket produces investigation findings, not engine fixes: no changes to engine search/stop/UCI-I/O code land under it
-- [x] #2 Each of the three failure modes (intermittent search/UCI deadlock; illegal PV moves; EOF null-move abort) is reproduced and root-caused, with documented evidence (repro conditions, captured state at the failure, offending positions/PVs, and the relevant code paths)
+- [ ] #2 Each of the three failure modes (intermittent search/UCI deadlock; illegal PV moves; EOF null-move abort) is reproduced and root-caused, with documented evidence (repro conditions, captured state at the failure, offending positions/PVs, and the relevant code paths)
 - [x] #3 The investigation determines whether the failures are independent or share a common root cause, and records any coupling with TASK-32 (time allocation) so overlapping fixes are not duplicated
-- [x] #4 One or more fresh, well-scoped implementation tickets are created that spec the fix for each defect (or root cause), each with its own acceptance criteria so it can be implemented and reviewed independently; those tickets carry forward the original fix-level requirements (no hang under repeated self-play, only-legal PV moves, legal best-so-far move on stdin EOF, and regression coverage of the stop/abort and EOF paths)
+- [ ] #4 One or more fresh, well-scoped implementation tickets are created that spec the fix for each defect (or root cause), each with its own acceptance criteria so it can be implemented and reviewed independently; those tickets carry forward the original fix-level requirements (no hang under repeated self-play, only-legal PV moves, legal best-so-far move on stdin EOF, and regression coverage of the stop/abort and EOF paths)
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -180,10 +180,72 @@ fix-level requirements (no hang under repeated self-play -> TASK-35 #1; only-leg
 stop/abort and EOF paths -> TASK-35 #3, TASK-36 #3, TASK-37 #4). TASK-37 records the
 TASK-32 dependency.
 ---
+
+author: @codex
+created: 2026-07-18 11:48
+---
+Merge attempt: 1
+Primary tip tested: c851bba (chore(backlog): file TASK-38 time allocation and TASK-39 stop responsiveness)
+Merged: 3280616 (branch tip; approved implementation target f81ee26)
+Verdict: ejected - textual conflict, primary not advanced
+
+Failing command:
+  git merge --no-ff 3280616
+  CONFLICT (content): Merge conflict in
+    backlog/tasks/task-34 - Engine-self-play-under-a-UCI-runner-is-unstable-...md
+  Automatic merge failed
+
+The trial merge was performed on a detached HEAD at c851bba and discarded; master
+is unchanged at c851bba and the primary worktree is clean. No integrated checks or
+benchmarks were run, because the merge did not produce a mergeable tree.
+
+Cause: master moved while TASK-34 was in review. c851bba modified this task's own
+file, adding a @georgeseabridge comment (2026-07-18 11:46) into the COMMENTS block,
+while the task branch independently added the implementation handoff and review
+approval comments to the same block. The conflict is confined to this one backlog
+file (frontmatter updated_date and the Comments section). No engine source is
+involved on either side.
+
+This is not merely a mechanical conflict: the incoming comment changes the scope of
+the deliverable and must be reconciled deliberately, not auto-resolved.
+
+Substantive input from the incoming master-side comment, verified against the
+TASK-32 branch by its author:
+- Failure mode 3 (EOF null move) is REPORTED RESOLVED as a side effect of TASK-32
+  (master a04e7d5 -> bestmove 0000; TASK-32 f4a4643 -> bestmove a2a3), because
+  Search::min_search_complete suppresses the cancellation flag until ply 1 completes.
+  The recommendation is to confirm mode 3 against the merged TASK-32 code and close
+  it out with that evidence rather than root-cause it, focusing this ticket on
+  modes 1 and 2.
+- Failure mode 2 (illegal PV) is confirmed NOT fixed and still reproducing on master,
+  independently of TASK-32. This agrees with the review finding.
+- TASK-39 (filed on master at 11:46) now covers UCI 'stop' responsiveness under
+  TASK-32's abort-suppressed window, i.e. the same stop/abort area, and explicitly
+  asks TASK-34 to coordinate to avoid duplicate investigation.
+
+Rework required (for $implement, on this branch):
+1. Merge current master into the task branch and resolve this task file's Comments
+   block so both the master-side comment and the branch-side handoff/review comments
+   are preserved.
+2. Revisit Defect 3 against TASK-32's implementation. If it no longer reproduces,
+   record that evidence and narrow or retire TASK-37 accordingly; TASK-37 as written
+   specs the guaranteed-minimum-search fix that TASK-32 appears to have already
+   implemented, so landing it unchanged risks duplicated engine work. TASK-37's own
+   text already anticipates this ("if TASK-32 lands first, narrow TASK-37"), so this
+   is a scope confirmation rather than a contradiction.
+3. Record the TASK-39 coordination on this ticket and/or TASK-35, since TASK-39
+   covers the same stop/abort area.
+4. Note for the reviewer: TASK-35 and TASK-36 carry ordinals 38000 and 39000, which
+   now collide with TASK-38 (38000) and TASK-39 (39000) filed on master. Cosmetic
+   board-ordering issue only, but worth correcting during rework.
+
+AC #2 and AC #4 are unchecked and the final summary cleared, because both rest on
+Defect 3 being an open defect requiring its own fix ticket, which the incoming
+evidence disputes. AC #1 and AC #3 are unaffected and remain proven.
+
+Review evidence that remains valid and need not be re-derived: Defect 2 reproduces
+(FEN 8/3n1P2/6R1/4k1P1/P1Q5/8/4N3/4K3 b - - 0 53, cold TT, go depth 4; PV plies 1-3
+legal, ply 4 c5f8 illegal) and Defect 1 did not reproduce in an independent 120-game
+debug self-play run.
+---
 <!-- COMMENTS:END -->
-
-## Final Summary
-
-<!-- SECTION:FINAL_SUMMARY:BEGIN -->
-Investigation-only ticket: root-caused the three self-play robustness defects and specced the fixes as fresh tickets, with no engine code changed (base d9a138c..f81ee26 touches backlog/ only). Findings recorded in doc-2: Defect 3 (EOF null move) is Cancelled(None) reaching format_search_outcome because iterative_deepening records no SearchResult when a cancel lands before depth 1; Defect 2 (illegal PV) is the triangular PVTable splicing stale sibling rows via copy_within on cutoff/mate-leaf paths; Defect 1 (completion deadlock) is the driver's search-completion signal depending solely on a dropped-Sender channel disconnect waking a parked select!. Defects 1 and 2 are independent; Defect 3 shares TASK-32's root cause (no guaranteed legal root move before an abort), recorded on both tickets. Fixes specced as TASK-35 (deadlock), TASK-36 (illegal PV) and TASK-37 (EOF, depends on TASK-32). Verified by review: cargo fmt --check clean and cargo test --workspace green (109 passed, 0 failed); Defect 3 reproduced (bestmove 0000 from startpos); Defect 2 reproduced via FastChess depth=4 self-play (40x 'Illegal PV move - move c5f8') and the offending position recovered (FEN 8/3n1P2/6R1/4k1P1/P1Q5/8/4N3/4K3 b - - 0 53) with python-chess confirming PV plies 1-3 legal and ply 4 illegal. Defect 1's hang did not reproduce in an independent 120-game debug self-play run, so its stated repro rate is optimistic; the finding stands on the recorded thread samples plus review confirmation that retained-Sender and output-buffering explanations are both ruled out.
-<!-- SECTION:FINAL_SUMMARY:END -->
