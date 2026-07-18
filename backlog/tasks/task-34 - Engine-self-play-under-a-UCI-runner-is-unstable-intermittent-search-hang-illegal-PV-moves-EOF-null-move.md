@@ -181,6 +181,22 @@ stop/abort and EOF paths -> TASK-35 #3, TASK-36 #3, TASK-37 #4). TASK-37 records
 TASK-32 dependency.
 ---
 
+author: @georgeseabridge
+created: 2026-07-18 11:46
+---
+Cross-reference from the TASK-32 review (verified against master a04e7d5 and the TASK-32 branch build).
+
+Failure mode 2 (illegal PV moves) is NOT fixed and still reproduces on master: 33 'Warning; Illegal PV move' emissions across a 6-game FastChess self-play match at tc=10+0.1. They cluster on mate scores (e.g. 'score mate 3 ... pv e6a6 a7b8 a6b6 b8a7 h1h5', where b8a7 is illegal). Played moves remain legal and games terminate normally, so this stays an info-line PV defect. Not caused by TASK-32: it reproduces identically on the TASK-32 base and on the TASK-32 branch, and that change touches neither PVTable population nor info.rs formatting.
+
+Failure mode 3 (EOF null move) appears to be RESOLVED as a side effect of TASK-32, and should be re-verified rather than re-investigated from scratch. Isolated reproducer with a fixed depth so the time budget is not a confounder:
+  printf 'uci\nisready\nposition startpos\ngo depth 8\n' | seaborg --uci
+  master a04e7d5   -> bestmove 0000
+  TASK-32 f4a4643  -> bestmove a2a3
+Mechanism: on EOF the driver cancels the search, and TASK-32's Search::min_search_complete suppresses the cancellation flag until the first ply completes, so a legal root move is always recorded before any abort can take effect. Once past ply 1, an abort yields SearchOutcome::Cancelled(Some(result)) and SearchOutcome::result() returns the last completed iteration's move, so a legal move is emitted in that case too.
+
+Recommended adjustment to this ticket's scope: confirm mode 3 against the merged TASK-32 code and, if it no longer reproduces, close it out with that evidence instead of root-causing it, leaving the investigation to focus on modes 1 and 2. Note also that TASK-39 now covers a related question in the same stop/abort area (whether TASK-32's abort-suppressed window bounds UCI 'stop' responsiveness), so coordinate with it to avoid duplicate investigation.
+---
+
 author: @codex
 created: 2026-07-18 11:48
 ---
