@@ -3,11 +3,11 @@ id: TASK-41
 title: >-
   Throttle the clock read in Search::stopping() to avoid a per-node
   Instant::now()
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-18 12:17'
-updated_date: '2026-07-18 23:28'
+updated_date: '2026-07-18 23:32'
 labels:
   - engine
   - search
@@ -57,3 +57,24 @@ Measurement (2026-07-19, Apple/macOS host, release Criterion `search startpos de
 
 Implementation samples release-build deadlines every 8 visited nodes and debug-build deadlines once per newly visited node; repeated stopping checks within a node do not read the clock. The cancellation atomic remains the first check on every call. The first guaranteed ply still bypasses both abort sources unchanged. The wall-time regression uses a 20 ms budget with 100 ms scheduling tolerance.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @codex
+created: 2026-07-18 23:32
+---
+Implementation handoff
+Branch: task-41-clock-read-throttle
+Worktree: /Users/seabo/seaborg-worktrees/task-41-clock-read-throttle
+Base: ebf428924df7afef6616ad179b6c186d0faa4b6b
+Implementation target: 9598721f1adcc43387ead42b544a510525579190
+Resolved findings: none
+Verification:
+- `cargo fmt --check`: passed
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`: passed
+- `cargo test --workspace`: passed (203 passed, 1 ignored)
+- `cargo bench --bench search -- --warm-up-time 2 --measurement-time 5 --sample-size 30`: median improved from 70.467 us to 41.449 us; derived NPS 8.22M to 13.97M (+70.0%)
+Known failures: none
+---
+<!-- COMMENTS:END -->
