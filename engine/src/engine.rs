@@ -19,8 +19,18 @@ enum Input {
 
 enum DriverEvent {
     Input(Result<Input, crossbeam_channel::RecvError>),
-    Search(Result<SearchEvent, crossbeam_channel::RecvError>),
+    /// A typed update from a still-running search.
+    SearchProgress(SearchEvent),
+    /// The active search's worker thread has finished, however that was observed.
+    SearchComplete,
 }
+
+/// How often [`next_event`] rechecks a running search's liveness directly.
+///
+/// This is only a backstop. Completion is normally observed the instant the worker
+/// signals it; the poll exists so that a lost channel wakeup costs at most this much
+/// latency instead of deadlocking the driver forever (TASK-35).
+const SEARCH_LIVENESS_POLL: Duration = Duration::from_millis(50);
 
 /// Authoritative engine identity used for UCI `id` responses and human
 /// diagnostics. All fields are supplied by the host binary so that the UCI
@@ -138,11 +148,15 @@ where
                 DriverEvent::Input(Ok(Input::Command(command))) => {
                     handle_command(&info, command, &mut pos, &mut output, &mut errors);
                 }
-                DriverEvent::Search(Ok(event)) => {
+                DriverEvent::SearchProgress(event) => {
                     let _ = writeln!(output, "{}", format_search_event(&event));
                 }
-                DriverEvent::Search(Err(_)) => {
-                    finish_search(active_search.take().unwrap(), &mut output);
+                DriverEvent::SearchComplete => {
+                    // `next_event` only reports completion for a search it was given,
+                    // so a handle is necessarily active here.
+                    if let Some(search) = active_search.take() {
+                        finish_search(search, &mut output);
+                    }
                 }
             }
         }
@@ -178,13 +192,28 @@ fn read_commands<R: BufRead>(mut input: R, sender: crossbeam_channel::Sender<Inp
 }
 
 fn next_event(commands: &Receiver<Input>, search: Option<&SearchHandle>) -> DriverEvent {
-    if let Some(search) = search {
+    let Some(search) = search else {
+        return DriverEvent::Input(commands.recv());
+    };
+
+    loop {
         select! {
-            recv(commands) -> command => DriverEvent::Input(command),
-            recv(search.events()) -> event => DriverEvent::Search(event),
+            recv(commands) -> command => return DriverEvent::Input(command),
+            recv(search.events()) -> event => match event {
+                Ok(event) => return DriverEvent::SearchProgress(event),
+                // The worker dropped its event `Sender`. This used to be the only
+                // completion signal; it is now merely the earliest of three.
+                Err(_) => return DriverEvent::SearchComplete,
+            },
+            recv(search.finished()) -> _ => return DriverEvent::SearchComplete,
+            default(SEARCH_LIVENESS_POLL) => {
+                // Nothing woke us. Ask the thread itself rather than trusting that a
+                // wakeup would have arrived, so a finished search is always noticed.
+                if search.is_finished() {
+                    return DriverEvent::SearchComplete;
+                }
+            }
         }
-    } else {
-        DriverEvent::Input(commands.recv())
     }
 }
 
@@ -471,6 +500,71 @@ mod tests {
 
         input_tx.send(b"quit\n".to_vec()).unwrap();
         driver.join().unwrap();
+    }
+
+    /// Completion must be observed through the explicit signal, never only through
+    /// the events channel disconnecting when the worker drops its `Sender`.
+    ///
+    /// The test pins that channel open for the whole search, which is exactly the
+    /// state a lost disconnect wakeup leaves the driver in (TASK-35 / doc-2). Before
+    /// the fix `next_event` had no other way to learn the worker had exited, so this
+    /// parks forever; the watchdog turns that hang into a failure instead of a
+    /// wedged test binary.
+    #[test]
+    fn search_completion_is_observed_without_an_events_disconnect() {
+        const ITERATIONS: usize = 20;
+        const PER_SEARCH_TIMEOUT: Duration = Duration::from_secs(30);
+
+        let (done_tx, done_rx) = unbounded::<usize>();
+        let searcher = thread::spawn(move || {
+            core::init::init_globals();
+            let engine = SearchEngine::new(1);
+            // Never written to, but kept alive so the command arm of the select
+            // stays open and completion is the only way out of `next_event`.
+            let (_command_tx, command_rx) = unbounded::<Input>();
+
+            for iteration in 0..ITERATIONS {
+                // Alternate the two ways a search ends: running to its depth limit,
+                // and being cancelled while unbounded.
+                let cancelled = iteration % 2 == 1;
+                let limit = if cancelled {
+                    SearchLimit::Infinite
+                } else {
+                    SearchLimit::Depth(2)
+                };
+                let (handle, retained_events) =
+                    engine.start_retaining_events(Position::start_pos(), limit);
+                if cancelled {
+                    handle.cancel();
+                }
+
+                loop {
+                    match next_event(&command_rx, Some(&handle)) {
+                        DriverEvent::SearchProgress(_) => {}
+                        DriverEvent::SearchComplete => break,
+                        DriverEvent::Input(_) => unreachable!("no commands are sent"),
+                    }
+                }
+
+                let outcome = handle.wait();
+                assert_eq!(outcome.was_cancelled(), cancelled);
+                drop(retained_events);
+                if done_tx.send(iteration).is_err() {
+                    break;
+                }
+            }
+        });
+
+        for iteration in 0..ITERATIONS {
+            match done_rx.recv_timeout(PER_SEARCH_TIMEOUT) {
+                Ok(observed) => assert_eq!(observed, iteration),
+                Err(_) => panic!(
+                    "search {iteration} completed but the driver never observed it; \
+                     completion still depends on the events channel disconnecting"
+                ),
+            }
+        }
+        searcher.join().unwrap();
     }
 
     struct ChannelReader(Receiver<Vec<u8>>);

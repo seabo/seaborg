@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 
 const MAX_DEPTH: u8 = 255;
 
@@ -140,6 +140,20 @@ impl SearchEngine {
 
     /// Start searching a cloned position on a background thread.
     pub fn start(&self, position: Position, limit: SearchLimit) -> SearchHandle {
+        self.start_inner(position, limit).0
+    }
+
+    /// Start a search while also handing back a clone of the worker's event `Sender`.
+    ///
+    /// Production callers use [`SearchEngine::start`] and drop the extra sender
+    /// immediately. Tests retain it to hold the events channel open, which lets them
+    /// assert that completion is observed through the explicit signal rather than
+    /// through a channel disconnect.
+    fn start_inner(
+        &self,
+        position: Position,
+        limit: SearchLimit,
+    ) -> (SearchHandle, Sender<SearchEvent>) {
         if let SearchLimit::Depth(depth) = limit {
             assert!(depth > 0, "search depth must be greater than zero");
         }
@@ -148,6 +162,10 @@ impl SearchEngine {
         let thread_cancellation = cancellation.clone();
         let table = Arc::clone(&self.table);
         let (events, receiver) = unbounded();
+        let events_probe = events.clone();
+        // Capacity 1 and a single send per worker, so signalling completion can never
+        // block the worker thread on its way out.
+        let (finished_tx, finished_rx) = bounded(1);
         let join = std::thread::spawn(move || {
             let (depth, deadline) = match limit {
                 SearchLimit::Depth(depth) => (depth, None),
@@ -157,18 +175,39 @@ impl SearchEngine {
             let mut search =
                 Search::with_events(position, &thread_cancellation.0, deadline, &table, events);
             let result = search.run::<Master>(depth);
-            if thread_cancellation.is_cancelled() {
+            let outcome = if thread_cancellation.is_cancelled() {
                 SearchOutcome::Cancelled(result)
             } else {
                 SearchOutcome::Completed(result)
-            }
+            };
+            // Release the event `Sender` before signalling, so a driver woken by the
+            // signal finds the full event backlog already queued and terminated.
+            drop(search);
+            // The explicit completion signal. The driver must never have to infer that
+            // this thread finished from the events channel disconnecting: that wakeup
+            // has been observed to be lost, parking the driver forever (TASK-35).
+            let _ = finished_tx.send(());
+            outcome
         });
 
-        SearchHandle {
+        let handle = SearchHandle {
             cancellation,
             events: receiver,
+            finished: finished_rx,
             join: Some(join),
-        }
+        };
+        (handle, events_probe)
+    }
+
+    /// Test-only variant of [`SearchEngine::start`] that keeps the worker's event
+    /// `Sender` alive, so the events channel never disconnects when the worker exits.
+    #[cfg(test)]
+    pub(crate) fn start_retaining_events(
+        &self,
+        position: Position,
+        limit: SearchLimit,
+    ) -> (SearchHandle, Sender<SearchEvent>) {
+        self.start_inner(position, limit)
     }
 }
 
@@ -176,6 +215,7 @@ impl SearchEngine {
 pub struct SearchHandle {
     cancellation: CancellationToken,
     events: Receiver<SearchEvent>,
+    finished: Receiver<()>,
     join: Option<JoinHandle<SearchOutcome>>,
 }
 
@@ -186,6 +226,16 @@ impl SearchHandle {
 
     pub fn events(&self) -> &Receiver<SearchEvent> {
         &self.events
+    }
+
+    /// Receives exactly one message once the worker thread has finished, whether the
+    /// search completed or was cancelled.
+    ///
+    /// This is the authoritative completion signal. Unlike the events channel
+    /// disconnecting, it is an ordinary message send on a channel the driver is
+    /// already selecting over.
+    pub fn finished(&self) -> &Receiver<()> {
+        &self.finished
     }
 
     pub fn cancel(&self) {
