@@ -1,11 +1,11 @@
 ---
 id: TASK-49
 title: Correct static exchange evaluation for pawn promotions
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-18 18:30'
-updated_date: '2026-07-18 21:51'
+updated_date: '2026-07-18 22:13'
 labels: []
 dependencies: []
 references:
