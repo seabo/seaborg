@@ -29,3 +29,11 @@ harness = false
 [[bench]]
 name = "search"
 harness = false
+
+[[bench]]
+name = "bb"
+harness = false
+
+[[bench]]
+name = "square"
+harness = false
