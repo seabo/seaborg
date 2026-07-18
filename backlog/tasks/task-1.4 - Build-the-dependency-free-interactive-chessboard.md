@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 15:40'
-updated_date: '2026-07-18 20:13'
+updated_date: '2026-07-18 21:09'
 labels: []
 dependencies:
   - TASK-1.3
@@ -39,10 +39,9 @@ Create the owned HTML, CSS, TypeScript, and SVG board experience that renders au
 <!-- SECTION:PLAN:BEGIN -->
 Rework after human feedback on target 9319c0d27963a721fd1c04c3d02e8cb2e8f56eb0.
 
-1. Resolve HUMAN-2 by defining all eight board grid rows explicitly as equal minmax(0, 1fr) tracks, retaining the fixed 1:1 board container and zero-minimum square sizing.
-2. Add a browser regression that compares every row and column rectangle in sparse and occupied positions at desktop and narrow widths, proving that piece contents cannot affect geometry.
-3. Keep Lichess cburnett out of the repository because its declared GPLv2+ licence fails the requested MIT condition. Present the verified MIT-compatible Lichess alternatives and wait for the human artwork choice before resolving HUMAN-1.
-4. After the artwork choice, replace the sprite with the selected licensed source plus attribution, rerun frontend/browser verification and all required Rust gates, then create a new immutable review target.
+1. Resolve HUMAN-2 with eight explicit equal grid tracks on both axes, zero-minimum square sizing, a focused asset regression, and real-browser rectangle measurements across occupied, sparse, stressed, desktop, and narrow layouts.
+2. Record the human decision to park HUMAN-1 after confirming the Lichess default set is not MIT; retain the current locally owned piece sprite and create no follow-up work.
+3. Run frontend verification and all repository-required Rust gates, then hand the new immutable target to independent review.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
@@ -59,6 +58,8 @@ Rework after human feedback:
 Resolved HUMAN-2 in 9370e8f. The board now declares eight explicit minmax(0, 1fr) rows and columns, and squares have zero minimum dimensions, so intrinsic SVG or empty-row contents cannot resize a track. The focused embedded-asset regression passed. Chrome geometry verification measured all 64 squares: desktop occupied and sparse/stressed positions both stayed exactly 735.625px square with every cell 91.953125px; at 390px viewport the board stayed 348.03125px square with only normal subpixel distribution (43.5-43.515625px).
 
 HUMAN-1 remains pending human choice. Lichess COPYING.md declares its default public/piece/cburnett set GPLv2+, not MIT, so it was not imported. Lichess declares fantasy, spatial, and celtic piece sets MIT; its separate public/images/staunton collection is also MIT except named subdirectories, but it is not the default 2D set.
+
+HUMAN-1 disposition: the human explicitly chose to park the piece-set preference after reviewing the MIT-compatible alternatives. The current locally owned sprite remains in scope, no third-party artwork is imported, and no follow-up task is requested.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -93,5 +94,11 @@ Human feedback on implementation target 9319c0d27963a721fd1c04c3d02e8cb2e8f56eb0
 HUMAN-1: Replace the current custom piece artwork; the preferred Lichess default set may be used only if MIT licensed. Licence research found Lichess public/piece/cburnett is GPLv2+, not MIT, so importing it is pending a human choice of an MIT-compatible alternative.
 
 HUMAN-2: The board rows resize according to their piece contents. The 8x8 board geometry must remain completely rigid for every position.
+---
+
+author: @codex
+created: 2026-07-18 21:09
+---
+Human disposition for rework: park HUMAN-1 without changing artwork or creating follow-up work; proceed to review with HUMAN-2 fixed.
 ---
 <!-- COMMENTS:END -->
