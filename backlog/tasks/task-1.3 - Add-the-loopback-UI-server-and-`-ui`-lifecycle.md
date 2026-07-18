@@ -1,11 +1,11 @@
 ---
 id: TASK-1.3
 title: Add the loopback UI server and `--ui` lifecycle
-status: In Review
+status: Changes Requested
 assignee:
   - '@codex'
 created_date: '2026-07-17 15:40'
-updated_date: '2026-07-18 12:31'
+updated_date: '2026-07-18 13:32'
 labels: []
 dependencies:
   - TASK-1.2
@@ -91,5 +91,101 @@ Verification:
 Known failures: none
 
 Reviewer notes. The dependency-free std::net server and the placeholder client were both confirmed with the user before implementation; TASK-1.4 owns the real board. Two deliberate scope boundaries worth confirming: GET /api/state and /api/events need no token (AC #4 scopes the token to mutations, and cross-origin reads are blocked by Host/Origin plus the absence of CORS headers), and there is no cap on concurrent connections, which is a local-process denial-of-service only and fits TASK-1.5 integration hardening rather than this task.
+---
+
+author: @codex
+created: 2026-07-18 13:32
+---
+Review attempt: 1
+Reviewed branch: task-1.3-ui-server
+Reviewed implementation: 7b7225a396534484dc856e33059e2d41310f54d7
+Verdict: changes_requested
+
+All seven acceptance criteria are met and were independently proven (see Verification).
+Both findings below are resource-ownership defects in the new server: neither breaks an
+acceptance criterion, but each was reproduced deterministically against the built binary,
+and each contradicts design intent already stated in this patch's own comments.
+
+REV-1-01 [P1] An unbounded thread-per-connection kills the whole process
+Location: engine/src/ui/server.rs:225
+Impact: `thread::spawn` panics on EAGAIN and is called on the accept-loop thread, so the
+  panic unwinds `UiServer::run`; `serving.join()` (src/cmdline.rs:100) then reports and
+  exits 1. The listener has no connection cap, no pool, and no bound on concurrent SSE
+  streams, so the engine process is lost mid-game. No protocol bytes are required: the
+  `check_origin_headers` and `authorized` gates both run after the thread already exists.
+  This is the same failure mode the accept arm deliberately guards (server.rs:219-222
+  reasons explicitly about descriptor exhaustion); the adjacent spawn is unprotected, which
+  reads as an oversight rather than a considered tradeoff. It is also reachable without an
+  attacker: a low per-process thread limit turns ordinary stream churn into a hard exit.
+Reproduction: with `seaborg --ui --ui-port 8742 --no-open`, open bare TCP connections and
+  send nothing at all. At 4106 connections on this machine:
+    panicked at .../thread/functions.rs:131:29:
+    failed to spawn thread: Os { code: 35, kind: WouldBlock, ... }
+    the Seaborg UI server stopped unexpectedly
+  A follow-up connect then gets ECONNREFUSED; the process is gone.
+Expected: a failed spawn is handled like a failed accept - drop or refuse the connection and
+  keep serving. A cap on concurrent connections/streams would bound the condition at source.
+
+REV-1-02 [P2] The drain path has no overall deadline, so one client pins a thread indefinitely
+Location: engine/src/ui/server.rs:283-286
+Impact: `DRAIN_TIMEOUT` is installed as a per-read socket timeout, not a deadline, so any
+  client delivering at least one byte per 2s keeps `io::copy` productive up to `MAX_DRAIN`
+  (1 MiB) - on the order of weeks on a single thread. This is exactly the anti-pattern
+  `http::apply_deadline` (http.rs:165-178) was written to prevent on the request path
+  ("a client that dribbles bytes cannot hold a connection thread indefinitely"); the drain
+  path never calls it. It also multiplies REV-1-01 by making each pinned thread cheap and
+  long-lived rather than bounded by REQUEST_DEADLINE.
+Reproduction: send `POST /api/move` with `Content-Length: 20000` (over MAX_BODY, so 413 plus
+  drain), then one `x` byte every 1.5s. Observed: 413 returned, then the connection held open
+  for the full 60.2s of dripping, having sent 40 of 20000 bytes, and closing only when the
+  client stopped.
+Expected: bound the drain by an absolute deadline as the request path does, in addition to
+  the existing MAX_DRAIN byte cap.
+
+Non-blocking observations (no action required for this task; do not file follow-ups without
+human approval):
+- server.rs:294-308 - GET routes accept a missing `Origin`. The doc comment's rationale
+  ("the token requirement covers separately") does not hold for GET, since no GET route
+  requires a token; a cross-origin `<img src=".../api/events">` passes and pins a thread.
+  Disclosure was refuted (nosniff + content types + `frame-ancestors 'none'` hold), so the
+  impact is confined to the DoS surface above, but the stated reasoning is incorrect.
+- session.rs:68-71 - `shutdown()` calls `notify_all()` without holding `published`, while
+  `wait_for_update` reads `running` under it. A lost wakeup leaves an SSE thread parked up to
+  KEEPALIVE_INTERVAL (15s) past shutdown. Bounded; both existing tests sleep 20ms first, so
+  the window is not covered.
+- wire.rs:85-108 - `write_score` does not special-case `Score::INF_P`/`INF_N` before the mate
+  branches, though the comment says it mirrors `Score`'s `Display`, which does. INF_P would
+  render as `{"kind":"mate","moves":-4949}` - a sign inversion. No live path found
+  (search.rs:734 asserts `best_value > Score::INF_N` and terminal positions are never
+  searched), so this is latent only.
+- json.rs:255-262 / 179-195 - `from_str_radix` accepts `\u+041`, which also shifts the escape
+  window and bypasses the lone-surrogate rejection; `number()` accepts `01`, `1.`, `-.5`.
+  Harmless downstream (`as_u64` rejects non-finite/negative/fractional/>2^53, and strings are
+  matched against fixed allowlists) but laxer than the module's "deliberately strict" contract.
+- http.rs:193-195 - a request truncated at EOF after a complete header line is served as
+  though complete, because `read_line` cannot distinguish EOF from the terminating blank line.
+  No smuggling risk (always `Connection: close`, no pipelining, TE rejected).
+
+Verification:
+- cargo fmt --check: passed
+- cargo test --workspace --no-fail-fast: passed, 182 tests, 0 failures, 1 pre-existing ignored
+- cargo test -p engine ui:: (5 consecutive runs): 67/67 each run, no flakes
+- cargo clippy -p engine --all-targets: 0 warnings in engine/src/ui and src/cmdline.rs
+  (remaining warnings are pre-existing in core/engine)
+- git diff --check 8ceb480..7b7225a: clean
+- Benchmarks not run: the diff is additive (engine/src/ui/*, one `pub mod ui;` line, and
+  src/cmdline.rs) and touches no movegen or search hot path.
+- AC#1/#2/#3/#4/#5 proven live against the release binary over curl and raw sockets: loopback
+  bind and URL print, --ui-port 8731 and --no-open, asset/state GET, POST move (e2e4 applied,
+  engine replied a7a6), SSE head plus streaming plus reconnection (resume at current id
+  replays nothing; a future id 999999 correctly re-sends current state), missing/wrong token
+  403 invalid_token, Host: evil.com 403 forbidden_host, cross-origin POST with a valid token
+  403 forbidden_origin, oversized body 413, path traversal 404, and CSP/no-store/nosniff/
+  Referrer-Policy present on every response.
+- AC#6 proven live: --ui --uci, --ui --dev, and --uci --dev each rejected with exit code 2;
+  --ui-port and --no-open each require --ui.
+- AC#7 reviewed for substance, not presence: the 67 tests assert distinct error codes,
+  boundary cases (body exactly at MAX_BODY, truncated and extended tokens), and that rejected
+  commands leave the revision unchanged.
 ---
 <!-- COMMENTS:END -->
