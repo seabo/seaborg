@@ -1,17 +1,19 @@
 ---
 id: TASK-37
 title: Add regression coverage for the stdin-EOF / stop-abort bestmove path
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-18 01:21'
-updated_date: '2026-07-18 23:11'
+updated_date: '2026-07-18 23:13'
 labels:
   - engine
   - search
   - uci
 dependencies:
   - TASK-32
+modified_files:
+  - engine/src/engine.rs
 priority: medium
 type: bug
 ordinal: 42000
@@ -78,5 +80,23 @@ The original defect no longer reproduces: TASK-32 (merged 8ceb480) fixed it as a
 This ticket therefore no longer specs an engine fix. It retains only the regression coverage that TASK-34 AC #4 requires to be carried forward, because TASK-32's unit tests cover the search-level abort paths but nothing exercises the driver-level EOF path (Input::Closed during a live search) end to end and nothing pins the terminal-position 'bestmove 0000' case. Priority dropped high -> medium accordingly: this is defence against regression, not a live defect.
 
 It was NOT retired outright precisely so that requirement does not become homeless. Ordinal moved 40000 -> 42000 to clear the collision with TASK-38/TASK-39 filed on master.
+---
+
+author: @codex
+created: 2026-07-18 23:13
+---
+Implementation handoff
+Branch: task-37-stdin-eof-regression
+Worktree: /Users/seabo/seaborg-worktrees/task-37-stdin-eof-regression
+Base: ebf428924df7afef6616ad179b6c186d0faa4b6b
+Implementation target: 48db98524f7eb2b7f585327d50c99b2b31845f58
+Resolved findings: none
+Verification:
+- cargo fmt --check: passed
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: passed
+- cargo test --workspace: passed (35 core + 163 engine + 5 integration + 1 doctest; 0 failed, 1 ignored)
+- cargo test -p engine engine::tests::stdin_eof_ repeated 20 times: passed (40/40 test executions)
+- Mutation check with min_search_complete suppression bypassed: both new tests failed on non-terminal bestmove 0000; production guard restored before required checks
+Known failures: none
 ---
 <!-- COMMENTS:END -->
