@@ -1,11 +1,11 @@
 ---
 id: TASK-22
 title: Make UCI output protocol clean and version consistent
-status: In Progress
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:15'
-updated_date: '2026-07-18 00:53'
+updated_date: '2026-07-18 01:13'
 labels:
   - uci
   - release
@@ -55,6 +55,10 @@ Implementation summary:
 - `uci` handshake now emits `id name <name> <version>` / `id author <author>` from the threaded identity.
 - Error/parse-failure routing to stderr was already in place and is preserved; tests now assert stdout stays empty for malformed/unsupported input.
 - Tests (engine::tests, driving run() directly): added startup_emits_no_stdout_and_a_trimmed_stderr_banner, uci_handshake_stream_is_exact, readiness_stream_is_exact; updated eof/replacement/standard-state/malformed tests to assert exact stdout streams and banner-only stderr.
+
+Rework (merge-eject resolution):
+Resolved merge-eject finding (comment #3): the integrated result on primary failed engine::tests::uci_new_game_is_an_owner_handled_hash_boundary (asserted errors.is_empty()) because TASK-22 routes the startup banner to stderr. Rebased this task branch onto current primary (base 1ae6cce, which contains TASK-12's landed new_game() handling and that test) and changed the inherited assertion to diagnostics_after_banner(&errors) == "" — consistent with the other TASK-22 exact-stream tests. This preserves TASK-12's silent-ucinewgame guarantee (no error diagnostics) and TASK-22's banner-on-stderr behavior. No product behavior changed; only a test expectation was reconciled. New immutable target: 41b5dfd.
+Verification on integrated result (base 1ae6cce): cargo build ok; cargo test --workspace ok (engine 71 passed/1 ignored incl. the reconciled test and all TASK-22 exact-stream tests, core suite, build_metadata 5, doctests ok); cargo fmt --all --check ok; cargo clippy -p engine -p seaborg --lib --bins reports no warnings citing engine/src/engine.rs or src/cmdline.rs; the pre-existing benches/square.rs E0423 exists at base 1ae6cce and is untouched by this patch (git diff 1ae6cce..target -- benches/ is empty). Manual smoke: printf 'uci\nucinewgame\nisready\nquit\n' | seaborg --uci -> stdout is pure UCI (id name seaborg 0.1.0 / id author / option / uciok / readyok); stderr = single banner 'seaborg 0.1.0 by George Seabridge (commit <12>)'; seaborg --version = seaborg 0.1.0.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -127,10 +131,61 @@ Root cause (semantic conflict, not textual): master advanced past this task's ba
 
 Required rework (on this task branch, reusing the worktree): rebase/rework onto current primary and reconcile the stderr-diagnostics expectation with TASK-12's now-landed test. Options for the implementer to choose: update the inherited uci_new_game test to assert diagnostics_after_banner(&errors) == "" (consistent with the other TASK-22 tests) rather than errors.is_empty(); this keeps both behaviors. Re-verify the full suite on a fresh integrated result. No code was changed by this merge attempt; approval on 0269c0a is void until a new target is produced and re-reviewed.
 ---
+
+author: @codex
+created: 2026-07-18 00:58
+---
+Implementation handoff
+Branch: task-22-uci-output-protocol
+Worktree: /Users/seabo/seaborg-worktrees/task-22-uci-output-protocol
+Base: 1ae6cce891de11e1439d0d3363862de2261b4aff
+Implementation target: 41b5dfd134679effc0e21156aca2c100c7af4ce8
+Resolved findings: merge-eject finding (comment #3, review attempt basis) — inherited uci_new_game test reconciled with TASK-22 stderr banner
+Verification:
+- cargo build: ok
+- cargo test --workspace: ok (engine 71 passed, 1 ignored; core suite ok; build_metadata 5; doctests ok)
+- cargo fmt --all -- --check: ok
+- cargo clippy -p engine -p seaborg --lib --bins: no warnings cite engine/src/engine.rs or src/cmdline.rs
+- manual UCI smoke: stdout pure UCI, banner isolated to stderr, --version = seaborg 0.1.0
+Known failures: benches/square.rs E0423 (cargo clippy --all-targets / bench build) is a pre-existing baseline error present at base 1ae6cce; this patch does not touch benches/ (git diff 1ae6cce..41b5dfd -- benches/ is empty)
+Note: rebased onto current primary 1ae6cce, so base and target SHAs supersede the prior cycle's (base 299f5ec / target 0269c0a). Prior review approval on 0269c0a is void; this new target 41b5dfd requires a fresh review.
+---
+
+author: @codex
+created: 2026-07-18 01:03
+---
+Review attempt: 2
+Reviewed branch: task-22-uci-output-protocol
+Reviewed implementation: 41b5dfd134679effc0e21156aca2c100c7af4ce8
+Base: 1ae6cce891de11e1439d0d3363862de2261b4aff
+Verdict: approved
+
+Scope: base-to-target diff touches only engine/src/engine.rs and src/cmdline.rs (plus this task file). Post-target commit 13a2cea is handoff metadata only (task file). Base 1ae6cce is an ancestor of the target and the target is an ancestor of the tip.
+
+Rework verification (merge-eject finding, comment #3): the inherited TASK-12 test engine::tests::uci_new_game_is_an_owner_handled_hash_boundary changed only its assertion from errors.is_empty() to diagnostics_after_banner(&errors) == "" — this preserves TASK-12's silent-ucinewgame guarantee (no error diagnostics) while accommodating TASK-22's startup banner on stderr. Minimal and semantically sound; no product behavior changed.
+
+Acceptance criteria (all proven):
+- #1 No unsolicited non-UCI stdout before uci: startup_emits_no_stdout_and_a_trimmed_stderr_banner asserts stdout=='' for an empty script; smoke shows first stdout byte is the uci handshake 'id name'.
+- #2 Errors/diagnostics never invalid protocol on stdout: malformed_and_unsupported_commands_only_write_to_stderr asserts stdout=='' while stderr carries UnexpectedToken/InvalidOption/invalid move; smoke 'register' yields empty stdout.
+- #3 Single authoritative version: EngineInfo.version=env!(CARGO_PKG_VERSION) and clap #[clap(version)] both resolve to the seaborg crate 0.1.0; id name, --version, and banner all report seaborg 0.1.0 (was 0.0.2/0.1.0 drift).
+- #4 Commit metadata trimmed to diagnostic channel: EngineInfo::short_commit() trims to 12 chars, written to stderr only; startup test asserts the full hash never appears; smoke stderr banner 'commit <12>'.
+- #5 Exact-stream integration tests: uci_handshake_stream_is_exact and readiness_stream_is_exact assert byte-exact stdout; startup test asserts exact stdout/stderr; malformed test asserts exact empty stdout — all drive run() end-to-end.
+
+Verification (reviewed target 41b5dfd; worktree /Users/seabo/seaborg-worktrees/task-22-uci-output-protocol):
+- cargo build: ok
+- cargo test --workspace: ok (engine 71 passed/1 ignored, core 35, build_metadata 5, doctests ok)
+- cargo fmt --all -- --check: clean
+- cargo clippy -p engine -p seaborg --lib --bins: no warning cites engine/src/engine.rs or src/cmdline.rs (pre-existing repo warnings elsewhere are unchanged from base)
+- Manual: printf 'uci\nisready\nquit\n' | seaborg --uci -> stdout id name seaborg 0.1.0 / id author George Seabridge / option ... / uciok / readyok; stderr single banner; seaborg --version -> seaborg 0.1.0
+
+Benchmarks not run: base-to-target diff touches only UCI protocol/IO plumbing (command dispatch, cmdline wiring), not movegen/search hot paths; EngineInfo is passed by reference and does not enter the search or move-generation code.
+
+No implementation file changes after the target; approval is on 41b5dfd.
+---
 <!-- COMMENTS:END -->
 
 ## Final Summary
 
 <!-- SECTION:FINAL_SUMMARY:BEGIN -->
-Threaded a single authoritative engine::EngineInfo (name/version=CARGO_PKG_VERSION/author/commit=GIT_HASH) from the seaborg binary into engine::run, so UCI 'id name', clap '--version', and the startup banner all report seaborg 0.1.0 (previously three drifting sources incl. hardcoded 0.0.2). Removed the two unsolicited stdout writes; protocol stdout now carries only UCI traffic and the human banner (12-char trimmed commit) goes to stderr. Verified target 0269c0a: cargo build ok; cargo test --workspace ok (engine 63 passed incl. new startup/handshake/readiness/error exact-stream tests, core 35, build_metadata 5); cargo fmt --all --check ok; cargo clippy on changed files clean (pre-existing repo warnings and the benches/square.rs E0423 are baseline, untouched by this patch); manual smoke: stdout = id name seaborg 0.1.0 / id author / option / uciok / readyok with stderr banner 'seaborg 0.1.0 by George Seabridge (commit ...)' and --version = seaborg 0.1.0.
+Threaded a single authoritative engine::EngineInfo (name/version=CARGO_PKG_VERSION/author/commit=GIT_HASH) from the seaborg binary into engine::run, so UCI 'id name', clap '--version', and the startup banner all derive from the seaborg package version (0.1.0), replacing three drifting sources incl. hardcoded 0.0.2. Removed the two unsolicited startup stdout writes; protocol stdout now carries only UCI traffic and the human banner (12-char trimmed commit via EngineInfo::short_commit) goes to the stderr diagnostic channel. Rework reconciled TASK-12's inherited uci_new_game test (errors.is_empty -> diagnostics_after_banner(&errors)=='') to coexist with the banner-on-stderr design. Reviewed target 41b5dfd (base 1ae6cce): cargo build ok; cargo test --workspace ok (engine 71 passed/1 ignored incl. startup/handshake/readiness/error exact-stream tests and the reconciled test, core 35, build_metadata 5, doctests); cargo fmt --all --check clean; cargo clippy on changed crates emits no warning citing engine/src/engine.rs or src/cmdline.rs; manual smoke: stdout = id name seaborg 0.1.0 / id author / option / uciok / readyok, stderr banner = 'seaborg 0.1.0 by George Seabridge (commit <12>)', --version = seaborg 0.1.0.
 <!-- SECTION:FINAL_SUMMARY:END -->
