@@ -1,11 +1,11 @@
 ---
 id: TASK-46
 title: Prevent aborted search subtrees from contributing scores
-status: Ready to Merge
+status: Changes Requested
 assignee:
   - '@codex'
 created_date: '2026-07-18 18:29'
-updated_date: '2026-07-18 23:38'
+updated_date: '2026-07-18 23:44'
 labels: []
 dependencies: []
 references:
@@ -514,6 +514,60 @@ discard a value while the search is genuinely being abandoned, and
 `zero_time_limit_still_returns_a_legal_move` continues to hold.
 
 Approved implementation SHA: 0e4c7aca6bdc4715ddcc480f42ab21458ca7e691
+---
+
+author: @codex
+created: 2026-07-18 23:44
+---
+Merge attempt: 1
+Primary tip tested: f476d4c8cfcbfd630235ad81067763b37af2e656
+Approved target: 0e4c7aca6bdc4715ddcc480f42ab21458ca7e691
+Result: ejected (textual conflict, primary not advanced)
+
+Failing command:
+  git merge --no-ff 0e4c7aca6bdc4715ddcc480f42ab21458ca7e691
+  -> CONFLICT (content): Merge conflict in engine/src/search.rs (4 hunks)
+
+Approval was intact and all preconditions passed: status was Ready to Merge,
+`dependencies: []`, 0e4c7ac is an ancestor of branch tip 84967cc, and the only
+file changed after the approved target is the task file. The eject is purely an
+integration collision, not a defect in the approved work. The trial merge was
+aborted and primary remains at f476d4c.
+
+Cause: TASK-54 (cd66d14, `fix(task-54): preserve mate parity and detach UCI
+input`) landed on primary after TASK-46's base e301527 and rewrote the exact
+call sites TASK-46 rewrites. TASK-54 replaced raw score negation at recursion
+boundaries with `Score::child_bound()` (engine/src/score.rs:64), which adjusts
+mate distance by one ply instead of plain `-self`. TASK-46 rewrote the same
+lines to propagate `Option<Score>`. Both edits are correct and they are
+orthogonal in intent, but they overlap textually line for line.
+
+Conflicting hunks, all in engine/src/search.rs:
+1. Step 19 non-PV null-window child search
+   primary: `self.search::<T, NonPv>(alpha.inc_one().child_bound(), alpha.child_bound(), depth - 1)`
+   target:  `let child = self.search::<T, NonPv>(-alpha.inc_one(), -alpha, depth - 1);` + `else { self.pos.unmake_move(); return None; }`
+2. Step 20 PV / re-search child search
+   primary: `self.search::<T, Pv>(beta.child_bound(), alpha.child_bound(), depth - 1)`
+   target:  same `Option` unwind shape with `-beta, -alpha`
+3. `quiesce` move loop recursion
+   primary: `self.quiesce::<T, Node>(beta.child_bound(), alpha.child_bound())`
+   target:  `let child = self.quiesce::<T, Node>(-beta, -alpha);` then `score = child?.neg().inc_mate();`
+4. `quiesce_evasions` move loop recursion — same shape as 3
+
+Required resolution: keep BOTH changes at each site — primary's
+`child_bound()` window arguments inside target's `Option<Score>` unwind. Do not
+resolve by taking either side wholesale. Taking `ours` silently reintroduces the
+aborted-subtree bug this task fixes; taking `theirs` silently reverts TASK-54's
+mate-parity fix, which its own regression tests should catch.
+
+Note also that `.neg()` on the target side and `child_bound()` on the primary
+side are not interchangeable — `child_bound` adjusts mate distance where
+`neg` does not — so the merged code must apply `child_bound()` to the window
+arguments while leaving the existing `.neg().inc_mate()` treatment of the
+returned child value as TASK-46 wrote it. Please re-run the full required
+checks plus both TASK-46 regressions and TASK-54's mate-parity tests after
+resolving, since this rework changes production code and voids the prior
+approval.
 ---
 <!-- COMMENTS:END -->
 
