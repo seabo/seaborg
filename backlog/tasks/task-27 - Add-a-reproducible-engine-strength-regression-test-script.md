@@ -1,11 +1,11 @@
 ---
 id: TASK-27
 title: Add a reproducible engine strength-regression test script
-status: In Review
+status: Changes Requested
 assignee:
   - '@codex'
 created_date: '2026-07-17 18:54'
-updated_date: '2026-07-18 00:33'
+updated_date: '2026-07-18 00:47'
 labels: []
 dependencies: []
 references:
@@ -269,5 +269,33 @@ Verification:
 - cargo test --workspace: FAIL only at pre-existing engine::tt::tests::gen_bound (assertion gen < 64) on recorded base
 Known failures: engine::tt::tests::gen_bound fails on recorded base dc8f6ce; TASK-27 changes no Rust sources (git diff --name-only dc8f6ce..b7a8ca6 -- '*.rs' is empty). Current primary (299f5ec) independently reworked engine/src/tt.rs after this base.
 Follow-up tickets filed for seaborg-side defects found during validation: TASK-32 (time-allocation null/illegal move at fast TCs) and TASK-34 (self-play deadlock, illegal PV moves, EOF null move). These are out of TASK-27 scope and block seaborg self-play, not the tool.
+---
+
+author: @codex
+created: 2026-07-18 00:47
+---
+Review attempt: 4
+Reviewed branch: task-27-strength-regression
+Reviewed implementation: b7a8ca68decae557cd2ea3a661fc2f54ca8720f5
+Verdict: changes_requested
+
+REV-4-01 [P2] Report and docs claim engine-process restart between games, but FastChess runs with restart=off (processes are reused)
+Location: tools/strength/strength_test.py:344 (report field restart_between_games: True); build_command tools/strength/strength_test.py:247-266 (no restart=on emitted); docs/strength-testing.md:96-99.
+Impact: The auditable report hardcodes "restart_between_games": true and docs/strength-testing.md states the runner "restarts engine processes between games so stale state cannot cross games". FastChess's per-engine option restart=(off|on) defaults to off and build_command never sets restart=on, so each engine process is reused across every game of the match; the only between-game isolation actually applied is FastChess's default ucinewgame/isready handshake, not a process restart. The report thus asserts a run configuration that is not in effect, which defeats the auditability contract the tool exists to provide (AC #7: the report must record the exact configuration) and means the task's explicit "isolation from stale engine state between games" requirement is delivered by a weaker, undocumented mechanism than the one advertised. For an engine that does not fully reset on ucinewgame, stale state (e.g. a transposition table) can leak across games and bias the strength measurement while the report claims isolation. This blocks AC #2 and AC #7.
+Reproduction:
+- grep -n restart tools/strength/strength_test.py -> only line 344 (restart_between_games: True); build_command emits no restart=on.
+- fastchess -help | grep -A2 'restart=' -> "restart=(off|on) ... Enable or disable engine restarts between games, default is off."
+- Run FastChess with the tool's exact flags (-rounds 1 -games 2 -repeat 2) and two logging engines: only one process is started per engine and neither is restarted between the two games of the round; FastChess sends ucinewgame between games but does not restart the process.
+Expected: Either configure the runner to genuinely restart engine processes between games (add restart=on to the -each per-engine options) so runtime behavior matches the report/docs, or correct the report field and documentation to describe the actual isolation mechanism (same process reused, ucinewgame between games) and justify it as sufficient. The auditable report must not state a runner configuration that is not applied. Add a build_command test asserting the chosen isolation configuration.
+
+Verification:
+- python3 -m unittest discover -s tools/strength -p 'test_*.py' -v: PASS (19 tests; live fastchess -version test ran against fastchess alpha 1.5.0 20251121-1eedf82)
+- cargo fmt --check: PASS
+- cargo test --workspace: FAIL only at pre-existing engine::tt::tests::gen_bound (assertion gen < 64); engine/src/tt.rs is byte-identical base..target and no Rust is in this diff (git diff --name-only dc8f6ce..b7a8ca6 -- '*.rs' is empty), so this failure is pre-existing baseline behavior, not patch-introduced.
+- git diff --check dc8f6ce..b7a8ca6: PASS
+- shasum -a 256 tools/strength/openings-v1.epd: matches embedded SUITE_SHA256
+- FastChess engine-stdin transcript for -rounds 1 -games 2 -repeat 2: one process per engine across both games; ucinewgame sent between games; no process restart observed.
+
+Notes: REV-3-01 (paired colour-reversed openings) is confirmed resolved and verified against the real FastChess binary (-rounds pairs, -games 2 gives colour-reversed a/b, b/a pairs; total games = max_games). REV-3-02 (run() PASS-path coverage) and REV-3-03 (dead code / reserved fields) are resolved. All other acceptance criteria are otherwise well-supported by evidence; REV-4-01 is the sole blocking finding.
 ---
 <!-- COMMENTS:END -->
