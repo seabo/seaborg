@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <style>
+      .body { fill: currentColor; stroke: inherit; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+      .detail { fill: none; stroke: inherit; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+    </style>
+    <symbol id="white-pawn" viewBox="0 0 100 100"><g class="body"><circle cx="50" cy="28" r="14"/><path d="M38 43h24c0 13 5 22 13 29H25c8-7 13-16 13-29Z"/><path d="M22 72h56l6 13H16Z"/></g></symbol>
+    <symbol id="black-pawn" viewBox="0 0 100 100"><g class="body"><circle cx="50" cy="28" r="14"/><path d="M38 43h24c0 13 5 22 13 29H25c8-7 13-16 13-29Z"/><path d="M22 72h56l6 13H16Z"/></g></symbol>
+    <symbol id="white-rook" viewBox="0 0 100 100"><g class="body"><path d="M22 18h14v10h10V18h10v10h9V18h14v24l-9 8 6 25H24l6-25-8-8Z"/><path d="M18 75h64l5 11H13Z"/></g><path class="detail" d="M30 43h40M27 70h46"/></symbol>
+    <symbol id="black-rook" viewBox="0 0 100 100"><g class="body"><path d="M22 18h14v10h10V18h10v10h9V18h14v24l-9 8 6 25H24l6-25-8-8Z"/><path d="M18 75h64l5 11H13Z"/></g><path class="detail" d="M30 43h40M27 70h46"/></symbol>
+    <symbol id="white-knight" viewBox="0 0 100 100"><path class="body" d="M24 76c4-18 13-31 29-39l-11-4 16-18c20 9 27 29 19 48l-7 13H24Z"/><path class="detail" d="M48 33 63 45 48 51M62 25l7 4"/><circle cx="63" cy="30" r="2.5" fill="inherit"/></symbol>
+    <symbol id="black-knight" viewBox="0 0 100 100"><path class="body" d="M24 76c4-18 13-31 29-39l-11-4 16-18c20 9 27 29 19 48l-7 13H24Z"/><path class="detail" d="M48 33 63 45 48 51M62 25l7 4"/><circle cx="63" cy="30" r="2.5" fill="inherit"/></symbol>
+    <symbol id="white-bishop" viewBox="0 0 100 100"><g class="body"><path d="M50 13c16 13 21 25 13 37-3 5-7 8-11 10h13l10 16H25l10-16h13c-5-2-9-5-12-10-7-12-2-24 14-37Z"/><path d="M20 76h60l6 11H14Z"/></g><path class="detail" d="m55 27-13 18"/></symbol>
+    <symbol id="black-bishop" viewBox="0 0 100 100"><g class="body"><path d="M50 13c16 13 21 25 13 37-3 5-7 8-11 10h13l10 16H25l10-16h13c-5-2-9-5-12-10-7-12-2-24 14-37Z"/><path d="M20 76h60l6 11H14Z"/></g><path class="detail" d="m55 27-13 18"/></symbol>
+    <symbol id="white-queen" viewBox="0 0 100 100"><g class="body"><circle cx="18" cy="24" r="5"/><circle cx="39" cy="17" r="5"/><circle cx="61" cy="17" r="5"/><circle cx="82" cy="24" r="5"/><path d="m18 30 14 30h36l14-30-20 18-12-25-12 25Z"/><path d="M27 60h46l6 16H21Z"/><path d="M17 76h66l5 11H12Z"/></g><path class="detail" d="M28 61h44"/></symbol>
+    <symbol id="black-queen" viewBox="0 0 100 100"><g class="body"><circle cx="18" cy="24" r="5"/><circle cx="39" cy="17" r="5"/><circle cx="61" cy="17" r="5"/><circle cx="82" cy="24" r="5"/><path d="m18 30 14 30h36l14-30-20 18-12-25-12 25Z"/><path d="M27 60h46l6 16H21Z"/><path d="M17 76h66l5 11H12Z"/></g><path class="detail" d="M28 61h44"/></symbol>
+    <symbol id="white-king" viewBox="0 0 100 100"><g class="body"><path d="M46 12h8v11h11v8H54v10c14 3 21 13 17 27H29c-4-14 3-24 17-27V31H35v-8h11Z"/><path d="M24 68h52l6 9H18Z"/><path d="M15 77h70l4 10H11Z"/></g><path class="detail" d="M31 55h38"/></symbol>
+    <symbol id="black-king" viewBox="0 0 100 100"><g class="body"><path d="M46 12h8v11h11v8H54v10c14 3 21 13 17 27H29c-4-14 3-24 17-27V31H35v-8h11Z"/><path d="M24 68h52l6 9H18Z"/><path d="M15 77h70l4 10H11Z"/></g><path class="detail" d="M31 55h38"/></symbol>
+  </defs>
+</svg>

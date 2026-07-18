@@ -48,6 +48,7 @@ pub struct GameSnapshot {
     pub human_side: Player,
     pub fen: String,
     pub side_to_move: Player,
+    pub in_check: bool,
     pub legal_moves: Vec<String>,
     pub last_move: Option<MoveRecord>,
     pub move_history: Vec<MoveRecord>,
@@ -122,6 +123,7 @@ impl GameController {
             human_side: self.human_side,
             fen: self.position.to_fen(),
             side_to_move: self.position.turn(),
+            in_check: self.position.in_check(),
             legal_moves: legal_uci_moves(&self.position),
             last_move: self.history.last().cloned(),
             move_history: self.history.clone(),
@@ -416,6 +418,7 @@ mod tests {
         let mut game = controller(core::position::START_POSITION, Player::WHITE);
         let initial = game.snapshot();
         assert_eq!(initial.revision, 0);
+        assert!(!initial.in_check);
         assert_eq!(initial.legal_moves.len(), 20);
         game.play_human_move("e2e4", initial.revision).unwrap();
         assert_eq!(game.snapshot().last_move.unwrap().san, "e4");
@@ -573,6 +576,7 @@ mod tests {
                 winner: Player::WHITE
             }
         );
+        assert!(mate.snapshot().in_check);
         assert_eq!(mate.snapshot().engine_status, EngineStatus::Idle);
 
         let stalemate = controller("7k/5Q2/6K1/8/8/8/8/8 b - - 0 1", Player::WHITE);

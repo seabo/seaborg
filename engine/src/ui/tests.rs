@@ -358,7 +358,9 @@ fn serves_the_embedded_assets_with_their_content_types() {
     for (path, content_type, marker) in [
         ("/", "text/html; charset=utf-8", "<title>Seaborg</title>"),
         ("/app.js", "text/javascript; charset=utf-8", "EventSource"),
+        ("/board.js", "text/javascript; charset=utf-8", "parseFen"),
         ("/style.css", "text/css; charset=utf-8", "body"),
+        ("/pieces.svg", "image/svg+xml", "white-king"),
     ] {
         let response = get(&server, path);
         assert_eq!(response.status, 200, "{path}");
@@ -373,6 +375,15 @@ fn serves_the_embedded_assets_with_their_content_types() {
             response.body
         );
     }
+}
+
+#[test]
+fn board_assets_define_rigid_eight_by_eight_tracks() {
+    let server = TestServer::start();
+    let style = get(&server, "/style.css").body;
+    assert!(style.contains("grid-template-columns: repeat(8, minmax(0, 1fr))"));
+    assert!(style.contains("grid-template-rows: repeat(8, minmax(0, 1fr))"));
+    assert!(style.contains("min-height: 0"));
 }
 
 #[test]
@@ -392,7 +403,14 @@ fn the_page_carries_the_session_token_and_no_placeholder() {
 #[test]
 fn every_response_sets_the_security_and_caching_headers() {
     let server = TestServer::start();
-    for path in ["/", "/app.js", "/style.css", "/api/state"] {
+    for path in [
+        "/",
+        "/app.js",
+        "/board.js",
+        "/style.css",
+        "/pieces.svg",
+        "/api/state",
+    ] {
         let response = get(&server, path);
         assert_eq!(response.header("cache-control"), Some("no-store"), "{path}");
         assert_eq!(
@@ -431,6 +449,7 @@ fn serves_the_current_state_as_json() {
         state.get("sideToMove").and_then(Json::as_str),
         Some("white")
     );
+    assert_eq!(state.get("inCheck"), Some(&Json::Bool(false)));
     let Some(Json::Array(moves)) = state.get("legalMoves") else {
         panic!("expected legal moves");
     };
@@ -735,6 +754,8 @@ fn known_routes_reject_the_wrong_method() {
     for (method, path) in [
         ("POST", "/"),
         ("POST", "/app.js"),
+        ("POST", "/board.js"),
+        ("POST", "/pieces.svg"),
         ("POST", "/api/state"),
         ("DELETE", "/api/events"),
         ("GET", "/api/move"),

@@ -1,6 +1,6 @@
 //! The loopback HTTP server exposing the game controller to a local browser.
 //!
-//! The surface is deliberately fixed: three embedded assets, one state document, one event
+//! The surface is deliberately fixed: five embedded assets, one state document, one event
 //! stream, and three bounded commands. There is no file-path routing and no general engine
 //! command endpoint, so nothing outside this list is reachable however the request is spelled.
 
@@ -23,7 +23,9 @@ use std::time::{Duration, Instant};
 
 const INDEX_HTML: &str = include_str!("assets/index.html");
 const APP_JS: &str = include_str!("assets/app.js");
+const BOARD_JS: &str = include_str!("assets/board.js");
 const STYLE_CSS: &str = include_str!("assets/style.css");
+const PIECES_SVG: &str = include_str!("assets/pieces.svg");
 
 /// The marker in the embedded page replaced with this process's session token.
 const TOKEN_PLACEHOLDER: &str = "__SEABORG_TOKEN__";
@@ -485,12 +487,26 @@ fn route(stream: &mut TcpStream, request: &Request, state: &ServerState) -> io::
             NO_STORE,
             APP_JS.as_bytes(),
         ),
+        ("GET", "/board.js") => write_response(
+            stream,
+            Status::Ok,
+            "text/javascript; charset=utf-8",
+            NO_STORE,
+            BOARD_JS.as_bytes(),
+        ),
         ("GET", "/style.css") => write_response(
             stream,
             Status::Ok,
             "text/css; charset=utf-8",
             NO_STORE,
             STYLE_CSS.as_bytes(),
+        ),
+        ("GET", "/pieces.svg") => write_response(
+            stream,
+            Status::Ok,
+            "image/svg+xml",
+            NO_STORE,
+            PIECES_SVG.as_bytes(),
         ),
         ("GET", "/api/state") => {
             let (_, json) = state.session.current();
@@ -500,9 +516,13 @@ fn route(stream: &mut TcpStream, request: &Request, state: &ServerState) -> io::
         ("POST", "/api/move") | ("POST", "/api/undo") | ("POST", "/api/new-game") => {
             handle_command(stream, request, state)
         }
-        (_, "/") | (_, "/app.js") | (_, "/style.css") | (_, "/api/state") | (_, "/api/events") => {
-            write_error(stream, Status::MethodNotAllowed, "method_not_allowed")
-        }
+        (_, "/")
+        | (_, "/app.js")
+        | (_, "/board.js")
+        | (_, "/style.css")
+        | (_, "/pieces.svg")
+        | (_, "/api/state")
+        | (_, "/api/events") => write_error(stream, Status::MethodNotAllowed, "method_not_allowed"),
         (_, "/api/move") | (_, "/api/undo") | (_, "/api/new-game") => {
             write_error(stream, Status::MethodNotAllowed, "method_not_allowed")
         }

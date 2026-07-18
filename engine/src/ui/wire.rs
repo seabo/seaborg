@@ -185,6 +185,8 @@ pub fn snapshot_to_json(snapshot: &GameSnapshot) -> String {
     write_string(&mut out, &snapshot.fen);
     write_key(&mut out, &mut first, "sideToMove");
     write_string(&mut out, player_name(snapshot.side_to_move));
+    write_key(&mut out, &mut first, "inCheck");
+    out.push_str(if snapshot.in_check { "true" } else { "false" });
 
     write_key(&mut out, &mut first, "legalMoves");
     out.push('[');
@@ -237,6 +239,7 @@ mod tests {
             human_side: Player::WHITE,
             fen: position.to_fen(),
             side_to_move: Player::WHITE,
+            in_check: false,
             legal_moves: vec!["e2e4".to_owned(), "d2d4".to_owned()],
             last_move: None,
             move_history: Vec::new(),
@@ -247,11 +250,14 @@ mod tests {
 
     #[test]
     fn serializes_a_snapshot_the_parser_accepts() {
-        let json = snapshot_to_json(&start_snapshot());
+        let mut snapshot = start_snapshot();
+        snapshot.in_check = true;
+        let json = snapshot_to_json(&snapshot);
         let value = parse(&json).unwrap();
         assert_eq!(value.get("revision").unwrap().as_u64(), Some(3));
         assert_eq!(value.get("humanSide").unwrap().as_str(), Some("white"));
         assert_eq!(value.get("sideToMove").unwrap().as_str(), Some("white"));
+        assert_eq!(value.get("inCheck"), Some(&Json::Bool(true)));
         assert_eq!(value.get("lastMove"), Some(&Json::Null));
         assert_eq!(
             value

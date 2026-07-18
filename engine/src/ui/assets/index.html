@@ -4,47 +4,81 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Seaborg</title>
+    <meta name="theme-color" content="#10191a" />
     <!-- Replaced with this process's session token when the page is served. -->
     <meta name="seaborg-token" content="__SEABORG_TOKEN__" />
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
-    <h1>Seaborg</h1>
-    <p id="status" role="status">Connecting…</p>
+    <main class="app-shell">
+      <header class="masthead">
+        <div>
+          <p class="eyebrow">Local chess</p>
+          <h1>SEABORG</h1>
+        </div>
+        <p id="connection-status" class="connection" role="status">Connecting…</p>
+      </header>
 
-    <section aria-labelledby="position-heading">
-      <h2 id="position-heading">Position</h2>
-      <dl>
-        <dt>FEN</dt>
-        <dd id="fen">—</dd>
-        <dt>Side to move</dt>
-        <dd id="side-to-move">—</dd>
-        <dt>Game</dt>
-        <dd id="game-status">—</dd>
-        <dt>Engine</dt>
-        <dd id="engine-status">—</dd>
-      </dl>
-    </section>
+      <div class="game-layout">
+        <section class="board-panel" aria-labelledby="board-heading">
+          <div class="board-heading-row">
+            <div>
+              <p class="eyebrow">Your board</p>
+              <h2 id="board-heading">Play Seaborg</h2>
+            </div>
+            <p id="turn-status" class="turn-status" aria-live="polite">Loading position…</p>
+          </div>
+          <p id="board-instructions" class="visually-hidden">
+            Use arrow keys to move around the board. Press Enter or Space to select a piece and
+            again on a legal destination to move it. Press Escape to clear selection.
+          </p>
+          <div class="board-frame">
+            <div
+              id="board"
+              class="board"
+              role="grid"
+              aria-describedby="board-instructions board-message"
+              aria-label="Chess board"
+            ></div>
+          </div>
+          <p id="board-message" class="board-message" role="alert"></p>
+        </section>
 
-    <section aria-labelledby="move-heading">
-      <h2 id="move-heading">Play a move</h2>
-      <form id="move-form">
-        <label for="uci">Move in UCI notation</label>
-        <input id="uci" name="uci" autocomplete="off" placeholder="e2e4" required />
-        <button type="submit">Play</button>
+        <aside class="side-panel" aria-label="Game controls and move history">
+          <section aria-labelledby="game-heading">
+            <p class="eyebrow">Game</p>
+            <h2 id="game-heading">At the board</h2>
+            <div class="control-stack">
+              <button id="new-white" type="button">New game as White</button>
+              <button id="new-black" type="button">New game as Black</button>
+              <button id="undo" class="quiet" type="button">Undo full turn</button>
+            </div>
+          </section>
+          <section class="history-section" aria-labelledby="history-heading">
+            <div class="history-heading">
+              <h2 id="history-heading">Moves</h2>
+              <span>UCI in tooltip</span>
+            </div>
+            <ol id="history" class="history"></ol>
+          </section>
+          <p class="interaction-note">Drag a piece or tap two squares. Pointer, touch, pen, and keyboard all use the same legal moves.</p>
+        </aside>
+      </div>
+    </main>
+
+    <dialog id="promotion-dialog" class="promotion-dialog" aria-labelledby="promotion-heading">
+      <form method="dialog">
+        <p class="eyebrow">Pawn promotion</p>
+        <h2 id="promotion-heading">Choose a piece</h2>
+        <div class="promotion-options">
+          <button type="submit" value="queen" data-promotion="queen"><span aria-hidden="true">♛</span> Queen</button>
+          <button type="submit" value="rook" data-promotion="rook"><span aria-hidden="true">♜</span> Rook</button>
+          <button type="submit" value="bishop" data-promotion="bishop"><span aria-hidden="true">♝</span> Bishop</button>
+          <button type="submit" value="knight" data-promotion="knight"><span aria-hidden="true">♞</span> Knight</button>
+        </div>
+        <button class="quiet cancel-promotion" type="submit" value="cancel">Cancel</button>
       </form>
-      <p id="move-error" role="alert"></p>
-      <p>
-        <button type="button" id="undo">Undo</button>
-        <button type="button" id="new-white">New game as white</button>
-        <button type="button" id="new-black">New game as black</button>
-      </p>
-    </section>
-
-    <section aria-labelledby="history-heading">
-      <h2 id="history-heading">Moves</h2>
-      <ol id="history"></ol>
-    </section>
+    </dialog>
 
     <script src="/app.js" type="module"></script>
   </body>
