@@ -27,6 +27,12 @@ pub struct Tracer {
     pub hash_found: Averager<u32>,
 }
 
+impl Default for Tracer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Tracer {
     pub fn new() -> Self {
         Self {

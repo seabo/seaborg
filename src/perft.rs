@@ -32,7 +32,7 @@ pub fn perft(args: &PerftArgs) {
 
     match pos {
         Ok(ref mut pos) => {
-            let start_zob = pos.zobrist().clone();
+            let start_zob = pos.zobrist();
             let now = Instant::now();
             let perft_result = if args.divide {
                 Perft::divide(pos, depth as usize, args.verbose, false)
@@ -52,7 +52,7 @@ pub fn perft(args: &PerftArgs) {
                 ((perft_result.nodes.unwrap() * 1_000_000_000) / (elapsed.as_nanos() as usize))
                     .separated_string()
             );
-            let end_zob = pos.zobrist().clone();
+            let end_zob = pos.zobrist();
             println!();
             println!("Start zob: {}", start_zob);
             println!("End zob:   {}", end_zob);

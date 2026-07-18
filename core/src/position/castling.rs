@@ -74,7 +74,7 @@ impl CastlingRights {
     }
 
     pub fn update(&self, from: Square) -> Self {
-        let mut new_cr = self.clone();
+        let mut new_cr = *self;
         let flags_to_turn_off = match from {
             Square::A1 => Self::WHITE_QUEENSIDE,
             Square::E1 => Self::WHITE_QUEENSIDE | Self::WHITE_KINGSIDE,

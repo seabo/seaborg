@@ -244,9 +244,9 @@ impl Thread for Worker {
 /// * The first child of a PV node is a PV node.
 /// * Children of PV nodes that are searched with a zero-window are Cut nodes.
 /// * Children of PV nodes that have to be re-search because the scout search failed high are PV
-/// nodes.
+///   nodes.
 /// * The first child of a Cut node and other candidate cutoff moves (nullmove, killers, captures,
-/// checks) is an All node.
+///   checks) is an All node.
 /// * A Cut node becomes an All node once all the candidate cutoff moves are searched.
 /// * Children of All nodes are Cut nodes.
 pub trait NodeType {
@@ -630,7 +630,7 @@ impl<'engine> Search<'engine> {
 
                 // Start reporting which move we're considering after 3 seconds have elapsed.
                 if T::is_master() && Node::root() && self.trace.live_elapsed().as_millis() > 3000 {
-                    self.emit_current_move(depth, &mov, move_count);
+                    self.emit_current_move(depth, mov, move_count);
                 }
 
                 // Step 16. Reductions & extensions.
@@ -716,7 +716,11 @@ impl<'engine> Search<'engine> {
         }
 
         debug_assert!(
-            move_count > 0 || self.pos.generate::<BasicMoveList, AllGen, Legal>().len() == 0
+            move_count > 0
+                || self
+                    .pos
+                    .generate::<BasicMoveList, AllGen, Legal>()
+                    .is_empty()
         );
 
         // Step 23. Check for mate and stalemate.
@@ -1096,13 +1100,13 @@ impl<'a, 'search> Loader for MoveLoader<'a, 'search> {
         let (km1, km2) = self.search.kt.probe(self.draft, &self.search.pos);
         let mut cnt = 0;
 
-        if km1.is_some() {
+        if let Some(km) = km1 {
             cnt += 1;
-            movelist.push(km1.unwrap());
+            movelist.push(km);
         }
-        if km2.is_some() {
+        if let Some(km) = km2 {
             cnt += 1;
-            movelist.push(km2.unwrap());
+            movelist.push(km);
         }
         self.search.trace.killers_per_node.push_many(cnt, 2);
     }

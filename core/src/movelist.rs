@@ -27,6 +27,10 @@ pub trait MoveList: Debug {
     fn push(&mut self, mv: Move);
     /// The length of the move list.
     fn len(&self) -> usize;
+    /// Whether the move list contains no moves.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
     /// Clear the list.
     fn clear(&mut self);
 }
@@ -316,7 +320,7 @@ impl Index<usize> for OverflowingMoveList {
 
     #[inline(always)]
     fn index(&self, index: usize) -> &Move {
-        &*self.0.index(index)
+        self.0.index(index)
     }
 }
 

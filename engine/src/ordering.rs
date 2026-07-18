@@ -45,7 +45,7 @@ impl<'a> Iterator for Scorer<'a> {
 impl<'a> From<SegmentMut<'a>> for Scorer<'a> {
     fn from(val: &'a mut [Entry]) -> Self {
         Self {
-            iter: val.into_iter(),
+            iter: val.iter_mut(),
         }
     }
 }
@@ -310,6 +310,12 @@ pub trait Loader {
     /// Provides an iterator over the quiet moves, allowing the `Loader` to provide scores for
     /// each move.
     fn score_quiets(&mut self, _scorer: Scorer) {}
+}
+
+impl Default for OrderedMoves {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl OrderedMoves {
@@ -720,7 +726,7 @@ mod tests {
                 for mov in &moves {
                     c += 1;
                     // SAFETY: `mov` was generated for the current test position.
-                    unsafe { p.pos.make_move_unchecked(&mov) };
+                    unsafe { p.pos.make_move_unchecked(mov) };
                     let child_count = if depth == 1 {
                         1
                     } else {
@@ -747,7 +753,7 @@ mod tests {
                 while moves.load_next_phase(TestLoader::from(&mut self.pos)) {
                     for mov in &moves {
                         // SAFETY: `mov` was generated for this position above.
-                        unsafe { self.pos.make_move_unchecked(&mov) };
+                        unsafe { self.pos.make_move_unchecked(mov) };
                         c += self.perft_recurse(depth - 1);
                         self.pos.unmake_move();
                     }
@@ -769,11 +775,8 @@ mod tests {
 
     impl<'a> Loader for TestLoader<'a> {
         fn load_hash(&mut self, movelist: &mut ScoredMoveList) {
-            match self.pos.generate::<BasicMoveList, All, Legal>().random() {
-                Some(mv) => {
-                    movelist.push(*mv);
-                }
-                None => {}
+            if let Some(mv) = self.pos.generate::<BasicMoveList, All, Legal>().random() {
+                movelist.push(*mv);
             }
         }
 

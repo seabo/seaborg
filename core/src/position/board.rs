@@ -6,6 +6,12 @@ pub struct Board {
     pub arr: [Piece; 64],
 }
 
+impl Default for Board {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Board {
     // TODO: rename this `empty()`.
     pub fn new() -> Self {
@@ -62,7 +68,7 @@ impl Board {
             for (j, square) in row.iter().enumerate() {
                 s.push_str(&format!(" {} ", square));
                 if j != 7 {
-                    s.push_str("│")
+                    s.push('│')
                 }
             }
             s.push_str(&format!("║ {}\n", 8 - i));

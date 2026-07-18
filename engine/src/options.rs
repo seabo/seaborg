@@ -1,5 +1,5 @@
 /// Engine configuration.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Config {
     /// Debug mode.
     debug_mode: bool,
@@ -10,15 +10,6 @@ pub struct Config {
 impl Config {
     pub fn debug_mode(&self) -> bool {
         self.debug_mode
-    }
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            debug_mode: false,
-            hash: Default::default(),
-        }
     }
 }
 

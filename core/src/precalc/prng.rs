@@ -1,17 +1,17 @@
 /// Object for generating pseudo-random numbers.
-pub struct PRNG {
+pub struct Prng {
     seed: u64,
 }
 
-impl PRNG {
-    /// Creates PRNG from a seed.
+impl Prng {
+    /// Creates Prng from a seed.
     ///
     /// # Panics
     ///
     /// Undefined behavior if the seed is zero
     #[inline(always)]
-    pub const fn init(s: u64) -> PRNG {
-        PRNG { seed: s }
+    pub const fn init(s: u64) -> Prng {
+        Prng { seed: s }
     }
 
     /// Returns a pseudo-random number.
@@ -31,6 +31,6 @@ impl PRNG {
         self.seed ^= self.seed >> 12;
         self.seed ^= self.seed << 25;
         self.seed ^= self.seed >> 27;
-        self.seed.wrapping_mul(2685_8216_5773_6338_717)
+        self.seed.wrapping_mul(2_685_821_657_736_338_717)
     }
 }

@@ -1,4 +1,4 @@
-use super::prng::PRNG;
+use super::prng::Prng;
 use crate::position::CastlingRights;
 use crate::position::{Piece, Player, Square};
 
@@ -34,7 +34,7 @@ fn keys() -> &'static ZobristKeys {
 }
 
 const fn gen_piece_square_keys() -> [[u64; 13]; 64] {
-    let mut rng = PRNG::init(SEEDS[0]);
+    let mut rng = Prng::init(SEEDS[0]);
     let mut keys = [[0; 13]; 64];
 
     let mut square = 0;
@@ -50,12 +50,12 @@ const fn gen_piece_square_keys() -> [[u64; 13]; 64] {
 }
 
 const fn gen_side_to_move_keys() -> [u64; 2] {
-    let mut rng = PRNG::init(SEEDS[1]);
+    let mut rng = Prng::init(SEEDS[1]);
     [rng.rand(), rng.rand()]
 }
 
 const fn gen_castling_rights_keys() -> [u64; 16] {
-    let mut rng = PRNG::init(SEEDS[2]);
+    let mut rng = Prng::init(SEEDS[2]);
     let mut keys = [0; 16];
 
     let mut index = 0;
@@ -67,7 +67,7 @@ const fn gen_castling_rights_keys() -> [u64; 16] {
 }
 
 const fn gen_ep_file_keys() -> [u64; 8] {
-    let mut rng = PRNG::init(SEEDS[3]);
+    let mut rng = Prng::init(SEEDS[3]);
     let mut keys = [0; 8];
 
     let mut index = 0;

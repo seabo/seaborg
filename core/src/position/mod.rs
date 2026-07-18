@@ -176,14 +176,14 @@ impl Position {
     /// Sets the `State` struct for the current position. Should only be called
     /// when initialising a new `Position`.
     pub fn set_state(&mut self) {
-        self.state = State::from_position(&self);
+        self.state = State::from_position(self);
     }
 
     /// Set the `Zobrist` key for the current position based on the other data in
     /// the `Position` struct. Should only be called when initialising a new `Position`
     /// as the zobrist key is kept incrementally updated thereafter.
     pub fn set_zobrist(&mut self) {
-        self.zobrist = Zobrist::from_position(&self);
+        self.zobrist = Zobrist::from_position(self);
     }
 
     pub fn history(&self) -> &Vec<UndoableMove> {
@@ -243,7 +243,7 @@ impl Position {
     #[inline(always)]
     pub unsafe fn make_move_unchecked(&mut self, mov: &Move) {
         // Add an undoable move to the position history
-        let undoable_move = mov.to_undoable(&self);
+        let undoable_move = mov.to_undoable(self);
         self.history.push(undoable_move);
 
         // Reset the en passant square
@@ -294,21 +294,19 @@ impl Position {
             self.apply_castling(us, from, to, &mut r_orig, &mut r_dest);
         } else if captured_piece != Piece::None {
             let mut cap_sq = to;
-            if captured_piece.type_of() == PieceType::Pawn {
-                if mov.is_en_passant() {
-                    match us {
-                        Player::WHITE => cap_sq = unsafe { cap_sq.offset_unchecked(-8) },
-                        Player::BLACK => cap_sq = unsafe { cap_sq.offset_unchecked(8) },
-                    };
+            if captured_piece.type_of() == PieceType::Pawn && mov.is_en_passant() {
+                match us {
+                    Player::WHITE => cap_sq = unsafe { cap_sq.offset_unchecked(-8) },
+                    Player::BLACK => cap_sq = unsafe { cap_sq.offset_unchecked(8) },
+                };
 
-                    debug_assert_eq!(moving_piece.type_of(), PieceType::Pawn);
-                    debug_assert_eq!(us.relative_rank(5), to.rank()); // `to` square is on "6th" rank from player's perspective
-                    debug_assert_eq!(self.piece_at_sq(to), Piece::None);
-                    debug_assert_eq!(
-                        self.piece_at_sq(cap_sq).player_piece(),
-                        (them, PieceType::Pawn)
-                    );
-                }
+                debug_assert_eq!(moving_piece.type_of(), PieceType::Pawn);
+                debug_assert_eq!(us.relative_rank(5), to.rank()); // `to` square is on "6th" rank from player's perspective
+                debug_assert_eq!(self.piece_at_sq(to), Piece::None);
+                debug_assert_eq!(
+                    self.piece_at_sq(cap_sq).player_piece(),
+                    (them, PieceType::Pawn)
+                );
             }
 
             // Update the `Bitboard`s and `Piece` array
@@ -348,7 +346,7 @@ impl Position {
 
         // Update "invisible" state
         self.turn = them;
-        self.state = State::from_position(&self);
+        self.state = State::from_position(self);
     }
 
     fn assert_valid_move_input(&self, mov: &Move) {
@@ -557,7 +555,7 @@ impl Position {
             }
         }
 
-        return None;
+        None
     }
 
     /// Moves a piece on the board for a given player from square `from`
@@ -918,14 +916,14 @@ impl Position {
     /// Generate moves for the current position according to the generic parameters.
     #[inline]
     pub fn generate<ML: MoveList, G: Generate, L: Legality>(&self) -> ML {
-        MoveGen::generate::<ML, G, L>(&self)
+        MoveGen::generate::<ML, G, L>(self)
     }
 
     /// Generate moves for the current position according to the generic parameters. Moves are
     /// pushed into the passed `MoveList`.
     #[inline]
     pub fn generate_in<ML: MoveList, G: Generate, L: Legality>(&self, movelist: &mut ML) {
-        MoveGen::generate_in::<ML, G, L>(&self, movelist);
+        MoveGen::generate_in::<ML, G, L>(self, movelist);
     }
 
     #[inline]
@@ -1004,7 +1002,7 @@ impl fmt::Display for Position {
 
 impl fmt::Debug for Position {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "")?;
+        writeln!(f)?;
         writeln!(f, "BITBOARDS\n=========\n")?;
         writeln!(f, "No Pieces:\n {}", self.bbs[Piece::None as usize])?;
         writeln!(
@@ -1111,7 +1109,7 @@ pub fn rank_bb(s: u8) -> u64 {
 /// corresponding `Rank` index.
 #[inline(always)]
 pub fn rank_idx_of_sq(s: u8) -> u8 {
-    (s >> 3) as u8
+    s >> 3
 }
 
 /// For whatever file the bit (inner value of a `Square`) is, returns the
@@ -1137,7 +1135,7 @@ pub fn file_of_sq(s: u8) -> u8 {
 #[inline]
 pub fn u8_to_u64(s: u8) -> u64 {
     assert!(s < 64, "square index must be in 0..64");
-    (1 as u64) << s
+    1_u64 << s
 }
 
 #[cfg(test)]

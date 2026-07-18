@@ -60,19 +60,17 @@ pub static RANK_BB: [u64; RANK_CNT] = [
 
 /// Bits representing the castling path for a white king-side castle.
 pub const CASTLING_PATH_WHITE_K_SIDE: u64 =
-    (1 as u64) << Square::F1.0 as u32 | (1 as u64) << Square::G1.0 as u32;
+    1_u64 << Square::F1.0 as u32 | 1_u64 << Square::G1.0 as u32;
 /// Bits representing the castling path for a white queen-side castle.
-pub const CASTLING_PATH_WHITE_Q_SIDE: u64 = (1 as u64) << Square::B1.0 as u32
-    | (1 as u64) << Square::C1.0 as u32
-    | (1 as u64) << Square::D1.0 as u32;
+pub const CASTLING_PATH_WHITE_Q_SIDE: u64 =
+    1_u64 << Square::B1.0 as u32 | 1_u64 << Square::C1.0 as u32 | 1_u64 << Square::D1.0 as u32;
 
 /// Bits representing the castling path for a black king-side castle.
 pub const CASTLING_PATH_BLACK_K_SIDE: u64 =
-    (1 as u64) << Square::F8.0 as u32 | (1 as u64) << Square::G8.0 as u32;
+    1_u64 << Square::F8.0 as u32 | 1_u64 << Square::G8.0 as u32;
 /// Bits representing the castling path for a black queen-side castle.
-pub const CASTLING_PATH_BLACK_Q_SIDE: u64 = (1 as u64) << Square::B8.0 as u32
-    | (1 as u64) << Square::C8.0 as u32
-    | (1 as u64) << Square::D8.0 as u32;
+pub const CASTLING_PATH_BLACK_Q_SIDE: u64 =
+    1_u64 << Square::B8.0 as u32 | 1_u64 << Square::C8.0 as u32 | 1_u64 << Square::D8.0 as u32;
 
 /// Array for the bits representing the castling path for castle, indexed
 /// per the side available (king-side, queen-side), as well as indexed per player.
