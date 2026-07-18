@@ -66,7 +66,20 @@ impl Session {
 
     /// Stop the driver thread and release every waiting stream.
     pub fn shutdown(&self) {
-        self.running.store(false, Ordering::SeqCst);
+        // The flag is set under `published` even though it is atomic, because `wait_for_update`
+        // reads it under that same lock before parking. Signalling without the lock would allow
+        // the notify to land after that read but before `wait_timeout` parks — a condvar keeps no
+        // record of a notification with no waiter, so it would be dropped and the stream would
+        // sleep through shutdown until its keepalive timeout expired.
+        //
+        // That window is only a few instructions wide and the waiter holds this lock across all
+        // of it, so it is not reachable from a test that drives the type from outside; attempting
+        // one only produced a test that passed with the bug present. This is therefore justified
+        // by the locking discipline rather than by a reproduction.
+        {
+            let _published = self.lock_published();
+            self.running.store(false, Ordering::SeqCst);
+        }
         self.updated.notify_all();
     }
 

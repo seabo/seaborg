@@ -176,22 +176,61 @@ impl Parser<'_> {
         }
     }
 
+    /// Scan a number against the JSON grammar rather than against what `f64::from_str` tolerates.
+    ///
+    /// Consuming every numeric-looking byte and deferring to `from_str` would accept `01`, `1.`,
+    /// `-.5` and `1e` — Rust's float syntax, not JSON's. Nothing downstream is harmed by that
+    /// leniency, but this module's contract is to be strict, and a parser that quietly accepts a
+    /// larger language than it documents is the kind that surprises a later caller.
     fn number(&mut self) -> Result<Json, ParseError> {
         let start = self.pos;
+
         if self.peek() == Some(b'-') {
             self.pos += 1;
         }
-        while matches!(
-            self.peek(),
-            Some(b'0'..=b'9' | b'.' | b'e' | b'E' | b'+' | b'-')
-        ) {
-            self.pos += 1;
+
+        // An integer part is mandatory, and a leading zero admits no further digits.
+        match self.peek() {
+            Some(b'0') => self.pos += 1,
+            Some(b'1'..=b'9') => self.digits(),
+            _ => return Err(ParseError),
         }
+
+        // A fraction, when present, needs at least one digit after the point.
+        if self.peek() == Some(b'.') {
+            self.pos += 1;
+            if !matches!(self.peek(), Some(b'0'..=b'9')) {
+                return Err(ParseError);
+            }
+            self.digits();
+        }
+
+        // An exponent, when present, needs at least one digit after the optional sign.
+        if matches!(self.peek(), Some(b'e' | b'E')) {
+            self.pos += 1;
+            if matches!(self.peek(), Some(b'+' | b'-')) {
+                self.pos += 1;
+            }
+            if !matches!(self.peek(), Some(b'0'..=b'9')) {
+                return Err(ParseError);
+            }
+            self.digits();
+        }
+
+        // The slice is now known to be JSON-legal, which `f64` accepts as a subset of its own
+        // syntax, so this converts an already-validated token rather than doing the validating.
         std::str::from_utf8(&self.bytes[start..self.pos])
             .map_err(|_| ParseError)?
             .parse::<f64>()
             .map(Json::Number)
             .map_err(|_| ParseError)
+    }
+
+    /// Consume a run of ASCII digits, which may be empty.
+    fn digits(&mut self) {
+        while matches!(self.peek(), Some(b'0'..=b'9')) {
+            self.pos += 1;
+        }
     }
 
     fn string(&mut self) -> Result<String, ParseError> {
@@ -252,9 +291,18 @@ impl Parser<'_> {
         char::from_u32(high).ok_or(ParseError)
     }
 
+    /// Read exactly four hexadecimal digits.
+    ///
+    /// The digits are checked before conversion because `from_str_radix` accepts a leading sign,
+    /// so `\u+041` would otherwise parse as U+0041 while consuming a differently-sized token. That
+    /// shifts the escape window, which in turn lets a lone surrogate slip past the pairing check
+    /// in [`Parser::unicode_escape`] by arriving where that check no longer looks.
     fn hex4(&mut self) -> Result<u32, ParseError> {
         let end = self.pos + 4;
         let digits = self.bytes.get(self.pos..end).ok_or(ParseError)?;
+        if !digits.iter().all(u8::is_ascii_hexdigit) {
+            return Err(ParseError);
+        }
         let text = std::str::from_utf8(digits).map_err(|_| ParseError)?;
         let value = u32::from_str_radix(text, 16).map_err(|_| ParseError)?;
         self.pos = end;
@@ -390,5 +438,56 @@ mod tests {
         out.push('2');
         out.push('}');
         assert_eq!(out, r#"{"a":1,"b":2}"#);
+    }
+
+    /// Review attempt 1: `hex4` used `from_str_radix`, which accepts a leading `+`, so `\u+041`
+    /// parsed as U+0041. Worse, it consumed a different span than the escape occupied, shifting
+    /// the window the surrogate-pairing check inspects.
+    #[test]
+    fn unicode_escapes_require_four_actual_hex_digits() {
+        for input in [
+            r#""\u+041""#,
+            r#""\u-041""#,
+            r#""\u 041""#,
+            r#""\u04""#,
+            r#""\uzzzz""#,
+        ] {
+            assert!(parse(input).is_err(), "{input} should be rejected");
+        }
+
+        // Well-formed escapes, including a surrogate pair, still parse.
+        assert_eq!(parse(r#""\u0041""#).unwrap().as_str(), Some("A"));
+        assert_eq!(
+            parse(r#""\ud83d\ude00""#).unwrap().as_str(),
+            Some("\u{1f600}")
+        );
+        assert!(parse(r#""\ud83d""#).is_err(), "a lone surrogate is invalid");
+    }
+
+    /// Review attempt 1: `number` consumed every numeric-looking byte and handed the span to
+    /// `f64::from_str`, which accepts a wider language than JSON does.
+    #[test]
+    fn numbers_follow_the_json_grammar_rather_than_rusts_float_syntax() {
+        for input in [
+            "01", "1.", "-.5", ".5", "1e", "1e+", "-", "1.2.3", "+1", "00",
+        ] {
+            assert!(parse(input).is_err(), "{input} should be rejected");
+        }
+
+        for (input, expected) in [
+            ("0", 0.0),
+            ("-0", 0.0),
+            ("1", 1.0),
+            ("-1.5", -1.5),
+            ("1e3", 1000.0),
+            ("1E-2", 0.01),
+            ("1.25e+2", 125.0),
+            ("10", 10.0),
+        ] {
+            match parse(input) {
+                Ok(Json::Number(value)) => assert_eq!(value, expected, "{input}"),
+                other => panic!("{input} should parse as a number, got {other:?}"),
+            }
+        }
     }
 }

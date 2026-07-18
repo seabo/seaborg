@@ -31,8 +31,18 @@ function describeEngine(status) {
   if (status.kind !== "thinking") return "idle";
   if (!status.progress) return "thinking…";
   const { depth, score, nodes } = status.progress;
+  // Switch on the tag rather than assuming anything untagged carries centipawns, so a kind this
+  // client does not know renders as unknown instead of "undefined cp".
   const evaluation =
-    score.kind === "mate" ? `mate in ${score.moves}` : `${score.centipawns} cp`;
+    score.kind === "mate"
+      ? `mate in ${score.moves}`
+      : score.kind === "cp"
+        ? `${score.centipawns} cp`
+        : score.kind === "inf"
+          ? "+∞"
+          : score.kind === "-inf"
+            ? "-∞"
+            : "?";
   return `thinking — depth ${depth}, ${evaluation}, ${nodes} nodes`;
 }
 

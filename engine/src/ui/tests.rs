@@ -5,7 +5,7 @@
 //! hand-rolled HTTP layer cannot pass by satisfying an internal signature.
 
 use super::json::{parse, Json};
-use super::server::{bind, UiConfig, UiError, UiHandle, MAX_REQUEST_BODY};
+use super::server::{bind, UiConfig, UiError, UiHandle, MAX_CONNECTIONS, MAX_REQUEST_BODY};
 use crate::search::SearchLimit;
 use core::init::init_globals;
 use core::position::Player;
@@ -985,4 +985,119 @@ fn search_progress_reaches_the_stream_while_the_engine_thinks() {
     }
     assert!(saw_reply, "the engine's reply should reach the stream");
     assert!(ids.windows(2).all(|pair| pair[1] > pair[0]), "ids: {ids:?}");
+}
+
+// --- Regressions from review attempt 1 -------------------------------------------------------
+
+/// REV-1-01: the accept loop is capped, so a flood is refused rather than accumulating threads.
+///
+/// The original loop called `thread::spawn` per connection with no cap. `thread::spawn` panics
+/// when the OS refuses a thread, and it ran on the accept-loop thread, so the panic unwound
+/// `UiServer::run` and killed the engine process mid-game. This asserts the bound that keeps that
+/// condition out of reach: connections past the cap are turned away with a status, and — the part
+/// that actually mattered — the server is still serving afterwards.
+#[test]
+fn connections_past_the_cap_are_refused_and_the_server_keeps_serving() {
+    let server = TestServer::start();
+
+    // Hold the cap open with bare sockets that send nothing, which is all the original defect
+    // needed: the token and Origin gates both run after the connection thread already exists.
+    let mut held = Vec::new();
+    for _ in 0..MAX_CONNECTIONS {
+        held.push(TcpStream::connect_timeout(&server.addr, Duration::from_secs(5)).unwrap());
+    }
+
+    // The permit is claimed on the accept-loop thread, but the connections above are only counted
+    // once each has been accepted, so allow the loop a moment to drain its backlog.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let refused = loop {
+        let response = get(&server, "/api/state");
+        if response.status == 503 {
+            break response;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the server should reach its connection cap, got {}",
+            response.status
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(refused.error_code(), "too_many_connections");
+
+    // Releasing the held connections returns their slots and ordinary service resumes. This is
+    // the assertion the defect failed: the process was gone by this point.
+    drop(held);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let response = get(&server, "/api/state");
+        if response.status == 200 {
+            assert!(response.json().get("fen").is_some());
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the server should serve again once connections close"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// REV-1-02: draining a rejected request is bounded by elapsed time, not just by bytes.
+///
+/// `DRAIN_TIMEOUT` was installed as a per-read socket timeout, so a client delivering one byte
+/// inside each timeout kept the drain productive all the way to the 1 MiB cap — on the order of
+/// weeks on one thread. The drain now carries an absolute deadline, so a dripping client is cut
+/// off shortly after it, having sent nowhere near the byte cap.
+#[test]
+fn a_dripping_client_cannot_hold_a_thread_open_after_its_request_is_rejected() {
+    let server = TestServer::start();
+
+    let mut stream = TcpStream::connect_timeout(&server.addr, Duration::from_secs(5)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .unwrap();
+
+    // Declare a body over the limit so the request is rejected before the body is read, which is
+    // what puts the connection on the drain path with data still queued.
+    let oversized = MAX_REQUEST_BODY + 1;
+    stream
+        .write_all(
+            format!(
+                "POST /api/move HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n\
+                 Content-Type: application/json\r\nContent-Length: {oversized}\r\n\r\n",
+                server.addr.port()
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+    stream.flush().unwrap();
+
+    // Drip a byte at a time, slowly enough that a per-read socket timeout would keep resetting
+    // and the drain would stay productive all the way to its byte cap.
+    let started = Instant::now();
+    let limit = Duration::from_secs(12);
+    let mut sent = 0_usize;
+    while started.elapsed() < limit {
+        // The server abandons the drain and closes with this client's bytes still queued, so the
+        // socket dies by RST and writing to it starts failing.
+        if stream.write_all(b"x").is_err() || stream.flush().is_err() {
+            break;
+        }
+        sent += 1;
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < limit,
+        "the drain should end on its deadline, not run for as long as the client drips"
+    );
+    assert!(
+        sent < oversized,
+        "the connection should close long before the declared {oversized}-byte body arrives, \
+         got {sent} bytes in {elapsed:?}"
+    );
+    // A client that keeps sending past the deadline forfeits its response to that reset, which is
+    // the intended trade: the thread matters more than the courtesy. A client that stops sending
+    // still gets its 413 — `oversized_requests_are_refused_before_the_body_is_buffered` covers it.
 }

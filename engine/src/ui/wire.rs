@@ -86,7 +86,15 @@ fn write_score(out: &mut String, score: Score) {
     let mut first = true;
     out.push('{');
     let raw = score.to_i16();
-    if score.is_mate() {
+    if score == Score::INF_P || score == Score::INF_N {
+        // The infinities sit outside the mate band but satisfy `is_mate`, so they must be taken
+        // first — exactly as `Score`'s `Display` does. Falling through would run the conversion
+        // below on a value it was never derived for and invert the sign: `INF_P` would render as
+        // a mate *against* the side to move. No search result reaches the browser as an infinity
+        // today, so this guards a representation rather than a live path.
+        write_key(out, &mut first, "kind");
+        write_string(out, if score == Score::INF_P { "inf" } else { "-inf" });
+    } else if score.is_mate() {
         // Mirrors the UCI `mate N` conversion in `Score`'s `Display`: negative means the side to
         // move is being mated, and the value counts moves rather than plies.
         let moves = if raw < 0 {
@@ -410,5 +418,27 @@ mod tests {
             command_error_code(&CommandError::NotHumanTurn),
             "not_human_turn"
         );
+    }
+
+    /// Review attempt 1: `write_score` tested `is_mate` before the infinities, which satisfy it
+    /// while sitting outside the mate band. `INF_P` therefore ran through the positive-mate
+    /// conversion and came out as `{"kind":"mate","moves":-4949}` — an infinite advantage
+    /// rendered as being mated. `Score`'s `Display` takes the infinities first; so does this now.
+    #[test]
+    fn infinite_scores_are_tagged_rather_than_converted_as_mates() {
+        let mut out = String::new();
+        write_score(&mut out, Score::INF_P);
+        assert_eq!(out, r#"{"kind":"inf"}"#);
+
+        let mut out = String::new();
+        write_score(&mut out, Score::INF_N);
+        assert_eq!(out, r#"{"kind":"-inf"}"#);
+
+        // The guard is exact, so the mate band it sits above is untouched — the deepest mate this
+        // engine represents still converts. `encodes_mate_scores_in_moves_matching_uci` covers
+        // the band itself; this only shows the new branch does not swallow part of it.
+        let mut out = String::new();
+        write_score(&mut out, Score::mate(-98));
+        assert_eq!(out, r#"{"kind":"mate","moves":-49}"#);
     }
 }

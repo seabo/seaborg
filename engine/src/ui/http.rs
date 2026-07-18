@@ -80,10 +80,13 @@ pub fn read_request(
     reader: &mut BufReader<TcpStream>,
     deadline: Instant,
 ) -> Result<Request, RequestError> {
-    let line = read_line(reader, MAX_REQUEST_LINE, deadline)?;
-    if line.is_empty() {
-        return Err(RequestError::Closed);
-    }
+    // A connection that closes before sending anything, or that sends only a blank line, is an
+    // idle peer going away rather than a client owed a diagnosis.
+    let line = match read_line(reader, MAX_REQUEST_LINE, deadline)? {
+        None => return Err(RequestError::Closed),
+        Some(line) if line.is_empty() => return Err(RequestError::Closed),
+        Some(line) => line,
+    };
 
     let mut parts = line.split(' ');
     let method = parts.next().ok_or(RequestError::Malformed)?;
@@ -103,7 +106,9 @@ pub fn read_request(
 
     let mut headers = Vec::new();
     loop {
-        let line = read_line(reader, MAX_HEADER_LINE, deadline)?;
+        // Only a blank line ends the headers. Running out of input here means the request was
+        // truncated in transit, which is malformed rather than complete.
+        let line = read_line(reader, MAX_HEADER_LINE, deadline)?.ok_or(RequestError::Malformed)?;
         if line.is_empty() {
             break;
         }
@@ -177,12 +182,16 @@ fn apply_deadline(reader: &BufReader<TcpStream>, deadline: Instant) -> Result<()
         .map_err(|_| RequestError::Io)
 }
 
-/// Read one CRLF-terminated line, returning it without the terminator.
+/// Read one CRLF-terminated line, returning it without the terminator, or `None` at end of input.
+///
+/// EOF is reported as `None` rather than as an empty line so callers can tell "the peer stopped
+/// sending" from "a blank line ended the headers". Conflating them would serve a request truncated
+/// mid-headers as though the client had finished it.
 fn read_line(
     reader: &mut BufReader<TcpStream>,
     limit: usize,
     deadline: Instant,
-) -> Result<String, RequestError> {
+) -> Result<Option<String>, RequestError> {
     let mut raw = Vec::new();
     apply_deadline(reader, deadline)?;
     // `take` bounds the read so an endless line without a newline cannot exhaust memory.
@@ -191,7 +200,7 @@ fn read_line(
         .read_until(b'\n', &mut raw)
         .map_err(|error| read_failure(&error, RequestError::Io))?;
     if read == 0 {
-        return Ok(String::new());
+        return Ok(None);
     }
     if !raw.ends_with(b"\n") {
         // Reading the whole allowance without a terminator means the line is over-long; stopping
@@ -206,7 +215,9 @@ fn read_line(
     if raw.ends_with(b"\r") {
         raw.pop();
     }
-    String::from_utf8(raw).map_err(|_| RequestError::Malformed)
+    String::from_utf8(raw)
+        .map(Some)
+        .map_err(|_| RequestError::Malformed)
 }
 
 /// The status codes this server emits.
@@ -222,6 +233,7 @@ pub enum Status {
     PayloadTooLarge,
     UnsupportedMediaType,
     UnprocessableContent,
+    ServiceUnavailable,
 }
 
 impl Status {
@@ -237,6 +249,7 @@ impl Status {
             Status::PayloadTooLarge => 413,
             Status::UnsupportedMediaType => 415,
             Status::UnprocessableContent => 422,
+            Status::ServiceUnavailable => 503,
         }
     }
 
@@ -252,6 +265,7 @@ impl Status {
             Status::PayloadTooLarge => "Payload Too Large",
             Status::UnsupportedMediaType => "Unsupported Media Type",
             Status::UnprocessableContent => "Unprocessable Content",
+            Status::ServiceUnavailable => "Service Unavailable",
         }
     }
 }
@@ -490,5 +504,23 @@ mod tests {
     fn rejects_a_body_shorter_than_its_declared_length() {
         let raw = b"POST /api/move HTTP/1.1\r\nContent-Length: 32\r\n\r\nshort";
         assert_eq!(parse(raw), Err(RequestError::Malformed));
+    }
+
+    /// Review attempt 1: `read_line` returned an empty string both for a blank line and for EOF,
+    /// so a request cut off after a complete header line was indistinguishable from one whose
+    /// headers had ended, and was served as though the client had finished sending it.
+    #[test]
+    fn a_request_truncated_after_a_header_line_is_malformed_rather_than_complete() {
+        // No blank line: the peer closed mid-headers.
+        let truncated = parse(b"GET /api/state HTTP/1.1\r\nHost: 127.0.0.1:9\r\n");
+        assert_eq!(truncated, Err(RequestError::Malformed));
+
+        // The same bytes plus the terminator are a complete request, which is what makes the
+        // case above a truncation rather than a stricter reading of a valid one.
+        let complete = parse(b"GET /api/state HTTP/1.1\r\nHost: 127.0.0.1:9\r\n\r\n").unwrap();
+        assert_eq!(complete.path, "/api/state");
+
+        // A connection that closes without sending anything is still just a peer going away.
+        assert_eq!(parse(b""), Err(RequestError::Closed));
     }
 }

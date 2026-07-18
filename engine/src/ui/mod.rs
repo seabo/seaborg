@@ -14,4 +14,6 @@ mod wire;
 #[cfg(test)]
 mod tests;
 
-pub use server::{bind, open_browser, UiConfig, UiError, UiHandle, UiServer, MAX_REQUEST_BODY};
+pub use server::{
+    bind, open_browser, UiConfig, UiError, UiHandle, UiServer, MAX_CONNECTIONS, MAX_REQUEST_BODY,
+};
