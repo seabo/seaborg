@@ -3,9 +3,11 @@ id: TASK-41
 title: >-
   Throttle the clock read in Search::stopping() to avoid a per-node
   Instant::now()
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-18 12:17'
+updated_date: '2026-07-18 23:20'
 labels:
   - engine
   - search
@@ -38,3 +40,12 @@ Identified during the TASK-38 investigation and deliberately left out of that ti
 - [ ] #4 TASK-32 guaranteed-legal-move behavior is unaffected, evidenced by its existing regression tests passing
 - [ ] #5 A before/after benchmark on the existing hot-path benchmarks shows no regression, and the nps change is reported
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Establish a representative baseline with the existing `search startpos depth 7` Criterion benchmark and a clock-read-elided comparison, recording time and NPS evidence.
+2. If the measured cost is material, preserve the guaranteed-first-ply early return and unthrottled cancellation load while sampling only deadline reads at a documented node interval.
+3. Add focused tests for deadline tolerance and stop responsiveness, and confirm the existing zero/near-zero budget regressions.
+4. Re-run the hot-path benchmark against the baseline, record before/after NPS, then run all repository-required checks and prepare the immutable review handoff.
+<!-- SECTION:PLAN:END -->
