@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-18 18:29'
-updated_date: '2026-07-18 23:30'
+updated_date: '2026-07-18 23:32'
 labels: []
 dependencies: []
 references:
@@ -54,6 +54,8 @@ Implemented explicit `Option<Score>` node outcomes across main search, razoring,
 Resolved REV-1-01: changed the deterministic abort threshold to the reviewer-proven pre-fix failure point and now compare the complete restored PV, not only its first move. The threshold fires on entry to the candidate depth-two search after depth one has fully completed.
 
 Resolved REV-2-01: the iterative regression now aborts at completed-depth-one nodes + 2, which is the first recursive child of the depth-two root, and uses a 16 MiB TT. Added direct node-level coverage proving the aborted child returns None, restores the root move, contributes no PV move, and leaves the ancestor TT slot empty. On base e301527 the corresponding node API returns the plausible Score::zero() instead of an unusable outcome.
+
+Resolved REV-3-01: sized the direct depth-two regression's PV table to depth two, so the assertion observes the row written by the searched root and fails on the unfixed base as demonstrated in review attempt 3.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -408,5 +410,11 @@ Verification (on 043d75f):
 - same one-line change on target 043d75f: passed
 - grafted iterative test on base e301527: passed (see non-blocking note)
 - instrumented node accounting: abort fires at node 2, inside the first child
+---
+
+author: @codex
+created: 2026-07-18 23:32
+---
+Resolved REV-3-01: the direct abort regression now uses PVTable::new(2), making its no-principal-move assertion non-vacuous and discriminating against base e301527.
 ---
 <!-- COMMENTS:END -->

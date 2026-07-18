@@ -1694,6 +1694,7 @@ mod tests {
         // node, makes a move, and the recursive search consumes the second node before stopping.
         search.min_search_complete = true;
         search.search_depth = 2;
+        search.pvt = PVTable::new(2);
         search.abort_after_nodes = Some(2);
 
         let result = search.search::<Master, Root>(Score::INF_N, Score::INF_P, 2);
