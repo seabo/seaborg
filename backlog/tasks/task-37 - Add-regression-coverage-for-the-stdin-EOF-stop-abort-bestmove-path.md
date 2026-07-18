@@ -1,11 +1,11 @@
 ---
 id: TASK-37
 title: Add regression coverage for the stdin-EOF / stop-abort bestmove path
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-18 01:21'
-updated_date: '2026-07-18 23:24'
+updated_date: '2026-07-18 23:28'
 labels:
   - engine
   - search
