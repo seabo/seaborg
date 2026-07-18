@@ -1,11 +1,11 @@
 ---
 id: TASK-32
 title: Engine returns illegal null move and forfeits at fast time controls
-status: In Review
+status: Ready to Merge
 assignee:
   - '@georgeseabridge'
 created_date: '2026-07-18 00:09'
-updated_date: '2026-07-18 01:27'
+updated_date: '2026-07-18 11:39'
 labels:
   - engine
   - search
@@ -26,11 +26,11 @@ Discovered while validating the TASK-27 strength-regression tooling against a re
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 For any go command, the engine returns a legal move whenever a legal move exists, including when the computed time budget is zero or near-zero (never 'bestmove 0000' in a non-terminal position)
-- [ ] #2 A guaranteed-minimum search completes at least one full ply / one legal root move before any time-based abort can take effect
-- [ ] #3 The search honors the allotted clock: self-play at fast time controls (e.g. 2+0.05 and 10+0.1) produces no illegal-move forfeits and no losses on time attributable to overrun
-- [ ] #4 Behavior is validated with a UCI tournament runner (FastChess or cutechess-cli) playing seaborg self-play at a fast time control with zero illegal moves and zero time forfeits
-- [ ] #5 Unit tests cover the zero/near-zero budget path returning a legal move and the time-abort honoring the budget
+- [x] #1 For any go command, the engine returns a legal move whenever a legal move exists, including when the computed time budget is zero or near-zero (never 'bestmove 0000' in a non-terminal position)
+- [x] #2 A guaranteed-minimum search completes at least one full ply / one legal root move before any time-based abort can take effect
+- [x] #3 The search honors the allotted clock: self-play at fast time controls (e.g. 2+0.05 and 10+0.1) produces no illegal-move forfeits and no losses on time attributable to overrun
+- [x] #4 Behavior is validated with a UCI tournament runner (FastChess or cutechess-cli) playing seaborg self-play at a fast time control with zero illegal moves and zero time forfeits
+- [x] #5 Unit tests cover the zero/near-zero budget path returning a legal move and the time-abort honoring the budget
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -78,4 +78,48 @@ Verification:
 - FastChess self-play 10+0.1, 20 games: all Termination=normal, 0 illegal-move forfeits, 0 time losses (6-6-8 W/L/D)
 Known failures: none from this change. Baseline (pre-existing, unrelated): 'benches/square.rs' fails to compile (E0423, Square tuple-struct private field) on master; excluded via --lib/--bins/--tests. FastChess 'Illegal PV move' warnings are a pre-existing PV-info-line artifact on mate scores (played moves are legal; games end normally).
 ---
+
+author: @georgeseabridge
+created: 2026-07-18 11:38
+---
+Review attempt: 1
+Reviewed branch: task-32-illegal-null-move
+Reviewed implementation: f4a4643591d5349db80815fd8cec36cd947ee7f6
+Base: d9a138ccdeb36f39dd28fc7e19d460635ec6be29
+Verdict: approved
+
+Target immutability: f4a4643 descends from the recorded base; the only later commit (c0166d4) touches the task file alone.
+
+Scope: base..target changes engine/src/search.rs (fix + tests), engine/src/game.rs (test only), and the task file. No unrelated work. The replaced game.rs test 'incomplete_search_outcomes_are_ignored' loses no coverage: 'stale_or_cancelled_search_outcomes_are_never_applied' still exercises the SearchOutcome::Completed(Some(_)) guard at game.rs:182.
+
+Design review: run() is invoked exactly once per search (search.rs:151), so the guaranteed ply cannot be re-armed mid-search; min_search_complete is a plain field on a single-threaded Search, so there is no concurrency exposure; the first iteration is always d=1, so the suppressed window is bounded by one depth-1 search plus quiescence.
+
+AC #1 - Independently reproduced the defect on the base commit: 'go wtime 2000 btime 2000 winc 50 binc 50' returns 'bestmove 0000'. On the target the same command returns 'bestmove a2a3'. Legal moves also returned for 'go movetime 0', 'go wtime 1 btime 1', and 'go infinite' + immediate 'stop', across startpos, Kiwipete (r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1 -> e2a6), a pawn endgame (8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1 -> b4f4), and a rook endgame (-> a1a8). A checkmated position still returns 0000, which the criterion explicitly scopes out ('in a non-terminal position') and which is conventional UCI behavior.
+
+AC #2 - stopping() (search.rs:761) returns false until min_search_complete, which iterative_deepening sets only after an iteration completes (search.rs:466). Unit test aborts_are_suppressed_only_until_the_first_ply_completes asserts both halves with the flag set and the deadline already elapsed. Every move in the tournament PGNs reports depth >= 1.
+
+AC #3 / #4 - FastChess self-play on the target build: 40 games at tc=2+0.05 (20-20-0) and 10 games at tc=10+0.1. Zero illegal-move forfeits, zero time losses; every game ended in a real mate, 3-fold repetition, or insufficient material. 'grep -c forfeit|illegal|time' over the 2+0.05 PGN returns 0.
+
+AC #5 - Four unit tests cover the paths: zero_time_limit_still_returns_a_legal_move, near_zero_time_budget_completes_the_guaranteed_ply, aborts_are_suppressed_only_until_the_first_ply_completes, time_limited_search_honors_the_budget_after_the_guaranteed_ply. All pass and each asserts move legality via position.valid_move rather than mere presence.
+
+Verification:
+- cargo fmt --all --check: clean
+- cargo clippy --workspace --lib --bins --tests: no errors (pre-existing warnings only)
+- cargo test --workspace --lib --bins --tests: 111 passed, 0 failed, 1 ignored
+- cargo build --release: ok
+- Manual UCI boundary matrix (above): all legal, no 0000 in non-terminal positions
+- FastChess 2+0.05 x40 and 10+0.1 x10: 0 illegal, 0 time forfeits
+- cargo bench --bench search (A/B base vs target): target [44.8 / 46.0 / 48.0] us, base [48.3 / 52.0 / 59.2] us. No regression. perft/movegen benches are unaffected by construction (benches/perft.rs uses engine::perft::Perft and benches/movegen.rs uses core movegen; neither links through Search::stopping), and the machine was not idle (competing self-play processes from another worktree, load ~9.8), so absolute numbers are indicative only.
+
+Non-blocking observations for the human, not deferred blocking findings and no follow-up task created:
+1. time.rs allocation is unchanged, so at 2+0.05 the per-move budget still saturates to 0 for roughly the first 13 moves; the engine plays those instantly at depth 1 and only reaches ~45ms searches once increment has banked clock. This is a pre-existing strength/tuning defect, is present on master, causes no forfeit or overrun, and was explicitly scoped out by the implementation plan. AC #3 as written (no illegal-move forfeits, no losses on time attributable to overrun) holds.
+2. Suppressing the cancellation flag during ply 1 means a UCI 'stop' cannot interrupt the first ply. Measured at ~10-150ms including process start, so it is bounded and safe, but it is a deliberate minor deviation from prompt-stop semantics worth knowing about.
+3. FastChess 'Illegal PV move' warnings on mate scores are pre-existing: reproduced on the base build (8 occurrences in 6 games at 10+0.1). They concern the info-line PV only, never the played move.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Search now guarantees a completed first ply before any abort can take effect, so a legal root move is always available. engine/src/search.rs gains Search::min_search_complete: stopping() returns false until the first iterative-deepening iteration finishes, suppressing both the cancellation flag and the time deadline; deeper iterations honor the clock as before. Verified independently: base d9a138c reproduces 'bestmove 0000' at a 2+0.05-derived go, target f4a4643 returns legal moves at zero, 1ns, movetime 0 and 1ms budgets and on an immediate stop, across startpos, Kiwipete, and endgame FENs. FastChess self-play 40 games at 2+0.05 and 10 games at 10+0.1: zero illegal moves, zero time forfeits, all terminations normal. cargo fmt --all --check clean, cargo clippy no errors, cargo test --workspace --lib --bins --tests 111 passed / 0 failed. Search hot-path A/B (cargo bench --bench search) showed no regression.
+<!-- SECTION:FINAL_SUMMARY:END -->
