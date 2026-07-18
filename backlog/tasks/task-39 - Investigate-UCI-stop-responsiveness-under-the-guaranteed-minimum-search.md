@@ -1,7 +1,7 @@
 ---
 id: TASK-39
 title: Investigate UCI stop responsiveness under the guaranteed-minimum search
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-18 11:46'
@@ -174,5 +174,29 @@ Verification:
 - cargo fmt --check: passed
 - fresh-target cargo clippy --workspace --all-targets --all-features -- -D warnings: passed
 - cargo test --workspace: passed (core 35; engine 159 passed/1 ignored; metadata 5; doc tests passed)
+---
+
+author: @codex
+created: 2026-07-18 20:12
+---
+Implementation handoff
+Branch: task-39-stop-responsiveness
+Worktree: /Users/seabo/seaborg-worktrees/task-39-stop-responsiveness
+Base: 9c4cc1896a6f9b121412bb9c5cf86b338891367d
+Implementation target: f5e942f
+Resolved findings: REV-1-01
+Verification:
+- cargo fmt --check: clean
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean (covers the new example via --all-targets)
+- cargo test --workspace: passed (core 35; engine 159 passed/1 ignored; metadata 5; doc test 1; 0 failed)
+- ruby -c tools/task39_stop_probe.rb: Syntax OK
+- cargo run --release -p engine --example task39_qtree -- corpus 20000000: max quiet chain 4, max reachable ply 48
+- cargo run --release -p engine --example task39_qtree -- wac 2000000: 300 positions, 201 truncated, max quiet chain 4, max reachable ply 46
+- cargo run --release -p engine --example task39_qtree -- sweep 5000 1580315493 200000: max quiet chain 5, max reachable ply 55
+- ruby tools/task39_stop_probe.rb target/release/seaborg 1000: 16,000 samples over 16 positions, all legal non-null bestmoves, all medians <= 1.162 ms, overall max 5.820 ms
+- git diff --name-only 9c4cc18 -- engine/src src core/src: empty, so AC#1 holds
+Known failures: none
+
+Note for review: the AC#4 verdict has changed from the previous attempt. The earlier report treated a TASK-29 quiescence check-extension cap as sufficient for the time-deadline path; the new structural evidence shows it would almost never bind, because quiet check chains top out at 5 while the large ply-1 trees come from capture/promotion interleaving. That finding is recorded as a comment on TASK-29 as well as in doc-3.
 ---
 <!-- COMMENTS:END -->
