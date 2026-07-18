@@ -61,9 +61,29 @@ impl EngineInfo {
 
 /// Launch the engine process.
 pub fn launch(info: EngineInfo) {
-    run(info, io::stdin(), io::stdout(), io::stderr());
+    run_detached(info, io::stdin(), io::stdout(), io::stderr());
 }
 
+/// Run the production driver with a detached input reader.
+///
+/// A UCI host normally keeps stdin open for the engine's lifetime, so the reader can be blocked in
+/// `read_line` when the driver panics. It must not be a scoped thread: unwinding a scope joins the
+/// reader and turns the panic into a permanent hang. A detached reader is harmless during normal
+/// shutdown and is terminated by the operating system if the main/driver thread panics.
+fn run_detached<R, W, E>(info: EngineInfo, input: R, output: W, errors: E)
+where
+    R: Read + Send + 'static,
+    W: Write,
+    E: Write,
+{
+    core::init::init_globals();
+
+    let (uci_tx, uci_rx) = unbounded();
+    thread::spawn(move || read_commands(BufReader::new(input), uci_tx));
+    drive(info, uci_rx, output, errors);
+}
+
+#[cfg(test)]
 fn run<R, W, E>(info: EngineInfo, input: R, mut output: W, mut errors: E)
 where
     R: Read + Send,
@@ -72,95 +92,100 @@ where
 {
     core::init::init_globals();
 
+    thread::scope(|scope| {
+        let (uci_tx, uci_rx) = unbounded();
+        scope.spawn(move || read_commands(BufReader::new(input), uci_tx));
+        drive(info, uci_rx, &mut output, &mut errors);
+    });
+}
+
+fn drive<W, E>(info: EngineInfo, uci_rx: Receiver<Input>, mut output: W, mut errors: E)
+where
+    W: Write,
+    E: Write,
+{
     let mut hash_size_mb = 16;
     let mut search_engine = SearchEngine::new(hash_size_mb);
     let mut active_search: Option<SearchHandle> = None;
     let mut pos = Position::start_pos();
 
-    thread::scope(|scope| {
-        let (uci_tx, uci_rx) = unbounded();
-        scope.spawn(move || read_commands(BufReader::new(input), uci_tx));
+    // Protocol stdout must contain only valid UCI traffic, so the human
+    // banner (including trimmed commit metadata) goes to the diagnostic
+    // channel and never precedes the `uci` handshake on stdout.
+    let _ = writeln!(
+        errors,
+        "{} {} by {} (commit {})",
+        info.name,
+        info.version,
+        info.author,
+        info.short_commit()
+    );
 
-        // Protocol stdout must contain only valid UCI traffic, so the human
-        // banner (including trimmed commit metadata) goes to the diagnostic
-        // channel and never precedes the `uci` handshake on stdout.
-        let _ = writeln!(
-            errors,
-            "{} {} by {} (commit {})",
-            info.name,
-            info.version,
-            info.author,
-            info.short_commit()
-        );
+    loop {
+        let event = next_event(&uci_rx, active_search.as_ref());
+        match event {
+            DriverEvent::Input(Ok(Input::Command(Command::Quit)))
+            | DriverEvent::Input(Ok(Input::Closed))
+            | DriverEvent::Input(Err(_)) => {
+                if let Some(search) = active_search.take() {
+                    stop_search(search, &mut output);
+                }
+                break;
+            }
+            DriverEvent::Input(Ok(Input::ParseError(err))) => {
+                let _ = writeln!(errors, "error: {err}");
+            }
+            DriverEvent::Input(Ok(Input::Command(Command::Stop))) => {
+                if let Some(search) = active_search.take() {
+                    stop_search(search, &mut output);
+                }
+            }
+            DriverEvent::Input(Ok(Input::Command(Command::SetOption(option)))) => {
+                if let Some(search) = active_search.take() {
+                    stop_search(search, &mut output);
+                }
+                if let EngineOpt::Hash(size) = option {
+                    hash_size_mb = size;
+                    search_engine = SearchEngine::new(hash_size_mb);
+                }
+            }
+            DriverEvent::Input(Ok(Input::Command(Command::Go(timing)))) => {
+                if let Some(search) = active_search.take() {
+                    stop_search(search, &mut output);
+                }
 
-        loop {
-            let event = next_event(&uci_rx, active_search.as_ref());
-            match event {
-                DriverEvent::Input(Ok(Input::Command(Command::Quit)))
-                | DriverEvent::Input(Ok(Input::Closed))
-                | DriverEvent::Input(Err(_)) => {
-                    if let Some(search) = active_search.take() {
-                        stop_search(search, &mut output);
+                let limit = match timing {
+                    TimingMode::Depth(depth) => SearchLimit::Depth(depth),
+                    TimingMode::Infinite => SearchLimit::Infinite,
+                    TimingMode::Timed(tc) => {
+                        let move_time = tc.to_move_time(pos.move_number(), pos.turn());
+                        SearchLimit::Time(Duration::from_millis(move_time))
                     }
-                    break;
+                    TimingMode::MoveTime(time) => SearchLimit::Time(Duration::from_millis(time)),
+                };
+                active_search = Some(search_engine.start(pos.clone(), limit));
+            }
+            DriverEvent::Input(Ok(Input::Command(Command::UciNewGame))) => {
+                if let Some(search) = active_search.take() {
+                    stop_search(search, &mut output);
                 }
-                DriverEvent::Input(Ok(Input::ParseError(err))) => {
-                    let _ = writeln!(errors, "error: {err}");
-                }
-                DriverEvent::Input(Ok(Input::Command(Command::Stop))) => {
-                    if let Some(search) = active_search.take() {
-                        stop_search(search, &mut output);
-                    }
-                }
-                DriverEvent::Input(Ok(Input::Command(Command::SetOption(option)))) => {
-                    if let Some(search) = active_search.take() {
-                        stop_search(search, &mut output);
-                    }
-                    if let EngineOpt::Hash(size) = option {
-                        hash_size_mb = size;
-                        search_engine = SearchEngine::new(hash_size_mb);
-                    }
-                }
-                DriverEvent::Input(Ok(Input::Command(Command::Go(timing)))) => {
-                    if let Some(search) = active_search.take() {
-                        stop_search(search, &mut output);
-                    }
-
-                    let limit = match timing {
-                        TimingMode::Depth(depth) => SearchLimit::Depth(depth),
-                        TimingMode::Infinite => SearchLimit::Infinite,
-                        TimingMode::Timed(tc) => {
-                            let move_time = tc.to_move_time(pos.move_number(), pos.turn());
-                            SearchLimit::Time(Duration::from_millis(move_time))
-                        }
-                        TimingMode::MoveTime(time) => {
-                            SearchLimit::Time(Duration::from_millis(time))
-                        }
-                    };
-                    active_search = Some(search_engine.start(pos.clone(), limit));
-                }
-                DriverEvent::Input(Ok(Input::Command(Command::UciNewGame))) => {
-                    if let Some(search) = active_search.take() {
-                        stop_search(search, &mut output);
-                    }
-                    search_engine.new_game();
-                }
-                DriverEvent::Input(Ok(Input::Command(command))) => {
-                    handle_command(&info, command, &mut pos, &mut output, &mut errors);
-                }
-                DriverEvent::SearchProgress(event) => {
-                    let _ = writeln!(output, "{}", format_search_event(&event));
-                }
-                DriverEvent::SearchComplete => {
-                    // `next_event` only reports completion for a search it was given,
-                    // so a handle is necessarily active here.
-                    if let Some(search) = active_search.take() {
-                        finish_search(search, &mut output);
-                    }
+                search_engine.new_game();
+            }
+            DriverEvent::Input(Ok(Input::Command(command))) => {
+                handle_command(&info, command, &mut pos, &mut output, &mut errors);
+            }
+            DriverEvent::SearchProgress(event) => {
+                let _ = writeln!(output, "{}", format_search_event(&event));
+            }
+            DriverEvent::SearchComplete => {
+                // `next_event` only reports completion for a search it was given,
+                // so a handle is necessarily active here.
+                if let Some(search) = active_search.take() {
+                    finish_search(search, &mut output);
                 }
             }
         }
-    });
+    }
 }
 
 fn read_commands<R: BufRead>(mut input: R, sender: crossbeam_channel::Sender<Input>) {
@@ -298,7 +323,9 @@ fn finish_search<W: Write>(search: SearchHandle, output: &mut W) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::{Command as ProcessCommand, Stdio};
     use std::sync::{Arc, Mutex};
+    use std::time::Instant;
 
     #[derive(Clone, Default)]
     struct SharedWriter(Arc<Mutex<Vec<u8>>>);
@@ -623,6 +650,95 @@ mod tests {
             assert!(chunk.len() <= buf.len());
             buf[..chunk.len()].copy_from_slice(&chunk);
             Ok(chunk.len())
+        }
+    }
+
+    struct PanickingWriter;
+
+    impl Write for PanickingWriter {
+        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+            panic!("injected UCI driver panic")
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn driver_panic_does_not_join_a_blocked_input_reader() {
+        const TIMEOUT: Duration = Duration::from_secs(2);
+
+        let (input_tx, input_rx) = unbounded::<Vec<u8>>();
+        let (done_tx, done_rx) = unbounded();
+        thread::spawn(move || {
+            let panicked = std::panic::catch_unwind(|| {
+                run_detached(
+                    TEST_INFO,
+                    ChannelReader(input_rx),
+                    PanickingWriter,
+                    io::sink(),
+                )
+            })
+            .is_err();
+            let _ = done_tx.send(panicked);
+        });
+
+        input_tx.send(b"isready\n".to_vec()).unwrap();
+        assert_eq!(
+            done_rx.recv_timeout(TIMEOUT),
+            Ok(true),
+            "driver unwind waited for the still-open input reader"
+        );
+    }
+
+    /// Subprocess probe used by `driver_panic_exits_the_process_nonzero`. The sender is deliberately
+    /// leaked so the detached reader remains blocked exactly as it does under a UCI runner.
+    #[test]
+    #[ignore = "launched explicitly by the subprocess regression"]
+    fn driver_panic_process_probe() {
+        let (input_tx, input_rx) = unbounded::<Vec<u8>>();
+        input_tx.send(b"isready\n".to_vec()).unwrap();
+        std::mem::forget(input_tx);
+        run_detached(
+            TEST_INFO,
+            ChannelReader(input_rx),
+            PanickingWriter,
+            io::sink(),
+        );
+    }
+
+    #[test]
+    fn driver_panic_exits_the_process_nonzero() {
+        const TIMEOUT: Duration = Duration::from_secs(2);
+
+        let mut child = ProcessCommand::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "engine::tests::driver_panic_process_probe",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + TIMEOUT;
+
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(
+                    !status.success(),
+                    "driver panic must produce a non-zero exit"
+                );
+                break;
+            }
+            if Instant::now() >= deadline {
+                child.kill().unwrap();
+                let _ = child.wait();
+                panic!("panicking driver process remained blocked on its stdin reader");
+            }
+            thread::sleep(Duration::from_millis(10));
         }
     }
 }
