@@ -17,7 +17,18 @@ positions = {
   "in_check_quiet_evasions" => "fen k3r3/8/8/8/8/8/8/4K3 w - - 0 1",
   "mate_tactics_1" => "fen r5k1/2qn2pp/2nN1p2/3pP2Q/3P1p2/5N2/4B1PP/1b4K1 w - - 0 25",
   "mate_tactics_2" => "fen 6rk/p7/1pq1p2p/4P3/5BrP/P3Qp2/1P1R1K1P/5R2 b - - 0 34",
-  "check_heavy" => "fen 3kB3/5K2/7p/3p4/3pn3/4NN2/8/1b4B1 w - - 0 1"
+  "check_heavy" => "fen 3kB3/5K2/7p/3p4/3pn3/4NN2/8/1b4B1 w - - 0 1",
+  # Positions ranked worst by the offline reachability model in
+  # engine/examples/task39_qtree.rs: each has a ply-1 quiescence tree exceeding two million
+  # reachable nodes at 41-46 ply. They are included so the measured stop latency is tied to the
+  # structurally worst cases found, not only to the hand-picked corpus above.
+  "model_worst_wac022" => "fen r1bqk2r/ppp1nppp/4p3/n5N1/2BPp3/P1P5/2P2PPP/R1BQK2R w KQkq - 0 1",
+  "model_worst_wac263" => "fen rnbqr2k/pppp1Qpp/8/b2NN3/2B1n3/8/PPPP1PPP/R1B1K2R w KQ - 0 1",
+  "model_worst_wac070" => "fen 2kr3r/pppq1ppp/3p1n2/bQ2p3/1n1PP3/1PN1BN1P/1PP2PP1/2KR3R b - - 0 1",
+  "model_worst_wac093" => "fen r1b1k1nr/pp3pQp/4pq2/3pn3/8/P1P5/2P2PPP/R1B1KBNR w KQkq - 0 1",
+  "model_worst_wac114" => "fen r1b1rnk1/1p4pp/p1p2p2/3pN2n/3P1PPq/2NBPR1P/PPQ5/2R3K1 w - - 0 1",
+  # Highest quiet check-evasion chain (4) observed anywhere in the model sweep.
+  "model_worst_chain_wac104" => "fen b4r1k/pq2rp2/1p1bpn1p/3PN2n/2P2P2/P2B3K/1B2Q2N/3R2R1 w - - 0 1"
 }
 
 stdin, stdout, stderr, waiter = Open3.popen3(engine, "--uci")

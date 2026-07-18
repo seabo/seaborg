@@ -1,11 +1,11 @@
 ---
 id: TASK-39
 title: Investigate UCI stop responsiveness under the guaranteed-minimum search
-status: Changes Requested
+status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-18 11:46'
-updated_date: '2026-07-18 19:52'
+updated_date: '2026-07-18 20:12'
 labels:
   - engine
   - search
@@ -60,11 +60,16 @@ Related: TASK-34 covers separate self-play robustness defects (intermittent sear
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Trace the guaranteed first iteration, quiescence recursion, cancellation, and UCI driver shutdown paths; identify what can and cannot bound the suppressed interval.
-2. Build a release UCI binary and measure immediate-stop latency in a persistent-process harness over representative and adversarial FENs, including dense tactics, long capture sequences, and check-extension chains; repeat enough samples to report distributions and a conservative threshold.
-3. Compare the evidence with UCI prompt-stop semantics and common tournament-runner timeout margins, and determine whether TASK-29's proposed quiescence cap alone supplies a sufficient bound.
-4. Record the investigation in Backlog documentation without changing engine search/stop/UCI code. If the evidence supports keeping behavior, add only regression coverage that pins a robust bound; otherwise create well-scoped implementation ticket(s) preserving TASK-32's legal-move guarantee.
-5. Run focused verification plus the repository-required formatting, strict Clippy, and workspace tests; commit the immutable investigation target and create the In Review handoff.
+REV-1-01 rework: supply structural ply-1 quiescence evidence.
+
+1. Build an offline quiescence-reachability explorer as a new engine example (engine/examples/, NOT engine/src search/stop/UCI code, per AC#1). It replicates quiesce/quiesce_evasions move selection exactly — non-check q-nodes expand QueenPromotions+Captures (QMoveLoader), in-check q-nodes expand all legal evasions (quiesce_evasions) — and its only terminations are quiesce Step 1 (in_threefold, half_move_clock >= 50) plus an explicit ply cap. Omitting stand-pat/alpha-beta pruning makes it a sound UPPER BOUND on the reachable ply-1 q-tree.
+2. Report per-position structural metrics: q-nodes, max q-ply, and max consecutive quiet-check-evasion chain length, measured over each depth-1 root child (the actual ply-1 quiescence work).
+3. Systematically search for adversarial positions rather than asserting them: sweep the existing 10-position corpus, repo test-suite FENs, hand-constructed mutual-perpetual-check/discovered-check batteries, and randomly generated positions reached by random play. Rank by max q-ply and quiet-check-chain length.
+4. Establish the structural argument for why deep quiet-check chains are hard to reach: a quiet check can only be generated from an in-check node (QMoveLoader::load_quiets is gated on in_check and quiesce returns to quiesce_evasions first), so an unbounded quiet chain requires mutual alternating check, which threefold/fifty-move then cuts.
+5. Re-run tools/task39_stop_probe.rb extended with the worst positions found, recording their real bestmove latency so the structural worst case is tied to measured latency.
+6. Add a fast regression test pinning the structural bound on the worst discovered position.
+7. Update doc-3 with method, structural results, the adversarial search procedure and its negative/positive result, and revised conclusions; keep AC#3/#4/#5 judgements consistent with what the new evidence shows.
+8. Run cargo fmt --check, strict clippy, cargo test --workspace; record Resolved REV-1-01 and hand off.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
@@ -84,6 +89,26 @@ Verification completed:
 - cargo fmt --check: clean
 - cargo clippy --workspace --all-targets --all-features -- -D warnings: clean
 - cargo test --workspace: passed (core 35; engine 159 passed/1 ignored; metadata 5; doc tests passed)
+
+Review attempt 1 rework.
+
+Resolved REV-1-01: adversarial deep check-extension evidence is now supplied structurally rather than asserted.
+
+Added engine/examples/task39_qtree.rs, an offline quiescence-reachability model. It lives outside engine/src so AC#1 still holds (git diff vs base 9c4cc18 touches no engine/src, core/src or src/ file). It replicates quiesce/quiesce_evasions move selection exactly — non-check q-nodes expand QueenPromotions+Captures per QMoveLoader, in-check q-nodes expand all legal evasions per quiesce_evasions — with quiesce Step 1 (threefold, half_move_clock >= 50) as the only non-cap termination. Stand-pat, TT cutoffs and alpha-beta are omitted deliberately, so the model is a sound upper bound on the reachable ply-1 q-tree.
+
+It reports max_q_ply and max_quiet_check_chain (consecutive quiet check evasions — exactly the quantity a TASK-29 cap would bound), which is the q-node/max-q-ply structural evidence the finding asked for.
+
+Systematic adversarial search rather than assertion, over four corpora: 5,000 random positions from random play (seed 1580315493), the 300-position WAC suite, the 16-position named corpus, and six purpose-built mutual-check/discovered-check/perpetual-check batteries.
+
+Results. The longest consecutive quiet check-evasion chain found anywhere was 5, with the mass at 2-3; the six hand-built adversaries all produced chains of length 1 and trees under 500 nodes, so deliberate construction of a long chain failed. Reachable tree depth and size, by contrast, is large almost everywhere: 46 ply on WAC (201/300 positions exceeded a 2M-node cap), 55 ply in the random sweep, and past 20M nodes on ordinary dense tactical positions in the named corpus.
+
+Latency tied to the structural worst cases. tools/task39_stop_probe.rb was extended with the six structurally worst positions found (WAC.022/263/070/093/114 by depth, WAC.104 by chain). 16,000 samples over 16 positions: every median at or below 1.162 ms, overall max 5.820 ms, all bestmoves legal and non-null. WAC.114 has a reachable ply-1 tree of 2M+ nodes at 44 ply yet answers stop in 0.269 ms median.
+
+That gap is the substantive finding: responsiveness rests entirely on pruning effectiveness, not on the suppressed window being structurally short.
+
+AC#4 answer changed as a result. A quiescence check-extension ply cap alone does NOT bound this window: chains never exceed 5, so a cap would almost never bind, while the large trees come from capture/promotion interleaving that resets the halfmove clock and that a check-extension cap does not touch. Recorded on TASK-29 as a comment so the finding is not lost when it is picked up. Bounding this window structurally would need a total q-node or q-ply budget.
+
+doc-3 rewritten with method, the reachability-upper-bound caveat, all four corpora, the latency table, and revised AC#3/#4/#5/#6 judgements. No timing regression test added: it would pass on this hardware and corpus while the adversarial failure mode stayed open. TASK-45 remains the primary outcome and preserves the TASK-32/TASK-37 legal-move guarantee by construction.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
