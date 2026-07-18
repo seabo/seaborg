@@ -1,11 +1,11 @@
 ---
 id: TASK-1.4
 title: Build the dependency-free interactive chessboard
-status: In Review
+status: Changes Requested
 assignee:
   - '@codex'
 created_date: '2026-07-17 15:40'
-updated_date: '2026-07-18 19:59'
+updated_date: '2026-07-18 20:11'
 labels: []
 dependencies:
   - TASK-1.3
@@ -76,5 +76,15 @@ Verification:
 - cargo build: passed
 - Chrome against target/debug/seaborg --ui: desktop 1440x1000 and narrow 390x844 rendered without overflow; click-click, keyboard, mouse/pen/touch drag, both orientations, snapback, engine lockout, and reduced motion passed; no browser console/CSP errors or external resources
 Known failures: none
+---
+
+author: @codex
+created: 2026-07-18 20:11
+---
+Human feedback on implementation target 9319c0d27963a721fd1c04c3d02e8cb2e8f56eb0:
+
+HUMAN-1: Replace the current custom piece artwork; the preferred Lichess default set may be used only if MIT licensed. Licence research found Lichess public/piece/cburnett is GPLv2+, not MIT, so importing it is pending a human choice of an MIT-compatible alternative.
+
+HUMAN-2: The board rows resize according to their piece contents. The 8x8 board geometry must remain completely rigid for every position.
 ---
 <!-- COMMENTS:END -->
