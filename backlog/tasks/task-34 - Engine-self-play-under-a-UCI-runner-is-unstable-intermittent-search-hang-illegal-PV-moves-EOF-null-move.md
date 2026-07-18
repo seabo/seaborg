@@ -3,11 +3,11 @@ id: TASK-34
 title: >-
   Engine self-play under a UCI runner is unstable: intermittent search hang,
   illegal PV moves, EOF null move
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-18 00:25'
-updated_date: '2026-07-18 12:05'
+updated_date: '2026-07-18 12:08'
 labels:
   - engine
   - search
@@ -283,5 +283,74 @@ Review evidence that remains valid and need not be re-derived: Defect 2 reproduc
 (FEN 8/3n1P2/6R1/4k1P1/P1Q5/8/4N3/4K3 b - - 0 53, cold TT, go depth 4; PV plies 1-3
 legal, ply 4 c5f8 illegal) and Defect 1 did not reproduce in an independent 120-game
 debug self-play run.
+---
+
+author: @codex
+created: 2026-07-18 12:08
+---
+Implementation handoff
+Branch: task-34-investigate-selfplay-robustness
+Worktree: /Users/seabo/seaborg-worktrees/task-34-investigate-selfplay-robustness
+Base: 40a97475317ead3cf251d550bcde864542559bc5 (master tip, merged in at 80a4af6)
+Implementation target: b6387bc62ebf428ef7bc27c1c88f265efc5ebb89
+Resolved findings: merge attempt 1 ejection (rework items 1-4 from the 2026-07-18 11:48 comment)
+
+Rework attempt 2. Master was merged into the branch (80a4af6), so the base is now the
+current master tip rather than the original d9a138c; the previously approved target
+f81ee26 remains an ancestor. The full 40a9747..b6387bc diff touches backlog/ only.
+
+Resolved rework item 1 - merge conflict. Merged master; conflicts were confined to the
+Comments blocks and updated_date of task-34 and task-32. Both resolved by preserving both
+sides in chronological order (master's @georgeseabridge 11:46 comment now sits between the
+branch's 11:39 review and 11:48 merge-eject comments on task-34; the branch's @codex 01:22
+cross-reference now precedes master's TASK-32 handoff/review comments). No engine source
+was involved on either side. Verified: no conflict markers remain, backlog doctor clean,
+both tasks render correctly via backlog task view.
+
+Resolved rework item 2 - Defect 3 re-verified, TASK-37 narrowed. Defect 3 no longer
+reproduces on the merged code. Rather than retire TASK-37 outright, it was narrowed to
+regression coverage only, because retiring it would have orphaned this ticket's AC #4
+requirement to carry forward 'legal best-so-far move on stdin EOF, and regression coverage
+of the stop/abort and EOF paths'. TASK-32's unit tests pin the search-level abort paths but
+nothing exercises the driver-level EOF path (Input::Closed during a live search) end to end
+and nothing pins the terminal-position case, so that coverage gap is real and is what
+TASK-37 now specs. Its ACs assert only that a legal move is returned - not a depth, move or
+timing - so they survive whatever TASK-39 decides about the suppression window. Priority
+dropped high -> medium; title and filename updated to match the new scope.
+
+Resolved rework item 3 - TASK-39 coordination recorded on TASK-35 (boundary: completion
+signalling vs stop responsiveness; independent because TASK-35's hang occurs after the
+worker has already exited), on TASK-37, and as a reply on TASK-39 itself noting that any
+narrowing of the abort-suppressed window must preserve the EOF guarantee, since 'stop' and
+EOF share the cancellation flag.
+
+Resolved rework item 4 - ordinal collision cleared: TASK-35 38000 -> 40000, TASK-36
+39000 -> 41000, TASK-37 40000 -> 42000. No remaining duplicates.
+
+Verification:
+- git diff --stat 40a9747 b6387bc -- ':(exclude)backlog': empty (no source changes; AC #1)
+- cargo fmt --all --check: clean
+- cargo test --workspace --lib --bins --tests: 114 passed, 0 failed, 1 ignored
+  (35 + 74[1 ignored] + 0 + 5)
+- cargo build --release: ok (binary used for the repros below, commit d6c5679)
+- backlog doctor: no duplicate task IDs
+- Defect 3 re-verification, all five EOF variants (was 'bestmove 0000' on master d9a138c):
+    printf 'uci/isready/go depth 25'                          -> bestmove a2a3
+    printf 'uci/isready/position startpos/go depth 8'         -> bestmove a2a3
+    printf 'uci/isready/position fen <Kiwipete>/go depth 20'  -> bestmove e2a6
+    printf 'uci/isready/position startpos/go infinite'        -> bestmove a2a3
+    printf 'uci/isready/position startpos/go depth 25/quit'   -> bestmove a2a3
+- Post-ply-1 abort: EOF after ~3s of 'go infinite' -> depth-10 result (bestmove a2a3);
+  explicit 'stop' after 3s behaves identically
+- Terminal positions still correct: 7k/5QQ1/8/8/8/8/8/7K b (mate) and 7k/5Q2/6K1/8/8/8/8/8 b
+  (stalemate) both -> bestmove 0000
+
+Not re-derived (per the merge-eject comment, still valid): Defect 2 reproduces (FEN
+8/3n1P2/6R1/4k1P1/P1Q5/8/4N3/4K3 b - - 0 53, cold TT, go depth 4; PV plies 1-3 legal, ply 4
+c5f8 illegal), and Defect 1 did not reproduce in an independent 120-game debug self-play run.
+
+Known failures: none from this change. Baseline (pre-existing, unrelated): benches/square.rs
+fails to compile (E0423, Square tuple-struct private field), which is why the test command is
+scoped to --lib/--bins/--tests.
 ---
 <!-- COMMENTS:END -->
