@@ -1,11 +1,11 @@
 ---
 id: TASK-46
 title: Prevent aborted search subtrees from contributing scores
-status: Changes Requested
+status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-18 18:29'
-updated_date: '2026-07-18 23:44'
+updated_date: '2026-07-18 23:47'
 labels: []
 dependencies: []
 references:
@@ -41,9 +41,9 @@ TODO site: engine/src/search.rs:815 (is this robust?).
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Resolve REV-3-01 by sizing the direct regression test PV table to the depth-two search so its PV assertion observes the row actually written.
-2. Run the focused regression and verify it remains discriminating against the recorded base evidence from review attempt 3.
-3. Run all repository-required checks, commit the rework, and record a new immutable implementation handoff.
+1. Merge the current primary tip into the persistent TASK-46 branch and resolve the four search recursion conflicts by combining TASK-46 abort propagation with TASK-54 child_bound() window semantics.
+2. Run the focused TASK-46 abort/PV regressions and TASK-54 mate-parity regressions, inspecting test names and adding coverage only if the integrated behavior is not already exercised.
+3. Run all repository-required checks, commit the integration rework, and record a new immutable implementation handoff for independent review.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
