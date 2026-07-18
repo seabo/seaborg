@@ -3,11 +3,11 @@ id: TASK-34
 title: >-
   Engine self-play under a UCI runner is unstable: intermittent search hang,
   illegal PV moves, EOF null move
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-18 00:25'
-updated_date: '2026-07-18 01:23'
+updated_date: '2026-07-18 01:27'
 labels:
   - engine
   - search
@@ -73,3 +73,27 @@ Investigation complete; no engine code changed under this ticket (working tree t
 Coupling: Defects 1 and 2 are independent of each other and TASK-32. Defect 3 shares TASK-32's root cause (no guaranteed legal move before an abort; differ only in trigger: time budget vs EOF).
 Fresh tickets: TASK-35 (Defect 1), TASK-36 (Defect 2), TASK-37 (Defect 3, depends on/coupled to TASK-32; coupling also noted on TASK-32).
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @codex
+created: 2026-07-18 01:27
+---
+Implementation handoff
+Branch: task-34-investigate-selfplay-robustness
+Worktree: /Users/seabo/seaborg-worktrees/task-34-investigate-selfplay-robustness
+Base: d9a138ccdeb36f39dd28fc7e19d460635ec6be29
+Implementation target: f81ee2636db97be18df6cb2f327fcfe6e47645d0
+Resolved findings: none (initial implementation)
+Deliverable: investigation findings (backlog doc-2) + fresh tickets TASK-35 (deadlock), TASK-36 (illegal PV), TASK-37 (EOF null move, coupled to TASK-32). No engine code changed.
+Verification:
+- git status (excluding backlog): clean, no source/engine changes
+- cargo test --workspace: ok (35 + 68 + 5 + 1 passed, 0 failed, 1 ignored)
+- cargo fmt --check: clean
+- Defect 3 repro: printf 'uci\nisready\ngo depth 25\n' | seaborg -u => bestmove 0000
+- Defect 2 repro: FastChess depth=4 self-play => 'Illegal PV move - move c5f8'
+- Defect 1 repro: debug-build self-play concurrency>=8 hangs; sample shows driver in select! with worker thread exited
+Known failures: none
+---
+<!-- COMMENTS:END -->
