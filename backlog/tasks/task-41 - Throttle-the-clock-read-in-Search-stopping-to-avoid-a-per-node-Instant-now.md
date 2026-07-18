@@ -3,11 +3,11 @@ id: TASK-41
 title: >-
   Throttle the clock read in Search::stopping() to avoid a per-node
   Instant::now()
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-18 12:17'
-updated_date: '2026-07-18 23:42'
+updated_date: '2026-07-18 23:46'
 labels:
   - engine
   - search
@@ -56,6 +56,8 @@ Identified during the TASK-38 investigation and deliberately left out of that ti
 Measurement (2026-07-19, Apple/macOS host, release Criterion `search startpos depth 7`, 30 samples after 2 s warm-up): the benchmark was given a far-future deadline so it actually exercised `Instant::now()`. Baseline median was 70.467 us for 579 visited nodes (about 8.22M NPS). Throttling reduced the median to 41.449 us (about 13.97M NPS), a 41.2% time reduction / 70.0% NPS increase. The removed clock-read work therefore cost about 29.018 us per search, or 50.1 ns per visited node on this workload, which is material and warrants throttling. Criterion reported the 95% change interval as -41.316% to -37.119% (p < 0.05).
 
 Implementation samples release-build deadlines every 8 visited nodes and debug-build deadlines once per newly visited node; repeated stopping checks within a node do not read the clock. The cancellation atomic remains the first check on every call. The first guaranteed ply still bypasses both abort sources unchanged. The wall-time regression uses a 20 ms budget with 100 ms scheduling tolerance.
+
+Resolved REV-1-01: sampled deadline expiry is now latched in the existing deadline-sample state, so every subsequent stopping check remains true while the search unwinds. Added `expired_deadline_stays_latched_at_the_same_node`; the optimized 20 ms wall-time regression now completes in about 20 ms. The rework benchmark median was 40.255 us (about 14.38M NPS), 2.9% faster than the prior reviewed 41.449 us implementation and 42.9% faster / about 75.0% higher NPS than the original 70.467 us baseline.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -106,5 +108,24 @@ author: @codex
 created: 2026-07-18 23:42
 ---
 Rework started for REV-1-01. The deadline-expired decision will be latched across unwind checks; cancellation responsiveness and the guaranteed-first-ply gate remain unchanged.
+---
+
+author: @codex
+created: 2026-07-18 23:46
+---
+Implementation handoff
+Branch: task-41-clock-read-throttle
+Worktree: /Users/seabo/seaborg-worktrees/task-41-clock-read-throttle
+Base: ebf428924df7afef6616ad179b6c186d0faa4b6b
+Implementation target: bc6ab57b4b56b6eaa99e507306b687708dd00806
+Resolved findings: REV-1-01
+Verification:
+- `cargo fmt --check`: passed
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`: passed
+- `cargo test --workspace`: passed (203 passed, 1 ignored)
+- `cargo test --release -p engine search::tests::expired_deadline_stays_latched_at_the_same_node -- --exact`: passed
+- `cargo test --release -p engine search::tests::time_limited_search_honors_the_budget_after_the_guaranteed_ply -- --exact --nocapture`: passed in about 20 ms
+- `cargo bench --bench search -- --warm-up-time 3 --measurement-time 10 --sample-size 50`: 40.255 us median, about 14.38M NPS; 2.9% faster than prior reviewed implementation and about 75.0% higher NPS than original baseline
+Known failures: none
 ---
 <!-- COMMENTS:END -->
