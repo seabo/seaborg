@@ -1,9 +1,11 @@
 ---
 id: TASK-32
 title: Engine returns illegal null move and forfeits at fast time controls
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@georgeseabridge'
 created_date: '2026-07-18 00:09'
+updated_date: '2026-07-18 00:58'
 labels:
   - engine
   - search
@@ -30,3 +32,13 @@ Discovered while validating the TASK-27 strength-regression tooling against a re
 - [ ] #4 Behavior is validated with a UCI tournament runner (FastChess or cutechess-cli) playing seaborg self-play at a fast time control with zero illegal moves and zero time forfeits
 - [ ] #5 Unit tests cover the zero/near-zero budget path returning a legal move and the time-abort honoring the budget
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Root cause: with a zero/near-zero time budget, Search::stopping() reports true immediately (stop_time already elapsed), so iterative_deepening breaks before recording any result; the outcome carries best_move=None and info::format_search_outcome emits 'bestmove 0000', which runners reject.
+2. Fix in engine/src/search.rs: add a guaranteed-minimum-search guard. Suppress the time-based deadline in stopping() until the first full ply (depth-1 root iteration) has completed. After depth 1 records a result, arm the time abort so deeper iterations honor the clock. This guarantees a completed legal root move whenever one exists, without overrunning the budget beyond one (fast) ply.
+3. Keep the cancellation (user 'stop') path and Depth/Infinite limits unchanged; only the time deadline is gated. Leave time.rs allocation as-is (saturate-to-zero is now safe).
+4. Update the existing zero_time_limit test (which asserted the buggy Completed(None)) to assert a legal move is returned; add near-zero-budget and time-abort-honoring unit tests.
+5. Validate with FastChess seaborg self-play at a fast time control (e.g. 2+0.05 and 10+0.1): zero illegal moves, zero time forfeits.
+<!-- SECTION:PLAN:END -->
