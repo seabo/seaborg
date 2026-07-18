@@ -5,7 +5,7 @@ status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-17 18:54'
-updated_date: '2026-07-17 23:31'
+updated_date: '2026-07-18 00:33'
 labels: []
 dependencies: []
 references:
@@ -58,10 +58,15 @@ The implementation should be practical on a dedicated or self-hosted machine. It
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Resolve REV-3-01 (P1): change runner invocation to genuinely play each opening as a colour-reversed pair. Use cutechess -rounds max_games/2 -games 2 -repeat 2 (rounds count pairs; total games = max_games), keeping cap/max_games accounting consistent. Add a test asserting the paired/colour-reversal flags. cutechess-cli is not installed in this environment; verify flags against the cutechess-cli.6 manual and canonical fishtest usage, and note that in the handoff.
-2. Resolve REV-3-02 (P2): add a run()-level success test that mocks setup and a PASS runner output at return code 0, asserting exit 0, verdict PASS in report.json, and populated results/sprt.
-3. Resolve REV-3-03 (P3): remove dead write_report(); make forfeits/crashes honest by documenting them as reserved fail-closed-zero counters (fields kept for AC #7 report enumeration) in code and docs.
-4. Run focused Python tests and repository quality gates (cargo fmt --check, cargo test --workspace), record resolutions, commit a new immutable target, and hand off for review.
+Pivoted the runner from cutechess-cli to FastChess (an accepted runner per the task) so the tool is genuinely runnable in local dev and validated against a real binary.
+1. Retarget build_command/parse_result/runner_version to FastChess, verified against a real FastChess v1.5.0 (1eedf82) build.
+2. Add --engine-arg (both engines; use =-form for dashes, e.g. --engine-arg=-u) so seaborg's UCI mode works, and a robust interactive uci_preflight that keeps stdin open until bestmove.
+3. Generalise --time-control to --limit (tc/st/depth/nodes); authoritative mode requires a time-based limit.
+4. Add --match-timeout so a hung runner/engine fails closed instead of hanging the tool.
+5. Replace invented cutechess fixtures with REAL captured FastChess output; guard the Illegal-PV-move false positive; add a deterministic live runner-version test against the real binary.
+6. Resolve prior findings REV-3-01/02/03 (paired colour-reversal, run() PASS coverage, dead code / reserved fields) carried into the FastChess implementation.
+7. File seaborg-side defects found during validation as TASK-32 (time-allocation null move) and TASK-34 (self-play deadlock, illegal PV, EOF null move); these are out of TASK-27 scope.
+8. Update docs, run gates, commit an immutable target, hand off.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
@@ -80,6 +85,21 @@ Resolved REV-3-01: build_command now emits '-rounds max_games/2 -games 2 -repeat
 Resolved REV-3-02: added test_run_success_path_passes_and_records_results, which mocks setup and a PASS runner output at exit 0 and asserts exit 0, report verdict PASS, populated results (games/W/D/L) and sprt (llr/lower_bound/upper_bound). Extracted a shared run_with_mocks harness reused by the failure tests.
 
 Resolved REV-3-03: removed the dead write_report() (run() inlines dir creation and report.json writes); documented Result.forfeits and Result.crashes as reserved fail-closed-zero counters in both the dataclass and docs/strength-testing.md, since any crash/forfeit fails closed to INFRASTRUCTURE ERROR before a Result exists.
+
+FastChess pivot (validated against a real binary):
+The orchestrator now targets FastChess (an accepted runner per the task) instead of cutechess-cli. Rationale: cutechess-cli has no brew formula and needs a Qt source build, whereas FastChess is a dependency-light single binary — the difference between the tool being runnable by reviewer agents in local dev and not. FastChess v1.7.0-alpha (commit 1eedf82, reports 1.5.0) was built and installed to ~/.local/bin, and the tool was exercised against it.
+
+parse_result and build_command are validated against REAL captured FastChess output (Games/Wins/Losses/Draws, Ptnml(0-2), 'LLR: llr (pct%) (lower, upper) [e0, e1]', 'Finished match', and real failure phrasings). Test fixtures are real captured strings, not invented. A regression test guards FastChess's 'Illegal PV move' warning from being misread as a game failure. A live test drives the real FastChess binary's -version.
+
+Added capabilities required to make it genuinely usable: --engine-arg (applied to both engines; use =-form for dash args, e.g. --engine-arg=-u for seaborg UCI mode); a robust interactive uci_preflight that keeps stdin open until bestmove; --limit generalising the resource budget (tc/st/depth/nodes) with authoritative mode requiring a time-based limit; --match-timeout to fail closed on a hung runner; and running the match in the artifact dir so FastChess's config.json is archived rather than left in the repo.
+
+Real end-to-end validation uncovered a bug mocks hid: subprocess.TimeoutExpired.output is undecoded bytes even under text=True, which crashed the timeout handler; fixed to decode, with a bytes-output regression test.
+
+Resolved REV-3-01: FastChess plays each opening as a colour-reversed pair via -rounds max_games/2 -games 2 -repeat 2 (total games == max_games); test asserts the paired configuration.
+Resolved REV-3-02: added a run()-level PASS success test (mocked runner PASS output, exit 0) asserting exit 0, verdict PASS, populated results/sprt.
+Resolved REV-3-03: removed dead write_report(); documented forfeits/crashes as reserved fail-closed-zero fields in code and docs.
+
+Out of scope (filed as new tickets): seaborg cannot currently complete fast timed self-play (TASK-32: time-allocation null move / illegal move at starved TCs) and intermittently deadlocks during self-play under a runner, reports illegal PV moves, and returns bestmove 0000 on stdin EOF (TASK-34). Because of TASK-34, no automated test depends on seaborg running a search; a full seaborg match was verified manually when it did not deadlock, and the parsing paths are covered by real captured fixtures.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -227,5 +247,27 @@ Verification:
 - cargo test --workspace: FAIL only at pre-existing engine::tt::tests::gen_bound (assertion gen < 64) on recorded base
 Known failures: engine::tt::tests::gen_bound fails on recorded base dc8f6ce; TASK-27 changes no Rust sources (git diff --name-only dc8f6ce..73a3182 -- '*.rs' is empty). Current primary (299f5ec) independently reworked engine/src/tt.rs after this base, replacing the debug_assert!(gen < 64) path.
 Note: cutechess-cli is not installed in this environment; the paired-pairing flags were verified against the cutechess-cli.6 manual and canonical fishtest usage.
+---
+
+author: @codex
+created: 2026-07-18 00:33
+---
+Implementation handoff
+Branch: task-27-strength-regression
+Worktree: /Users/seabo/seaborg-worktrees/task-27-strength-regression
+Base: dc8f6cef131c0cdfdb3feb3e914dd6e938c3a87d
+Implementation target: b7a8ca68decae557cd2ea3a661fc2f54ca8720f5
+Resolved findings: REV-3-01, REV-3-02, REV-3-03
+Runner change: retargeted from cutechess-cli to FastChess (accepted by the task). FastChess v1.7.0-alpha (commit 1eedf82) built and installed to ~/.local/bin.
+Verification:
+- python3 -m unittest discover -s tools/strength -p 'test_*.py': PASS (19 tests; live FastChess -version test runs, seaborg-search tests intentionally omitted)
+- Real FastChess match executed and output captured; parse_result validated against real Games/Ptnml/LLR output
+- --match-timeout observed firing against a hung seaborg match (fails closed to INFRASTRUCTURE ERROR + report.json), not hanging
+- cargo fmt --check: PASS
+- git diff --check dc8f6ce..b7a8ca6: PASS
+- shasum -a 256 tools/strength/openings-v1.epd: PASS (matches embedded SUITE_SHA256)
+- cargo test --workspace: FAIL only at pre-existing engine::tt::tests::gen_bound (assertion gen < 64) on recorded base
+Known failures: engine::tt::tests::gen_bound fails on recorded base dc8f6ce; TASK-27 changes no Rust sources (git diff --name-only dc8f6ce..b7a8ca6 -- '*.rs' is empty). Current primary (299f5ec) independently reworked engine/src/tt.rs after this base.
+Follow-up tickets filed for seaborg-side defects found during validation: TASK-32 (time-allocation null/illegal move at fast TCs) and TASK-34 (self-play deadlock, illegal PV moves, EOF null move). These are out of TASK-27 scope and block seaborg self-play, not the tool.
 ---
 <!-- COMMENTS:END -->
