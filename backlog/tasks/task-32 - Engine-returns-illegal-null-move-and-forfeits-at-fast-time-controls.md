@@ -4,6 +4,7 @@ title: Engine returns illegal null move and forfeits at fast time controls
 status: To Do
 assignee: []
 created_date: '2026-07-18 00:09'
+updated_date: '2026-07-18 01:22'
 labels:
   - engine
   - search
@@ -30,3 +31,13 @@ Discovered while validating the TASK-27 strength-regression tooling against a re
 - [ ] #4 Behavior is validated with a UCI tournament runner (FastChess or cutechess-cli) playing seaborg self-play at a fast time control with zero illegal moves and zero time forfeits
 - [ ] #5 Unit tests cover the zero/near-zero budget path returning a legal move and the time-abort honoring the budget
 <!-- AC:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @codex
+created: 2026-07-18 01:22
+---
+TASK-34 investigation (doc-2) found that the stdin-EOF null-move defect (now TASK-37) shares this ticket's root cause: no guaranteed legal root move before an abort, yielding 'bestmove 0000'. Only the abort trigger differs (TASK-32: zero/near-zero time budget; TASK-37: stdin EOF/cancel). The shared 'always choose a legal move before any abort; return legal best-so-far' guarantee should be implemented once. TASK-37 depends on TASK-32; coordinate so the two triggers are not fixed divergently.
+---
+<!-- COMMENTS:END -->

@@ -3,9 +3,11 @@ id: TASK-34
 title: >-
   Engine self-play under a UCI runner is unstable: intermittent search hang,
   illegal PV moves, EOF null move
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-18 00:25'
+updated_date: '2026-07-18 01:23'
 labels:
   - engine
   - search
@@ -51,3 +53,23 @@ No engine code fixes should land under this ticket; its deliverable is the inves
 - [ ] #3 The investigation determines whether the failures are independent or share a common root cause, and records any coupling with TASK-32 (time allocation) so overlapping fixes are not duplicated
 - [ ] #4 One or more fresh, well-scoped implementation tickets are created that spec the fix for each defect (or root cause), each with its own acceptance criteria so it can be implemented and reviewed independently; those tickets carry forward the original fix-level requirements (no hang under repeated self-play, only-legal PV moves, legal best-so-far move on stdin EOF, and regression coverage of the stop/abort and EOF paths)
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Reproduce each of the three failure modes against the real FastChess build and scripted UCI input; capture concrete evidence (offending PV, bestmove 0000, thread samples at the hang).
+2. Root-cause each defect against the search/stop/UCI-I/O code paths (engine/src/engine.rs, search.rs, pv_table.rs, info.rs); determine independent vs shared cause and coupling with TASK-32.
+3. Record investigation findings as a durable backlog doc plus task notes (no engine code changes land under TASK-34).
+4. Create fresh, independently-implementable tickets speccing the fix for each root cause, each carrying forward the original fix-level requirements and regression-coverage expectations.
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Investigation complete; no engine code changed under this ticket (working tree touches only backlog/). Findings recorded in doc-2 (backlog/docs/doc-2). All three failure modes reproduced and root-caused:
+- Defect 3 (EOF null move): deterministic repro 'printf uci/isready/go depth 25 | seaborg -u' -> bestmove 0000 from startpos. Root cause: EOF cancels the search before a depth completes; iterative_deepening records no result -> Cancelled(None) -> format_search_outcome emits 0000.
+- Defect 2 (illegal PV): FastChess depth=4 self-play flags 'Illegal PV move - move c5f8' for 'pv d7f8 g6a6 f8g6 c5f8' (score mate -2). Best move (first ply) is legal; deep PV plies corrupt. Root cause: triangular PVTable updated on fail-high/cutoff nodes (search.rs Step 22) splices stale sibling rows via copy_within; mate/leaf handling compounds it.
+- Defect 1 (completion deadlock): reproduced under debug-build self-play (concurrency>=8); all slots freeze, engines idle at ~0% CPU, no bestmove, no panic. Thread samples at the hang show the driver parked in crossbeam select! on the active-search branch while the search worker thread has already exited (only main+reader threads remain) -> lost channel-disconnect wakeup; finish_search never runs.
+Coupling: Defects 1 and 2 are independent of each other and TASK-32. Defect 3 shares TASK-32's root cause (no guaranteed legal move before an abort; differ only in trigger: time budget vs EOF).
+Fresh tickets: TASK-35 (Defect 1), TASK-36 (Defect 2), TASK-37 (Defect 3, depends on/coupled to TASK-32; coupling also noted on TASK-32).
+<!-- SECTION:NOTES:END -->
