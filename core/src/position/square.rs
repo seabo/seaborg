@@ -31,6 +31,18 @@ impl Square {
         self.0
     }
 
+    /// Offsets a square without checking that the result remains on the board.
+    ///
+    /// # Safety
+    ///
+    /// `self.index() as i16 + offset as i16` must be in `0..64`. This is
+    /// crate-private for audited move-generation and position-mutation paths;
+    /// callers handling untrusted values must use checked square arithmetic.
+    #[inline(always)]
+    pub(crate) const unsafe fn offset_unchecked(self, offset: i8) -> Self {
+        Self((self.0 as i8 + offset) as u8)
+    }
+
     #[inline]
     pub const fn is_okay(&self) -> bool {
         self.0 < 64

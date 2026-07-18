@@ -719,7 +719,8 @@ mod tests {
                 println!("{:?}", moves.phase());
                 for mov in &moves {
                     c += 1;
-                    p.pos.make_move(&mov);
+                    // SAFETY: `mov` was generated for the current test position.
+                    unsafe { p.pos.make_move_unchecked(&mov) };
                     let child_count = if depth == 1 {
                         1
                     } else {
@@ -745,7 +746,8 @@ mod tests {
                 let mut c: usize = 0;
                 while moves.load_next_phase(TestLoader::from(&mut self.pos)) {
                     for mov in &moves {
-                        self.pos.make_move(&mov);
+                        // SAFETY: `mov` was generated for this position above.
+                        unsafe { self.pos.make_move_unchecked(&mov) };
                         c += self.perft_recurse(depth - 1);
                         self.pos.unmake_move();
                     }

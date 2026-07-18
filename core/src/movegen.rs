@@ -5,7 +5,7 @@ use crate::mono_traits::{
 };
 use crate::mov::{Move, MoveType};
 use crate::movelist::MoveList;
-use crate::position::{CastleType, PieceType, Player, Position, Square, PROMO_PIECES};
+use crate::position::{CastleType, Piece, PieceType, Player, Position, Square, PROMO_PIECES};
 use crate::precalc::boards::{between_bb, king_moves, knight_moves, line_bb, pawn_attacks_from};
 use crate::precalc::magic;
 
@@ -490,12 +490,16 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
 
             for dest in push_one {
                 let orig = PL::down(dest);
-                self.add_move::<L>(Move::build(orig, dest, None, MoveType::QUIET));
+                self.add_move::<L>(unsafe {
+                    Move::build_unchecked(orig, dest, None, MoveType::QUIET)
+                });
             }
 
             for dest in push_two {
                 let orig = PL::down(PL::down(dest));
-                self.add_move::<L>(Move::build(orig, dest, None, MoveType::QUIET));
+                self.add_move::<L>(unsafe {
+                    Move::build_unchecked(orig, dest, None, MoveType::QUIET)
+                });
             }
         }
 
@@ -533,12 +537,16 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
 
             for dest in left_cap {
                 let orig = PL::down_right(dest);
-                self.add_move::<L>(Move::build(orig, dest, None, MoveType::CAPTURE));
+                self.add_move::<L>(unsafe {
+                    Move::build_unchecked(orig, dest, None, MoveType::CAPTURE)
+                });
             }
 
             for dest in right_cap {
                 let orig = PL::down_left(dest);
-                self.add_move::<L>(Move::build(orig, dest, None, MoveType::CAPTURE));
+                self.add_move::<L>(unsafe {
+                    Move::build_unchecked(orig, dest, None, MoveType::CAPTURE)
+                });
             }
 
             if let Some(ep_square) = self.position.ep_square() {
@@ -549,12 +557,14 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
                     pawns_not_rank_7 & Bitboard(pawn_attacks_from(ep_square, PL::opp_player()));
 
                 for orig in ep_cap {
-                    self.add_move::<L>(Move::build(
-                        orig,
-                        ep_square,
-                        None,
-                        MoveType::EN_PASSANT | MoveType::CAPTURE,
-                    ));
+                    self.add_move::<L>(unsafe {
+                        Move::build_unchecked(
+                            orig,
+                            ep_square,
+                            None,
+                            MoveType::EN_PASSANT | MoveType::CAPTURE,
+                        )
+                    });
                 }
             }
         }
@@ -668,23 +678,23 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
     // Generates castling for a single side
     #[inline(always)]
     fn castling_side<PL: Side, L: Legality>(&mut self, side: CastleType) {
-        if self.position.can_castle(PL::player(), side)
+        let player = PL::player();
+        let king_orig = player.relative_square(Square::E1);
+        let rook_orig = self.position.castling_rook_square(side);
+
+        if self.position.can_castle(player, side)
             && !self.position.castle_impeded(side)
-            && self
-                .position
-                .piece_at_sq(self.position.castling_rook_square(side))
-                .type_of()
-                == PieceType::Rook
+            && self.position.piece_at_sq(king_orig) == Piece::make(player, PieceType::King)
+            && self.position.piece_at_sq(rook_orig) == Piece::make(player, PieceType::Rook)
         {
             let king_side = side == CastleType::Kingside;
-            let ksq = self.position.king_sq(PL::player());
-            let k_to =
-                PL::player().relative_square(if king_side { Square::G1 } else { Square::C1 });
+            let ksq = king_orig;
+            let k_to = player.relative_square(if king_side { Square::G1 } else { Square::C1 });
             let enemies = self.them_occ;
             let direction: fn(Square) -> Square = if king_side {
-                |x: Square| x - Square(1)
+                |x: Square| unsafe { x.offset_unchecked(-1) }
             } else {
-                |x: Square| x + Square(1)
+                |x: Square| unsafe { x.offset_unchecked(1) }
             };
 
             let mut s: Square = k_to;
@@ -700,7 +710,9 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
                 s = direction(s);
             }
             if can_castle {
-                self.add_move::<L>(Move::build(ksq, k_to, None, MoveType::CASTLE));
+                self.add_move::<L>(unsafe {
+                    Move::build_unchecked(ksq, k_to, None, MoveType::CASTLE)
+                });
             }
         }
     }
@@ -728,7 +740,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
         ty: MoveType,
     ) {
         for dest in bb {
-            let mov = Move::build(orig, dest, None, ty);
+            let mov = unsafe { Move::build_unchecked(orig, dest, None, ty) };
             self.add_move::<L>(mov);
         }
     }
@@ -759,7 +771,9 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
         } else {
             MoveType::PROMOTION
         };
-        self.add_move::<L>(Move::build(orig, dest, Some(PieceType::Queen), move_ty));
+        self.add_move::<L>(unsafe {
+            Move::build_unchecked(orig, dest, Some(PieceType::Queen), move_ty)
+        });
     }
 
     /// Add the four possible promo moves (`=N`, `=B`, `=R`, `=Q`)
@@ -771,7 +785,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
             MoveType::PROMOTION
         };
         for piece in PROMO_PIECES {
-            self.add_move::<L>(Move::build(orig, dest, Some(piece), move_ty));
+            self.add_move::<L>(unsafe { Move::build_unchecked(orig, dest, Some(piece), move_ty) });
         }
     }
 
@@ -829,6 +843,26 @@ mod tests {
         captures.len()
     }
 
+    fn generates_castle(fen: &str) -> bool {
+        let pos = Position::from_fen(fen).unwrap();
+        pos.generate::<BasicMoveList, All, Legal>()
+            .iter()
+            .any(|mov| mov.is_castle())
+    }
+
+    #[test]
+    fn stale_castling_rights_require_correct_origin_pieces() {
+        init_globals();
+
+        assert!(generates_castle("4k3/8/8/8/8/8/8/4K2R w K - 0 1"));
+        assert!(!generates_castle("4k3/8/8/8/8/8/8/4K3 w K - 0 1"));
+        assert!(!generates_castle("4k3/8/8/8/8/8/8/4K2r w K - 0 1"));
+        assert!(!generates_castle("4k3/8/8/8/8/8/8/3K3R w K - 0 1"));
+        assert!(generates_castle("4k2r/8/8/8/8/8/8/4K3 b k - 0 1"));
+        assert!(!generates_castle("4k2R/8/8/8/8/8/8/4K3 b k - 0 1"));
+        assert!(!generates_castle("3k3r/8/8/8/8/8/8/4K3 b k - 0 1"));
+    }
+
     struct Perft<'a> {
         position: &'a mut Position,
         nodes: usize,
@@ -848,7 +882,8 @@ mod tests {
             let moves = self.position.generate::<BasicMoveList, Captures, Legal>();
 
             for mov in &moves {
-                self.position.make_move(mov);
+                // SAFETY: `mov` was generated for this unchanged position.
+                unsafe { self.position.make_move_unchecked(mov) };
                 self.perft(depth - 1);
                 self.position.unmake_move();
             }

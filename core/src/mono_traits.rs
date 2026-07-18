@@ -85,40 +85,40 @@ impl Side for White {
 
     #[inline(always)]
     fn down(sq: Square) -> Square {
-        sq - Square(8)
+        unsafe { sq.offset_unchecked(-8) }
     }
 
     #[inline(always)]
     fn up(sq: Square) -> Square {
-        sq + Square(8)
+        unsafe { sq.offset_unchecked(8) }
     }
 
     #[inline(always)]
     fn left(sq: Square) -> Square {
-        sq - Square(1)
+        unsafe { sq.offset_unchecked(-1) }
     }
 
     #[inline(always)]
     fn right(sq: Square) -> Square {
-        sq + Square(1)
+        unsafe { sq.offset_unchecked(1) }
     }
 
     #[inline(always)]
     fn down_left(sq: Square) -> Square {
-        sq - Square(9)
+        unsafe { sq.offset_unchecked(-9) }
     }
 
     #[inline(always)]
     fn down_right(sq: Square) -> Square {
-        sq - Square(7)
+        unsafe { sq.offset_unchecked(-7) }
     }
     #[inline(always)]
     fn up_left(sq: Square) -> Square {
-        sq + Square(7)
+        unsafe { sq.offset_unchecked(7) }
     }
     #[inline(always)]
     fn up_right(sq: Square) -> Square {
-        sq + Square(9)
+        unsafe { sq.offset_unchecked(9) }
     }
 
     #[inline(always)]
@@ -175,40 +175,40 @@ impl Side for Black {
 
     #[inline(always)]
     fn down(sq: Square) -> Square {
-        sq + Square(8)
+        unsafe { sq.offset_unchecked(8) }
     }
 
     #[inline(always)]
     fn up(sq: Square) -> Square {
-        sq - Square(8)
+        unsafe { sq.offset_unchecked(-8) }
     }
 
     #[inline(always)]
     fn left(sq: Square) -> Square {
-        sq + Square(1)
+        unsafe { sq.offset_unchecked(1) }
     }
 
     #[inline(always)]
     fn right(sq: Square) -> Square {
-        sq - Square(1)
+        unsafe { sq.offset_unchecked(-1) }
     }
 
     #[inline(always)]
     fn down_left(sq: Square) -> Square {
-        sq + Square(9)
+        unsafe { sq.offset_unchecked(9) }
     }
 
     #[inline(always)]
     fn down_right(sq: Square) -> Square {
-        sq + Square(7)
+        unsafe { sq.offset_unchecked(7) }
     }
     #[inline(always)]
     fn up_left(sq: Square) -> Square {
-        sq - Square(7)
+        unsafe { sq.offset_unchecked(-7) }
     }
     #[inline(always)]
     fn up_right(sq: Square) -> Square {
-        sq - Square(9)
+        unsafe { sq.offset_unchecked(-9) }
     }
 
     #[inline(always)]

@@ -1,4 +1,5 @@
 use super::info::{format_search_event, format_search_outcome};
+use super::options::EngineOpt;
 use super::search::{SearchEngine, SearchEvent, SearchHandle, SearchLimit};
 use super::time::TimingMode;
 use super::uci::{self, Command};
@@ -34,7 +35,8 @@ where
 {
     core::init::init_globals();
 
-    let search_engine = SearchEngine::new(16);
+    let mut hash_size_mb = 16;
+    let mut search_engine = SearchEngine::new(hash_size_mb);
     let mut active_search: Option<SearchHandle> = None;
     let mut pos = Position::start_pos();
 
@@ -64,6 +66,15 @@ where
                         stop_search(search, &mut output);
                     }
                 }
+                DriverEvent::Input(Ok(Input::Command(Command::SetOption(option)))) => {
+                    if let Some(search) = active_search.take() {
+                        stop_search(search, &mut output);
+                    }
+                    if let EngineOpt::Hash(size) = option {
+                        hash_size_mb = size;
+                        search_engine = SearchEngine::new(hash_size_mb);
+                    }
+                }
                 DriverEvent::Input(Ok(Input::Command(Command::Go(timing)))) => {
                     if let Some(search) = active_search.take() {
                         stop_search(search, &mut output);
@@ -89,7 +100,7 @@ where
                     search_engine.new_game();
                 }
                 DriverEvent::Input(Ok(Input::Command(command))) => {
-                    handle_command(command, &mut pos, &mut output);
+                    handle_command(command, &mut pos, &mut output, &mut errors);
                 }
                 DriverEvent::Search(Ok(event)) => {
                     let _ = writeln!(output, "{}", format_search_event(&event));
@@ -141,19 +152,24 @@ fn next_event(commands: &Receiver<Input>, search: Option<&SearchHandle>) -> Driv
     }
 }
 
-fn handle_command<W: Write>(command: Command, pos: &mut Position, output: &mut W) {
+fn handle_command<W: Write, E: Write>(
+    command: Command,
+    pos: &mut Position,
+    output: &mut W,
+    errors: &mut E,
+) {
     match command {
         Command::SetPosition((fen, moves)) => match Position::from_fen(&fen) {
             Ok(mut new_pos) => {
                 for mov in moves {
                     if new_pos.make_uci_move(&mov).is_none() {
-                        let _ = writeln!(output, "invalid move {mov}");
+                        let _ = writeln!(errors, "error: invalid move {mov}");
                     }
                 }
                 *pos = new_pos;
             }
             Err(err) => {
-                let _ = writeln!(output, "invalid position; {err}");
+                let _ = writeln!(errors, "error: invalid position; {err}");
             }
         },
         Command::Display => {
@@ -181,14 +197,21 @@ fn handle_command<W: Write>(command: Command, pos: &mut Position, output: &mut W
         Command::Uci => {
             let _ = writeln!(output, "id name seaborg 0.0.2");
             let _ = writeln!(output, "id author George Seabridge");
+            let _ = writeln!(
+                output,
+                "option name Hash type spin default 16 min 1 max 1024"
+            );
             let _ = writeln!(output, "uciok");
         }
         Command::IsReady => {
             let _ = writeln!(output, "readyok");
         }
-        command => {
-            let _ = writeln!(output, "{command:?}: not yet implemented");
-        }
+        Command::Config => {}
+        Command::UciNewGame
+        | Command::SetOption(_)
+        | Command::Go(_)
+        | Command::Stop
+        | Command::Quit => {}
     }
 }
 
@@ -293,6 +316,32 @@ mod tests {
         assert!(output.contains("readyok"));
         assert!(!output.contains("UciNewGame: not yet implemented"));
         assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn standard_state_commands_are_silent_and_supported() {
+        let (output, errors) =
+            run_script("setoption name Hash value 1\ndebug on\nucinewgame\nisready\nquit\n");
+
+        assert!(output.contains("readyok"));
+        assert!(!output.contains("not yet implemented"));
+        assert!(!output.contains("SetOption"));
+        assert!(!output.contains("UciNewGame"));
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn malformed_and_unsupported_commands_only_write_to_stderr() {
+        let (output, errors) = run_script(
+            "register\nsetoption name Missing value 1\nposition startpos moves invalid\nquit\n",
+        );
+
+        assert!(!output.contains("register"));
+        assert!(!output.contains("InvalidOption"));
+        assert!(!output.contains("invalid move"));
+        assert!(errors.contains("UnexpectedToken"));
+        assert!(errors.contains("InvalidOption"));
+        assert!(errors.contains("invalid move"));
     }
 
     #[test]
