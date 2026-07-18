@@ -1,11 +1,11 @@
 ---
 id: TASK-1.3
 title: Add the loopback UI server and `--ui` lifecycle
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-17 15:40'
-updated_date: '2026-07-18 14:12'
+updated_date: '2026-07-18 14:26'
 labels: []
 dependencies:
   - TASK-1.2
