@@ -1,11 +1,11 @@
 ---
 id: TASK-22
 title: Make UCI output protocol clean and version consistent
-status: Ready to Merge
+status: Changes Requested
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:15'
-updated_date: '2026-07-18 00:43'
+updated_date: '2026-07-18 00:48'
 labels:
   - uci
   - release
@@ -105,6 +105,28 @@ Verification (target code, worktree /Users/seabo/seaborg-worktrees/task-22-uci-o
 - Manual: printf 'uci\nisready\nquit\n' | seaborg --uci -> stdout id name seaborg 0.1.0 / id author George Seabridge / option ... / uciok / readyok; stderr banner seaborg 0.1.0 by George Seabridge (commit ...); seaborg --version -> seaborg 0.1.0
 
 Benchmarks not run: diff touches only UCI protocol/IO plumbing, not movegen/search hot paths.
+---
+
+author: @codex
+created: 2026-07-18 00:48
+---
+Merge attempt: 1
+Verdict: ejected -> Changes Requested
+Primary tip tested (T): 52e97622f3dbe75f773313d7710f4a6b22077b0a
+Approved target: 0269c0a51ba19a646f3e86a0a5657aba66fcd1de
+Trial merge (discarded): non-ff merge of approval tip 407f1dc into T
+
+Result: textually clean merge, but the integrated result FAILS a required check. Not landed; primary left at T.
+
+Failing command: cargo test --workspace (run on the trial merge commit)
+Failure:
+  engine::tests::uci_new_game_is_an_owner_handled_hash_boundary ... FAILED
+  panicked at engine/src/engine.rs:393: assertion failed: errors.is_empty()
+  (engine suite: 67 passed; 1 failed; 1 ignored)
+
+Root cause (semantic conflict, not textual): master advanced past this task's base 299f5ec via TASK-12 (2b1fe16 'fix(task-12): preserve tt reuse and mate distance'), which added the test uci_new_game_is_an_owner_handled_hash_boundary asserting errors.is_empty() after a 'ucinewgame\nisready\nquit' script. TASK-22 intentionally moves the startup human banner onto the stderr diagnostic channel, so run_script now always leaves the banner on stderr and errors.is_empty() is false. The two changes are individually correct but collide on the shared stderr expectation.
+
+Required rework (on this task branch, reusing the worktree): rebase/rework onto current primary and reconcile the stderr-diagnostics expectation with TASK-12's now-landed test. Options for the implementer to choose: update the inherited uci_new_game test to assert diagnostics_after_banner(&errors) == "" (consistent with the other TASK-22 tests) rather than errors.is_empty(); this keeps both behaviors. Re-verify the full suite on a fresh integrated result. No code was changed by this merge attempt; approval on 0269c0a is void until a new target is produced and re-reviewed.
 ---
 <!-- COMMENTS:END -->
 
