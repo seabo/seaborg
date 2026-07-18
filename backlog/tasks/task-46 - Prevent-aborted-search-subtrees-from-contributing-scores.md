@@ -1,11 +1,11 @@
 ---
 id: TASK-46
 title: Prevent aborted search subtrees from contributing scores
-status: In Review
+status: Changes Requested
 assignee:
   - '@codex'
 created_date: '2026-07-18 18:29'
-updated_date: '2026-07-18 23:07'
+updated_date: '2026-07-18 23:27'
 labels: []
 dependencies: []
 references:
@@ -316,5 +316,97 @@ Verification:
 - cargo test -p engine aborted_child_cannot_score_or_write_its_parent: passed
 - base e301527 code-path comparison: aborted node returns Score::zero() rather than None, so the direct outcome assertion discriminates the fix
 Known failures: none
+---
+
+author: @codex
+created: 2026-07-18 23:27
+---
+Review attempt: 3
+Reviewed branch: task-46-aborted-search-subtrees
+Reviewed implementation: 043d75f6bb010689887a37d916928dc941811471
+Base: e30152795f22a10d8a50fc028dedf1dbb3567d90
+Verdict: changes_requested
+
+REV-2-01 is resolved on the "mid-subtree" half. I confirmed the +2 threshold is a
+genuine in-subtree abort: `visit_node()` runs at the top of `search`, so node
+n+1 is the depth-two root (which does not stop) and node n+2 is its first
+recursive child, reached only after `make_move`. The new direct test
+`aborted_child_cannot_score_or_write_its_parent` exercises the
+`let Some(child) = ... else { self.pos.unmake_move(); return None }` unwind at
+engine/src/search.rs:706, which attempt 2 correctly reported as untested.
+
+REV-3-01 [P1] The PV assertion in the new direct test is vacuous, leaving AC#1 unproven
+Location: engine/src/search.rs:1704-1707 (`assert!(search.pvt.pv().next().is_none())`),
+root cause at engine/src/search.rs:1691 (`Search::new`)
+Impact: This assertion is the only evidence offered for the best_move/PV half of
+AC#1 ("an abort during a subtree search cannot cause that subtree value to raise
+alpha or be recorded as best_move"). It cannot fail. `Search::new` builds
+`PVTable::new(8)`, but the test searches at depth 2. `PVTable::pv()` reads
+`data[0..self.depth]`, i.e. the row for `d == m == 8`, while `copy_to(2, mov)`
+writes row `k = m - d = 6`. The assertion therefore inspects a row that nothing
+in a depth-2 search ever writes, and passes regardless of whether the aborted
+child's move was spliced into the PV. The remaining assertions in this test also
+all pass on the unfixed base (see reproduction), so `assert_eq!(result, None)` -
+which cannot be expressed on base at all, since `search` returns `Score` there -
+is currently the test's only load-bearing claim.
+Reproduction:
+1. git worktree add --detach /tmp/task46-rev3-base e301527
+2. Graft the `abort_after_nodes` hook (field, initializer, `stopping()` block)
+   and this test onto base, dropping only the `assert_eq!(result, None)` line,
+   which does not typecheck there.
+3. cargo test -p engine <grafted test>
+   -> PASSES on the unfixed base. Instrumented output:
+   `nodes=2 zob_ok=true pv_first=None tt_empty=true`.
+   The node-count, zobrist and TT assertions do not discriminate: the
+   pre-existing `if self.stopping() { break 'move_loop; }` at
+   engine/src/search.rs:681 already stops base after two nodes, and base's
+   pre-existing Step 24 `stopping()` check already suppresses the root TT write.
+4. Add one line to the grafted test: `search.pvt = PVTable::new(2);`
+   -> now FAILS on base as required:
+   `pv_first=Some(Move { orig: Square(8), dest: Square(16), ... })` (a2a3, the
+   aborted child's root move spliced into the PV), panicking on the pv-none
+   assertion.
+5. The same one-line change on target 043d75f: passes (verified,
+   `test result: ok. 1 passed`).
+Expected: Size the test's PV table to the depth actually searched so `pv()`
+reads the row the search writes - `search.pvt = PVTable::new(2);` after
+`search.search_depth = 2;` is sufficient and needs no other edit. That converts
+the assertion from vacuous to discriminating, and gives AC#1 and AC#2 the direct
+evidence attempt 2 asked for.
+
+Non-blocking observations (no action required beyond REV-3-01):
+- `mid_subtree_abort_keeps_the_last_completed_iteration` at `+2` now passes on
+  base e301527 (verified by graft), where the `+1` variant from attempt 2
+  failed. This is not a second blocker: base leaves a depth-two-shaped `pvt`
+  whose row-0 line reduces to the same single move as the completed depth-one
+  PV, because the depth-two root searches the depth-one best move first. Once
+  REV-3-01 is fixed, the direct test carries the discrimination burden - which
+  is exactly the fallback attempt 2 proposed - and this test correctly serves
+  AC#4's literal requirement (end-to-end bestmove/PV preservation) and AC#3. I
+  do not want another threshold hunt; do not change this threshold.
+- `Table::new(16)` resolves attempt 1's single-slot-collision note. The AC#2
+  claim is now direct rather than an artifact of every node sharing one slot.
+- The production change remains sound; I re-reviewed the full base-to-target
+  diff independently. `NodeResult = Option<Score>` propagates correctly through
+  `search`, razoring, `quiesce` and `quiesce_evasions`; every abort path unmakes
+  the move before unwinding (`quiesce`/`quiesce_evasions` deliberately unmake
+  before applying `?`); aborted nodes return before the Step 24 TT write;
+  `iterative_deepening` restores `completed_pvt` and breaks. AC#5 is satisfied -
+  the `is this robust?` TODO is gone. The diff adds no `#[allow]`. Only
+  engine/src/search.rs and the task file changed.
+- The delta from 4905c1e to 043d75f is confined to `mod tests` (two hunks), so
+  production code is byte-identical to what attempt 1 benchmarked. Attempt 1's
+  benchmark carry-forward holds and no re-benchmarking was performed or needed.
+
+Verification (on 043d75f):
+- cargo fmt --check: passed
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: passed
+  (re-run with a clean CARGO_TARGET_DIR to defeat lint caching; no output)
+- cargo test --workspace: passed (204 passed, 1 ignored, 0 failed)
+- grafted direct test on base e301527: PASSED (should have failed) -> REV-3-01
+- grafted direct test on base with PVTable::new(2): FAILED as required
+- same one-line change on target 043d75f: passed
+- grafted iterative test on base e301527: passed (see non-blocking note)
+- instrumented node accounting: abort fires at node 2, inside the first child
 ---
 <!-- COMMENTS:END -->
