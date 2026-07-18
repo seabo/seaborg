@@ -16,6 +16,11 @@ impl<'engine> Search<'engine> {
     /// captures a piece of type `target` with a piece of type `attacker` on square `from`. This
     /// analysis includes the effect of x-rays by sliding pieces through friendly pieces which
     /// move earlier (e.g. rook batteries along a file).
+    ///
+    /// A pawn arriving on its back rank is treated as promoting to a queen: the move gains the
+    /// difference in material, and the piece it leaves on `to` for the opponent to capture is a
+    /// queen rather than a pawn. This covers both a capture that promotes and a plain push to the
+    /// back rank opening the sequence; for the latter, pass `PieceType::None` as `target`.
     pub fn see(
         &mut self,
         from: Square,
@@ -33,24 +38,36 @@ impl<'engine> Search<'engine> {
         let mut from_set = from.to_bb();
         let mut occ = self.pos.occupied();
         let mut atta_def = self.pos.attack_defend(occ, to);
+        // The player who moves next in the sequence, i.e. the one who recaptures on `to`.
         let mut side = self.pos.turn().other_player();
 
         // Need to track the processed sliding pieces to ensure that we don't repeatedly process
         // them in x-ray attacks.
         let mut processed = Bitboard::empty();
 
-        gain[0] = Score::cp(piece_value(target));
+        let promotion_gain =
+            Score::cp(piece_value(PieceType::Queen) - piece_value(PieceType::Pawn));
+        let mut promoting = promotes(attacker, to, self.pos.turn());
+
+        gain[0] = Score::cp(piece_value(target)) + promotion_bonus(promoting, promotion_gain);
 
         while !from_set.is_empty() {
             d += 1;
 
-            gain[d] = Score::cp(piece_value(attacker)) - gain[d - 1];
+            // The piece this move leaves on `to` for the opponent to take. A promoting pawn is
+            // captured back as a queen.
+            let standing_promoted = promoting;
+            let standing = if standing_promoted {
+                Score::cp(piece_value(PieceType::Queen))
+            } else {
+                Score::cp(piece_value(attacker))
+            };
 
-            if max(-gain[d - 1], gain[d]) < Score::cp(0) {
-                break;
-            }
-
-            atta_def ^= from_set;
+            // Vacate the origin square before picking the next attacker, so that x-rays through it
+            // are revealed in time to be considered. Clear rather than toggle: a pawn pushing to
+            // the back rank never attacked `to`, so toggling would insert a stale attacker and let
+            // the same pawn be selected again two plies later.
+            atta_def &= !from_set;
             occ ^= from_set;
             processed ^= from_set;
 
@@ -62,6 +79,21 @@ impl<'engine> Search<'engine> {
             }
 
             (attacker, from_set) = self.least_valuable_piece(atta_def, side);
+            promoting = promotes(attacker, to, side);
+
+            // `gain[d]` is the payoff of the *next* move, so it has to be scored after that move is
+            // known: it wins whatever is standing on `to`, plus its own promotion gain, minus the
+            // opponent's standing gain. When no attacker remains this entry is speculative and the
+            // minimax pass below discards it.
+            gain[d] = standing + promotion_bonus(promoting, promotion_gain) - gain[d - 1];
+
+            // The usual cutoff assumes that continuing the exchange cannot recover from both
+            // alternatives being negative. Promotion breaks that assumption by making the
+            // standing piece substantially more valuable than its pawn attacker, so retain the
+            // immediate recapture and let the minimax pass account for it.
+            if !standing_promoted && max(-gain[d - 1], gain[d]) < Score::cp(0) {
+                break;
+            }
 
             side = side.other_player();
         }
@@ -98,6 +130,23 @@ impl<'engine> Search<'engine> {
     }
 }
 
+/// Whether `mover` playing `piece` to `to` promotes.
+///
+/// Underpromotion is ignored: a promoting pawn is always valued as a queen.
+#[inline(always)]
+fn promotes(piece: PieceType, to: Square, mover: Player) -> bool {
+    piece == PieceType::Pawn && to.rank() == mover.relative_rank(7)
+}
+
+#[inline(always)]
+fn promotion_bonus(promoting: bool, promotion_gain: Score) -> Score {
+    if promoting {
+        promotion_gain
+    } else {
+        Score::cp(0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,11 +180,26 @@ mod tests {
                 ("k7/7b/8/5p2/4PK2/8/5N2/8 b - - 0 1", Square::F5, Square::E4, PieceType::Pawn, PieceType::Pawn, Score::cp(0)),
                 ("8/1b6/3k4/3p4/3KP3/8/6B1/8 w - - 0 1", Square::E4, Square::D5, PieceType::Pawn, PieceType::Pawn, Score::cp(100)),
 
-                // TODO: need to reflect the positions and discussion here. Pawns promoting with
-                // capture, or pawns promoting without capture as the first move of SEE need
-                // attention. It might be easiest to use a search extension whenever we have a pawn
-                // on the 7th?
+                // Promotions. A pawn reaching the back rank is scored as a queen appearing on
+                // `to`, so the exchange picks up the queen/pawn difference.
                 // http://www.talkchess.com/forum3/viewtopic.php?f=7&t=77787
+
+                // The reference position from that thread. Rxc8 looks like it merely trades into
+                // Bxc8, but bxc8=Q follows, so black declines the recapture and white keeps the
+                // rook.
+                ("2r5/1P4pk/p2p1b1p/5b1n/BB3p2/2R2p2/P1P2P2/4RK2 w - - 0 1", Square::C3, Square::C8, PieceType::Rook, PieceType::Rook, Score::cp(500)),
+
+                // A capture that promotes, as the first move of the sequence. Nothing recaptures,
+                // so the gain is the rook plus the queen/pawn difference.
+                ("2r5/1P6/8/8/8/6k1/8/6K1 w - - 0 1", Square::B7, Square::C8, PieceType::Rook, PieceType::Pawn, Score::cp(1300)),
+
+                // A non-capturing promotion opening the sequence: pass `PieceType::None` as the
+                // target. e8=Q, Rxe8, Rxe8 nets the queen/pawn difference less the exchange.
+                ("r7/4P3/8/6k1/8/8/8/4R1K1 w - - 0 1", Square::E7, Square::E8, PieceType::None, PieceType::Pawn, Score::cp(400)),
+
+                // A capture-promotion followed by a recapture. The promotion-aware cutoff must
+                // retain ...Rxc8 so minimax reports the true net material gain.
+                ("2rr4/1P6/8/8/8/6k1/8/6K1 w - - 0 1", Square::B7, Square::C8, PieceType::Rook, PieceType::Pawn, Score::cp(400)),
 
                 // In these examples, the answer returned is not the true result because of
                 // pruning. The result is nevertheless the same (in terms of whether the initial

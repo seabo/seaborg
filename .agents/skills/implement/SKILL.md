@@ -54,6 +54,28 @@ For new work, implement every acceptance criterion within scope. For rework:
 
 Preserve unrelated changes. Do not edit the task's copy on the primary branch.
 
+## Stop when the correct fix is larger than the task
+
+Sometimes a defect is a symptom of a design that makes the correct behavior hard
+to express, and the honest fix is a structural change the task never
+anticipated. You are authorized to say so. Do not narrow the fix to what the
+task literally allows merely because a narrow patch is within reach and
+finishing is rewarded; a local patch that entrenches the wrong structure costs
+the project more than the delay.
+
+Distinguish two cases:
+
+- The correct fix is within this task's surface but large or tedious. Do it.
+- The correct fix requires changing structure shared with other code — an API,
+  an abstraction boundary, a data representation, an invariant other modules
+  rely on. Stop rather than work around it.
+
+To stop, leave the worktree clean, move the task to `Needs Human`, and record
+the proximate issue, why the in-scope fix is wrong or merely cosmetic, the
+structural change you believe is correct, and its rough cost. Do not begin the
+refactor and do not create the follow-up task yourself; the scope decision is
+the human's.
+
 ## Create the review handoff
 
 1. Read `backlog instructions task-finalization` for evidence requirements, but

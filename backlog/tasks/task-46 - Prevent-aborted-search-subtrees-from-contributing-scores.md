@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-18 18:29'
-updated_date: '2026-07-18 23:47'
+updated_date: '2026-07-18 23:48'
 labels: []
 dependencies: []
 references:
@@ -56,6 +56,8 @@ Resolved REV-1-01: changed the deterministic abort threshold to the reviewer-pro
 Resolved REV-2-01: the iterative regression now aborts at completed-depth-one nodes + 2, which is the first recursive child of the depth-two root, and uses a 16 MiB TT. Added direct node-level coverage proving the aborted child returns None, restores the root move, contributes no PV move, and leaves the ancestor TT slot empty. On base e301527 the corresponding node API returns the plausible Score::zero() instead of an unusable outcome.
 
 Resolved REV-3-01: sized the direct depth-two regression's PV table to depth two, so the assertion observes the row written by the searched root and fails on the unfixed base as demonstrated in review attempt 3.
+
+Integrated primary commit f476d4c (including TASK-54) into the persistent task branch. Resolved all four search.rs conflicts by retaining TASK-46 Option<Score> abort unwinds and using TASK-54 child_bound() arguments at main-search, quiescence, and check-evasion recursion boundaries.
 <!-- SECTION:NOTES:END -->
 
 ## Comments

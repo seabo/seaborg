@@ -562,11 +562,12 @@ impl<'engine> Search<'engine> {
 
         // Step 2. Mate distance pruning.
         if !Node::root() {
-            // If we mate at the next move, the value at the root would be Mate(draft). If we
-            // already have alpha greater than this, then we had a quicker mate elsewhere in the
-            // tree. So we can prune here.
-            alpha = std::cmp::max(Score::mate(draft as i8).neg(), alpha);
-            beta = std::cmp::min(Score::mate(draft as i8 + 1), beta);
+            // Scores are position-relative: at every node, being checkmated now and mating on the
+            // next ply are the worst and best possible mate values. Using `draft` here treats the
+            // bounds as root-relative; those wrong-parity bounds can escape a cutoff and masquerade
+            // as an exact root result.
+            alpha = std::cmp::max(Score::mate(0), alpha);
+            beta = std::cmp::min(Score::mate(1), beta);
             if alpha >= beta {
                 return Some(alpha);
             }
@@ -703,7 +704,11 @@ impl<'engine> Search<'engine> {
 
                 // Step 19. Search non-PV move with null window.
                 if !Node::pv() || move_count > 1 {
-                    let child = self.search::<T, NonPv>(-alpha.inc_one(), -alpha, depth - 1);
+                    let child = self.search::<T, NonPv>(
+                        alpha.inc_one().child_bound(),
+                        alpha.child_bound(),
+                        depth - 1,
+                    );
                     let Some(child) = child else {
                         self.pos.unmake_move();
                         return None;
@@ -718,7 +723,8 @@ impl<'engine> Search<'engine> {
                 if Node::pv()
                     && (move_count == 1 || (value > alpha && (Node::root() || value < beta)))
                 {
-                    let child = self.search::<T, Pv>(-beta, -alpha, depth - 1);
+                    let child =
+                        self.search::<T, Pv>(beta.child_bound(), alpha.child_bound(), depth - 1);
                     let Some(child) = child else {
                         self.pos.unmake_move();
                         return None;
@@ -976,7 +982,7 @@ impl<'engine> Search<'engine> {
 
                 // SAFETY: quiescence moves originate from move generation for `self.pos`.
                 unsafe { self.pos.make_move_unchecked(mov) };
-                let child = self.quiesce::<T, Node>(-beta, -alpha);
+                let child = self.quiesce::<T, Node>(beta.child_bound(), alpha.child_bound());
                 self.pos.unmake_move();
                 score = child?.neg().inc_mate();
 
@@ -1013,7 +1019,7 @@ impl<'engine> Search<'engine> {
             }
 
             self.pos.make_move(mov);
-            let child = self.quiesce::<T, Node>(-beta, -alpha);
+            let child = self.quiesce::<T, Node>(beta.child_bound(), alpha.child_bound());
             self.pos.unmake_move();
             let score = child?.neg().inc_mate();
 
@@ -1595,6 +1601,38 @@ mod tests {
         assert!(progress
             .iter()
             .all(|event| !event.principal_variation.is_empty()));
+    }
+
+    /// FastChess reached this WAC-derived position after a long forcing line. At depth five the
+    /// old search passed position-relative mate bounds to child nodes by negating them without
+    /// first removing one ply. A cutoff value then leaked back as `Score::mate(34)`: positive with
+    /// an impossible even ply count, and formatting the progress event tripped Score's parity
+    /// assertion on the UCI driver thread.
+    #[test]
+    fn child_mate_windows_preserve_distance_parity() {
+        core::init::init_globals();
+
+        let position =
+            Position::from_fen("2k5/8/b1p5/Pq2r1p1/8/5PpP/3p2P1/Q2R2K1 b - - 1 61").unwrap();
+        let engine = SearchEngine::new(1);
+        let search = engine.start(position, SearchLimit::Depth(5));
+        let events = search.events().clone();
+        let outcome = search.wait();
+        let progress = events
+            .try_iter()
+            .filter_map(|event| match event {
+                SearchEvent::Progress(progress) if progress.depth == 5 => Some(progress),
+                _ => None,
+            })
+            .next()
+            .expect("depth-five progress must be emitted");
+
+        assert!(matches!(outcome, SearchOutcome::Completed(Some(_))));
+        assert_eq!(progress.score, Score::mate(7));
+        assert!(
+            crate::info::format_search_event(&SearchEvent::Progress(progress))
+                .contains("score mate 4")
+        );
     }
 
     #[test]
