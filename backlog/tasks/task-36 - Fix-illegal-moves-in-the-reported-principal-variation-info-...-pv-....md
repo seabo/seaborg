@@ -1,9 +1,11 @@
 ---
 id: TASK-36
 title: Fix illegal moves in the reported principal variation (info ... pv ...)
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-18 01:21'
+updated_date: '2026-07-18 12:41'
 labels:
   - engine
   - search
@@ -33,3 +35,16 @@ Relevant code: engine/src/pv_table.rs (copy_to/update_internal/pv_leaf_at/pv), e
 - [ ] #3 A regression test drives the search on positions that previously produced illegal PVs (including the mate line d7f8 g6a6 f8g6 c5f8) and asserts the full reported PV is legal by playing it out
 - [ ] #4 The engine's selected/played best move is unchanged by the fix; existing search-correctness tests (e.g. gives_correct_answers) still pass
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Add a PV-legality test harness that runs the search with an event channel, collects every emitted 'info ... pv ...' line, and replays each PV from the root position asserting every move is legal. Confirm it reproduces illegal PVs on the current code (capture concrete FEN/depth).
+2. Fix the PV table so stale sibling rows can never be spliced up:
+   - Clear this ply's PV row on entry to `search`, before any early return (TT/draw/mate-distance/razoring/stopping), so a node that returns without establishing a PV leaves an empty row instead of a previous sibling's line.
+   - Only update the PV on exact PV-node alpha raises (move the `pvt.copy_to` call inside the `Node::pv() && value < beta` branch), so fail-high/beta-cutoff nodes no longer publish non-exact lines. Root is a PV node with beta = INF_P, so the root move is unaffected.
+   - Retire the now-redundant `pv_leaf_at` in favour of the clear-on-entry invariant.
+3. Add pv_table unit tests for row clearing and truncation semantics.
+4. Add the regression test from step 1 over mate-scored and tactical positions across depths 1..=N.
+5. Verify: cargo test workspace, cargo clippy, cargo fmt; confirm search suite (gives_correct_answers) unchanged; run FastChess seaborg self-play at fixed depth and confirm zero 'Illegal PV move' warnings.
+<!-- SECTION:PLAN:END -->
