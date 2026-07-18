@@ -56,7 +56,8 @@ impl<'engine> Search<'engine> {
 
             // The piece this move leaves on `to` for the opponent to take. A promoting pawn is
             // captured back as a queen.
-            let standing = if promoting {
+            let standing_promoted = promoting;
+            let standing = if standing_promoted {
                 Score::cp(piece_value(PieceType::Queen))
             } else {
                 Score::cp(piece_value(attacker))
@@ -86,7 +87,11 @@ impl<'engine> Search<'engine> {
             // minimax pass below discards it.
             gain[d] = standing + promotion_bonus(promoting, promotion_gain) - gain[d - 1];
 
-            if max(-gain[d - 1], gain[d]) < Score::cp(0) {
+            // The usual cutoff assumes that continuing the exchange cannot recover from both
+            // alternatives being negative. Promotion breaks that assumption by making the
+            // standing piece substantially more valuable than its pawn attacker, so retain the
+            // immediate recapture and let the minimax pass account for it.
+            if !standing_promoted && max(-gain[d - 1], gain[d]) < Score::cp(0) {
                 break;
             }
 
@@ -192,13 +197,15 @@ mod tests {
                 // target. e8=Q, Rxe8, Rxe8 nets the queen/pawn difference less the exchange.
                 ("r7/4P3/8/6k1/8/8/8/4R1K1 w - - 0 1", Square::E7, Square::E8, PieceType::None, PieceType::Pawn, Score::cp(400)),
 
+                // A capture-promotion followed by a recapture. The promotion-aware cutoff must
+                // retain ...Rxc8 so minimax reports the true net material gain.
+                ("2rr4/1P6/8/8/8/6k1/8/6K1 w - - 0 1", Square::B7, Square::C8, PieceType::Rook, PieceType::Pawn, Score::cp(400)),
+
                 // In these examples, the answer returned is not the true result because of
                 // pruning. The result is nevertheless the same (in terms of whether the initial
                 // capture is deemed favourable).
                 ("k7/8/2B2n2/8/4Q3/5P2/3n4/K7 b - - 0 1", Square::F6, Square::E4, PieceType::Queen, PieceType::Knight, Score::cp(900)),
                 ("k7/8/3np3/5R2/8/3Q2N1/8/K4R2 b - - 0 1", Square::E6, Square::F5, PieceType::Rook, PieceType::Pawn, Score::cp(500)),
-                // bxc8=Q Rxc8 truly nets 400, but the sequence is pruned after the promotion.
-                ("2rr4/1P6/8/8/8/6k1/8/6K1 w - - 0 1", Square::B7, Square::C8, PieceType::Rook, PieceType::Pawn, Score::cp(1300)),
         ];
 
         for (fen, from, to, target, attacker, score) in suite {

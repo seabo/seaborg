@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-18 18:30'
-updated_date: '2026-07-18 21:22'
+updated_date: '2026-07-18 21:23'
 labels: []
 dependencies: []
 references:
@@ -104,6 +104,10 @@ deemed favourable — is preserved, which is all the move-ordering caller consum
 pruning would change every value in the suite and regress the hot path, so it is out of scope here.
 
 AC #5: the TODO at the old engine/src/see.rs:134 is gone.
+
+## Review rework: promotion recapture cutoff
+
+Resolved REV-1-01. The earlier note and table entry that accepted +1300 for `2rr4/1P6/...` are superseded: the correct value is +400. The ordinary early cutoff is retained for non-promotion exchanges, but is skipped when the standing piece was just promoted. Promotion violates the cutoff's material-ordering assumption because the pawn attacker leaves a queen on the exchange square; retaining the immediate recapture lets the existing minimax fold account for the queen loss. The regression now asserts `bxc8=Q Rxc8` as +400.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
