@@ -1,11 +1,11 @@
 ---
 id: TASK-36
 title: Fix illegal moves in the reported principal variation (info ... pv ...)
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-18 01:21'
-updated_date: '2026-07-18 13:07'
+updated_date: '2026-07-18 13:38'
 labels:
   - engine
   - search
@@ -30,10 +30,10 @@ Relevant code: engine/src/pv_table.rs (copy_to/update_internal/pv_leaf_at/pv), e
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Every move in every reported 'info ... pv ...' line is legal in the position reached after playing the preceding PV moves, including on mate/stalemate-scored and beta-cutoff lines
-- [ ] #2 Validated with FastChess (or cutechess) seaborg self-play at fixed depth: zero 'Illegal PV move' warnings across a multi-game match
-- [ ] #3 A regression test drives the search on positions that previously produced illegal PVs (including the mate line d7f8 g6a6 f8g6 c5f8) and asserts the full reported PV is legal by playing it out
-- [ ] #4 The engine's selected/played best move is unchanged by the fix; existing search-correctness tests (e.g. gives_correct_answers) still pass
+- [x] #1 Every move in every reported 'info ... pv ...' line is legal in the position reached after playing the preceding PV moves, including on mate/stalemate-scored and beta-cutoff lines
+- [x] #2 Validated with FastChess (or cutechess) seaborg self-play at fixed depth: zero 'Illegal PV move' warnings across a multi-game match
+- [x] #3 A regression test drives the search on positions that previously produced illegal PVs (including the mate line d7f8 g6a6 f8g6 c5f8) and asserts the full reported PV is legal by playing it out
+- [x] #4 The engine's selected/played best move is unchanged by the fix; existing search-correctness tests (e.g. gives_correct_answers) still pass
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -123,4 +123,51 @@ Verification:
 - fastchess -engine cmd=<target/release/seaborg> args=-u -engine cmd=<same> args=-u -each proto=uci depth=4 -rounds 20 -games 2 -concurrency 4: 0 'Illegal PV move' warnings over 40 games, re-run against fa13e80 (master 87d5218 under the identical command: 40 warnings, all 'move c5f8'); both matches 40 decisive, Ptnml [0,0,20,0,0]
 Known failures: none
 ---
+
+author: @claude
+created: 2026-07-18 13:38
+---
+Review attempt: 1
+Reviewed branch: task-36-illegal-pv-moves
+Reviewed implementation: fa13e80415671371e8bb9ccb49d914943e961cd9
+Base: 87d52189030611a2b23f357bd36e91b1b4e7790f
+Verdict: approved
+
+Target immutability: fa13e80 is an ancestor of the branch tip 7853e9d, and the only commit after it touches the task file. Worktree clean.
+
+Scope: engine/src/pv_table.rs, engine/src/search.rs, engine/src/trace.rs, task file. No unrelated changes. Reviewed the invariant behind the fix: search is only ever entered at depth <= pvt.depth (root at search_depth, recursion at depth-1, no extensions or reductions implemented), so clear_at cannot underflow; the root is a PV node with beta = INF_P and mate scores cap at 20_100, so the root always takes the exact-alpha-raise branch and best_move is structurally unchanged.
+
+AC #1 - PV legality. Independent randomized sweep over 60 games worth of positions at depths 1-6 validated 1,260 reported PV lines / 3,325 moves with python-chess: 0 illegal. engine/src/info.rs is a pure passthrough of SearchProgress.principal_variation, so the test's data source is exactly what the UCI line prints. No empty pv fields emitted.
+
+AC #2 - self-play. Independently re-run, not taken from the handoff: fastchess seaborg-vs-seaborg, 40 games at depth 4 -> 0 'Illegal PV move' warnings, results 40 decisive, Ptnml [0,0,20,0,0]. Extended to 150 further games at depths 3, 5 and 6 -> 0 warnings. Counterfactual on the same machine with only the two production hunks reverted: 40/40 games emit 'Illegal PV move - move c5f8'.
+
+AC #3 - regression test. Confirmed the test genuinely fails without the fix, not merely that it exists: reverting the clear_at call and the copy_to gating in a throwaway worktree makes reported_principal_variations_are_legal fail with 'illegal PV move at ply 4 (c5f8) of depth-4 pv [d7f8 g6a6 f8g6 c5f8]' in 8/5P2/R5n1/4k1P1/P1Q5/8/4N3/4K3 w - - 3 55 - the exact line from the task description.
+
+AC #4 - move selection unchanged. bestmove identical between base and target on 22 positions x depths 1-8 (176 searches) and on 22 positions searched to depth 8 with all iteration info lines captured; scores identical on every info line; depth-9 node counts byte-identical on three positions (8,350,076 / 1,781,513 / 218,824). gives_correct_answers and the full suite pass.
+
+Drive-by trace.rs fix, reviewed on its own merits as the handoff requested: base 87d5218 fails fifty_move_rule_uses_halfmove_boundary 5/5 in release with 'attempt to divide by zero' at trace.rs:141; target passes 5/5. nps_over is correct for the boundary cases its unit tests cover and cannot overflow usize at realistic node counts. Testing the helper directly rather than racing a real search is the right call.
+
+Non-blocking observations, recorded rather than deferred as findings:
+- Mate-scored PVs are now one ply shorter (e.g. 'pv c7c6 a6a5 f4c7' becomes 'pv c7c6 a6a5'). All 39 changed info lines across the comparison were mate-scored; non-mate PVs are byte-identical to base. This is the inherent trade-off of publishing only exact PV-node lines, which the task description proposes, and a truncated PV is legal UCI. It is not called out in the implementation notes.
+- pv_table.rs places the tests module between the PVIter impl and the Debug impl rather than at the end of the file. Cosmetic.
+
+Verification:
+- git merge-base --is-ancestor fa13e80 HEAD: pass; git diff --stat fa13e80 HEAD: task file only
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets: pass, no warnings in the changed files
+- cargo test --workspace: pass (35 core + 81 engine + 5 build-metadata + 1 doc-test, 0 failed)
+- cargo test --workspace --release: pass, 0 failed
+- cargo test -p engine --release fifty_move_rule_uses_halfmove_boundary: pass 5/5 (base: fail 5/5)
+- fastchess depth=4 40 games: 0 warnings (base and fix-reverted build: 40 warnings)
+- fastchess depths 3/5/6, 50 games each: 0 warnings
+- cargo bench --bench perft --bench movegen, base vs target on the same idle-enough machine: generate moves 193.24 ns -> 191.49 ns, perft 5 22.295 ms -> 22.506 ms; confidence intervals overlap and the diff contains no movegen or perft code, so this is noise
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Reported principal variations are now always legal. Two independent PVTable defects are fixed in engine/src/{pv_table,search}.rs: rows are cleared on entry to every search node (PVTable::pv_leaf_at generalised to clear_at), so a node returning early can no longer leave a sibling's line for its parent to splice up; and pvt.copy_to is moved inside the exact PV-node alpha-raise branch, so fail-high nodes no longer publish non-PV continuations. engine/src/trace.rs additionally gains a nps_over helper that charges a sub-microsecond search one microsecond, fixing a divide-by-zero panic reachable from emit_progress.
+
+Verified at fa13e80: cargo test --workspace passes in debug (35 core + 81 engine + 5 build-metadata + 1 doc) and release; cargo fmt --check and cargo clippy clean on the changed files. The committed regression test reported_principal_variations_are_legal fails with the exact documented line 'illegal PV move at ply 4 (c5f8) of depth-4 pv [d7f8 g6a6 f8g6 c5f8]' when the fix is reverted. FastChess self-play: 0 'Illegal PV move' warnings over 190 games at depths 3-6, where the base commit emits 40 warnings over 40 games at depth 4. Move selection is unchanged: bestmoves and scores are identical to base 87d5218 across 22 positions x depths 1-8, and depth-9 node counts are byte-identical on three positions. perft/movegen benchmarks are within noise of base on the same machine.
+<!-- SECTION:FINAL_SUMMARY:END -->
