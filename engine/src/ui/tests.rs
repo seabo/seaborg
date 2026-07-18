@@ -378,6 +378,15 @@ fn serves_the_embedded_assets_with_their_content_types() {
 }
 
 #[test]
+fn board_assets_define_rigid_eight_by_eight_tracks() {
+    let server = TestServer::start();
+    let style = get(&server, "/style.css").body;
+    assert!(style.contains("grid-template-columns: repeat(8, minmax(0, 1fr))"));
+    assert!(style.contains("grid-template-rows: repeat(8, minmax(0, 1fr))"));
+    assert!(style.contains("min-height: 0"));
+}
+
+#[test]
 fn the_page_carries_the_session_token_and_no_placeholder() {
     let server = TestServer::start();
     let body = get(&server, "/").body;
