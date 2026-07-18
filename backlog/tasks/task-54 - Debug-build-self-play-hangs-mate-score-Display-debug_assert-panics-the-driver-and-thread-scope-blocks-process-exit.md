@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-18 20:11'
-updated_date: '2026-07-18 22:37'
+updated_date: '2026-07-18 22:38'
 labels:
   - engine
   - search
@@ -47,3 +47,12 @@ Related: TASK-36 (illegal PV moves on mate lines, Done) and TASK-12 (TT reuse an
 - [ ] #4 Debug-build self-play (seaborg-vs-seaborg, tc=inf depth=5, concurrency>=8, openings from suites/wac.epd, at least several hundred games) completes with no hang and no panic
 - [ ] #5 Release-build behaviour is unchanged and existing search-correctness, mate-score, and UCI tests still pass
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Reproduce the debug panic from the mate-rich WAC corpus and reduce it to one deterministic position/search line, then trace the raw mate score through search and UCI conversion to decide whether the parity assertion or search semantics are wrong.
+2. Add a targeted pre-fix-failing regression for that score/position and correct mate-score formatting or its producing search path while keeping wire/browser conversion aligned.
+3. Refactor production UCI input ownership so the stdin reader is not scope-joined during driver unwinding, and add focused coverage plus a documented subprocess/manual non-zero-exit check.
+4. Run focused mate/search/UCI tests, required Rust checks, and the specified debug FastChess WAC self-play stress run (at least several hundred games, concurrency 8); record evidence and hand off the immutable commit for review.
+<!-- SECTION:PLAN:END -->
