@@ -1,11 +1,11 @@
 ---
 id: TASK-1.4
 title: Build the dependency-free interactive chessboard
-status: In Review
+status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-17 15:40'
-updated_date: '2026-07-18 21:11'
+updated_date: '2026-07-18 21:25'
 labels: []
 dependencies:
   - TASK-1.3
@@ -26,12 +26,12 @@ Create the owned HTML, CSS, TypeScript, and SVG board experience that renders au
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The board renders every FEN position correctly in either orientation using locally bundled assets
-- [ ] #2 Users can move by drag-and-drop or click-click with mouse, touch, and pen input
-- [ ] #3 Selection, legal destinations, captures, the previous move, check, rejected-move snapback, and engine-thinking lockout have clear visual states
-- [ ] #4 Castling and en passant animate correctly and promotion presents an accessible queen, rook, bishop, or knight chooser
-- [ ] #5 The board is responsive, keyboard operable, labelled for assistive technology, and respects reduced-motion preferences
-- [ ] #6 The web app source is TypeScript compiled to locally served JavaScript, and the client runtime uses no third-party JavaScript, framework, bundler, CDN, font service, or runtime network asset
+- [x] #1 The board renders every FEN position correctly in either orientation using locally bundled assets
+- [x] #2 Users can move by drag-and-drop or click-click with mouse, touch, and pen input
+- [x] #3 Selection, legal destinations, captures, the previous move, check, rejected-move snapback, and engine-thinking lockout have clear visual states
+- [x] #4 Castling and en passant animate correctly and promotion presents an accessible queen, rook, bishop, or knight chooser
+- [x] #5 The board is responsive, keyboard operable, labelled for assistive technology, and respects reduced-motion preferences
+- [x] #6 The web app source is TypeScript compiled to locally served JavaScript, and the client runtime uses no third-party JavaScript, framework, bundler, CDN, font service, or runtime network asset
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -123,4 +123,16 @@ Verification:
 - Chrome rigid-grid regression: desktop occupied and sparse/stressed layouts remained 735.625px square with equal 91.953125px cells; narrow board remained 348.03125px square with only subpixel track distribution
 Known failures: none
 ---
+
+author: @codex
+created: 2026-07-18 21:25
+---
+Review attempt: 1\nReviewed branch: task-1.4-interactive-chessboard\nReviewed implementation: 9370e8ff108e3ec011a981c2524f201f3949670a\nVerdict: approved\n\nAll six acceptance criteria are proven by the immutable base-to-target diff, focused frontend/Rust tests, and the recorded live Chrome interaction and geometry verification. HUMAN-1 was explicitly parked by human direction; HUMAN-2 is resolved by rigid eight-track sizing and verified geometry.\n\nVerification:\n- cargo fmt --check: passed\n- clean CARGO_TARGET_DIR cargo clippy --workspace --all-targets --all-features -- -D warnings: passed, zero warnings\n- cargo test --workspace: passed, 201 tests, 0 failures, 1 ignored\n- tsc -p engine/src/ui/frontend/tsconfig.json: passed; committed JavaScript remained byte-identical\n- node --test engine/src/ui/frontend/board.test.mjs: passed, 7/7\n- recorded Chrome interaction and rigid-grid geometry run: passed at desktop and narrow viewports with mouse, touch, pen, click-click, keyboard, both orientations, snapback, lockout, reduced motion, CSP, and local-only resources
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Approved implementation 9370e8ff108e3ec011a981c2524f201f3949670a: delivers the owned dependency-free TypeScript chessboard with authoritative snapshot rendering, multimodal and keyboard move input, special-move and rejection animation, accessible promotion and board semantics, responsive rigid geometry, reduced-motion support, and locally embedded SVG assets. Verified with strict TypeScript compilation and byte-identical generated JavaScript, 7/7 frontend model tests, cargo fmt, fresh-target strict Clippy, the full workspace suite (201 passed, 1 ignored), and the recorded live Chrome interaction/geometry run.
+<!-- SECTION:FINAL_SUMMARY:END -->
