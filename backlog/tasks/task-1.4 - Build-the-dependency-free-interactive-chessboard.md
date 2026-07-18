@@ -1,11 +1,11 @@
 ---
 id: TASK-1.4
 title: Build the dependency-free interactive chessboard
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-17 15:40'
-updated_date: '2026-07-18 21:09'
+updated_date: '2026-07-18 21:11'
 labels: []
 dependencies:
   - TASK-1.3
@@ -60,6 +60,8 @@ Resolved HUMAN-2 in 9370e8f. The board now declares eight explicit minmax(0, 1fr
 HUMAN-1 remains pending human choice. Lichess COPYING.md declares its default public/piece/cburnett set GPLv2+, not MIT, so it was not imported. Lichess declares fantasy, spatial, and celtic piece sets MIT; its separate public/images/staunton collection is also MIT except named subdirectories, but it is not the default 2D set.
 
 HUMAN-1 disposition: the human explicitly chose to park the piece-set preference after reviewing the MIT-compatible alternatives. The current locally owned sprite remains in scope, no third-party artwork is imported, and no follow-up task is requested.
+
+Rework verification at 9370e8f: strict TypeScript build passed and regenerated JavaScript matched committed outputs byte-for-byte; 7/7 frontend model tests passed; cargo fmt --check passed; strict workspace Clippy passed with zero warnings; cargo test --workspace passed 201 tests with zero failures and one ignored. The live Chrome geometry check remains the focused behavioral evidence for HUMAN-2.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -100,5 +102,25 @@ author: @codex
 created: 2026-07-18 21:09
 ---
 Human disposition for rework: park HUMAN-1 without changing artwork or creating follow-up work; proceed to review with HUMAN-2 fixed.
+---
+
+author: @codex
+created: 2026-07-18 21:11
+---
+Implementation handoff
+Branch: task-1.4-interactive-chessboard
+Worktree: /Users/seabo/seaborg-worktrees/task-1.4-interactive-chessboard
+Base: 9c4cc1896a6f9b121412bb9c5cf86b338891367d
+Implementation target: 9370e8ff108e3ec011a981c2524f201f3949670a
+Resolved findings: HUMAN-2; HUMAN-1 parked by explicit human direction
+Verification:
+- tsc -p engine/src/ui/frontend/tsconfig.json: passed
+- clean temporary tsc build compared with committed app.js and board.js: byte-identical
+- node --test engine/src/ui/frontend/board.test.mjs: passed, 7/7
+- cargo fmt --check: passed
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: passed, zero warnings
+- cargo test --workspace: passed, 201 tests, 0 failures, 1 ignored
+- Chrome rigid-grid regression: desktop occupied and sparse/stressed layouts remained 735.625px square with equal 91.953125px cells; narrow board remained 348.03125px square with only subpixel track distribution
+Known failures: none
 ---
 <!-- COMMENTS:END -->
