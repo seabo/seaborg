@@ -1,11 +1,11 @@
 ---
 id: TASK-49
 title: Correct static exchange evaluation for pawn promotions
-status: In Review
+status: Changes Requested
 assignee:
   - '@claude'
 created_date: '2026-07-18 18:30'
-updated_date: '2026-07-18 20:09'
+updated_date: '2026-07-18 20:17'
 labels: []
 dependencies: []
 references:
@@ -134,5 +134,28 @@ implementation notes; the short version is that the pre-existing max(-gain[d-1],
 break already distorts magnitudes for two rows above it, promotions only widen the gap, and the
 sign the move-ordering caller consumes is preserved. Worth a second opinion on whether that is the
 right call for this ticket.
+---
+
+author: @codex
+created: 2026-07-18 20:17
+---
+Review attempt: 1
+Reviewed branch: task-49-see-promotions
+Reviewed implementation: 759846b
+Verdict: changes_requested
+
+REV-1-01 [P1] Promotion recapture is pruned before minimax
+Location: engine/src/see.rs:88; engine/src/see.rs:201
+Impact: A pawn capture-promotion that can be recaptured returns the pre-recapture gain, so SEE reports +1300 for bxc8=Q Rxc8 even though the exchange nets +400. The new test explicitly asserts the known-wrong +1300 value. This leaves AC #1 and the task requirement that reported promotion values be correct unproven.
+Reproduction: In the added FEN `2rr4/1P6/8/8/8/6k1/8/6K1 w - - 0 1`, evaluate SEE for b7xc8 with target rook and attacker pawn. The implementation test returns 1300; material accounting is 500 + (900 - 100) - 900 = 400. The implementation notes independently acknowledge 400 as the true result.
+Expected: The swap-off/minimax logic must retain the legal ...Rxc8 response and return 400, with the regression test asserting 400 rather than documenting the wrong magnitude as an accepted pruning approximation.
+
+Verification:
+- git diff --check 5b592ebb..759846b: pass
+- cargo fmt --check: pass
+- clean CARGO_TARGET_DIR cargo clippy --workspace --all-targets --all-features -- -D warnings: pass
+- cargo test --workspace: pass (35 core; 159 engine passed, 1 ignored; 5 integration; 1 doc)
+- focused inspection of `2rr4/1P6/...` promotion-recapture row: fail, expected 400 but asserted/returned 1300
+- cargo bench --bench perft --bench movegen on target and base: no actionable patch signal; these benchmarks do not execute SEE, and sequential runs showed thermal/order variance
 ---
 <!-- COMMENTS:END -->
