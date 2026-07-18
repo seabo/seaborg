@@ -3,11 +3,11 @@ id: TASK-41
 title: >-
   Throttle the clock read in Search::stopping() to avoid a per-node
   Instant::now()
-status: In Review
+status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-18 12:17'
-updated_date: '2026-07-18 23:46'
+updated_date: '2026-07-18 23:50'
 labels:
   - engine
   - search
@@ -34,11 +34,11 @@ Identified during the TASK-38 investigation and deliberately left out of that ti
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The per-node cost of the clock read is measured on a representative search and the figure recorded in the task, establishing whether a throttle is warranted
-- [ ] #2 If warranted, the deadline check is sampled on a node-count interval rather than on every stopping() call, and the cancellation-flag check remains unthrottled
-- [ ] #3 The search still respects its time budget within a documented tolerance, verified by a test asserting actual elapsed wall time against the budget
-- [ ] #4 TASK-32 guaranteed-legal-move behavior is unaffected, evidenced by its existing regression tests passing
-- [ ] #5 A before/after benchmark on the existing hot-path benchmarks shows no regression, and the nps change is reported
+- [x] #1 The per-node cost of the clock read is measured on a representative search and the figure recorded in the task, establishing whether a throttle is warranted
+- [x] #2 If warranted, the deadline check is sampled on a node-count interval rather than on every stopping() call, and the cancellation-flag check remains unthrottled
+- [x] #3 The search still respects its time budget within a documented tolerance, verified by a test asserting actual elapsed wall time against the budget
+- [x] #4 TASK-32 guaranteed-legal-move behavior is unaffected, evidenced by its existing regression tests passing
+- [x] #5 A before/after benchmark on the existing hot-path benchmarks shows no regression, and the nps change is reported
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -128,4 +128,33 @@ Verification:
 - `cargo bench --bench search -- --warm-up-time 3 --measurement-time 10 --sample-size 50`: 40.255 us median, about 14.38M NPS; 2.9% faster than prior reviewed implementation and about 75.0% higher NPS than original baseline
 Known failures: none
 ---
+
+author: @codex
+created: 2026-07-18 23:50
+---
+Review attempt: 2
+Reviewed branch: task-41-clock-read-throttle
+Reviewed implementation: bc6ab57b4b56b6eaa99e507306b687708dd00806
+Verdict: approved
+Resolved finding: REV-1-01
+
+Verification:
+- cargo fmt --check: passed
+- clean-target cargo clippy --workspace --all-targets --all-features -- -D warnings: passed
+- cargo test --workspace: passed (203 passed, 1 ignored)
+- release expired-deadline latch regression: passed
+- release 20 ms wall-time regression: passed in about 20 ms within the documented 100 ms tolerance
+- release cancellation responsiveness regression: passed
+- release zero and near-zero guaranteed-legal-move regressions: passed
+- prior independent base/target cargo bench --bench perft --bench movegen: no task-introduced regression (approximately +0.9% perft, within measurement noise; movegen improved)
+- recorded release search benchmark: 40.255 us median / about 14.38M NPS, about 75.0% above the 70.467 us / 8.22M NPS baseline
+
+All acceptance criteria are proven; no blocking findings remain.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Throttled deadline clock reads to every 8 nodes in release builds while preserving per-call cancellation checks and the guaranteed first ply; latched expiry now stops unwind reliably. Reviewer verified formatting, clean-target strict Clippy, the full workspace suite, focused release deadline/cancellation/legal-move regressions, and the recorded before/after benchmarks (about +75% search NPS with no perft/movegen regression).
+<!-- SECTION:FINAL_SUMMARY:END -->
