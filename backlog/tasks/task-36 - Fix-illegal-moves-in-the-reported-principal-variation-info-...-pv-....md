@@ -1,11 +1,11 @@
 ---
 id: TASK-36
 title: Fix illegal moves in the reported principal variation (info ... pv ...)
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-18 01:21'
-updated_date: '2026-07-18 13:03'
+updated_date: '2026-07-18 13:07'
 labels:
   - engine
   - search
@@ -66,6 +66,14 @@ Verification evidence:
 - FastChess self-play, depth=4, 40 games, identical conditions on both binaries: master 87d5218 emits 40 'Illegal PV move - move c5f8' warnings; this branch emits 0. Both matches produce identical results (40 decisive, Ptnml [0,0,20,0,0]), consistent with move selection being unchanged.
 
 Pre-existing unrelated failure: search::tests::fifty_move_rule_uses_halfmove_boundary panics with 'attempt to divide by zero' at engine/src/trace.rs:141 (Tracer::live_nps divides by elapsed micros, which is 0 when a search completes in under a microsecond). This reproduces on master 87d5218 in release builds — 5/5 runs in isolation, 1/3 full-suite runs — and equally on this branch. The debug suite is unaffected because the search is slow enough there. Out of scope for TASK-36 and not introduced by it.
+
+Drive-by fix folded in at user request (2026-07-18), superseding the 'known failure' recorded in the first handoff.
+
+engine/src/trace.rs measured search durations in whole microseconds, so a search completing faster than that measured as zero and both NPS accessors panicked with 'attempt to divide by zero'. Reachable from emit_progress, which builds a SearchProgress unconditionally, and the cause of search::tests::fifty_move_rule_uses_halfmove_boundary failing in release builds on master.
+
+The shared arithmetic is extracted into a private nps_over(nodes, elapsed) used by both live_nps and nps, charging a sub-microsecond search one microsecond. The new unit tests call nps_over directly rather than racing a real search: a first attempt asserted on Tracer timing end-to-end and was itself flaky under load, which is the same defect shape as the failure being fixed.
+
+Evidence: fifty_move_rule_uses_halfmove_boundary now passes 5/5 runs in isolation in release, where master 87d5218 fails 5/5; the full release workspace suite passes 5/5 consecutive runs, where master flaked 1/3. This is a behavioural fix outside the task's acceptance criteria and should be reviewed on its own merits.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -89,5 +97,30 @@ Verification:
 - cargo test -p engine --release gives_correct_answers: pass, best moves and score bounds unchanged across the search suite
 - fastchess -engine cmd=<target/release/seaborg> args=-u -engine cmd=<same> args=-u -each proto=uci depth=4 -rounds 20 -games 2 -concurrency 4: 0 'Illegal PV move' warnings over 40 games (master 87d5218 under the identical command: 40 warnings, all 'move c5f8')
 Known failures: search::tests::fifty_move_rule_uses_halfmove_boundary panics 'attempt to divide by zero' at engine/src/trace.rs:141 in release builds. Pre-existing and unrelated: on master 87d5218 it fails 5/5 runs in isolation ('cargo test -p engine --release fifty_move_rule_uses_halfmove_boundary') and 1/3 full-suite runs; this branch behaves identically. Tracer::live_nps divides by elapsed micros, which is 0 for sub-microsecond searches. Not introduced by this change and out of scope for TASK-36.
+---
+
+author: @claude
+created: 2026-07-18 13:07
+---
+Implementation handoff (supersedes the handoff naming target d04d3a4)
+Branch: task-36-illegal-pv-moves
+Worktree: /Users/seabo/seaborg-worktrees/task-36-illegal-pv-moves
+Base: 87d52189030611a2b23f357bd36e91b1b4e7790f
+Implementation target: fa13e80415671371e8bb9ccb49d914943e961cd9
+Resolved findings: none
+
+Scope note: fa13e80 is a drive-by fix to engine/src/trace.rs folded in at user request. It is outside this task's acceptance criteria and fixes the divide-by-zero previously reported as a known pre-existing failure. Please review it on its own merits. The PV fix proper is d04d3a4 and is unchanged by it.
+
+Verification:
+- cargo fmt --check: pass
+- cargo test --workspace (debug): pass, 81 engine + 35 core + 5 build-metadata + 1 doc-test, 0 failed
+- cargo test --workspace --release: pass, 5/5 consecutive runs (master 87d5218 flakes 1/3 on fifty_move_rule_uses_halfmove_boundary)
+- cargo test -p engine --release fifty_move_rule_uses_halfmove_boundary: pass 5/5 in isolation (master 87d5218: fails 5/5, 'attempt to divide by zero' at engine/src/trace.rs:141)
+- cargo test -p engine --release reported_principal_variations_are_legal: pass; fails on the unfixed logic with 'illegal PV move at ply 4 (c5f8) of depth-4 pv [d7f8 g6a6 f8g6 c5f8]'
+- cargo test -p engine --release pv_table: pass, 4 unit tests
+- cargo test -p engine --release trace: pass, 2 unit tests
+- cargo test -p engine --release gives_correct_answers: pass, best moves and score bounds unchanged across the search suite
+- fastchess -engine cmd=<target/release/seaborg> args=-u -engine cmd=<same> args=-u -each proto=uci depth=4 -rounds 20 -games 2 -concurrency 4: 0 'Illegal PV move' warnings over 40 games, re-run against fa13e80 (master 87d5218 under the identical command: 40 warnings, all 'move c5f8'); both matches 40 decisive, Ptnml [0,0,20,0,0]
+Known failures: none
 ---
 <!-- COMMENTS:END -->
