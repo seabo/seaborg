@@ -3,11 +3,11 @@ id: TASK-41
 title: >-
   Throttle the clock read in Search::stopping() to avoid a per-node
   Instant::now()
-status: In Review
+status: Changes Requested
 assignee:
   - '@codex'
 created_date: '2026-07-18 12:17'
-updated_date: '2026-07-18 23:32'
+updated_date: '2026-07-18 23:41'
 labels:
   - engine
   - search
@@ -76,5 +76,29 @@ Verification:
 - `cargo test --workspace`: passed (203 passed, 1 ignored)
 - `cargo bench --bench search -- --warm-up-time 2 --measurement-time 5 --sample-size 30`: median improved from 70.467 us to 41.449 us; derived NPS 8.22M to 13.97M (+70.0%)
 Known failures: none
+---
+
+author: @codex
+created: 2026-07-18 23:41
+---
+Review attempt: 1
+Reviewed branch: task-41-clock-read-throttle
+Reviewed implementation: 9598721f1adcc43387ead42b544a510525579190
+Verdict: changes_requested
+
+REV-1-01 [P1] Expired deadline is not latched across unwind checks
+Location: engine/src/search.rs:842-853
+Impact: Optimized searches do not reliably terminate at their deadline, so acceptance criterion #3 is not met and real time-controlled searches can continue far beyond their budget.
+Reproduction: `cargo test --release -p engine search::tests::time_limited_search_honors_the_budget_after_the_guaranteed_ply -- --exact --nocapture` did not complete within 5 seconds for a 20 ms budget; the full release search-test run reported this test still running after 60 seconds.
+Expected: Once a sampled deadline has expired, every subsequent stopping check must remain true while the search unwinds, without weakening the unthrottled cancellation check or the guaranteed-first-ply behavior.
+Reasoning: The expired sample sets `last_deadline_check_nodes` and returns true once. The immediate next check at the same node satisfies the interval throttle and returns false, allowing search to resume instead of preserving the abort decision.
+
+Verification:
+- `cargo fmt --check`: passed
+- clean-target `cargo clippy --workspace --all-targets --all-features -- -D warnings`: passed
+- `cargo test --workspace`: passed (203 passed, 1 ignored)
+- debug timing/cancellation/TASK-32 regressions: passed
+- optimized focused deadline test: failed to terminate within 5 seconds
+- base/target `cargo bench --bench perft --bench movegen`: no task-introduced regression (movegen medians 196.06 ns base vs 194.03 ns target; perft medians 22.776 ms base vs 22.980 ms target, approximately +0.9% and within measurement noise)
 ---
 <!-- COMMENTS:END -->
