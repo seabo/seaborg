@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-18 01:20'
-updated_date: '2026-07-18 18:27'
+updated_date: '2026-07-18 20:13'
 labels:
   - engine
   - search
@@ -46,6 +46,32 @@ Relevant code: engine/src/engine.rs (run loop, next_event select!, finish_search
 7. No PV or time-allocation code is touched.
 <!-- SECTION:PLAN:END -->
 
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented the explicit completion signal and made the driver's wait structurally unable to block forever on a finished search.
+
+search.rs: SearchHandle gains a bounded(1) 'finished' channel. The worker sends on it after dropping its event Sender and before returning, for both completed and cancelled searches. start() is now a thin wrapper over start_inner(), which also hands back a clone of the worker's event Sender; the #[cfg(test)] start_retaining_events() exposes that clone so tests can pin the events channel open.
+
+engine.rs: DriverEvent::Search(Result<..>) is replaced by explicit SearchProgress/SearchComplete variants, so all three completion routes converge on one finish_search call site. next_event now selects over commands, events, and the finished signal, with a default(50ms) arm that consults SearchHandle::is_finished() directly. The disconnect path is retained as one route of three rather than the only one. The poll is a backstop, not the normal path: the explicit signal keeps bestmove latency unchanged, and the poll bounds the cost of a lost wakeup at 50ms instead of forever.
+
+Note the same poll-based approach is already used by the other consumer of SearchHandle, game.rs::poll (try_iter + is_finished), which is why that driver never had this exposure and is untouched here.
+
+crossbeam-channel 0.5.6 -> 0.5.16 as defence in depth. Deliberately not the primary fix: the poll backstop holds regardless of channel implementation.
+
+AC #4: no PV or time-allocation code touched. The diff is limited to engine.rs, search.rs, engine/Cargo.toml and Cargo.lock.
+
+STRESS TESTING FOUND A SECOND, PRE-EXISTING DEFECT -> TASK-54.
+
+Debug-build self-play with a mate-rich opening book wedges permanently, on this branch AND on unmodified master (5b592eb). Root-caused from FastChess raw protocol logs (-log ... engine=true): debug_assert!(plies_to_mate % 2 == 0) at engine/src/score.rs:179 panics the driver/main thread while formatting a mate score ('assertion failed: plies_to_mate % 2 == 0', all 8 wedged slots). The panic unwinds out of the run loop and thread::scope then blocks forever joining the scoped stdin reader parked in read_line, so the process hangs instead of dying.
+
+That is why the thread sample shows main parked under thread::scope with the reader in read_line -- a signature easily mistaken for a completion deadlock, and distinct from doc-2's signature (main parked in crossbeam select! with the worker exited), which is the defect fixed here.
+
+It also resolves doc-2's asymmetry that 'the debug build hangs readily' while release did not: debug_assert! is compiled out in release. Some of the debug hangs attributed to the lost-wakeup defect may in fact have been this panic. score.rs is untouched by this task's diff.
+
+Consequence: AC #1 is only partially evidenced. Its release half passes strongly; its debug half cannot pass until TASK-54 is fixed, and not because of anything in this change. Filed as TASK-54 per user decision rather than widening this task's scope.
+<!-- SECTION:NOTES:END -->
+
 ## Comments
 
 <!-- COMMENTS:BEGIN -->
@@ -62,5 +88,13 @@ TASK-39 investigates UCI 'stop' responsiveness under TASK-32's abort-suppressed 
 They are independent: TASK-35's hang occurs after the search has completed and its worker has exited, so the suppression window plays no part in it, and fixing the completion signal does not change stop latency. Neither fix should need to touch the other's code. If an implementer finds they do interact, stop and reconcile the two tickets rather than widening either.
 
 Also note: TASK-35's ordinal moved 38000 -> 40000 to clear a collision with TASK-38 filed on master.
+---
+
+author: @codex
+created: 2026-07-18 20:13
+---
+Stress-testing this fix uncovered a second, pre-existing hang that is NOT this ticket's defect and is NOT caused by this change: a debug_assert in Score's Display impl (engine/src/score.rs:179) panics the driver thread on a mate score, and thread::scope then blocks process exit on the parked stdin reader. It reproduces identically on unmodified master. Filed as TASK-54 with full evidence.
+
+This bounds what AC #1 can claim here. Release-build evidence is strong (400 games, mate-rich book, 27908/27908 searches answered). The debug half of AC #1 is blocked by TASK-54, so I have left AC #1 unchecked for the reviewer rather than checking it on partial evidence. Reviewer: please treat AC #1 as blocked-by-TASK-54, not as satisfied.
 ---
 <!-- COMMENTS:END -->
