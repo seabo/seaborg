@@ -4,6 +4,7 @@ title: Complete transposition-table integration across main and quiescence searc
 status: To Do
 assignee: []
 created_date: '2026-07-19 00:01'
+updated_date: '2026-07-19 00:25'
 labels:
   - transposition-table
   - search
@@ -13,8 +14,6 @@ labels:
 dependencies:
   - TASK-46
   - TASK-57
-  - TASK-58
-  - TASK-59
 references:
   - engine/src/search.rs
   - engine/src/tt.rs
@@ -26,7 +25,7 @@ ordinal: 59000
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-Search currently couples main-search score reuse to the presence of a valid stored move, so terminal/null-move entries cannot cut off, while quiescence consumes deeper entries but never stores its own results. Quiescence also independently applies the fifty-move boundary at 50 plies instead of the shared 100-ply rule. Give main and quiescence search consistent, explicit TT semantics for identity, move ordering, depth, bounds, terminal nodes, collisions, and aborted work. TASK-28 records the existing collision-verification asymmetry and should be resolved by or alongside this task rather than duplicated.
+Integrate the rewritten transposition table from TASK-57 consistently across main search and quiescence. Search currently couples main-search score reuse to the presence of a valid stored move, so terminal or move-less entries cannot cut off, while quiescence consumes deeper entries but never stores its own results. Quiescence also independently applies the fifty-move boundary at 50 plies instead of the shared 100-ply rule. Establish explicit search-level semantics for score hits, move ordering, depth, bounds, terminal nodes, collisions, and incomplete work. TASK-28 records the existing collision-verification asymmetry and should be resolved by this task rather than duplicated.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria

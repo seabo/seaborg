@@ -4,13 +4,13 @@ title: Add benchmark-backed transposition-table hot-path enhancements
 status: To Do
 assignee: []
 created_date: '2026-07-19 00:01'
+updated_date: '2026-07-19 00:25'
 labels:
   - transposition-table
   - performance
   - search
   - benchmark
 dependencies:
-  - TASK-59
   - TASK-60
 references:
   - engine/src/tt.rs
@@ -23,7 +23,7 @@ ordinal: 60000
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-After correctness, replacement, and quiescence integration are stable, evaluate the remaining common TT hot-path opportunities rather than adopting them on folklore alone. The principal candidates are storing a position’s static evaluation to avoid duplicate work and support pruning, and prefetching the child bucket before recursive search. Coordinate with TASK-50, TASK-51, and TASK-52 so metadata supports forthcoming pruning without coupling this task to those search changes. TASK-43 separately owns TT-assisted PV extension.
+After the identity policy, clean transposition-table rewrite, and search integration are stable, evaluate remaining hot-path opportunities rather than adopting them on folklore alone. The principal candidates are storing a position’s static evaluation to avoid duplicate work and support pruning, and prefetching child buckets before recursive search. Coordinate with TASK-50, TASK-51, and TASK-52 so metadata supports forthcoming pruning without coupling this task to those search changes. TASK-43 separately owns TT-assisted PV extension.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
