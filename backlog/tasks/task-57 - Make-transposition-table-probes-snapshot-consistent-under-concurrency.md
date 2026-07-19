@@ -1,11 +1,11 @@
 ---
 id: TASK-57
 title: Rewrite the transposition table around clustered verified snapshots
-status: Changes Requested
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-19 00:00'
-updated_date: '2026-07-19 13:28'
+updated_date: '2026-07-19 13:45'
 labels:
   - transposition-table
   - performance
@@ -289,5 +289,72 @@ Assessment (not blocking, recorded so the rework stays bounded):
   belong to the same act; they will be checked at approval, and I expect no
   further verification work beyond re-running the required checks on the new
   target.
+---
+
+author: @codex
+created: 2026-07-19 13:45
+---
+Reviewer-authored fix
+Branch: task-57-tt-clustered-snapshots
+Previous implementation: fe46d6d81bde8e685f0c69b174805fd629b0c82d
+New implementation target: aa55cd18a5eb3f0a5e83b6bc6ec1e3b4e0e37e1f
+Resolved findings: REV-1-01, REV-1-02, REV-1-03
+
+Authored by the reviewer under explicit human authorisation, because the three
+findings were comment-only and a full rework round was not worth the latency.
+This means the usual independence guarantee does not hold for these changes: the
+person who raised the findings also fixed them. Approval is therefore deferred to
+a fresh review session or to the human owner, and I have not moved the task to
+Ready to Merge.
+
+Resolutions:
+- REV-1-01: the AC# prefixes are gone from all four test doc comments in tt.rs.
+  Nothing else changed; each sentence after the prefix already stood alone.
+- REV-1-02: the stride comment now states what the code relies on — the stride is
+  at least one, so the visited indices are distinct, and the last sits within a
+  stride of the end so the sample spans the allocation. The false power-of-two
+  claim is gone.
+- REV-1-03: hash_probes says what it sums again, and now records the non-obvious
+  part: hash_collisions is excluded because it counts a subset of the hits, so
+  adding it would double-count those probes.
+
+Additional change, requested by the human owner as a fly-by on the non-blocking
+observation in the previous review comment:
+
+Drop for SearchHandle cancelled the worker but did not join it. Every current
+caller waits explicitly, so nothing was broken, but it left the transposition
+table's ownership boundary resting on caller discipline: a handle dropped rather
+than waited detached a worker that still held a clone of the table, and the next
+clear_hash would panic on Arc::get_mut whenever it won the race. Drop now cancels
+and joins, which makes "no search is running" structural.
+
+The join always terminates and costs nothing on any existing path:
+- cancellation is checked on the search hot path;
+- neither channel the worker writes on its way out can block it (events is
+  unbounded; the completion channel has capacity for the one message ever sent);
+- no current caller drops a live handle, so no existing path reaches the join at
+  all. It is a backstop against a future one, not a change to today's control flow.
+- the join result is discarded deliberately: there is no consumer for the outcome
+  in Drop, and a panicking worker must not panic the dropping thread, which during
+  unwinding would abort the process.
+
+This strengthens AC#6 rather than expanding scope: that criterion asks the API to
+enforce the ownership boundary that keeps active searches from being invalidated
+accidentally, and clear_hash's exclusive reference only delivers that if no worker
+can outlive its handle.
+
+Verification on aa55cd1:
+- cargo fmt --check: clean
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean on a
+  clean CARGO_TARGET_DIR, no warnings
+- cargo test --workspace: 280 passed, 0 failed, 2 ignored (both pre-existing).
+  Engine tests went 230 -> 231 with the new test.
+- New test has teeth, verified rather than assumed: with Drop reverted to
+  cancel-without-join, dropping_a_search_handle_releases_the_table_for_a_later_clear
+  fails with "the hash cannot be cleared while a search still holds the table" at
+  search.rs:139. Restored, it passes. That also confirms the hazard was reachable
+  in practice, not merely theoretical.
+- No behavioural change to the transposition table itself; the earlier round-robin
+  measurement against base 9b7bf33 still describes this target.
 ---
 <!-- COMMENTS:END -->
