@@ -1,11 +1,11 @@
 ---
 id: TASK-64.1
 title: Track ply explicitly and introduce a per-ply search stack
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-19 13:30'
-updated_date: '2026-07-19 16:38'
+updated_date: '2026-07-19 18:40'
 labels:
   - search
   - architecture
@@ -44,14 +44,14 @@ This refactor should be behaviour-preserving. The search test suite in search.rs
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Ply from root is passed explicitly through the main search and quiescence rather than derived from search depth, and no code computes ply by subtracting depth from iteration depth
-- [ ] #2 Search depth uses a signed type and may be reduced to or below zero without underflow, entering quiescence on that condition
-- [ ] #3 A per-ply search stack exists with slots for at least static evaluation, the move played, and an excluded move, and is indexed by ply
-- [ ] #4 Killer moves are indexed by ply and remain correct when siblings at the same ply are searched at different depths
-- [ ] #5 The principal variation is indexed by ply, and a node whose depth exceeds the nominal iteration depth neither panics nor writes another ply row
-- [ ] #6 Quiescence receives a ply argument, whether or not a cap is applied to it
-- [ ] #7 A regression test exercises a node searched at greater depth than its nominal iteration depth and asserts no panic and a legal reported principal variation
-- [ ] #8 The existing search test suite passes without modification to its assertions
+- [x] #1 Ply from root is passed explicitly through the main search and quiescence rather than derived from search depth, and no code computes ply by subtracting depth from iteration depth
+- [x] #2 Search depth uses a signed type and may be reduced to or below zero without underflow, entering quiescence on that condition
+- [x] #3 A per-ply search stack exists with slots for at least static evaluation, the move played, and an excluded move, and is indexed by ply
+- [x] #4 Killer moves are indexed by ply and remain correct when siblings at the same ply are searched at different depths
+- [x] #5 The principal variation is indexed by ply, and a node whose depth exceeds the nominal iteration depth neither panics nor writes another ply row
+- [x] #6 Quiescence receives a ply argument, whether or not a cap is applied to it
+- [x] #7 A regression test exercises a node searched at greater depth than its nominal iteration depth and asserts no panic and a legal reported principal variation
+- [x] #8 The existing search test suite passes without modification to its assertions
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -106,4 +106,52 @@ Verification:
 New tests: search::tests::a_node_searched_past_the_nominal_horizon_still_reports_a_legal_pv, search::tests::a_depth_reduced_below_zero_hands_over_to_quiescence, three killer::tests ply-indexing tests, two pv_table::tests covering plies beyond the table
 Known failures: none
 ---
+
+author: @claude
+created: 2026-07-19 18:40
+---
+Review verdict: APPROVED
+
+Implementation target: ea17ad7 (immutable; the only later commit, 9705ed5, touches the task file alone, and `git diff ea17ad7 HEAD -- ':!backlog'` is empty)
+Base: c55508b
+Branch/worktree: task-64.1-explicit-ply-search-stack, /Users/seabo/seaborg-worktrees/task-64.1-explicit-ply-search-stack
+
+Repository-required checks, run on the target rather than trusted from the handoff:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: exit 0, zero warnings. Re-run with a clean CARGO_TARGET_DIR to rule out a cached result; engine relinted from scratch, still clean. No new #[allow] anywhere in the diff.
+- cargo test --workspace: pass, 250 engine tests / 0 failed / 2 ignored. All seven new tests observed running and green.
+
+Acceptance criteria, all proven:
+1/6. Signatures thread `ply` through search/search_inner/quiesce/quiesce_inner/quiesce_evasions from root 0. `grep -rn search_depth engine/src/` returns only an unrelated test name, so the subtraction cannot be reintroduced.
+2. `a_depth_reduced_below_zero_hands_over_to_quiescence` drives depths 0, -1 and -7 and asserts each equals a pure quiescence search.
+3. `StackEntry` carries eval, mov and excluded, held as `Box<[StackEntry; MAX_PLY]>` and indexed by ply; written on every node the suite exercises.
+4. Three killer tests cover same-ply sharing, non-leakage to neighbouring plies, and the root/out-of-reach cases. Depth is no longer an input to the table at all, so the sibling-depth hazard is structurally gone.
+5/7. `a_node_searched_past_the_nominal_horizon_still_reports_a_legal_pv` searches at depth 6 against a table sized for 3, asserting no panic, pv.len() <= 3 and full PV legality; `plies_beyond_the_table_neither_panic_nor_disturb_the_reported_line` covers the table directly. Confirmed non-vacuous: base has `self.search_depth - depth` (search.rs:674, u8 underflow) and `clear_at`'s `k = m - d` (usize underflow), so this scenario genuinely panicked before.
+8. The search-suite diff is confined to call sites gaining a ply argument and deleted `search_depth` setup lines. No assertion changed.
+
+Independent correctness checks:
+- `PVTable::copy_to` bounds hold at the worst case ply = plies-2 (plies^2 - plies + 1 <= plies^2); the deepest row has len 1, so it never reads a child row that does not exist.
+- The old-to-new index remapping is exact: killer draft d -> data[d-1] with size 20 becomes ply d -> data[d] with size 21, preserving reach over plies 1..=20.
+- `should_razor`'s `252 * depth * depth` cannot overflow i16 on a negative depth because Step 5 (depth <= 0 -> quiescence) precedes Step 7, so it only ever sees 1..=6.
+- `tt_draft` saturates downwards and is identity over the reachable range, and Step 4's `Depth::from(e.depth()) >= depth` is identity for depth >= 1, so TT behaviour is unchanged.
+
+Behaviour preservation, measured: base built in a throwaway worktree and depth-8 searches run through both binaries on startpos, Kiwipete and 8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1. Node counts, scores, PVs and hashfull are identical at every iteration; only time/nps differ.
+
+Performance: round-robin `cargo bench --bench search`, three rounds alternating base and target. Taking the minimum per configuration as BENCHMARKS.md prescribes, base 40.030 / 39.499 us against target 40.948 / 40.402 us, i.e. +2.3% on both configurations. That is below the documented 42.26 us investigate threshold and inside the ~3% run-to-run drift band BENCHMARKS.md records for this machine, which was not idle during measurement. The deadline gap, the figure that document says to watch, is preserved: 0.53 us at base against 0.55 us at target, so the TASK-41 clock throttle is intact. Recorded here for attribution rather than treated as a regression; the cost is consistent with the two per-node stack writes this task exists to introduce.
+
+Non-blocking observations, not defects and deliberately not filed as follow-up tasks:
+- The `ply + 1 >= MAX_PLY` handover returns before `clear_at(ply)`. That is safe only because `PVTable::new` takes a u8, so plies <= 255 < MAX_PLY and the clear would no-op regardless. Raising MAX_PLY or widening PVTable would turn the skipped clear into a stale-row bug.
+- That same handover counts the node through both `visit_node` and `visit_q_node`. Cosmetic, and unreachable without an iteration depth near 255.
+- `stack[ply].eval` currently has no reader; razoring still uses the local. Expected, since the slot exists for later work.
+
+Comment quality: no comment in the diff cites a task ID, acceptance criterion, review finding ID or Backlog document, and the added comments state reasons rather than restating code.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Replaced the depth-derived ply with an explicit ply index threaded through the main search and quiescence, made depth a signed `Depth = i16` that enters quiescence at `depth <= 0`, and added a `MAX_PLY` per-ply `SearchStack` (static eval, move played, excluded move). `KillerTable` and `PVTable` are now ply-indexed; the PV table stores rows in forward order and no-ops above its nominal ply count, so an extended subtree neither panics nor writes another ply's row. `Search::search_depth` and the `search_depth - depth` subtraction are deleted outright.
+
+Verified at ea17ad7: cargo fmt --check, cargo clippy --workspace --all-targets --all-features -- -D warnings (exit 0, zero warnings, re-confirmed with a clean CARGO_TARGET_DIR), and cargo test --workspace (250 engine tests pass, including the seven new ply-indexing and past-horizon regression tests). Behaviour preservation was measured rather than assumed: depth-8 UCI searches on startpos, Kiwipete and 8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1 produce identical node counts, scores, PVs and hashfull at every iteration against base c55508b. Round-robin search benchmarking over three rounds shows +2.3%, below the 5% BENCHMARKS.md gate and inside that document's stated ~3% drift band, with the deadline gap preserved at ~0.5 us.
+<!-- SECTION:FINAL_SUMMARY:END -->
