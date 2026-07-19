@@ -39,12 +39,18 @@ target: rebasing rewrites its SHAs and voids the approval pinned to them.
 
 ## Integrate with compare-and-swap
 
-Perform the land from the primary worktree, against the live primary tip:
+Perform the land from the primary worktree, against the live primary tip. Build
+and verify the merge on a **detached HEAD**, so that primary never points at an
+unverified commit and an ejected trial can be abandoned rather than reversed:
 
 1. Read the current primary tip `T`.
-2. Create a non-fast-forward merge commit `M` of the approved target into `T`.
-   The approved SHA stays intact as a parent; `M` is the integrated artifact
-   that gets verified. On a textual conflict, abort the merge and eject (below).
+2. Detach at `T` (`git checkout --detach <T>`), then create the non-fast-forward
+   merge commit `M` of the approved target there. **Primary must not move at
+   this step**: do not run `git merge` with primary checked out, even though the
+   resulting commit graph would be identical, because that advances primary to
+   an unverified commit and turns step 4 into a no-op. The approved SHA stays
+   intact as a parent; `M` is the integrated artifact that gets verified. On a
+   textual conflict, abort the merge, return to primary, and eject (below).
 3. Run the repository-required checks on `M`: `cargo fmt --check`,
    `cargo clippy --workspace --all-targets --all-features -- -D warnings`, and
    `cargo test --workspace`. Strict Clippy is a gate, not advisory: warnings on
@@ -60,9 +66,14 @@ Perform the land from the primary worktree, against the live primary tip:
    against the recorded base per `BENCHMARKS.md`. A repeatable regression beyond
    its thresholds is a failing result; differences within Criterion's confidence
    interval are noise.
-4. Re-read the primary tip. **If it still equals `T`**, advance primary to `M`.
+4. Re-read the primary tip. **If it still equals `T`**, advance primary to `M`
+   by fast-forward (`git checkout <primary> && git merge --ff-only <M>`).
    **If it moved**, discard `M` and restart from step 1 against the new tip; the
    verification against a stale tip is void.
+
+Because `M` is built detached, discarding it is `git checkout <primary>` and
+nothing else. If you find yourself needing `git reset --hard` to undo a trial,
+primary was advanced too early and step 2 was not followed.
 
 Only a clean merge whose integrated checks and benchmarks pass may advance
 primary. Textual cleanliness plus passing tests is the bar; a semantically
@@ -98,7 +109,8 @@ overlap re-review is a future enhancement, not part of this skill.
 
 For a textual conflict, or failing integrated checks or benchmarks:
 
-1. Do not advance primary. Discard the trial merge.
+1. Do not advance primary. Discard the trial merge by returning to primary
+   (`git checkout <primary>`); the detached `M` is simply abandoned.
 2. Append a concise merge-failure comment on the task branch with the primary
    tip tested, the failing command, and its evidence.
 3. Move the task to `Changes Requested` and leave the branch and worktree clean
