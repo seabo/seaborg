@@ -1,6 +1,7 @@
-use super::{Board, CastlingRights, Piece, Player, Position, Square, State, Zobrist};
+use super::{Board, CastlingRights, Piece, PieceType, Player, Position, Square, State, Zobrist};
 
 use crate::bb::Bitboard;
+use crate::precalc::boards::pawn_attacks_from;
 
 pub const START_POSITION: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
@@ -96,9 +97,36 @@ impl Position {
         };
 
         pos.set_state();
+        pos.canonicalize_ep_square();
         pos.set_zobrist();
 
         Ok(pos)
+    }
+
+    /// Drops an en-passant target that no enemy pawn can capture onto.
+    ///
+    /// `make_move_unchecked` only records an en-passant square when the double-pushed pawn is
+    /// actually attackable, but FEN input is accepted verbatim, and the notation is routinely
+    /// written with the target filled in after every double push regardless. Without this, a
+    /// position parsed from such a FEN and the identical position reached by playing moves hash
+    /// differently, splitting one position across two transposition-table identities (TASK-58).
+    ///
+    /// This must run before `set_zobrist`, so that the canonical square is the one hashed.
+    fn canonicalize_ep_square(&mut self) {
+        let Some(ep) = self.ep_square else {
+            return;
+        };
+
+        // `turn` is the side that may capture; the pawn that double-pushed belongs to the other.
+        // The predicate matches `make_move_unchecked`: squares a pawn of the pushing side standing
+        // on the target would attack are exactly the squares an enemy pawn must occupy to take it.
+        let capturable = (Bitboard(pawn_attacks_from(ep, !self.turn))
+            & self.piece_bb(self.turn, PieceType::Pawn))
+        .is_not_empty();
+
+        if !capturable {
+            self.ep_square = None;
+        }
     }
 
     pub fn start_pos() -> Self {
@@ -597,6 +625,8 @@ fn rank_file_to_idx(rank: u32, file: u8) -> u8 {
 mod tests {
     use super::*;
     use crate::init::init_globals;
+    use crate::mono_traits::{All as AllGen, Legal};
+    use crate::movelist::BasicMoveList;
 
     fn assert_invalid_fen(piece_positions: &str) {
         let fen = format!("{piece_positions} w - - 0 1");
@@ -630,5 +660,89 @@ mod tests {
         init_globals();
 
         assert!(Position::from_fen("4k3/8/8/8/8/8/8/4K3 w - - 0 1").is_ok());
+    }
+
+    /// AC#3. An en-passant target that no enemy pawn can capture onto cannot affect any legal move,
+    /// so it must not split the position into a second transposition identity (TASK-58).
+    #[test]
+    fn an_uncapturable_en_passant_target_is_dropped() {
+        init_globals();
+
+        // White's only pawn is on a2, nowhere near the d6 target, so no capture onto d6 exists.
+        let pos = Position::from_fen("4k3/8/8/3p4/8/8/P7/4K3 w - d6 0 1").unwrap();
+        assert_eq!(pos.ep_square(), None);
+
+        // The same board written without the redundant target must be the identical position.
+        let without = Position::from_fen("4k3/8/8/3p4/8/8/P7/4K3 w - - 0 1").unwrap();
+        assert_eq!(pos.zobrist(), without.zobrist());
+    }
+
+    /// AC#3. A target a pawn can actually capture onto changes the legal moves, so it must remain a
+    /// distinguishing part of the position's identity.
+    #[test]
+    fn a_capturable_en_passant_target_is_retained_and_distinguishing() {
+        init_globals();
+
+        // The white e5 pawn attacks d6, so the target is legally relevant.
+        let with = Position::from_fen("4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1").unwrap();
+        assert_eq!(with.ep_square(), Some(Square(43)));
+
+        let without = Position::from_fen("4k3/8/8/3pP3/8/8/8/4K3 w - - 0 1").unwrap();
+        assert_eq!(without.ep_square(), None);
+
+        assert_ne!(
+            with.zobrist(),
+            without.zobrist(),
+            "a usable en-passant right must remain distinguishable"
+        );
+    }
+
+    /// AC#3. The canonical identity is the one `make_move_unchecked` produces. A FEN that names the
+    /// target after a double push must hash the same as the position reached by playing that push.
+    #[test]
+    fn a_parsed_position_hashes_the_same_as_the_played_one() {
+        init_globals();
+
+        for (before, after_with_ep, ep_is_usable) in [
+            // Black has no pawn able to take on e3, so the notated target is redundant.
+            (
+                "4k3/8/8/8/8/8/4P3/4K3 w - - 0 1",
+                "4k3/8/8/8/4P3/8/8/4K3 b - e3 0 1",
+                false,
+            ),
+            // Black's d4 pawn attacks e3, so the target is a real capturing right.
+            (
+                "4k3/8/8/8/3p4/8/4P3/4K3 w - - 0 1",
+                "4k3/8/8/8/3pP3/8/8/4K3 b - e3 0 1",
+                true,
+            ),
+        ] {
+            let mut played = Position::from_fen(before).unwrap();
+            let moves = played.generate::<BasicMoveList, AllGen, Legal>();
+            let double_push = moves
+                .iter()
+                .find(|m| format!("{m}").contains("e2e4"))
+                .copied()
+                .expect("the double push must be available");
+            played.make_move(&double_push);
+
+            let parsed = Position::from_fen(after_with_ep).unwrap();
+
+            assert_eq!(
+                parsed.ep_square().is_some(),
+                ep_is_usable,
+                "canonical en-passant square wrong for {after_with_ep}"
+            );
+            assert_eq!(
+                played.ep_square(),
+                parsed.ep_square(),
+                "en-passant square disagreed for {after_with_ep}"
+            );
+            assert_eq!(
+                played.zobrist(),
+                parsed.zobrist(),
+                "played and parsed positions hashed differently for {after_with_ep}"
+            );
+        }
     }
 }
