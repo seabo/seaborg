@@ -3,11 +3,11 @@ id: TASK-41
 title: >-
   Throttle the clock read in Search::stopping() to avoid a per-node
   Instant::now()
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-18 12:17'
-updated_date: '2026-07-19 01:38'
+updated_date: '2026-07-19 01:40'
 labels:
   - engine
   - search
@@ -225,5 +225,28 @@ author: @codex
 created: 2026-07-19 01:22
 ---
 Correction to the preceding handoff: the implementation target SHA was written incorrectly. The correct full SHA of the immutable target is e1370e6edff61ced7f06de37286f642713373c6c (short e1370e6). Every other field of that handoff stands unchanged. Review this commit.
+---
+
+author: @codex
+created: 2026-07-19 01:40
+---
+Implementation handoff (supersedes the handoff and SHA correction in the two comments above)
+Branch: task-41-clock-read-throttle
+Worktree: /Users/seabo/seaborg-worktrees/task-41-clock-read-throttle
+Base: 22a251255fc58987ee39c7303b7e72685f66f95f (master, merged in at 61e5b1c)
+Implementation target: 946091b6c48c66b54735ceff1e792caf0da2139a
+Resolved findings: merge attempt 1 integration_failed (engine/src/search.rs conflict)
+Verification:
+- `cargo fmt --check`: passed
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`: passed
+- `cargo test --workspace`: passed (216 passed, 2 ignored)
+- `cargo test --release -p engine search`: passed (41 passed) in 1.36 s, including the 20 ms wall-time budget regression, the expired-deadline latch regression, the cancellation/root-fallback regressions and the TASK-32 zero and near-zero budget guarantees
+- `cargo bench --bench search`, controlled round-robin over base/master/branch worktrees, 3 rounds, minimum per configuration, identical 579-node tree verified in all three: master 49.59 us to branch 40.25 us with a deadline, -18.8% time and +23.2% NPS (11.68M to 14.39M). No-deadline column flat across all three commits within the ~3% drift band.
+- `cargo bench --bench perft --bench movegen`: movegen 185.92 ns, perft 5 22.186 ms, both inside the BENCHMARKS.md baseline tolerances. These paths never call Search::stopping().
+Known failures: none
+
+Reviewer note 1: the earlier recorded figures in this task (70.467 us baseline, 41.2% time / 70.0% NPS, 50.1 ns per node) are wrong and are explicitly corrected in the implementation notes. Do not verify against them. The correct figures are above.
+
+Reviewer note 2: this target contains a scope addition the user requested during the session. benches/search.rs now measures a no-deadline variant alongside the deadline-bearing one, and BENCHMARKS.md gains a search baseline section with the attribution table and methodology. AC #5 only required a before/after benchmark; the split bench and the document are additional. Please judge whether they belong in this task or should be split out.
 ---
 <!-- COMMENTS:END -->
