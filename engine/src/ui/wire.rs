@@ -98,6 +98,11 @@ fn write_engine_limit(out: &mut String, limit: SearchLimit) {
             write_key(out, &mut first, "plies");
             let _ = write!(out, "{plies}");
         }
+        SearchLimit::Nodes(nodes) => {
+            write_string(out, "nodes");
+            write_key(out, &mut first, "nodes");
+            let _ = write!(out, "{nodes}");
+        }
         // Not reachable through `parse_engine_limit`, but the CLI default could name it and a
         // snapshot must stay total.
         SearchLimit::Infinite => write_string(out, "infinite"),

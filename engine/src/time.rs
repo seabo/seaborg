@@ -75,6 +75,7 @@ pub enum TimingMode {
     Timed(TimeControl),
     MoveTime(u64),
     Depth(u8),
+    Nodes(u64),
     Infinite,
 }
 

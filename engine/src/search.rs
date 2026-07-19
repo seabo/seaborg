@@ -101,6 +101,14 @@ pub enum SearchLimit {
     Depth(u8),
     /// Search until the given amount of wall-clock time has elapsed.
     Time(Duration),
+    /// Search until the given number of nodes has been visited.
+    ///
+    /// Unlike a time or depth budget this is reproducible: the same position under the same
+    /// budget on the same build visits the same nodes and returns the same move, because the count
+    /// does not depend on machine speed, concurrent load, or the debug/release split. That is why
+    /// it is the conventional budget for self-play data generation and for A/B testing search
+    /// changes, and it is the meaning of the UCI `go nodes` parameter.
+    Nodes(u64),
     /// Search until explicitly cancelled.
     Infinite,
 }
@@ -242,13 +250,20 @@ impl SearchEngine {
         // block the worker thread on its way out.
         let (finished_tx, finished_rx) = bounded(1);
         let join = std::thread::spawn(move || {
-            let (depth, deadline) = match limit {
-                SearchLimit::Depth(depth) => (depth, None),
-                SearchLimit::Time(duration) => (MAX_DEPTH, Some(Instant::now() + duration)),
-                SearchLimit::Infinite => (MAX_DEPTH, None),
+            let (depth, deadline, node_limit) = match limit {
+                SearchLimit::Depth(depth) => (depth, None, None),
+                SearchLimit::Time(duration) => (MAX_DEPTH, Some(Instant::now() + duration), None),
+                SearchLimit::Nodes(nodes) => (MAX_DEPTH, None, Some(nodes)),
+                SearchLimit::Infinite => (MAX_DEPTH, None, None),
             };
-            let mut search =
-                Search::with_events(position, &thread_cancellation.0, deadline, &table, events);
+            let mut search = Search::with_events(
+                position,
+                &thread_cancellation.0,
+                deadline,
+                node_limit,
+                &table,
+                events,
+            );
             let result = search.run::<Master>(depth);
             let outcome = if thread_cancellation.is_cancelled() {
                 SearchOutcome::Cancelled(result)
@@ -541,6 +556,11 @@ pub struct Search<'engine> {
     stopping: &'engine AtomicBool,
     /// Time to at which to end search.
     stop_time: Option<Instant>,
+    /// Total node count at which to end search, if a node budget was set. Honoured on the same
+    /// footing as the time deadline: suppressed until the guaranteed first ply completes, so a
+    /// budget too small to finish a ply still returns a searched move rather than the unsearched
+    /// fallback.
+    node_limit: Option<u64>,
     /// Node count at the most recent deadline sample. `usize::MAX` means that a sampled deadline
     /// expired and remains latched while the search unwinds. Only the comparatively expensive
     /// clock read is throttled; the cancellation flag is still read on every call.
@@ -576,23 +596,25 @@ impl<'engine> Search<'engine> {
         stop_time: Option<Instant>,
         tt: &'engine Table,
     ) -> Self {
-        Self::build(pos, flag, stop_time, tt, None)
+        Self::build(pos, flag, stop_time, None, tt, None)
     }
 
     fn with_events(
         pos: Position,
         flag: &'engine AtomicBool,
         stop_time: Option<Instant>,
+        node_limit: Option<u64>,
         tt: &'engine Table,
         events: Sender<SearchEvent>,
     ) -> Self {
-        Self::build(pos, flag, stop_time, tt, Some(events))
+        Self::build(pos, flag, stop_time, node_limit, tt, Some(events))
     }
 
     fn build(
         pos: Position,
         flag: &'engine AtomicBool,
         stop_time: Option<Instant>,
+        node_limit: Option<u64>,
         tt: &'engine Table,
         events: Option<Sender<SearchEvent>>,
     ) -> Self {
@@ -606,6 +628,7 @@ impl<'engine> Search<'engine> {
             history_draws: 0,
             stopping: flag,
             stop_time,
+            node_limit,
             last_deadline_check_nodes: None,
             events,
             stack: Box::new([StackEntry::default(); MAX_PLY]),
@@ -1137,6 +1160,18 @@ impl<'engine> Search<'engine> {
 
         if !self.min_search_complete {
             return false;
+        }
+
+        // The node budget is gated exactly like the time deadline above: only the completed first
+        // ply releases it, so a budget too small to finish a ply returns a searched move rather
+        // than the unsearched fallback. Unlike the clock read it needs no throttling — the node
+        // count is already read on every call — and the comparison is monotonic, so once the
+        // budget is reached every later check during the unwind agrees without a latch.
+        if self
+            .node_limit
+            .is_some_and(|limit| self.trace.all_nodes_visited() as u64 >= limit)
+        {
+            return true;
         }
 
         let Some(stop_time) = self.stop_time else {
@@ -2879,6 +2914,7 @@ mod tests {
                 Position::from_fen("2k5/8/b1p5/Pq2r1p1/8/5PpP/3p2P1/Q2R2K1 b - - 1 61").unwrap(),
                 &flag,
                 None,
+                None,
                 &table,
                 sender,
             );
@@ -2910,6 +2946,7 @@ mod tests {
             Position::from_fen("2k5/8/b1p5/Pq2r1p1/8/5PpP/3p2P1/Q2R2K1 b - - 1 61").unwrap(),
             &flag,
             None,
+            None,
             &table,
             sender,
         );
@@ -2931,7 +2968,7 @@ mod tests {
         let flag = AtomicBool::new(false);
         let table = Table::new(1);
         let (sender, events) = unbounded();
-        let search = Search::with_events(position, &flag, None, &table, sender);
+        let search = Search::with_events(position, &flag, None, None, &table, sender);
 
         search.emit_current_move(7, &current_move, 4);
 
@@ -3180,6 +3217,136 @@ mod tests {
         assert!(
             elapsed <= budget + Duration::from_millis(100),
             "{budget:?} search exceeded deadline tolerance: {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn the_node_limit_is_suppressed_until_the_first_ply_completes() {
+        core::init::init_globals();
+
+        let position = Position::start_pos();
+        let flag = AtomicBool::new(false);
+        let table = Table::new(1);
+        // The budget is already spent (zero nodes), and the root fallback is established, but only
+        // the completed first ply may release the node-based abort — so a budget too small to
+        // finish a ply returns a searched move rather than the unsearched fallback.
+        let mut search = Search::new(position, &flag, None, &table);
+        search.node_limit = Some(0);
+        search.root_fallback_ready = true;
+
+        assert!(!search.stopping());
+
+        search.min_search_complete = true;
+        assert!(search.stopping());
+    }
+
+    #[test]
+    fn cancellation_under_a_node_limit_is_not_gated_on_the_budget() {
+        core::init::init_globals();
+
+        let position = Position::start_pos();
+        let flag = AtomicBool::new(true);
+        let table = Table::new(1);
+        // A budget far larger than anything the search will visit, and no completed first ply. The
+        // node limit is checked only after the cancellation flag, and cancellation aborts as soon
+        // as the root fallback exists — so a `stop` must not wait for the budget or the first ply.
+        let mut search = Search::new(position, &flag, None, &table);
+        search.node_limit = Some(u64::MAX);
+        search.establish_root_fallback();
+        assert!(!search.min_search_complete);
+
+        assert!(
+            search.stopping(),
+            "cancellation must abort without waiting for the node budget"
+        );
+    }
+
+    #[test]
+    fn a_node_budget_below_one_ply_still_returns_a_legal_move() {
+        core::init::init_globals();
+
+        let position = Position::start_pos();
+        let engine = SearchEngine::new(1);
+        // One node cannot complete a ply, but the guaranteed-minimum search must run regardless,
+        // exactly as it does under a zero time budget.
+        let search = engine.start(position.clone(), SearchLimit::Nodes(1));
+        let outcome = search.wait();
+
+        assert!(matches!(outcome, SearchOutcome::Completed(_)));
+        let result = outcome.result().expect("a legal move must be returned");
+        assert!(result.depth >= 1);
+        let best_move = result
+            .best_move
+            .expect("non-terminal position has a legal move");
+        assert!(
+            position.valid_move(&best_move),
+            "returned move must be legal"
+        );
+    }
+
+    #[test]
+    fn a_node_budget_exhausted_mid_iteration_keeps_the_last_completed_iteration() {
+        core::init::init_globals();
+
+        let position = Position::start_pos();
+        let flag = AtomicBool::new(false);
+
+        // Measure the guaranteed first ply, then set a budget a couple of nodes beyond it. The node
+        // limit is suppressed until that ply completes, so the budget can only bind partway through
+        // the second iteration.
+        let baseline_table = Table::new(16);
+        let mut baseline = Search::new(position.clone(), &flag, None, &baseline_table);
+        let expected = baseline.run::<Master>(1).unwrap();
+        let first_ply_nodes = baseline.trace.all_nodes_visited();
+        let budget = (first_ply_nodes + 2) as u64;
+
+        let table = Table::new(16);
+        let mut search = Search::new(position.clone(), &flag, None, &table);
+        search.node_limit = Some(budget);
+        let result = search.run::<Master>(MAX_DEPTH).unwrap();
+
+        // The aborted second iteration is discarded; the completed first ply is what is returned.
+        assert_eq!(result, expected);
+        assert!(search.trace.all_nodes_visited() >= budget as usize);
+    }
+
+    #[test]
+    fn a_node_limited_search_is_reproducible_across_runs() {
+        core::init::init_globals();
+
+        // A position with a large quiescence tree, so a mid-search abort lands deep in the
+        // recursion where any nondeterminism would surface.
+        let position = Position::from_fen(QUIESCENCE_HEAVY_FEN).unwrap();
+        let budget = 5_000;
+
+        // Each run starts from a fresh table and cancellation flag, so nothing but the deterministic
+        // node visitation decides where the budget binds.
+        let run = || {
+            let flag = AtomicBool::new(false);
+            let table = Table::new(16);
+            let mut search = Search::new(position.clone(), &flag, None, &table);
+            search.node_limit = Some(budget);
+            let result = search.run::<Master>(MAX_DEPTH).unwrap();
+            (result, search.trace.all_nodes_visited())
+        };
+
+        let (first, first_nodes) = run();
+        let (second, second_nodes) = run();
+
+        assert_eq!(
+            first, second,
+            "the same build, position and budget must return the same move and score"
+        );
+        assert_eq!(
+            first_nodes, second_nodes,
+            "node visitation must be identical across runs"
+        );
+
+        // The budget genuinely bound rather than the search exhausting the depth first.
+        assert!(first_nodes >= budget as usize);
+        assert!(
+            first.depth < MAX_DEPTH,
+            "a {budget}-node budget cannot reach the maximum depth"
         );
     }
 
