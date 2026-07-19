@@ -1,11 +1,11 @@
 ---
 id: TASK-21
 title: Modernize and deduplicate the dependency graph
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-19 21:11'
+updated_date: '2026-07-19 21:15'
 labels:
   - dependencies
   - maintenance
@@ -42,3 +42,32 @@ The workspace carries duplicate major generations and several legacy direct depe
 3. Regenerate the lockfile, compile all targets, and resolve dependency-upgrade API or lint fallout without expanding product behavior.
 4. Review and document remaining cargo-tree duplicates, run workspace tests plus benchmark smoke/build coverage and all repository-required gates, then commit an immutable implementation and hand off for independent review.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Updated direct dependencies to current releases compatible with rustc 1.97.1, including clap 4.6.2, criterion 0.8.2, bitflags 2.13.1, rand 0.10.2, simple_logger 5.2.0, open 5.4.0, unicode-segmentation 1.13.3, and crossbeam-channel 0.5.16. Removed unused core separator/log and engine log declarations. Aliased the root package dependency as chess_core so clap 4 derive expansion can address Rust core without collision. Migrated rand, bitflags, and Criterion APIs. cargo tree --workspace --duplicates now reports only syn 2.0.119 and 3.0.0; both are transitive proc-macro dependencies through clap/zerocopy and serde/criterion respectively.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @codex
+created: 2026-07-19 21:15
+---
+Implementation handoff
+Branch: task-21-dependency-graph
+Worktree: /Users/seabo/seaborg-worktrees/task-21-dependency-graph
+Base: c7826f15b267cd89b0c1c02c97b5294f6ec9bf57
+Implementation target: ce88829883ddc6add2fb484cb8602c040853fff1
+Resolved findings: none
+Verification:
+- cargo fmt --check: passed
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: passed
+- cargo test --workspace: passed (335 passed, 2 ignored)
+- cargo bench --workspace --no-run: passed
+- cargo bench --workspace -- --test: passed (all benchmark targets reported Success)
+- cargo tree --workspace --duplicates: reviewed; only transitive syn 2/3 remain
+Known failures: none
+---
+<!-- COMMENTS:END -->
