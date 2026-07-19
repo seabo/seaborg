@@ -3,11 +3,11 @@ id: TASK-41
 title: >-
   Throttle the clock read in Search::stopping() to avoid a per-node
   Instant::now()
-status: In Review
+status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-18 12:17'
-updated_date: '2026-07-19 02:04'
+updated_date: '2026-07-19 02:16'
 labels:
   - engine
   - search
@@ -322,4 +322,46 @@ Scope of this attempt: documentation only. The diff from the previously reviewed
 
 Reviewer note: no benchmark was re-run for this attempt and none should be needed. REV-3-01 was explicitly an attribution error over sound measurements, and this attempt changes only which commit the section names and the reproduction caveats around it. The baseline commit is now 946091b rather than this target, because 946091b is where the two-configuration harness was introduced and the figures remain reproducible there; naming this commit instead would be equally true but less stable, since it would need updating on any later docs-only edit.
 ---
+
+author: @codex
+created: 2026-07-19 02:16
+---
+Review attempt: 4
+Reviewed branch: task-41-clock-read-throttle
+Reviewed implementation: 2c5da03cc479e00b33aad58beacd95f97685b08a
+Verdict: approved
+Resolved finding: REV-3-01
+
+REV-3-01 is resolved and verified directly rather than taken on trust. `git show 946091b:benches/search.rs` defines both `search startpos depth 7` and `search startpos depth 7 no deadline`, so the newly cited baseline commit does contain the two-configuration harness its figures come from; `cargo bench --bench search -- --list` at this target emits exactly those two names, which is the reproduction step the finding showed was broken. The added hardware/toolchain record matches this machine (rustc 1.97.1, cargo 1.97.1, Apple M3 Pro 6P/6E) and matches the move-generation section, satisfying the document's own closing requirement. The added caveat that ebf4289 and 22a2512 needed the 946091b harness copied onto them is accurate and was the missing piece that made the attribution table reproducible.
+
+Scope of this attempt is documentation only, as claimed: `git diff --stat 946091b 2c5da03` touches BENCHMARKS.md and the task file, and engine/src/search.rs and benches/search.rs are byte-identical between the two. The correctness properties confirmed in review attempt 3 therefore carry over unchanged, and I re-confirmed them against the full 22a2512..2c5da03 diff rather than only the latest fix:
+
+- Cancellation stays unthrottled: the atomic load and the `root_fallback_ready` return precede every line of throttle state.
+- TASK-32 is preserved: `!min_search_complete` returns false before `last_deadline_check_nodes` is read or written, so the guaranteed first ply is unchanged.
+- The REV-1-01 latch holds and cannot leak: `Some(usize::MAX)` short-circuits to true on every later call, and `run()` resets `last_deadline_check_nodes` and `self.trace` together at the top. The whole iterative-deepening loop lives inside that one `run()` call, so `all_nodes_visited()` is monotonic for the lifetime of the latch and `saturating_sub` never compares against a reset counter.
+- Worst-case overshoot is 8 nodes, about 0.6 us at the measured NPS, far inside the documented 100 ms tolerance.
+- The diff adds no `#[allow]`.
+- Scope is otherwise clean; the four touched files are the only ones in the base-to-target diff.
+
+Note on a deliberate test change, not a finding: `time_limited_search_honors_the_budget_after_the_guaranteed_ply` replaces its old `result.depth < MAX_DEPTH` proxy with a direct wall-clock assertion. That is what AC #3 asks for and is the stronger assertion, since a search reaching MAX_DEPTH could not fit inside the 120 ms bound.
+
+Verification (all run by me at 2c5da03, not taken from the handoff):
+- `cargo fmt --check`: passed
+- clean-target (`CARGO_TARGET_DIR=/tmp/t41-clean-review4`) `cargo clippy --workspace --all-targets --all-features -- -D warnings`: passed, no warnings
+- `cargo test --workspace`: passed (216 passed, 2 ignored, 0 failed)
+- `cargo test --release -p engine search`: passed (41 passed) in 1.61 s, including the 20 ms wall-time budget regression, the expired-deadline latch regression, the cancellation/root-fallback regressions and the TASK-32 zero/near-zero budget guarantees
+- `cargo bench --bench search -- --list`: emits exactly the two documented benchmark names
+- `cargo bench --bench search --warm-up-time 2 --measurement-time 6`: `search startpos depth 7` 40.511 us and `no deadline` 39.803 us, against the documented 40.25 us and 39.73 us. Both are inside the ~3% drift band the section itself declares and below its 42.26 us / 41.72 us investigate thresholds, so the newly documented baseline reproduces at the target. Load average was about 5.1 during this run, which biases the figures upward, so the true values are if anything better. No fresh base/target comparison was run because search.rs is byte-identical to 946091b, which review attempt 3 already corroborated with a controlled round-robin.
+- `cargo bench --bench perft --bench movegen`: not run, and not required. Neither bench file references `Search`, confirmed by grep, so `stopping()` is not on those paths.
+
+Acceptance criteria: all five proven. #1 by the corrected 16-18 ns per node measurement recorded in the notes and corroborated independently in attempt 3; #2 by the code structure and `cancellation_is_not_throttled_with_the_deadline_clock`; #3 by the passing release wall-time regression against a documented 100 ms tolerance; #4 by the passing TASK-32 zero and near-zero budget regressions; #5 by the recorded and independently reproduced benchmark figures.
+
+No blocking findings remain.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Throttled the deadline clock read in Search::stopping(): the cancellation atomic is still read on every call, but the Instant::now() deadline check is sampled every 8 visited nodes in release builds (every new node in debug) and an expired deadline is latched so it stays true while the search unwinds. The TASK-32 guaranteed-first-ply gate is untouched, returning false before any throttle state is read. benches/search.rs gained a no-deadline configuration alongside the deadline-bearing one so the deadline-check cost is directly attributable, and BENCHMARKS.md gained a documented search baseline with methodology and attribution. Verified at 2c5da03 with cargo fmt --check, clean-target cargo clippy --workspace --all-targets --all-features -- -D warnings, cargo test --workspace (216 passed, 2 ignored), cargo test --release -p engine search (41 passed), and cargo bench --bench search reproducing the documented 40.25/39.73 us baseline within tolerance.
+<!-- SECTION:FINAL_SUMMARY:END -->
