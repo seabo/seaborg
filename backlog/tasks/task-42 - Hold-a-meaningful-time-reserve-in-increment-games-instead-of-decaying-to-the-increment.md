@@ -3,9 +3,11 @@ id: TASK-42
 title: >-
   Hold a meaningful time reserve in increment games instead of decaying to the
   increment
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-18 13:18'
+updated_date: '2026-07-19 03:49'
 labels:
   - engine
   - time
@@ -63,3 +65,14 @@ Do not regress TASK-7 (overflow safety), TASK-32 (guaranteed legal move under a 
 - [ ] #4 TASK-7 overflow safety, TASK-32 guaranteed-legal-move behavior and TASK-38 proportional opening allocation all still hold, evidenced by their existing regression tests passing
 - [ ] #5 A FastChess self-play match against the pre-change build at 1+0.01 and 2+0.05 shows a non-negative Elo delta, zero time forfeits, zero illegal moves, and a reduction in depth-1 moves played after move 60
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Make the reserve an explicit policy in engine/src/time.rs: hold back RESERVE_INCREMENT_MOVES (10) moves' worth of increment from the clock, and spend only the surplus above that reserve over est_remaining_moves. Reserve = inc * RESERVE_INCREMENT_MOVES, so it is zero in sudden death (no flat buffer, TASK-38's proportionality property is untouched) and scales with the increment that funds the steady state.
+2. Give the reserve a restoring force: below the reserve, allot usable/RESERVE_INCREMENT_MOVES, which is provably less than the increment there, so the clock climbs back toward the reserve instead of creeping past it under search overshoot.
+3. Keep MOVE_OVERHEAD, MAX_CLOCK_SHARE_DIVISOR and the .max(1) floor exactly as they are, so TASK-7 overflow safety and TASK-32 zero-budget behavior are unaffected.
+4. Add a full-game simulation test over 1+0.01, 2+0.05 and 10+0.1 asserting the clock at moves 60, 100 and 140 stays above the reserve, plus a late-game test showing an allocation materially above the increment when the clock is above the reserve.
+5. Update the two exact-value assertions in the TASK-38 opening test to the new policy's numbers and re-point increment_contributes_to_allocation at a clock above the reserve; the properties they encode are preserved.
+6. Run cargo fmt --check, strict clippy, cargo test --workspace, then a FastChess self-play match against the pre-change build at 1+0.01 and 2+0.05 for AC5.
+<!-- SECTION:PLAN:END -->
