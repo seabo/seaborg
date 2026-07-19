@@ -3,7 +3,7 @@ id: TASK-58
 title: >-
   Make transposition-table identity safe for rule- and history-sensitive
   positions
-status: In Review
+status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-19 00:00'
@@ -32,10 +32,10 @@ The Zobrist key identifies board state, side to move, castling rights, and en-pa
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The transposition-table policy prevents the known halfmove-clock incompatibility by using position-intrinsic leaf evaluation, suppressing history-sensitive writes, and conservatively gating reads near the fifty-move boundary; the fixed horizon allowance is accepted as an engineering safeguard rather than a proof against every theoretical extension sequence
-- [ ] #2 Repetition-derived values are not stored as position-intrinsic TT information, and the known rare read-side graph-history limitation is explicitly documented and accepted without widening or re-keying the packed transposition-table entry
-- [ ] #3 Positions that differ only by an en-passant target which cannot affect any legal move have the same canonical transposition identity, while a legally relevant en-passant right remains distinguished
-- [ ] #4 Regression tests cover materially different halfmove clocks, read gating near the fifty-move boundary, suppression of repetition- and fifty-move-derived writes, continued storage of history-independent values, and capturable versus non-capturable en-passant targets
+- [x] #1 The transposition-table policy prevents the known halfmove-clock incompatibility by using position-intrinsic leaf evaluation, suppressing history-sensitive writes, and conservatively gating reads near the fifty-move boundary; the fixed horizon allowance is accepted as an engineering safeguard rather than a proof against every theoretical extension sequence
+- [x] #2 Repetition-derived values are not stored as position-intrinsic TT information, and the known rare read-side graph-history limitation is explicitly documented and accepted without widening or re-keying the packed transposition-table entry
+- [x] #3 Positions that differ only by an en-passant target which cannot affect any legal move have the same canonical transposition identity, while a legally relevant en-passant right remains distinguished
+- [x] #4 Regression tests cover materially different halfmove clocks, read gating near the fifty-move boundary, suppression of repetition- and fifty-move-derived writes, continued storage of history-independent values, and capturable versus non-capturable en-passant targets
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -212,4 +212,31 @@ created: 2026-07-19 03:38
 ---
 Human scope decision, 2026-07-19: accept the implementation as a pragmatic correctness improvement. Full mathematical immunity to every unbounded check-extension sequence and fully history-keyed repetition-safe TT reads are not required for TASK-58. The remaining cases are documented, rare search-cache misvaluation risks; widening or re-keying the packed TT entry would add disproportionate memory, performance, and implementation complexity. Acceptance criteria have been revised to describe the policy actually required. No follow-up task is requested unless engine testing later demonstrates practical impact.
 ---
+
+author: @codex
+created: 2026-07-19 03:38
+---
+Review attempt: 3
+Reviewed branch: task-58-tt-identity-rule-sensitive
+Reviewed implementation: a76792d
+Verdict: approved
+
+The human scope decision in comment #6 supersedes the absolute guarantees underlying REV-1-01 and REV-2-01. Against the revised acceptance criteria, the implementation provides the accepted conservative halfmove-clock policy, suppresses repetition- and fifty-move-derived writes, documents the rare read-side repetition limitation, and canonicalises en-passant identity using legal availability. No implementation changed after the reviewed target.
+
+Verification:
+- cargo fmt --check: pass
+- clean CARGO_TARGET_DIR cargo clippy --workspace --all-targets --all-features -- -D warnings: pass
+- cargo test --workspace: pass (43 core, 197 engine, 5 build_metadata, 1 doc; 2 ignored)
+- cargo test --release -p engine perft_suite: pass
+- focused clock, repetition-write, history-independent-write, Zobrist, and en-passant regression tests: pass within workspace suite
+- base-to-target git diff --check: pass
+- implementation target ancestry and task-only post-target commits: pass
+- interleaved benchmarks recorded by implementation: perft about +0.8%, depth-7 search about +1.9%, within the 5% investigation threshold
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Made transposition-table reuse materially safer by making leaf evaluation clock-independent, suppressing history-sensitive writes, conservatively gating reads near the fifty-move boundary, and canonicalising en-passant identity by legal availability. The accepted rare read-side repetition and unbounded-extension limitations are documented. Verified with formatting, clean strict Clippy, the full workspace suite, release perft, focused regressions, and relative benchmarks within the 5% threshold. Approved implementation: a76792d.
+<!-- SECTION:FINAL_SUMMARY:END -->
