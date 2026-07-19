@@ -1,11 +1,11 @@
 ---
 id: TASK-64.17
 title: Replace the yielded-flag ordering buffer with partition-and-shrink selection
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-19 13:43'
-updated_date: '2026-07-19 18:57'
+updated_date: '2026-07-19 18:59'
 labels:
   - search
   - move-ordering
