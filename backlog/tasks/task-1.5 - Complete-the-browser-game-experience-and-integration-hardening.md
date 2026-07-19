@@ -5,7 +5,7 @@ status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-17 15:40'
-updated_date: '2026-07-19 01:05'
+updated_date: '2026-07-19 01:10'
 labels: []
 dependencies:
   - TASK-1.4
@@ -111,5 +111,21 @@ Implementation target: f3052af30e8f2db2c7e2264d8ba96f154f775c26 — the last com
 Every commit after f3052af on this branch touches only backlog/tasks/task-1.5, which the following verifies:
   git diff --stat f3052af..HEAD
 Review the branch diff 4d48c35..f3052af for the implementation.
+---
+
+author: @claude
+created: 2026-07-19 01:10
+---
+Retraction: the 'engine misses a mate in one' note in my handoff is wrong. There is no such bug, and no follow-up task should be created for it.
+
+I claimed that after 1.f3 a6 2.g4 the engine missed 2...Qh4#. Qh4 is not legal in that position: the d8-h4 diagonal runs d8-e7-f6-g5-h4 and e7 still holds a black pawn, so the queen cannot leave d8 at all. The engine played a6a5 because the mate I asserted did not exist. I asserted it without checking that the queen could reach h4.
+
+The real fool's mate line is 1.f3 e5 2.g4, where e5 opens the diagonal. In that position (rnbqkbnr/pppp1ppp/8/4p3/6P1/5P2/PPPPP2P/RNBQKBNR b KQkq g3 0 2) the engine finds it immediately:
+  go depth 1     -> info depth 1 score mate 1 nodes 33 pv d8h4 / bestmove d8h4
+  go movetime 1000 -> info depth 255 score mate 1 nodes 7907 pv d8h4 / bestmove d8h4
+
+Mate detection and mate scoring are correct. The supporting 'go movetime 1000 returned only depth 1, 20 nodes' observation was also an artifact: I piped quit immediately after go and truncated the search. Given its time the same position reaches depth 9 over 3M nodes.
+
+Nothing in the implementation or its verification depends on this claim; only the handoff note was wrong.
 ---
 <!-- COMMENTS:END -->
