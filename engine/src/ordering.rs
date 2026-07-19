@@ -589,7 +589,7 @@ mod tests {
     use core::movelist::BasicMoveList;
     use core::position::Position;
 
-    use rand::*;
+    use rand::RngExt;
 
     struct Perft {
         pos: Position,
@@ -698,23 +698,23 @@ mod tests {
         }
 
         fn score_captures(&mut self, captures: Scorer) {
-            let mut rng = rand::thread_rng();
+            let mut rng = rand::rng();
 
             for (mov, score) in captures {
                 if mov.is_capture() {
                     // Assign a random number from -10_000 to +10_000.
-                    *score = rng.gen_range(-10_000..10_000);
+                    *score = rng.random_range(-10_000..10_000);
                 }
             }
         }
 
         fn score_quiets(&mut self, quiets: Scorer) {
-            let mut rng = rand::thread_rng();
+            let mut rng = rand::rng();
 
             for (mov, score) in quiets {
                 if mov.is_capture() {
                     // Assign a random number from -10_000 to +10_000.
-                    *score = rng.gen_range(-10_000..10_000);
+                    *score = rng.random_range(-10_000..10_000);
                 }
             }
         }

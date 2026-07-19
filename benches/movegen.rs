@@ -1,8 +1,9 @@
-use core::init::init_globals;
-use core::mono_traits::{All, Legal};
-use core::movelist::BasicMoveList;
-use core::position::Position;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use chess_core::init::init_globals;
+use chess_core::mono_traits::{All, Legal};
+use chess_core::movelist::BasicMoveList;
+use chess_core::position::Position;
+use criterion::{criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
 
 fn gen_moves(position: &Position) -> BasicMoveList {
     position.generate::<BasicMoveList, All, Legal>()

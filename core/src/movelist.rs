@@ -4,7 +4,7 @@
 /// because it is (believed to be) the case that no chess position has more than
 /// 218 legal moves, so we will never overflow the bounds if used correctly.
 ///
-use rand::{thread_rng, Rng};
+use rand::seq::IndexedRandom;
 
 use std::fmt;
 use std::fmt::Debug;
@@ -49,8 +49,7 @@ pub type BasicMoveList = HotArrayVec<Move, MAX_MOVES>;
 impl<T, const N: usize> HotArrayVec<T, N> {
     #[inline]
     pub fn random(&self) -> Option<&T> {
-        let mut rng = thread_rng();
-        rng.choose(self)
+        self.choose(&mut rand::rng())
     }
 }
 
@@ -215,8 +214,7 @@ impl<T, const N: usize> ArrayVec<T, N> {
     /// Return a random element from the list.
     #[inline]
     pub fn random(&self) -> Option<&T> {
-        let mut rng = thread_rng();
-        rng.choose(self.as_slice())
+        self.as_slice().choose(&mut rand::rng())
     }
 
     /// Push a `T` to the end of the list.

@@ -1,5 +1,6 @@
-use core::bb::Bitboard;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use chess_core::bb::Bitboard;
+use criterion::{criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let bb = Bitboard::new(0x00000000C0000000);
