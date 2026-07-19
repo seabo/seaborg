@@ -1,11 +1,11 @@
 ---
 id: TASK-45
 title: Honor UCI cancellation after recording a legal root fallback
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-18 18:28'
-updated_date: '2026-07-19 00:28'
+updated_date: '2026-07-19 00:31'
 labels:
   - engine
   - search
@@ -81,6 +81,8 @@ and `cancellation_is_suppressed_only_until_the_root_fallback_exists`. Renamed an
 `the_time_deadline_is_suppressed_until_the_first_ply_completes`, since the two signals are no
 longer gated together. `quiescence_abort_with_legal_evasions_is_not_checkmate` now arms
 `root_fallback_ready` instead of `min_search_complete`.
+
+Rework after merge attempt 1: merged primary 4d48c359, which includes TASK-46's aborted-subtree propagation. Resolved all three conflicts by retaining root_fallback_ready/root_fallback alongside the test-only abort_after_nodes hook. Search::stopping now gives the deterministic test hook unconditional priority, honors explicit cancellation once root_fallback_ready is set, and continues to gate only the wall-clock deadline on min_search_complete. Existing TASK-45, TASK-46, TASK-37, and replacement-search focused regressions all pass; no additional test was needed because the combined semantics are directly covered.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -145,6 +147,28 @@ Three conflicting regions, all against TASK-46 (merge d279898, approved target 3
 3. `stopping()` (~line 899): a genuine semantic overlap, not mere adjacency. TASK-46 rewrote the body to short-circuit on `abort_after_nodes` and return `stopping || deadline`; TASK-45 rewrote the same body to return `root_fallback_ready` when the cancellation flag is set and to gate only the time deadline on `min_search_complete`. Rework must combine both: keep the TASK-46 test hook and node-limit short-circuit, and keep TASK-45's split gating (cancellation gated on `root_fallback_ready`, deadline gated on `min_search_complete`).
 
 The primary branch was not advanced; the trial merge was aborted and primary remains at 4d48c35. Merge current primary into the task branch, resolve the above, re-run the required checks, and return the task to In Review — the approval pinned to c303c08 is void once the implementation changes.
+---
+
+author: @codex
+created: 2026-07-19 00:31
+---
+Implementation handoff
+Branch: task-45-honor-cancellation-after-root-fallback
+Worktree: /Users/seabo/seaborg-worktrees/task-45-honor-cancellation-after-root-fallback
+Base: 4d48c35917a2955550f5a0bbc6a0120d3b0cc957
+Implementation target: 7532ef9b0c1def755484e3456aba5073618d41b0
+Resolved findings: merge attempt 1 conflict recorded in comment #3 (no REV ID)
+Verification:
+- cargo test -p engine cancellation -- --nocapture: pass (3)
+- cargo test -p engine time_limited_search -- --nocapture: pass (1)
+- cargo test -p engine search::tests::mid_subtree_abort_keeps_the_last_completed_iteration -- --nocapture: pass (1)
+- cargo test -p engine search::tests::aborted_child_cannot_score_or_write_its_parent -- --nocapture: pass (1)
+- cargo test -p engine engine::tests::stdin_eof_ -- --nocapture: pass (2)
+- cargo test -p engine replacement_stop_and_quit_are_serialized -- --nocapture: pass (1)
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass, no warnings
+- cargo test --workspace: pass (35 core + 173 engine passed, 2 ignored + 5 integration + 1 doctest; 0 failed)
+Known failures: none
 ---
 <!-- COMMENTS:END -->
 
