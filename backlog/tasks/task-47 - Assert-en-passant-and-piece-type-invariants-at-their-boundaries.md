@@ -1,9 +1,11 @@
 ---
 id: TASK-47
 title: Assert en passant and piece-type invariants at their boundaries
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-18 18:30'
+updated_date: '2026-07-19 20:09'
 labels: []
 dependencies: []
 references:
@@ -35,3 +37,13 @@ Assertions on hot paths must be debug-only so release move generation is unaffec
 - [ ] #5 Added hot-path assertions are debug-only and the movegen and perft benchmarks show no release regression
 - [ ] #6 All four TODO comments at the listed sites are removed
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. movegen.rs generate + has-any-move ep paths: replace the two TODOs with a debug_assert_eq! that ep_square's rank equals PL::player().relative_rank(5) (the 6th rank from the mover's perspective). Debug-only so release movegen is unaffected.
+2. fen.rs parse_ep_square: take the side to move, parse the square, then reject (FenError) any square whose rank does not match turn.relative_rank(5) — 6th rank for White to move, 3rd for Black. Update the from_fen call site to pass turn. Remove the TODO.
+3. movegen.rs moves_bb: replace the PieceType::None bare panic!()+TODO with unreachable!() plus a comment explaining no PieceTrait impl produces None, so the arm is statically unreachable.
+4. Add fen tests: at least one rejected inconsistent-ep FEN and one accepted valid one.
+5. Run fmt/clippy/test; confirm no release movegen/perft regression (assertions are debug-only).
+<!-- SECTION:PLAN:END -->
