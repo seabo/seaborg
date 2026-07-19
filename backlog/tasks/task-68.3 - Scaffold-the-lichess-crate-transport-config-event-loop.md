@@ -1,11 +1,11 @@
 ---
 id: TASK-68.3
 title: 'Scaffold the lichess crate: transport, config, event loop'
-status: In Progress
+status: In Review
 assignee:
   - '@george'
 created_date: '2026-07-19 22:33'
-updated_date: '2026-07-19 23:15'
+updated_date: '2026-07-19 23:29'
 labels: []
 dependencies:
   - TASK-68.1
@@ -54,3 +54,40 @@ Out of scope: playing moves in a game (TASK-68.4) and reconnect/backoff hardenin
 4. Unit tests: event dispatch vs inline NDJSON fixtures via a FakeTransport recording accept/decline (no network), policy matrix, config defaults+parse, account bot detection, engine_options mapping.
 5. Run cargo fmt --check, clippy -D warnings, cargo test --workspace.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented the lichess crate scaffold.
+
+Layout (lichess/src): error (Error/Result), config (Config/ChallengePolicy/EngineSettings with serde(default, deny_unknown_fields) + validation + Config::load with default path seaborg-lichess.toml and --config override), transport (Transport trait + ureq HttpTransport, bearer token, NDJSON line streaming), event (serde internally-tagged Event/TimeControl using rename_all + rename_all_fields; parse_line tolerates blank keepalive lines; #[serde(other)] tolerates unknown event types), policy (evaluate challenge vs policy + games cap -> Accept/Decline{reason} with Lichess reason strings), account (Account is_bot + games_played), client (LichessClient<T: Transport> typed methods account/accept/decline/upgrade/event_stream), game (GameHandoff seam using engine::options::EngineOpt + core Position::start_pos), run (load_token, run->serve, upgrade with confirmation closure, run_event_loop respecting max-games cap and non-bot detection).
+
+Design decisions:
+- Transport abstraction is the network seam. Tests use a FakeTransport that replays inline NDJSON and records POSTs, so challenge handling runs with no network (AC#6).
+- Upgrade takes a confirmation closure; the CLI supplies the stdin 'yes' prompt (src/cmdline.rs), keeping lib free of terminal I/O and unit-testable. Upgrade requires zero games (Error::UpgradeIneligible) and reports AlreadyBot/Cancelled/Upgraded.
+- Non-bot accounts are rejected in serve() before streaming, with an error message pointing at 'seaborg lichess upgrade' (AC#5).
+- ureq 3 default TLS backend is rustls (rustls/rustls-webpki pulled into Cargo.lock). ureq and toml are single-consumer, so they live in lichess/Cargo.toml; serde/serde_json are inherited from the workspace per manifest policy.
+- Added lichess/seaborg-lichess.example.toml documenting every field and its default (AC#3).
+
+Deferred (out of scope): playing moves (TASK-68.4) and reconnect/backoff (TASK-68.5). GameStart currently logs and builds the GameHandoff without spawning a runner.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @george
+created: 2026-07-19 23:29
+---
+Implementation handoff
+Branch: task-68.3-scaffold-lichess-crate
+Worktree: /Users/seabo/seaborg-worktrees/task-68.3-scaffold-lichess-crate
+Base: f8cc36b621173b93ea93d78f9e43c0ec66d68767
+Implementation target: 8f028cdc704f705b0cfb25fa873db6136f83d229
+Resolved findings: none
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (no warnings)
+- cargo test --workspace: pass (lichess 33; engine 269 + 45 + 19 + 1; 0 failed; 2 pre-existing engine tests ignored)
+Known failures: none
+---
+<!-- COMMENTS:END -->
