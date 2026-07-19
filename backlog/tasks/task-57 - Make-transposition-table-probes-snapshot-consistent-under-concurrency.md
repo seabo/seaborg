@@ -5,7 +5,7 @@ status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-19 00:00'
-updated_date: '2026-07-19 12:55'
+updated_date: '2026-07-19 13:12'
 labels:
   - transposition-table
   - performance
@@ -128,5 +128,49 @@ Verification:
 Known failures: none
 
 Note for the reviewer: master has moved since this branch was cut. TASK-55 merged as 909d54e after this base commit, so the branch is behind primary. Nothing here touches the search-documentation change TASK-55 made, but the merge gate will be integrating against a newer tip than the measured base.
+---
+
+author: @codex
+created: 2026-07-19 13:12
+---
+Note for the reviewer: key width was queried, and the density arithmetic in my handoff notes was understated. Corrected below. No code changed; the implementation target remains fe46d6d81bde8e685f0c69b174805fd629b0c82d.
+
+AC#3 permits either a signature or a full key, provided accidental acceptance is negligible. I chose the full 64-bit key. A 32-bit key is the obvious cheaper point on that curve and is worth an explicit opinion from someone who did not write this.
+
+The entry is key + data, and the data is 48 bits with nothing meaningful to give back:
+
+  move 16 (15 needed plus the null flag) + score 16 (+/-30,000 range)
+  + depth 8 (MAX_DEPTH is 255, so all eight are real) + bound 2 + age 6 = 48
+
+That fixes the available layouts:
+
+  key 64 (as implemented): 16-byte entry, 4 per 64-byte cluster
+  key 32:                  12-byte entry, 5 per 64-byte cluster (1.25x)
+  key 16 (previous table):  8-byte entry, 8 per 64-byte cluster (2x)
+
+So a 32-bit key buys about 25% more entries, not 2x. Doubling capacity needs an 8-byte entry, which forces the key back to 16 bits and reinstates exactly the failure mode this task removed. The 12-byte variant also needs the cluster restructured into separate key and data arrays, because a u32 next to a u64 pads back to 16 bytes.
+
+Collision rates, at a 1GB table and roughly 10^9 probes per search, four slot comparisons per probe:
+
+  key 16: order 10^4-10^5 wrong-position acceptances per search, only partly filtered by move
+          legality, and not filtered at all for the move-less bounds the search cuts off against
+  key 32: order 1 per search, comparable to genuine Zobrist collisions
+  key 64: effectively zero
+
+The case for switching now looks weak to me, but I am not the right person to close it:
+
+- Time to depth is already level and node count already improved 2.5%. A further 25% of entries
+  plausibly buys around 1% more nodes, which is below the noise floor this machine measured at
+  (individual runs of one binary ranged 882-1510 ms).
+- It is a re-implementation, not a constant change: new packing, structure-of-arrays clusters, the
+  tear protocol re-verified against a 32-bit check, and the full benchmark set re-run.
+
+There is a larger lever than key width, and it is a policy question rather than an optimisation.
+Stockfish stores a 16-bit key in 10-byte entries and tolerates rare torn reads, which yields 6
+entries per cluster - better than either option above. This task deliberately went the other way:
+AC#2 and AC#13 require that a hybrid entry can never be consumed. Whether that guarantee is worth
+its density is a decision for a human, and reversing it should not be smuggled into this task.
+
+Flagged rather than actioned, and no follow-up task created: the scope call is not mine to make.
 ---
 <!-- COMMENTS:END -->
