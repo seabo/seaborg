@@ -412,6 +412,10 @@ pub struct Search<'engine> {
     stopping: &'engine AtomicBool,
     /// Time to at which to end search.
     stop_time: Option<Instant>,
+    /// Node count at the most recent deadline sample. `usize::MAX` means that a sampled deadline
+    /// expired and remains latched while the search unwinds. Only the comparatively expensive
+    /// clock read is throttled; the cancellation flag is still read on every call.
+    last_deadline_check_nodes: Option<usize>,
     /// Whether the guaranteed-minimum search (one full ply) has completed. The time deadline is
     /// suppressed until this is set, so a search always returns a completed legal root move even
     /// when the allotted budget is zero or already elapsed.
@@ -468,6 +472,7 @@ impl<'engine> Search<'engine> {
             trace: Tracer::new(),
             stopping: flag,
             stop_time,
+            last_deadline_check_nodes: None,
             events,
             search_depth: 0,
             depth_reached: 0,
@@ -481,6 +486,7 @@ impl<'engine> Search<'engine> {
 
     pub fn run<T: Thread>(&mut self, d: u8) -> Option<SearchResult> {
         self.trace = Tracer::new();
+        self.last_deadline_check_nodes = None;
 
         assert!(d > 0);
 
@@ -875,7 +881,7 @@ impl<'engine> Search<'engine> {
     }
 
     #[inline(always)]
-    fn stopping(&self) -> bool {
+    fn stopping(&mut self) -> bool {
         #[cfg(test)]
         if self
             .abort_after_nodes
@@ -889,7 +895,9 @@ impl<'engine> Search<'engine> {
         // Explicit cancellation (`stop`, `quit`, stdin EOF, or a command replacing the active
         // search) aborts as soon as the root fallback exists, which is before the first node is
         // searched. A legal bestmove is therefore always available without waiting for the depth-1
-        // quiescence tree, whose size has no practically small bound (TASK-39).
+        // quiescence tree, whose size has no practically small bound (TASK-39). This check reads an
+        // atomic bool, which is cheap enough to run on every call and must stay unthrottled so that
+        // cancellation responsiveness is unaffected.
         //
         // The time deadline is still suppressed until the guaranteed-minimum search (the first full
         // ply) completes, so a zero or already-elapsed budget returns a searched move rather than
@@ -898,11 +906,39 @@ impl<'engine> Search<'engine> {
             return self.root_fallback_ready;
         }
 
-        self.min_search_complete
-            && self
-                .stop_time
-                .map(|s| s <= std::time::Instant::now())
-                .unwrap_or(false)
+        if !self.min_search_complete {
+            return false;
+        }
+
+        let Some(stop_time) = self.stop_time else {
+            return false;
+        };
+
+        // Unlike the cancellation flag, the deadline needs a clock read, which is expensive enough
+        // relative to a node to matter in the innermost loops. Optimized searches therefore sample
+        // every eight nodes. Debug builds search orders of magnitude more slowly, so sample each
+        // node there to keep wall-clock tests and developer runs responsive while still avoiding
+        // repeated reads within the same node.
+        const DEADLINE_CHECK_INTERVAL_NODES: usize = if cfg!(debug_assertions) { 1 } else { 8 };
+        let nodes = self.trace.all_nodes_visited();
+        if let Some(last) = self.last_deadline_check_nodes {
+            // An expired deadline stays latched: the many stopping checks made while the search
+            // unwinds must all agree, rather than the throttle letting search resume mid-unwind.
+            if last == usize::MAX {
+                return true;
+            }
+            if nodes.saturating_sub(last) < DEADLINE_CHECK_INTERVAL_NODES {
+                return false;
+            }
+        }
+
+        if stop_time <= Instant::now() {
+            self.last_deadline_check_nodes = Some(usize::MAX);
+            true
+        } else {
+            self.last_deadline_check_nodes = Some(nodes);
+            false
+        }
     }
 
     /// Returns the static evaluation, from the perspective of the side to move.
@@ -1877,24 +1913,68 @@ mod tests {
     }
 
     #[test]
+    fn cancellation_is_not_throttled_with_the_deadline_clock() {
+        core::init::init_globals();
+
+        let flag = AtomicBool::new(false);
+        let table = Table::new(1);
+        let mut search = Search::new(
+            Position::start_pos(),
+            &flag,
+            Some(Instant::now() + Duration::from_secs(60)),
+            &table,
+        );
+        search.establish_root_fallback();
+        search.min_search_complete = true;
+
+        // The deadline sample taken here throttles subsequent clock reads, but it must not defer
+        // the cancellation flag: the very next check at the same node has to observe the stop.
+        assert!(!search.stopping());
+        flag.store(true, Ordering::Relaxed);
+        assert!(
+            search.stopping(),
+            "cancellation must be read at the same node"
+        );
+    }
+
+    #[test]
+    fn expired_deadline_stays_latched_at_the_same_node() {
+        core::init::init_globals();
+
+        let flag = AtomicBool::new(false);
+        let table = Table::new(1);
+        let mut search = Search::new(Position::start_pos(), &flag, Some(Instant::now()), &table);
+        search.min_search_complete = true;
+
+        assert!(search.stopping(), "the elapsed deadline must stop search");
+        assert!(
+            search.stopping(),
+            "deadline expiry must remain latched during same-node unwind checks"
+        );
+    }
+
+    #[test]
     fn time_limited_search_honors_the_budget_after_the_guaranteed_ply() {
         core::init::init_globals();
 
+        let budget = Duration::from_millis(20);
+        let started = Instant::now();
         let engine = SearchEngine::new(1);
-        let search = engine.start(
-            Position::start_pos(),
-            SearchLimit::Time(Duration::from_millis(20)),
-        );
+        let search = engine.start(Position::start_pos(), SearchLimit::Time(budget));
         let outcome = search.wait();
+        let elapsed = started.elapsed();
 
         // The search returns of its own accord (the deadline aborts it) rather than running to the
         // maximum depth, and it still reports a completed legal move.
         assert!(matches!(outcome, SearchOutcome::Completed(_)));
         let result = outcome.result().expect("a legal move must be returned");
         assert!(result.depth >= 1);
+        // Release deadline checks are at most 8 nodes apart (one node in debug builds). The
+        // additional 100 ms allows for a slow or descheduled CI worker while still catching a
+        // missed or excessively coarse sample.
         assert!(
-            result.depth < MAX_DEPTH,
-            "the budget must bound the search depth"
+            elapsed <= budget + Duration::from_millis(100),
+            "{budget:?} search exceeded deadline tolerance: {elapsed:?}"
         );
     }
 
