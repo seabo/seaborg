@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-18 23:42'
-updated_date: '2026-07-19 03:42'
+updated_date: '2026-07-19 03:44'
 labels:
   - engine
   - search
@@ -40,7 +40,7 @@ Decide deliberately between reinstating correct position-relative mate-distance 
 
 <!-- SECTION:PLAN:BEGIN -->
 1. Deliberately remove mate-distance pruning because position-relative mate scores have no root-distance bound to tighten; retain only node-score window normalization required for exact child-bound and infinity inputs.
-2. Remove the degenerate alpha >= beta early returns and rewrite search, quiescence, and Score documentation so the clamp is described solely as bound normalization.
-3. Add focused regression coverage proving out-of-band child windows are searched without returning invalid scores, then run mate-rich regressions and the debug wac.epd self-play test.
+2. Rewrite search, quiescence, and Score documentation so the clamp and collapsed-window return are described solely as bound sanitation, not mate-distance pruning.
+3. Retain focused regression coverage proving out-of-band child windows return valid in-band scores, then run mate-rich regressions and the debug wac.epd self-play test.
 4. Compare cargo bench --bench search against the base commit, run all repository-required checks, commit the implementation, and record the immutable review handoff.
 <!-- SECTION:PLAN:END -->
