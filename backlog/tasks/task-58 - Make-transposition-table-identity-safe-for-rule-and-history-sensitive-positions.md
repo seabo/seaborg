@@ -3,11 +3,11 @@ id: TASK-58
 title: >-
   Make transposition-table identity safe for rule- and history-sensitive
   positions
-status: In Review
+status: Changes Requested
 assignee:
   - '@codex'
 created_date: '2026-07-19 00:00'
-updated_date: '2026-07-19 03:09'
+updated_date: '2026-07-19 03:26'
 labels:
   - transposition-table
   - zobrist
@@ -168,5 +168,42 @@ Reviewer notes:
 - The previous round's warm-table clock test was replaced, not extended. It could not have caught the defect, which is what your reproduction step observed. The replacements seed the entry directly and drive a single NonPv node, and each was verified to fail with the gate disabled.
 - HORIZON_SLACK is a conservative allowance for quiescence and check extensions, not a proof of soundness; the doc comment says so. If you want a tighter argument, the alternative is bounding quiescence depth, which is a separate change.
 - Benchmarks were run this session, round-robin against base in a detached worktree: perft 5 about +0.8%, depth-7 search about +1.9%, consistent across rounds, well inside the 5% BENCHMARKS.md threshold. Numbers and method are in the implementation notes. Not compared against the BENCHMARKS.md table, which is from another session and commit.
+---
+
+author: @codex
+created: 2026-07-19 03:25
+---
+Review attempt: 2\nReviewed branch: task-58-tt-identity-rule-sensitive\nReviewed implementation: a76792d\nVerdict: changes_requested\n\nREV-1-01 [P1] Repetition-incompatible TT reads remain unguarded (still open)\nLocation: engine/src/search.rs:420-448 and engine/src/search.rs:686-711\nImpact: AC#2 and the incompatible-repetition portion of AC#4 remain unsatisfied. Write suppression prevents storing a value after this search observes a repetition, but an entry computed in a history with no repetition is still accepted in a different history where a descendant repeats a pre-root position. The implementation documentation explicitly identifies and accepts this gap; that is not enforcement of the acceptance criterion.\nReproduction: Seed or warm an exact entry in a history-independent visit, then revisit the same keyed node with a path history in which a descendant reaches threefold. Step 4 accepts the entry using key, depth, bound, and halfmove clock only, before that descendant is searched.\nExpected: Gate or key TT reads using compatible repetition state, and add compatible/incompatible repetition-history regression tests that exercise the cutoff read path.\n\nREV-2-01 [P1] Fixed horizon slack does not guarantee halfmove-clock compatibility\nLocation: engine/src/search.rs:982-1007\nImpact: AC#1 says an incompatible clock result cannot be reused. The 16-ply allowance is explicitly documented as not being a proof, while quiescence and check extensions can follow an unbounded quiet-evasion sequence. A cutoff can therefore be admitted when the fifty-move boundary is reachable beyond depth + 16, reusing a value that ignores the draw.\nReproduction: clock_permits_tt_reuse returns true whenever clock + entry_depth + 16 < 100, even though the implementation states that the actual forcing horizon has no tight static bound. The focused tests validate only arithmetic around the chosen constant, not the claimed incompatibility guarantee.\nExpected: Use a sound compatibility condition or key, or conservatively refuse reuse whenever the unbounded extension horizon could reach the rule, and cover the boundary with a behavioral regression.\n\nVerification:\n- cargo fmt --check: pass\n- clean CARGO_TARGET_DIR cargo clippy --workspace --all-targets --all-features -- -D warnings: pass\n- cargo test --workspace: pass (43 core, 197 engine, 5 build_metadata, 1 doc; 2 ignored)\n- cargo test --release -p engine perft_suite: pass\n- git diff --check base..target: pass\n- implementation target ancestry and task-only handoff commit: pass
+---
+
+author: @codex
+created: 2026-07-19 03:26
+---
+Review attempt: 2
+Reviewed branch: task-58-tt-identity-rule-sensitive
+Reviewed implementation: a76792d
+Verdict: changes_requested
+
+REV-1-01 [P1] Repetition-incompatible TT reads remain unguarded (still open)
+Location: engine/src/search.rs:420-448 and engine/src/search.rs:686-711
+Impact: AC#2 and the incompatible-repetition portion of AC#4 remain unsatisfied. Write suppression prevents storing a value after this search observes a repetition, but an entry computed in a history with no repetition is still accepted in a different history where a descendant repeats a pre-root position. The implementation documentation explicitly identifies and accepts this gap; that is not enforcement of the acceptance criterion.
+Reproduction: Seed or warm an exact entry in a history-independent visit, then revisit the same keyed node with a path history in which a descendant reaches threefold. Step 4 accepts the entry using key, depth, bound, and halfmove clock only, before that descendant is searched.
+Expected: Gate or key TT reads using compatible repetition state, and add compatible/incompatible repetition-history regression tests that exercise the cutoff read path.
+
+REV-2-01 [P1] Fixed horizon slack does not guarantee halfmove-clock compatibility
+Location: engine/src/search.rs:982-1007
+Impact: AC#1 says an incompatible clock result cannot be reused. The 16-ply allowance is explicitly documented as not being a proof, while quiescence and check extensions can follow an unbounded quiet-evasion sequence. A cutoff can therefore be admitted when the fifty-move boundary is reachable beyond depth + 16, reusing a value that ignores the draw.
+Reproduction: clock_permits_tt_reuse returns true whenever clock + entry_depth + 16 < 100, even though the implementation states that the actual forcing horizon has no tight static bound. The focused tests validate only arithmetic around the chosen constant, not the claimed incompatibility guarantee.
+Expected: Use a sound compatibility condition or key, or conservatively refuse reuse whenever the unbounded extension horizon could reach the rule, and cover the boundary with a behavioral regression.
+
+Verification:
+- cargo fmt --check: pass
+- clean CARGO_TARGET_DIR cargo clippy --workspace --all-targets --all-features -- -D warnings: pass
+- cargo test --workspace: pass (43 core, 197 engine, 5 build_metadata, 1 doc; 2 ignored)
+- cargo test --release -p engine perft_suite: pass
+- git diff --check base..target: pass
+- implementation target ancestry and task-only handoff commit: pass
+
+Formatting note: this supersedes comment #4, whose newlines were escaped by the CLI invocation.
 ---
 <!-- COMMENTS:END -->
