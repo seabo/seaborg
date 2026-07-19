@@ -1,9 +1,11 @@
 ---
 id: TASK-64.5
 title: Add aspiration windows to the iterative deepening loop
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-19 13:31'
+updated_date: '2026-07-19 22:50'
 labels:
   - search
   - strength
@@ -40,3 +42,14 @@ Mate scores are position-relative in this engine and clamped to the mate band by
 - [ ] #6 Node counts at fixed depth on a representative position set are reduced relative to the full-window baseline, with figures recorded in the implementation notes
 - [ ] #7 Measured with the TASK-27 strength-regression script, with results recorded in the implementation notes
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Add aspiration windows to iterative_deepening. Introduce ASPIRATION_MIN_DEPTH (below which, and for iteration 1, the full window is used, preserving the guaranteed first-ply contract) and an initial centipawn half-width delta.
+2. For iteration d >= min depth with a previous score, centre a window on the previous score. Re-search on fail-low (value<=alpha) or fail-high (value>=beta), widening geometrically. A bound whose delta exceeds a cap, or a fail that returns a mate score, snaps to the matching infinity so the loop terminates in a bounded number of re-searches and every returned score comes from a search whose window contained it.
+3. Mate/cp-band handling: a helper offsets a centipawn score by a delta and clamps into band; a mate (non-cp) score cannot be nudged by centipawns, so it opens the bound to infinity. Windows derived from a mate previous score fall back to the full window. Guarantees the returned score stays a node score (is_node_score).
+4. Abort handling: propagate None from any re-search so the iteration is discarded and its PV table restored (TASK-46 guarantee). Aspiration only runs after min_search_complete, so the first ply is never turned into an unbounded re-search sequence.
+5. Tests: unit test the window helper (cp widen/clamp, mate->infinity); regression test a forced-mate-at-root position searched to a depth that engages aspiration, asserting the correct mate node score; test that low-depth iterations still use the full window.
+6. Measure node counts at fixed depth on a representative position set vs the base commit (AC#6) and run the TASK-27 strength script (AC#7); record both in implementation notes.
+<!-- SECTION:PLAN:END -->
