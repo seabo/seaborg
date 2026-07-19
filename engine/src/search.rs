@@ -572,7 +572,30 @@ impl<'engine> Search<'engine> {
         self.root_fallback_ready = true;
     }
 
+    /// Wraps [`Self::search_inner`] with the same node-score check quiescence carries, so the
+    /// invariant is enforced wherever a score is produced rather than only in the subtree where
+    /// the excursion was first observed. Root scores reach `Display` on the UCI thread, and an
+    /// out-of-band one trips its parity assertion there.
     pub fn search<T: Thread, Node: NodeType>(
+        &mut self,
+        alpha: Score,
+        beta: Score,
+        depth: u8,
+    ) -> NodeResult {
+        let result = self.search_inner::<T, Node>(alpha, beta, depth);
+
+        if let Some(score) = result {
+            debug_assert!(
+                score.is_node_score(),
+                "search returned {score:?} outside the node score band \
+                 (window {alpha:?}..{beta:?}, depth {depth})",
+            );
+        }
+
+        result
+    }
+
+    fn search_inner<T: Thread, Node: NodeType>(
         &mut self,
         mut alpha: Score,
         mut beta: Score,
@@ -609,8 +632,17 @@ impl<'engine> Search<'engine> {
             // next ply are the worst and best possible mate values. Using `draft` here treats the
             // bounds as root-relative; those wrong-parity bounds can escape a cutoff and masquerade
             // as an exact root result.
-            alpha = std::cmp::max(Score::mate(0), alpha);
-            beta = std::cmp::min(Score::mate(1), beta);
+            //
+            // Both bounds are clamped at both ends, not just towards the middle. `child_bound` is
+            // exact, so a window at the very bottom of the band arrives here as
+            // `(Score(20_100), Score(20_101))`: entirely above anything a node can score. Clamping
+            // only inwards would leave `alpha` at 20_100 and return it, and the parent's
+            // `neg().inc_mate()` would turn that into an odd-ply negative mate — the wrong-parity
+            // score TASK-54 removed. Clamping outwards is free, because neither direction can
+            // discard an attainable score: `alpha` is returned as an upper bound and nothing
+            // exceeds `mate(1)`, `beta` as a lower bound and nothing falls below `mate(0)`.
+            alpha = alpha.clamp(Score::mate(0), Score::mate(1));
+            beta = beta.clamp(Score::mate(0), Score::mate(1));
             if alpha >= beta {
                 return Some(alpha);
             }
@@ -964,7 +996,27 @@ impl<'engine> Search<'engine> {
     }
 
     /// The quiescence search.
-    fn quiesce<T: Thread, Node: NodeType>(
+    ///
+    /// Wraps [`Self::quiesce_inner`] so that every exit from quiescence passes one check: the
+    /// score must lie in the band a node can actually hold. Quiescence returns `alpha` and `beta`
+    /// directly as fail-soft scores, so a window bound that escaped the encoding would become a
+    /// node score, and `Debug`/`Display` would render it as nonsense or trip their parity
+    /// assertions. See [`Score::is_node_score`].
+    fn quiesce<T: Thread, Node: NodeType>(&mut self, alpha: Score, beta: Score) -> NodeResult {
+        let result = self.quiesce_inner::<T, Node>(alpha, beta);
+
+        if let Some(score) = result {
+            debug_assert!(
+                score.is_node_score(),
+                "quiescence returned {score:?} outside the node score band \
+                 (window {alpha:?}..{beta:?})",
+            );
+        }
+
+        result
+    }
+
+    fn quiesce_inner<T: Thread, Node: NodeType>(
         &mut self,
         mut alpha: Score,
         mut beta: Score,
@@ -987,7 +1039,19 @@ impl<'engine> Search<'engine> {
             return Some(Score::zero());
         }
 
-        // Step 2. Load transposition table entry.
+        // Step 2. Mate distance pruning, on the same terms as `search`.
+        //
+        // Quiescence had no equivalent of this, which is what let the bound excursion compound:
+        // `child_bound` is exact, so `Score(20_101)` became the next ply's alpha, then
+        // `Score(-20_102)`, and so on. Quiescence returns `alpha` and `beta` directly as fail-soft
+        // scores, so those out-of-band bounds became node scores.
+        alpha = alpha.clamp(Score::mate(0), Score::mate(1));
+        beta = beta.clamp(Score::mate(0), Score::mate(1));
+        if alpha >= beta {
+            return Some(alpha);
+        }
+
+        // Step 3. Load transposition table entry.
         let (tt_entry, tt_hit) = {
             use super::tt::Probe::*;
             match self.tt.probe(&self.pos) {
@@ -1003,7 +1067,7 @@ impl<'engine> Search<'engine> {
             }
         };
 
-        // Step 3. Check for early TT cutoff.
+        // Step 4. Check for early TT cutoff.
         if !Node::pv() {
             let entry = tt_entry.read();
 
@@ -1039,7 +1103,7 @@ impl<'engine> Search<'engine> {
 
         let in_check = self.pos.in_check();
 
-        // Step 4. Static evaluation. Stand pat is not a legal option while in check.
+        // Step 5. Static evaluation. Stand pat is not a legal option while in check.
         if !in_check {
             let stand_pat = self.evaluate();
 
@@ -1058,7 +1122,7 @@ impl<'engine> Search<'engine> {
             return self.quiesce_evasions::<T, Node>(alpha, beta, &moves);
         }
 
-        // Step 5. Loop through all the moves until no moves remain or a beta cutoff occurs.
+        // Step 6. Loop through all the moves until no moves remain or a beta cutoff occurs.
         let mut moves = OrderedMoves::new();
         'move_loop: while moves.load_next_phase(QMoveLoader::from(self)) {
             for mov in &moves {
@@ -1719,6 +1783,154 @@ mod tests {
             crate::info::format_search_event(&SearchEvent::Progress(progress))
                 .contains("score mate 4")
         );
+    }
+
+    /// Sweep the 300-position Win At Chess tactical suite and format every root score, at the
+    /// depths where mate scores start appearing in quantity. This is the broad counterpart to the
+    /// targeted window tests: it is not looking for a specific value but for any score the search
+    /// can reach whose rendering panics, which is how TASK-54's parity violation surfaced. Debug
+    /// assertions must be live for it to mean anything, so run it on a debug build:
+    ///
+    /// ```text
+    /// cargo test -p engine -- --ignored wac_root_scores_format_without_panicking
+    /// ```
+    #[test]
+    #[ignore = "sweeps 900 searches; run explicitly when changing Score or the search window"]
+    fn wac_root_scores_format_without_panicking() {
+        core::init::init_globals();
+
+        let raw =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../suites/wac.epd"))
+                .expect("wac.epd must be readable");
+
+        // EPD records carry only the four placement fields, so the clocks are appended.
+        let positions: Vec<(String, String)> = raw
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                let fields: Vec<&str> = line.split_whitespace().collect();
+                let id = line
+                    .split("id \"")
+                    .nth(1)
+                    .and_then(|rest| rest.split('"').next())
+                    .unwrap_or("unknown")
+                    .to_string();
+                let fen = format!(
+                    "{} {} {} {} 0 1",
+                    fields[0], fields[1], fields[2], fields[3]
+                );
+                (id, fen)
+            })
+            .collect();
+
+        assert_eq!(positions.len(), 300, "the full WAC suite must be swept");
+
+        let mut formatted = 0;
+        for (id, fen) in &positions {
+            for depth in [4, 5, 6] {
+                let position = Position::from_fen(fen).unwrap();
+                let engine = SearchEngine::new(1);
+                let search = engine.start(position, SearchLimit::Depth(depth));
+                let events = search.events().clone();
+                let outcome = search.wait();
+
+                assert!(
+                    matches!(outcome, SearchOutcome::Completed(_)),
+                    "{id} depth {depth} did not complete",
+                );
+
+                for event in events.try_iter() {
+                    if let SearchEvent::Progress(progress) = &event {
+                        assert!(
+                            progress.score.is_node_score(),
+                            "{id} depth {depth} reported {:?}, outside the node score band",
+                            progress.score,
+                        );
+                        // `Display` carries the parity assertions; formatting is the check.
+                        let line = crate::info::format_search_event(&event);
+                        assert!(line.contains("score "), "{id} depth {depth}: {line}");
+                        formatted += 1;
+                    }
+                }
+            }
+        }
+
+        assert!(
+            formatted >= positions.len() * 3,
+            "expected at least one root score per search, got {formatted}",
+        );
+    }
+
+    /// The window `(Score(20_100), Score(20_101))` is not contrived: it is exactly what a child
+    /// receives when its parent searches the null window at the very bottom of the mate band,
+    /// since `child_bound` is exact and both ends of that window sit above the top of the band.
+    /// Every score is below such an alpha, so the node fails low and returns alpha as its
+    /// fail-soft bound. Returning the raw 20_100 put a value outside the node score band into the
+    /// parent, where `neg().inc_mate()` turned it into a positive mate at an even ply count — the
+    /// wrong-parity score that panics `Display` on the UCI thread (TASK-54).
+    #[test]
+    fn out_of_band_windows_do_not_leak_into_returned_scores() {
+        core::init::init_globals();
+
+        let out_of_band_alpha = Score::from_i16(20_100);
+        let out_of_band_beta = Score::from_i16(20_101);
+        assert_eq!(Score::mate(0).child_bound(), out_of_band_beta);
+        assert!(!out_of_band_alpha.is_node_score());
+        assert!(!out_of_band_beta.is_node_score());
+
+        for depth in [0, 1, 2] {
+            let flag = AtomicBool::new(false);
+            let table = Table::new(1);
+            let (sender, _events) = unbounded();
+            let mut search = Search::with_events(
+                Position::from_fen("2k5/8/b1p5/Pq2r1p1/8/5PpP/3p2P1/Q2R2K1 b - - 1 61").unwrap(),
+                &flag,
+                None,
+                &table,
+                sender,
+            );
+
+            // Entering below the root, so `draft` is measured from this node rather than from a
+            // root that was never searched.
+            search.search_depth = depth;
+
+            let value = search
+                .search::<Master, NonPv>(out_of_band_alpha, out_of_band_beta, depth)
+                .expect("an uncancelled search must produce a score");
+
+            assert!(
+                value.is_node_score(),
+                "depth {depth} returned {value:?}, outside the node score band",
+            );
+            // The parent's view has to be well formed too, since that is what reaches `Display`.
+            assert!(value.neg().inc_mate().is_node_score());
+        }
+    }
+
+    /// The same window, entered directly at quiescence. Quiescence is where the excursion used to
+    /// compound, because it had no mate distance pruning to absorb an out-of-band bound and it
+    /// returns `alpha` and `beta` themselves as fail-soft scores.
+    #[test]
+    fn quiescence_clamps_out_of_band_windows_into_the_node_score_band() {
+        core::init::init_globals();
+
+        let flag = AtomicBool::new(false);
+        let table = Table::new(1);
+        let (sender, _events) = unbounded();
+        let mut search = Search::with_events(
+            Position::from_fen("2k5/8/b1p5/Pq2r1p1/8/5PpP/3p2P1/Q2R2K1 b - - 1 61").unwrap(),
+            &flag,
+            None,
+            &table,
+            sender,
+        );
+
+        let value = search
+            .quiesce::<Master, NonPv>(Score::from_i16(20_100), Score::from_i16(20_101))
+            .expect("an uncancelled quiescence search must produce a score");
+
+        assert_eq!(value, Score::mate(1));
+        assert!(value.is_node_score());
     }
 
     #[test]
