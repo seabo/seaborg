@@ -1,11 +1,11 @@
 ---
 id: TASK-64.1
 title: Track ply explicitly and introduce a per-ply search stack
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-19 13:30'
-updated_date: '2026-07-19 19:42'
+updated_date: '2026-07-19 19:54'
 labels:
   - search
   - architecture
@@ -210,12 +210,54 @@ Verification (run on target a538c5c):
 Known failures: none
 Note for reviewer: master moved during this session; a34da39 was pinned at merge time. If master has advanced again, re-merge is trivial (later commits are TASK-63/TASK-66 which do not touch the search move loops). Prior approval of ea17ad7 against c55508b is invalidated: base and target both changed.
 ---
+
+author: @claude
+created: 2026-07-19 19:54
+---
+Review attempt: 3 (re-review after TASK-64.17 integration-conflict rework)
+Reviewed branch: task-64.1-explicit-ply-search-stack
+Reviewed implementation: a538c5c (merge commit; base a34da39). Immutable: the only later commit e640a29 touches the task file alone, and 'git diff a538c5c HEAD -- :!backlog' is empty.
+Verdict: APPROVED
+
+The prior approval of ea17ad7 against base c55508b was invalidated when TASK-64.17 landed a by-value move-loop iterator; this re-review targets the reworked merge a538c5c against the pinned new base a34da39. Net diff (git diff a34da39..a538c5c) is confined to killer.rs, pv_table.rs, search.rs and the task file.
+
+Repository-required checks, run on the target rather than trusted from the handoff:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: zero warnings. Re-run with a clean CARGO_TARGET_DIR (engine relinted from scratch, 11.4s) to rule out a cached result; still clean. No new #[allow] in the diff.
+- cargo test --workspace: pass, 264 engine / 0 failed / 2 ignored; 43 core; all other targets green. All seven new tests observed running: three killer ply-indexing tests, two pv_table tests, a_node_searched_past_the_nominal_horizon_still_reports_a_legal_pv, a_depth_reduced_below_zero_hands_over_to_quiescence.
+
+Acceptance criteria, all proven:
+1/6. ply threaded through search/search_inner/quiesce/quiesce_inner/quiesce_evasions from root 0; 'grep search_depth engine/src' returns only an unrelated test name, so the subtraction cannot recur.
+2. a_depth_reduced_below_zero_hands_over_to_quiescence drives depths 0, -1, -7 and asserts each equals a pure quiescence search; Depth = i16, Step 5 handover is 'depth <= 0'.
+3. StackEntry carries eval, mov and excluded, held as Box<[StackEntry; MAX_PLY]>, indexed by ply and written on every node exercised.
+4. Three killer tests cover same-ply sharing, non-leakage to neighbouring plies, and root/out-of-reach. Depth is no longer an input to the table, so the sibling-depth hazard is structurally gone. Reach preserved: old size 20 (draft 1..=20) becomes size 21 (ply 1..=20).
+5/7. a_node_searched_past_the_nominal_horizon searches depth 6 against a table sized 3, asserting no panic, pv.len() <= 3 and full PV legality. Non-vacuous: base a34da39 has 'self.search_depth - depth' (u8 underflow) and clear_at's 'k = m - d' (usize underflow), so the scenario genuinely panicked before.
+8. The search-suite diff is confined to call sites gaining a ply argument and deleted search_depth setup lines. No assertion changed.
+
+Independent correctness checks:
+- PVTable::copy_to bounds hold at every ply: row for ply p is p*plies..p*plies + (plies-p); the child copy source (p+1)*plies..(p+1)*plies + (plies-p-1) stays within the child row and never overlaps the destination (plies >= row_len). The deepest row (ply = plies-1) has len 1, so it never reads a child row that does not exist; ply >= plies is a no-op in both copy_to and clear_at.
+- pv() reads row 0 forward and stops at the first null (PVIter::next filters null), giving root-first order equivalent to the old reversed layout.
+- KillerTable probe/store guards are consistent (valid ply 1..(len-1)); the old draft d -> data[d-1] over size 20 maps to ply d -> data[d] over size 21, identical logical reach. Because draft == ply in the behaviour-preserving no-reduction case, killers are stored and probed at identical logical plies.
+- should_razor's 252*depth*depth cannot overflow i16: Step 5 (depth <= 0 -> quiescence) precedes Step 7, so razoring only ever sees depth 1..=6 (max 9072).
+- tt_draft saturates to [1,255] and is identity over the reachable range; Step 4's Depth::from(e.depth()) >= depth is identity for depth >= 1, so TT reuse is unchanged.
+- The ply+1 >= MAX_PLY handover returns before clear_at(ply); safe because PVTable::new takes a u8 (plies <= 255 < MAX_PLY), so that clear would no-op regardless, and stack[ply]/stack[ply+1] stay in range for every node reaching the move loop.
+
+Behaviour preservation, measured against the pinned new base a34da39: depth-8 UCI info lines (depth/seldepth/score/nodes/pv/hashfull) identical on startpos, Kiwipete and 8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1; only time/nps differ.
+
+Performance: round-robin 'cargo bench --bench search' (2 rounds alternating base a34da39 and target, machine otherwise idle). Taking the minimum per configuration as BENCHMARKS.md prescribes: deadline base 40.48 vs target 40.20 us; no-deadline base 40.07 vs target 39.58 us. Target is at or below base on both, CIs overlap, and both target minimums sit well inside the documented 42.26/41.72 us investigate thresholds. No repeatable regression.
+
+Non-blocking observations (not defects, deliberately not filed as follow-up tasks):
+- stack[ply].eval currently has no reader; razoring still uses the local. Expected, the slot exists for later work.
+- The ply+1 >= MAX_PLY handover counts the node through both visit_node and visit_q_node and skips clear_at; both are cosmetic and safe only while PVTable stays u8-sized, as the comments note. Raising MAX_PLY or widening PVTable would need this revisited.
+
+Comment quality: no comment in the diff cites a task ID, acceptance criterion, review finding ID or Backlog document; the added comments state reasons rather than restating code.
+---
 <!-- COMMENTS:END -->
 
 ## Final Summary
 
 <!-- SECTION:FINAL_SUMMARY:BEGIN -->
-Replaced the depth-derived ply with an explicit ply index threaded through the main search and quiescence, made depth a signed `Depth = i16` that enters quiescence at `depth <= 0`, and added a `MAX_PLY` per-ply `SearchStack` (static eval, move played, excluded move). `KillerTable` and `PVTable` are now ply-indexed; the PV table stores rows in forward order and no-ops above its nominal ply count, so an extended subtree neither panics nor writes another ply's row. `Search::search_depth` and the `search_depth - depth` subtraction are deleted outright.
+Replaced the depth-derived ply with an explicit ply index threaded through the main search and quiescence, made depth a signed Depth = i16 that enters quiescence at depth <= 0, and added a MAX_PLY per-ply SearchStack (static eval, move played, excluded move). KillerTable and PVTable are now ply-indexed; the PV table stores rows in forward order and no-ops above its nominal ply count, so an extended subtree neither panics nor writes another ply's row. Search::search_depth and the search_depth - depth subtraction are deleted outright.
 
-Verified at ea17ad7: cargo fmt --check, cargo clippy --workspace --all-targets --all-features -- -D warnings (exit 0, zero warnings, re-confirmed with a clean CARGO_TARGET_DIR), and cargo test --workspace (250 engine tests pass, including the seven new ply-indexing and past-horizon regression tests). Behaviour preservation was measured rather than assumed: depth-8 UCI searches on startpos, Kiwipete and 8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1 produce identical node counts, scores, PVs and hashfull at every iteration against base c55508b. Round-robin search benchmarking over three rounds shows +2.3%, below the 5% BENCHMARKS.md gate and inside that document's stated ~3% drift band, with the deadline gap preserved at ~0.5 us.
+Verified at implementation target a538c5c (base a34da39): cargo fmt --check pass; cargo clippy --workspace --all-targets --all-features -- -D warnings zero warnings on a clean CARGO_TARGET_DIR with no new #[allow]; cargo test --workspace pass (264 engine / 2 ignored, 43 core, all targets green), including the seven new ply-indexing and past-horizon regression tests, each observed running. The past-horizon test is non-vacuous: base a34da39 still has the u8 'search_depth - depth' underflow and PVTable 'k = m - d', so the scenario genuinely panicked before. Behaviour preservation re-measured against the new base: depth-8 UCI info lines identical. Round-robin search benchmark on base vs target shows target at or below base (deadline 40.48 vs 40.20 us min; no-deadline 40.07 vs 39.58 us min), well inside the 42.26/41.72 us investigate thresholds -- no regression.
 <!-- SECTION:FINAL_SUMMARY:END -->
