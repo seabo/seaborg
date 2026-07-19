@@ -3,11 +3,11 @@ id: TASK-41
 title: >-
   Throttle the clock read in Search::stopping() to avoid a per-node
   Instant::now()
-status: Changes Requested
+status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-18 12:17'
-updated_date: '2026-07-19 01:11'
+updated_date: '2026-07-19 01:13'
 labels:
   - engine
   - search
@@ -44,10 +44,11 @@ Identified during the TASK-38 investigation and deliberately left out of that ti
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Reproduce REV-1-01 with the optimized focused deadline test and inspect the stopping/unwind call sequence.
-2. Latch a sampled expired deadline for the remainder of the run while preserving the guaranteed-first-ply gate and per-call cancellation load.
-3. Add a regression proving repeated stopping checks at the same node remain true after expiry, then run focused debug and release tests.
-4. Re-run the hot-path benchmark and all repository-required checks, record REV-1-01 resolution evidence, and prepare a new immutable review handoff.
+1. Merge current master (22a2512) into the task branch and resolve the engine/src/search.rs conflict by hand.
+2. Rebuild stopping() on master's post-TASK-45/46 semantics: keep the test-only abort_after_nodes hook first, keep explicit cancellation returning root_fallback_ready unthrottled, and apply the deadline sampling/latching only to the min_search_complete-gated deadline branch.
+3. Change stopping() to &mut self and fix the resulting borrow/mutability fallout at all call sites and in tests.
+4. Reconcile the overlapping stopping regressions from both sides so master's cancellation/root-fallback tests and TASK-41's throttle and latch tests all survive.
+5. Re-run the repository-required checks plus focused release deadline, cancellation and TASK-32 regressions, re-run the hot-path benchmark on the integrated result, and hand off a new immutable target.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
