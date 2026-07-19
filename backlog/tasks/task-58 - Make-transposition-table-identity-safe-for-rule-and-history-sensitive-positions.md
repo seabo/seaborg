@@ -3,11 +3,11 @@ id: TASK-58
 title: >-
   Make transposition-table identity safe for rule- and history-sensitive
   positions
-status: In Review
+status: Changes Requested
 assignee:
   - '@codex'
 created_date: '2026-07-19 00:00'
-updated_date: '2026-07-19 02:36'
+updated_date: '2026-07-19 02:42'
 labels:
   - transposition-table
   - zobrist
@@ -94,5 +94,33 @@ Reviewer notes:
 - Two design decisions were confirmed with the user before implementing: satisfy AC#1 by removing the halfmove-clock scaling from evaluate() rather than gating TT reuse on a stored clock, and scope AC#3 to FEN reconciliation rather than full en-passant legality filtering. Both rationales are in the implementation notes.
 - The change to Zobrist::from_position alters every Zobrist key in the engine. It is a fix for a real divergence between the full and incremental key derivations that reproduces on unmodified master, and is a prerequisite for AC#3 rather than opportunistic scope. Worth independent confirmation that it is correctly in scope for this task.
 - Removing the eval scaling is a strength-relevant behavior change in drawish endings. No benchmark was run; nps and strength attribution is left to the merge-time gate.
+---
+
+author: @codex
+created: 2026-07-19 02:42
+---
+Review attempt: 1
+Reviewed branch: task-58-tt-identity-rule-sensitive
+Reviewed implementation: 99e9b4f
+Verdict: changes_requested
+
+REV-1-01 [P1] Warm TT reads remain incompatible with halfmove clock and repetition history
+Location: engine/src/search.rs:629-678 and engine/src/search.rs:1007-1044
+Impact: AC#1 and AC#2 remain unsatisfied. The patch suppresses writes only after the current search observes a history-sensitive draw, but an entry written by a low-clock or history-independent search is accepted solely by key, depth, and bound. A later incompatible visit can return it before searching the subtree that would claim the draw.
+Reproduction: Warm the table at halfmove clock 0, then search the same keyed position near clock 100 deeply enough that a reversible continuation reaches the boundary. The existing clock-80/depth-4 test never reaches incompatibility. The same ancestor-level issue applies when another repetition history makes a descendant draw relevant.
+Expected: Gate or key TT reads so scores and bounds are reused only in compatible rule/history state, with material incompatible-history regressions.
+
+REV-1-02 [P1] En-passant canonicalization retains legally unusable targets
+Location: core/src/position/fen.rs:113-132
+Impact: AC#3 requires equal identity when a target cannot affect any legal move. The pawn-attack predicate retains a target when the sole capturer is pinned or the capture exposes its king.
+Reproduction: Compare "k3r3/8/8/3pP3/8/8/8/4K3 w - d6 0 1" with the same FEN using "-" for en passant. e5xd6 exposes the rook check and is illegal, yet the target is retained and hashed.
+Expected: Retain the target only when at least one legal en-passant capture exists, with pinned/discovered-check regression coverage.
+
+Verification:
+- cargo fmt --check: pass
+- clean CARGO_TARGET_DIR cargo clippy --workspace --all-targets --all-features -- -D warnings: pass
+- cargo test --workspace: pass (40 core, 193 engine, 5 build_metadata, 1 doc; 2 ignored)
+- git diff --check base..target: pass
+- benchmarks not run because another repository benchmark consumed about 90% CPU, preventing a valid idle-machine comparison
 ---
 <!-- COMMENTS:END -->
