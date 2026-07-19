@@ -1,11 +1,11 @@
 ---
 id: TASK-67
 title: Centralize Cargo workspace manifest policy
-status: Ready to Merge
+status: Done
 assignee:
   - '@george'
 created_date: '2026-07-19 21:18'
-updated_date: '2026-07-19 21:59'
+updated_date: '2026-07-19 22:04'
 labels:
   - architecture
 dependencies: []
