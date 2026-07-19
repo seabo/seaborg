@@ -877,6 +877,12 @@ impl<'engine> Search<'engine> {
                 // SAFETY: ordered moves originate from move generation for `self.pos`.
                 unsafe { self.pos.make_move_unchecked(mov) };
 
+                // The child's first act is to probe this cluster, and the table is far larger than
+                // cache, so that probe misses. Starting the fetch here overlaps the miss with the
+                // recursive descent's own setup rather than stalling on it. The key is only known
+                // once the move has been made, so this is the earliest point the address exists.
+                self.tt.prefetch(self.pos.zobrist().0);
+
                 // Step 19. Search non-PV move with null window.
                 if !Node::pv() || move_count > 1 {
                     let child = self.search::<T, NonPv>(
@@ -1339,6 +1345,9 @@ impl<'engine> Search<'engine> {
 
                 // SAFETY: quiescence moves originate from move generation for `self.pos`.
                 unsafe { self.pos.make_move_unchecked(mov) };
+                // As in the main search: start the child's cluster fetch as soon as its key exists,
+                // so the miss overlaps the descent instead of stalling in front of the probe.
+                self.tt.prefetch(self.pos.zobrist().0);
                 let child = self.quiesce::<T, Node>(beta.child_bound(), alpha.child_bound());
                 self.pos.unmake_move();
                 // An aborted child leaves no usable value, and returning here without storing is

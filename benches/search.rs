@@ -11,6 +11,7 @@
 use core::init::init_globals;
 use core::position::Position;
 use criterion::{black_box, criterion_group, criterion_main, Criterion, SamplingMode};
+use engine::eval::Evaluation;
 use engine::search::{Search, Worker};
 use engine::tt::Table;
 use std::sync::atomic::AtomicBool;
@@ -163,5 +164,36 @@ fn report_hash_load_telemetry() {
     println!();
 }
 
-criterion_group!(benches, search_benchmark, hash_load_benchmark);
+/// Measure one static evaluation.
+///
+/// This figure exists to bound a specific question: what could be saved by storing a position's
+/// static evaluation in its transposition-table entry rather than recomputing it. That saving can
+/// never exceed one evaluation per node that probes successfully, so an evaluation cost per node,
+/// set against the search's own cost per node in the hash-load group above, is the ceiling on any
+/// such scheme. Recording it makes the trade arithmetic rather than folklore, and makes it
+/// re-checkable the moment the evaluation stops being material-only.
+fn evaluation_benchmark(c: &mut Criterion) {
+    init_globals();
+
+    let mut group = c.benchmark_group("static evaluation");
+
+    for (name, fen, _) in HASH_LOAD_POSITIONS {
+        let pos = Position::from_fen(fen).expect("benchmark position is a valid FEN");
+        group.bench_function(
+            name.split(" depth")
+                .next()
+                .expect("name has a depth suffix"),
+            |b| b.iter(|| black_box(black_box(&pos).material_eval())),
+        );
+    }
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    search_benchmark,
+    hash_load_benchmark,
+    evaluation_benchmark
+);
 criterion_main!(benches);

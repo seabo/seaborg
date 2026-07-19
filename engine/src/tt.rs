@@ -530,6 +530,55 @@ impl Table {
         *self.age.get_mut() = 0;
     }
 
+    /// Ask the hardware to begin fetching the cluster `key` maps to.
+    ///
+    /// A probe is a dependent load into an allocation far larger than cache, so the miss it takes is
+    /// serialised against everything the caller does afterwards: the address is not known until the
+    /// key is, and the key is not known until the move has been made. Issuing the hint as soon as
+    /// the key exists lets that miss overlap the work between here and the probe, instead of
+    /// stalling in front of it.
+    ///
+    /// This is a hint and nothing more. It moves no data the caller can observe, changes no value
+    /// any probe returns, and is architecturally permitted to do nothing at all — so a target
+    /// without an instruction for it compiles to an empty function rather than to a fallback that
+    /// would have to read memory to emulate one. Correctness cannot depend on it, only speed.
+    #[inline(always)]
+    pub fn prefetch(&self, key: u64) {
+        let cluster: *const Cluster = self.cluster(key);
+
+        #[cfg(target_arch = "x86_64")]
+        // SAFETY: `_mm_prefetch` is unsafe only because it takes a raw pointer. It is defined for
+        // any address, including an unmapped one, and never faults or traps; this address is in any
+        // case a live cluster in our own allocation. SSE, which provides it, is guaranteed on
+        // x86_64.
+        unsafe {
+            std::arch::x86_64::_mm_prefetch(cluster as *const i8, std::arch::x86_64::_MM_HINT_T0);
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        // SAFETY: `prfm` is a hint instruction. It has no destination operand, writes no memory and
+        // sets no flags, and the architecture defines it as having no effect other than on cache
+        // state — a prefetch of an unmapped or unprivileged address is ignored rather than faulted.
+        // `readonly` and `nostack` describe that accurately, and the address is a live cluster in
+        // our own allocation regardless. There is no stable intrinsic for this on aarch64;
+        // `core::arch::aarch64::_prefetch` remains unstable, which is why the instruction is
+        // written out.
+        unsafe {
+            std::arch::asm!(
+                "prfm pldl1keep, [{cluster}]",
+                cluster = in(reg) cluster,
+                options(readonly, nostack, preserves_flags),
+            );
+        }
+
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+        {
+            // No portable prefetch hint. The address is computed and discarded, which the optimiser
+            // removes entirely; probes on such a target are correct and simply take the full miss.
+            let _ = cluster;
+        }
+    }
+
     /// Look for a live entry for `key`.
     ///
     /// Returns an owned [`Snapshot`] whose fields all came from one atomic state of one slot, or
@@ -702,6 +751,27 @@ mod tests {
         assert_eq!(std::mem::align_of::<Cluster>(), 64);
         assert_eq!(std::mem::size_of::<Slot>(), 16);
         assert_eq!(std::mem::size_of::<Slot>() * CLUSTER_SLOTS, 64);
+    }
+
+    #[test]
+    fn prefetch_moves_no_observable_state() {
+        // A prefetch is a hardware hint: it pulls a cache line closer but changes no value any
+        // probe or store can read. This pins that contract, and equally that the hint is total over
+        // keys — issued for the stored key, a cluster sibling, and a key never stored, none of them
+        // panics or perturbs what the table holds. A target whose prefetch is architecturally a
+        // no-op still has to pass, which is why the assertion is about the table's contents and not
+        // about any timing.
+        let table = Table::new(1);
+        let key = 0x1234_5678_9abc_def0;
+        store(&table, key, 42, 5, Bound::Exact);
+        let before = table.probe(key);
+        assert!(before.is_some());
+
+        table.prefetch(key);
+        table.prefetch(sibling_key(key, table.mask));
+        table.prefetch(0);
+
+        assert_eq!(table.probe(key), before);
     }
 
     #[test]
