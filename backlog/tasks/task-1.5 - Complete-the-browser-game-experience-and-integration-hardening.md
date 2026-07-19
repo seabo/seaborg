@@ -1,11 +1,11 @@
 ---
 id: TASK-1.5
 title: Complete the browser game experience and integration hardening
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-17 15:40'
-updated_date: '2026-07-19 01:31'
+updated_date: '2026-07-19 01:40'
 labels: []
 dependencies:
   - TASK-1.4
@@ -65,6 +65,20 @@ Two defects were found by driving the real page in Chrome and are fixed here:
 - Repainting replaces every square and the replacements are disabled while the engine thinks, so a keyboard user was dropped onto the document on selecting a piece and again on every engine turn. The board now tracks that it owns the keyboard and takes focus back once a square can hold it.
 
 Out of scope, observed and confirmed pre-existing: the engine misses a mate in one (1.f3 a6 2.g4 missing 2...Qh4#). Reproduced through plain --uci, which uses none of this task's code, so it is a search issue rather than a UI one. Not fixed here.
+
+Rework of review attempt 1 (target f3052af).
+
+Resolved REV-1-01 — a failed quit branded a live server as stopped.
+postCommand collapsed a server refusal and a transport failure into the same null return, so quit could not distinguish them and treated every outcome as a successful stop. Commands now report a CommandOutcome of ok/rejected/unreachable. quit enters the terminal stopped state only when the request was accepted or never came back — a socket dropping mid-request is the ordinary end of a real shutdown — and on a refusal rolls 'quitting' back to false, leaves the controls live, and keeps the message sendCommand already wrote. postCommand keeps its null-returning shape, so playMove and sendControl are unchanged. The rule itself lives in format.ts as quitEndsTheSession so it is unit tested rather than buried in a DOM handler.
+Verified against the running binary: an unauthenticated quit is refused 403 invalid_token with /api/state still answering 200, and an authenticated quit still answers 200 {quitting:true}, prints 'Seaborg UI stopped.', and closes the port.
+
+Resolved REV-1-02 — no documented manual check procedure.
+Root cause was not a missing document. docs/browser-ui-manual-checks.md was written during the first attempt but .gitignore line 3 ignored /docs, so it was never staged and never appeared in the diff the reviewer read; docs/strength-testing.md is tracked only because it was force-added earlier. Nothing in the repository or any worktree relied on the rule, so on the human's decision it is removed and docs/ becomes a normal tracked directory, which also prevents the same silent loss recurring. The procedure covers desktop and narrow layouts, both colours, promotion, castling, en passant, terminal states, reload during search, reduced motion, keyboard and assistive technology, and names which items automated tests cover instead. A thirteenth check for the refused-quit path above was added.
+
+Non-blocking reviewer notes, all three addressed as inaccurate comments rather than defects:
+- The engine panel kept the previous search's eval/depth/nodes/NPS/PV on screen under a live 'Thinking' chip until the first progress event arrived, which its own retention comment did not justify. The panel now clears once per search, keyed on searchId rather than on progress being null so a repaint before the first progress event does not re-clear.
+- The principal_variation_san doc comment claimed undo cancels the search before touching the position. undo actually unmakes at game.rs:242 before cancelling at game.rs:245; the invariant holds because every mutating entry point takes &mut self under the session mutex and the search thread reads an independent clone. The comment now says that.
+- formatCount rendered 999,999 as '1000k' and 999,999,999 as '1000M', overflowing the stable width its doc describes. Units are now chosen from what the value rounds to, so those read '1.0M' and '1.0B'.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -218,5 +232,31 @@ Verification (all run by me on f3052af, not taken from the handoff):
 - Occupied fixed port: second instance exited 1 naming the port and suggesting --ui-port
 - Diff touches no search, movegen, or core file, so the hot-path benchmarks were not required
 - No #[allow] is added anywhere in the diff; no external network reference exists in the assets
+---
+
+author: @claude
+created: 2026-07-19 01:40
+---
+Implementation handoff
+Branch: task-1.5-browser-game-experience
+Worktree: /Users/seabo/seaborg-worktrees/task-1.5-browser-game-experience
+Base: 4d48c35917a2955550f5a0bbc6a0120d3b0cc957
+Implementation target: 758cf9737e0a2b4be3e34c3ffc0e1c2f7fc35c5f
+Resolved findings: REV-1-01, REV-1-02
+Verification:
+- cargo fmt --check: pass, exit 0
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass, exit 0, zero warnings. Re-run with a clean CARGO_TARGET_DIR to rule out cached results; still zero.
+- cargo test --workspace: pass, 225 passed / 0 failed / 2 ignored (the 2 ignored are pre-existing)
+- tsc 5.9.3 -p engine/src/ui/frontend/tsconfig.json then git diff --exit-code engine/src/ui/assets: pass, regenerated JS byte-identical to the committed output
+- node --test board.test.mjs format.test.mjs: pass, 16 passed / 0 failed (was 15; the new one is the rejected-quit rule)
+- Live refused quit against the release binary on 127.0.0.1:39217: POST /api/quit without a token answered 403 {"error":"invalid_token"} and GET /api/state still answered 200, i.e. the exact state REV-1-01 said the page must not call stopped
+- Live accepted quit on the same server: 200 {"quitting":true}, 'Seaborg UI stopped.' printed, port closed. The happy path is unregressed.
+Known failures: none.
+
+Two notes for the reviewer.
+
+1. The REV-1-01 fix is asserted at the level of the rule, not the DOM handler. quitEndsTheSession in format.ts is unit tested for all three outcomes, and quit() is a single call to it; the server half is already covered by quit_needs_the_session_token. What is not automated is the two meeting in a browser, because app.ts runs its DOM and EventSource setup at module load and cannot be imported under node --test without restructuring it into an init function. That restructuring is not in this task's scope, so manual check 13 covers the seam instead. Flagging it rather than implying the path is fully automated.
+
+2. REV-1-02 changes .gitignore, which is repository-wide and outside this task's strict surface. The manual check document existed during attempt 1 and was silently swallowed by the '/docs' ignore rule, which is why no document appeared in the diff. I put the option to the human rather than deciding it, and the decision was to un-ignore docs/ rather than force-add the single file, so the trap does not catch the next writer. docs/strength-testing.md was already tracked via an earlier force-add and is unaffected; no worktree had any other content under docs/.
 ---
 <!-- COMMENTS:END -->
