@@ -191,10 +191,16 @@ struct Segments {
 ///
 /// Moves are generated in phases, so each new phase requires a call to
 /// `OrderedMoves::load_next_phase`, passing a `Loader`. If this returns `true`, then there are more
-/// moves to be yielded, and `&mut OrderedMoves` is `IntoIterator` over them. Iterating consumes:
-/// selection reorders the buffer in place and each phase's moves can only be drawn once. The
-/// iterator is produced from a mutable borrow so that this is visible in the type rather than being
-/// a trap for the caller.
+/// moves to be yielded, and `&mut OrderedMoves` is `IntoIterator` over them. Iterating mutates:
+/// selection reorders the buffer in place as it goes, which is why the iterator is produced from a
+/// mutable borrow rather than a shared one. That borrow is what rules out two live iterators over
+/// the same phase, and stops the type advertising a shared borrow while quietly rewriting behind
+/// it.
+///
+/// It does not stop a caller drawing the same phase twice in sequence. A second pass re-sorts a
+/// segment that is already sorted and so re-yields the whole phase in the same order. Nothing here
+/// detects that, and a caller who does it searches every move of the phase twice, corrupting move
+/// counts and history and killer updates. Draw each phase once.
 ///
 /// `OrderedMoves` is built on top of an `ArrayVec`, as this appears to be significantly more
 /// performant than any solution involving overflows or allocations, since there is very little
@@ -906,6 +912,37 @@ mod tests {
             phase_moves(&phases, Phase::BadCaptures),
             &[captures[4], captures[2]]
         );
+    }
+
+    /// Drawing one phase twice re-yields it in full, in the same order.
+    ///
+    /// This pins the limit of what the mutable borrow buys. It rules out two live iterators and the
+    /// shared-borrow-that-mutates hazard, but sequential re-entry is not detected, so a caller who
+    /// does it searches the phase twice. Selection leaves the segment sorted, so the repeat is
+    /// order-identical rather than arbitrary; that is worth knowing but is not a licence to re-draw.
+    #[test]
+    fn drawing_a_phase_twice_yields_it_again_in_the_same_order() {
+        let quiets = sample_moves(5);
+        let loader = ScriptedLoader {
+            quiets: quiets.clone(),
+            ..Default::default()
+        };
+
+        let mut moves = OrderedMoves::new();
+        while moves.load_next_phase(loader.clone()) {
+            if moves.phase() != Phase::Quiet {
+                continue;
+            }
+
+            let first: Vec<Move> = (&mut moves).into_iter().collect();
+            let second: Vec<Move> = (&mut moves).into_iter().collect();
+
+            assert_eq!(first, quiets);
+            assert_eq!(second, first);
+            return;
+        }
+
+        panic!("the quiet phase was never loaded");
     }
 
     /// A move already yielded as the hash move is not yielded again by a later phase, whichever
