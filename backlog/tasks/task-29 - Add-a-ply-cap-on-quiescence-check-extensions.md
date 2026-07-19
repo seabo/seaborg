@@ -4,11 +4,12 @@ title: Add a ply cap on quiescence check extensions
 status: To Do
 assignee: []
 created_date: '2026-07-17 20:29'
-updated_date: '2026-07-18 22:02'
+updated_date: '2026-07-19 13:34'
 labels:
   - search
   - performance
-dependencies: []
+dependencies:
+  - TASK-64.1
 ordinal: 32000
 ---
 

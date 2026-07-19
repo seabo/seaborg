@@ -6,11 +6,13 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-18 13:59'
+updated_date: '2026-07-19 13:34'
 labels:
   - engine
   - search
   - uci
-dependencies: []
+dependencies:
+  - TASK-64.1
 priority: low
 type: enhancement
 ordinal: 44000

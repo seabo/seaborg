@@ -4,9 +4,12 @@ title: 'Add late move reduction, extensions, and post-alpha depth reduction'
 status: To Do
 assignee: []
 created_date: '2026-07-18 18:30'
+updated_date: '2026-07-19 13:34'
 labels: []
 dependencies:
   - TASK-50
+  - TASK-64.1
+  - TASK-64.2
 references:
   - engine/src/search.rs
 priority: medium
