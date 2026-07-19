@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-18 12:17'
-updated_date: '2026-07-19 01:13'
+updated_date: '2026-07-19 01:21'
 labels:
   - engine
   - search
@@ -59,6 +59,12 @@ Measurement (2026-07-19, Apple/macOS host, release Criterion `search startpos de
 Implementation samples release-build deadlines every 8 visited nodes and debug-build deadlines once per newly visited node; repeated stopping checks within a node do not read the clock. The cancellation atomic remains the first check on every call. The first guaranteed ply still bypasses both abort sources unchanged. The wall-time regression uses a 20 ms budget with 100 ms scheduling tolerance.
 
 Resolved REV-1-01: sampled deadline expiry is now latched in the existing deadline-sample state, so every subsequent stopping check remains true while the search unwinds. Added `expired_deadline_stays_latched_at_the_same_node`; the optimized 20 ms wall-time regression now completes in about 20 ms. The rework benchmark median was 40.255 us (about 14.38M NPS), 2.9% faster than the prior reviewed 41.449 us implementation and 42.9% faster / about 75.0% higher NPS than the original 70.467 us baseline.
+
+Integration rework (merge attempt 1 conflict). Merged master 22a2512 into the task branch and resolved engine/src/search.rs by hand. Master had since split the two abort signals apart (TASK-45/46): explicit cancellation returns `root_fallback_ready` and no longer waits for the first ply, while the time deadline is still gated on `min_search_complete`; it also added the test-only `abort_after_nodes` hook. The resolution keeps that gating structure verbatim and applies the deadline sampling/latching only to the deadline branch, after both the cancellation return and the `min_search_complete` gate. Cancellation therefore remains an unthrottled atomic load that aborts immediately once the root fallback exists, and the guaranteed deadline ply is unchanged.
+
+Regressions from both sides were retained: master's `cancellation_is_suppressed_only_until_the_root_fallback_exists` and `the_time_deadline_is_suppressed_until_the_first_ply_completes`, plus TASK-41's `cancellation_is_not_throttled_with_the_deadline_clock` (updated to establish the root fallback first, as master's semantics now require) and `expired_deadline_stays_latched_at_the_same_node`.
+
+Re-measured on the integrated result rather than reusing the pre-merge figures, since master's own changes moved the baseline. Release Criterion `search startpos depth 7`, 3 s warm-up, 10 s measurement, 50 samples, deadline set 24 h out so the clock read is actually exercised; the benchmark visits 579 nodes per iteration on both sides (measured directly), and the throttle cannot alter the tree because the deadline never expires. Baseline (current master's search.rs, same bench harness) median 49.620 us = 11.67M NPS; integrated target median 40.865 us = 14.17M NPS. That is a 17.6% median time reduction and a 21.4% NPS increase; Criterion's paired change estimate was -19.833% to -17.900% (p < 0.05), point estimate -18.8%. The absolute gain is smaller than the 41.2% recorded pre-merge only because master's intervening work lowered the baseline from 70.467 us to 49.620 us; the removed clock-read work is about 8.76 us per search, or 15.1 ns per visited node.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
