@@ -1,11 +1,11 @@
 ---
 id: TASK-47
 title: Assert en passant and piece-type invariants at their boundaries
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-18 18:30'
-updated_date: '2026-07-19 20:20'
+updated_date: '2026-07-19 20:28'
 labels: []
 dependencies: []
 references:
