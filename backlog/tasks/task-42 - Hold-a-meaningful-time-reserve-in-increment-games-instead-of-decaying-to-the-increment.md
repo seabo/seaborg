@@ -3,11 +3,11 @@ id: TASK-42
 title: >-
   Hold a meaningful time reserve in increment games instead of decaying to the
   increment
-status: In Review
+status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-18 13:18'
-updated_date: '2026-07-19 12:54'
+updated_date: '2026-07-19 13:06'
 labels:
   - engine
   - time
@@ -59,10 +59,10 @@ Do not regress TASK-7 (overflow safety), TASK-32 (guaranteed legal move under a 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The per-move allocation in an increment game converges to a state that retains a defined, non-trivial time reserve rather than decaying until the reserve is a small multiple of MOVE_OVERHEAD, with the target reserve expressed as an explicit policy rather than emerging by accident
-- [ ] #2 Unit tests simulate a full game at 1+0.01, 2+0.05 and 10+0.1 and assert the clock at moves 60, 100 and 140 stays above a defined reserve floor
-- [ ] #3 The engine can still allot materially more than the increment to a late-game move when the clock allows, demonstrated by a test over a representative late-game clock state
-- [ ] #4 TASK-7 overflow safety, TASK-32 guaranteed-legal-move behavior and TASK-38 proportional opening allocation all still hold, evidenced by their existing regression tests passing
+- [x] #1 The per-move allocation in an increment game converges to a state that retains a defined, non-trivial time reserve rather than decaying until the reserve is a small multiple of MOVE_OVERHEAD, with the target reserve expressed as an explicit policy rather than emerging by accident
+- [x] #2 Unit tests simulate a full game at 1+0.01, 2+0.05 and 10+0.1 and assert the clock at moves 60, 100 and 140 stays above a defined reserve floor
+- [x] #3 The engine can still allot materially more than the increment to a late-game move when the clock allows, demonstrated by a test over a representative late-game clock state
+- [x] #4 TASK-7 overflow safety, TASK-32 guaranteed-legal-move behavior and TASK-38 proportional opening allocation all still hold, evidenced by their existing regression tests passing
 - [ ] #5 A FastChess self-play match against the pre-change build at 1+0.01 and 2+0.05 shows a non-negative Elo delta, zero time forfeits, zero illegal moves, and a reduction in depth-1 moves played after move 60
 <!-- AC:END -->
 
@@ -171,4 +171,43 @@ Re-verified at 96adb9a:
 This branch is based on 9b7bf33 and does not contain master's newer commits. Diff against that
 base is confined to engine/src/time.rs and the task file.
 ---
+
+author: @codex
+created: 2026-07-19 13:06
+---
+Review verdict: APPROVED at implementation target 96adb9a.
+
+Immutability: base 9b7bf33 is an ancestor of 96adb9a, which is an ancestor of the branch tip. Commits after the target (07fc7b4 handoff, 4e5f54d correction) touch only the task file. The handoff's claim that 2cc4d1c..96adb9a is comments-only was checked directly: zero non-comment lines differ in engine/src/time.rs, so the strength evidence gathered at 2cc4d1c describes this target's behaviour.
+
+Checks re-run by the reviewer at the target, not taken from the handoff:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass, confirmed with a clean CARGO_TARGET_DIR so the result is not a cached lint
+- cargo test --workspace: pass (209 engine, 43 core, 5 build metadata, 1 integration; 3 ignored)
+No #[allow] is introduced by the diff. No benchmarks run: to_move_time is called once per search start (engine.rs:161, uci.rs:635), and the diff touches no movegen or search code.
+
+Correctness reasoning, verified by hand rather than from the tests alone:
+- When the headroom term binds, the clock lands on exactly MOVE_OVERHEAD + reserve. Spending inc + x and earning inc back drains by x, so bounding x by usable_time - reserve is precisely the statement that the move cannot cross the floor. The later share cap and .max(1) only reduce the drain, so they cannot break the invariant.
+- The below-reserve branch is genuinely self-correcting: usable_time < 10*inc gives usable_time/10 <= inc - 1 under integer division for inc >= 1, so the clock strictly climbs.
+- inc = 0 makes reserve 0, so checked_sub always takes the Some branch and sudden death is bit-for-bit unchanged. This is what keeps the reserve from behaving like the flat buffer that starved fast controls.
+- Overflow safety is preserved: saturating_mul on the reserve, checked_sub on the headroom, saturating_add on the allocation, and the max_allocation subtraction is unchanged.
+
+Acceptance criteria:
+- AC1 met. RESERVE_INCREMENT_MOVES is an explicit, documented policy and the converged state is a stated consequence of it rather than a rounding artefact.
+- AC2 met. an_increment_game_settles_on_the_reserve_rather_than_the_increment simulates 140 moves at 1+0.01, 2+0.05 and 10+0.1, asserting the clock exceeds the reserve at every move and reserve + MOVE_OVERHEAD at moves 60, 100 and 140.
+- AC3 met. a_late_game_move_can_still_be_allotted_far_more_than_the_increment allots 108ms against a 10ms increment at move 100, roughly ten times the increment.
+- AC4 met. The TASK-7 overflow test and TASK-32 zero-budget test are unmodified and pass. The TASK-38 opening assertions (100ms at 2+0.05, 34ms at 1+0.01, 24ms at 1+0) are numerically unchanged; only their comment was rewritten, which is direct evidence the opening allocation is untouched.
+- AC5 NOT met as written, and deliberately left unchecked. The 1+0.01 match over 2000 games returned SPRT INCONCLUSIVE (LLR -0.77 against +/-2.94) with Elo -6.60 +/- 8.45, so the required non-negative delta is not demonstrated; 2+0.05 was not run. The human reviewing this invocation stated they had read and understood the evidence in the implementation notes and explicitly approved that the inconclusive result should not block landing. This approval rests on that waiver, not on evidence for AC5. Forfeit safety, which is the part of AC5 that bears on correctness rather than strength, is independently evidenced: 0 time forfeits and 0 illegal moves in the match, and allocation_never_exceeds_the_remaining_clock sweeps 12 clocks x 5 increments x 6 movestogo values x 4 move numbers asserting the allotment is always under the clock.
+
+Non-blocking observations, recorded for the human rather than as findings:
+- The below-reserve branch ignores est_remaining_moves, so it also changes movestogo controls: at clock 1000, inc 100, movestogo 1 the allotment falls from 728ms to 97ms. This is conservative rather than unsafe, since unspent time carries over at a tournament control boundary and the sweep test rules out a forfeit, but it is a behaviour change outside the increment-game scope the task targets.
+- The implementer found that tools/strength/strength_test.py writes FastChess's nElo into report.json's elo field, overstating this run's headline regression by about 1.8x. They correctly did not open a follow-up task; that remains the human's call.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Replaced the geometric clock decay in engine/src/time.rs with an explicit increment-funded reserve: RESERVE_INCREMENT_MOVES (10) moves' worth of increment, enforced as a cap on how fast the clock may drain rather than as a deduction from the pool being divided. Above the reserve every allocation is bit-for-bit unchanged, so the opening behaviour is untouched; on the approach the headroom cap arrests the decay, settling the clock at MOVE_OVERHEAD + reserve (130ms at 1+0.01, 530ms at 2+0.05, 1030ms at 10+0.1) instead of asymptoting onto the bare increment. Below the reserve the allocation is usable/10, provably less than the increment there, so the clock recovers. The reserve is zero in sudden death, leaving that path unchanged.
+
+Verified at 96adb9a with cargo fmt --check, cargo clippy --workspace --all-targets --all-features -- -D warnings (clean CARGO_TARGET_DIR), and cargo test --workspace (209 engine, 43 core, 5 build metadata, 1 integration; 3 ignored; all pass). AC1-AC4 proven by unit tests and by the unmodified TASK-7 overflow, TASK-32 zero-budget and TASK-38 opening fixtures. AC5 is not met as written and was waived by the human as non-blocking.
+<!-- SECTION:FINAL_SUMMARY:END -->
