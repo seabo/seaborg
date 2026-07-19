@@ -1,11 +1,11 @@
 ---
 id: TASK-64.14
 title: Replace material-only evaluation with a tapered hand-crafted evaluation
-status: In Review
+status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-19 13:33'
-updated_date: '2026-07-19 20:58'
+updated_date: '2026-07-19 21:03'
 labels:
   - evaluation
   - strength
@@ -40,13 +40,13 @@ Scope beyond piece-square tables and tapering, such as mobility, king safety and
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The evaluation includes piece-square tables interpolated between a middlegame and an endgame phase
-- [ ] #2 Knight and bishop no longer carry identical values, and the values used are recorded
-- [ ] #3 The evaluation remains position-intrinsic and reads no state outside the Zobrist key, with a test asserting invariance to the halfmove clock
-- [ ] #4 The set of evaluation terms implemented beyond piece-square tables is recorded with rationale
-- [ ] #5 The tuning method used to fix the parameters is recorded
-- [ ] #6 Measured with the TASK-27 strength-regression script, with results recorded in the implementation notes
-- [ ] #7 Margin-based pruning tasks already landed are re-measured against the new evaluation and any margin revisions are recorded
+- [x] #1 The evaluation includes piece-square tables interpolated between a middlegame and an endgame phase
+- [x] #2 Knight and bishop no longer carry identical values, and the values used are recorded
+- [x] #3 The evaluation remains position-intrinsic and reads no state outside the Zobrist key, with a test asserting invariance to the halfmove clock
+- [x] #4 The set of evaluation terms implemented beyond piece-square tables is recorded with rationale
+- [x] #5 The tuning method used to fix the parameters is recorded
+- [x] #6 Measured with the TASK-27 strength-regression script, with results recorded in the implementation notes
+- [x] #7 Margin-based pruning tasks already landed are re-measured against the new evaluation and any margin revisions are recorded
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -157,4 +157,30 @@ Verification:
 - TASK-27 fixed-depth smoke comparison, depth=6, 20 games, retained razoring margin vs disabled: 10W-0D-10L, Elo 0.0, LLR 0.0, zero crashes/forfeits; report at /tmp/seaborg-strength-64_14-rework/artifacts-razoring-depth6/report.json
 Known failures: none
 ---
+
+author: @codex
+created: 2026-07-19 21:03
+---
+Review attempt: 2
+Reviewed branch: task-64.14-tapered-eval
+Reviewed implementation: 88b78c0
+Verdict: approved
+
+REV-1-01 resolution verified: the TASK-27 depth-6 paired run isolates retained razoring from an otherwise identical razoring-disabled comparator. The archived report records 10 wins, 0 draws, 10 losses, Elo 0.0, LLR 0.0, and zero crashes/forfeits; retaining the current margin is supported as a non-authoritative smoke decision.
+
+Verification:
+- git merge-base --is-ancestor aa915d85d32d03d829d0636c6af3e71b40a6632f 88b78c0: pass
+- git diff --name-status 88b78c0..138288e: task metadata only
+- cargo fmt --check: pass
+- clean-CARGO_TARGET_DIR cargo clippy --workspace --all-targets --all-features -- -D warnings: pass
+- cargo test --workspace: pass (43 core; 266 engine passed, 2 ignored; 19 integration; 1 doc test)
+- /tmp/seaborg-strength-64_14-rework/artifacts-razoring-depth6/report.json: present and matches recorded 10W-0D-10L result
+- perft/movegen benchmark: not verdict evidence because these benches do not exercise static evaluation; another task was also actively benchmarking, so the machine did not meet the required idle condition
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Replaced material-only evaluation with the PeSTO tapered material-and-piece-square evaluator, preserving position-intrinsic TT semantics and recording parameter provenance, scope, and distinct phase-dependent piece values. Verified immutable target 88b78c0 with cargo fmt --check, clean-target strict workspace Clippy, cargo test --workspace, the archived 19W-0D-1L evaluator smoke comparison, and the isolated 10W-0D-10L retained-razoring-versus-disabled comparison; the landed razoring margin remains unchanged.
+<!-- SECTION:FINAL_SUMMARY:END -->
