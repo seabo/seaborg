@@ -1,11 +1,11 @@
 ---
 id: TASK-47
 title: Assert en passant and piece-type invariants at their boundaries
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-18 18:30'
-updated_date: '2026-07-19 20:14'
+updated_date: '2026-07-19 20:20'
 labels: []
 dependencies: []
 references:
@@ -30,12 +30,12 @@ Assertions on hot paths must be debug-only so release move generation is unaffec
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Move generation debug-asserts the en passant rank invariant in both the generating and has-any-move paths
-- [ ] #2 FEN parsing rejects an en passant square inconsistent with the side to move, returning an error rather than panicking
-- [ ] #3 A test covers at least one rejected inconsistent-en-passant FEN and one accepted valid one
-- [ ] #4 The PieceType::None arm in moves_bb is expressed as a documented impossibility rather than a bare panic with a TODO
-- [ ] #5 Added hot-path assertions are debug-only and the movegen and perft benchmarks show no release regression
-- [ ] #6 All four TODO comments at the listed sites are removed
+- [x] #1 Move generation debug-asserts the en passant rank invariant in both the generating and has-any-move paths
+- [x] #2 FEN parsing rejects an en passant square inconsistent with the side to move, returning an error rather than panicking
+- [x] #3 A test covers at least one rejected inconsistent-en-passant FEN and one accepted valid one
+- [x] #4 The PieceType::None arm in moves_bb is expressed as a documented impossibility rather than a bare panic with a TODO
+- [x] #5 Added hot-path assertions are debug-only and the movegen and perft benchmarks show no release regression
+- [x] #6 All four TODO comments at the listed sites are removed
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -77,4 +77,35 @@ Verification:
 Note on AC #5: the added hot-path assertions are debug_assert_eq! (compiled out in release), and the moves_bb None arm was already statically-dead, so release movegen/perft codegen is unchanged by construction; no benchmark regression is possible from these edits.
 Known failures: none
 ---
+
+author: @claude
+created: 2026-07-19 20:20
+---
+Review attempt: 1
+Reviewed branch: task-47-assert-ep-piece-invariants
+Reviewed implementation: 9f07b54ba6d9f35e1512ccd718ade766c5de9c28
+Base: aa915d85d32d03d829d0636c6af3e71b40a6632f
+Verdict: approved
+
+All six acceptance criteria proven against the immutable base..target diff (only core/src/movegen.rs and core/src/position/fen.rs changed):
+- AC#1: debug_assert_eq! of the ep-rank invariant added to both the generate and has-any-move paths.
+- AC#2: parse_ep_square now takes turn and returns FenError::EnPassantSquareInvalid on a rank/side mismatch rather than panicking.
+- AC#3: rejects_en_passant_square_inconsistent_with_side_to_move (white 3rd-rank + black 6th-rank) and accepts_en_passant_square_consistent_with_side_to_move (valid d6) both pass.
+- AC#4: PieceType::None arm is unreachable!() with a comment stating why it is statically unreachable.
+- AC#5: both added asserts are debug_assert_eq! and no profile enables debug-assertions in release/bench; the None arm was already dead in release. Release codegen is unchanged by construction, so no benchmark regression is possible.
+- AC#6: no TODOs remain at any of the four sites.
+
+Verification (on 9f07b54):
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean (fresh CARGO_TARGET_DIR)
+- cargo test --workspace: green (core 264 passed / 2 ignored)
+
+No implementation file changed between the approved target 9f07b54 and the approval commit.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Closed four unchecked invariants at their boundaries. Movegen's generate and has-any-move ep paths now debug_assert_eq! that ep_square is on the 6th rank from the mover's perspective (PL::player().relative_rank(5)); fen::parse_ep_square takes the side to move and returns FenError::EnPassantSquareInvalid for a rank/side mismatch (White->6th, Black->3rd) instead of leaving the check open; moves_bb's PieceType::None arm is now unreachable!() with a comment explaining no PieceTrait maps to None; all four TODOs are removed. Verified on target 9f07b54: cargo fmt --check pass; cargo clippy --workspace --all-targets --all-features -- -D warnings clean (fresh CARGO_TARGET_DIR); cargo test --workspace green (core 264 passed/2 ignored, including new rejects_/accepts_en_passant_square tests). AC#5 is provable rather than measured: both new asserts are debug_assert_eq! and no profile enables debug-assertions in release/bench, and the None arm was already statically-dead, so release movegen/perft codegen is unchanged and no regression is possible.
+<!-- SECTION:FINAL_SUMMARY:END -->
