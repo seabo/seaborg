@@ -1,11 +1,11 @@
 ---
 id: TASK-61
 title: Add benchmark-backed transposition-table hot-path enhancements
-status: Ready to Merge
+status: Changes Requested
 assignee:
   - '@claude'
 created_date: '2026-07-19 00:01'
-updated_date: '2026-07-19 20:08'
+updated_date: '2026-07-19 20:12'
 labels:
   - transposition-table
   - performance
@@ -122,6 +122,26 @@ Verification:
 - cargo clippy --workspace --all-targets --all-features -- -D warnings: clean (fresh CARGO_TARGET_DIR)
 - cargo test --workspace: pass (43 + 245 + 17 + 1; 2 ignored pre-existing perft suites)
 - Hot-path benchmark round-robin: not run to a verdict; sustained machine load (avg ~6.1) precludes a clean measurement, and the change is node-count-neutral by construction so it carries no search-quality regression risk.
+---
+
+author: @claude
+created: 2026-07-19 20:12
+---
+Merge attempt: 1
+Verdict: ejected — textual conflict on integration
+Primary tip tested: aa915d85d32d03d829d0636c6af3e71b40a6632f
+Merged tip: 641b7f5 (approved code target b76a0c2)
+
+git merge --no-ff of the approved target onto the live primary tip conflicts in engine/src/search.rs. Since the approved target's base (c55508b), TASK-64.1 (explicit-ply search stack) landed on primary and changed two call sites this task also edits:
+- make_move_unchecked now takes a reference: `self.pos.make_move_unchecked(&mov)` (was by value).
+- quiesce now takes an explicit ply: `self.quiesce::<T, Node>(beta.child_bound(), alpha.child_bound(), ply + 1)` (previously no ply argument).
+
+The task inserts `self.tt.prefetch(self.pos.zobrist().0)` after make_move in both the main search and quiescence, against the old signatures. The main-search hunk auto-merges; the quiescence hunk is a true content conflict (both sides changed the make_move line and the quiesce call). Re-integrating the prefetch against the new signatures is implementation work and is out of scope for the merge gate.
+
+Rework: reattach this branch's worktree, merge current primary (or rebase the two prefetch insertions onto it), place both prefetch calls after the new `make_move_unchecked(&mov)` and before the ply-carrying quiesce call, re-run the required checks, and hand off a new immutable target for a fresh review. No implementation defect was found in review; this is purely a stale-base integration conflict.
+
+Verification:
+- git checkout --detach aa915d8 && git merge --no-ff 641b7f5: CONFLICT (content) in engine/src/search.rs; merge aborted, primary not advanced.
 ---
 <!-- COMMENTS:END -->
 
