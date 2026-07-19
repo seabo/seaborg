@@ -4,6 +4,7 @@ title: Repair the killer table ply capacity and replacement metric
 status: To Do
 assignee: []
 created_date: '2026-07-19 13:31'
+updated_date: '2026-07-19 23:49'
 labels:
   - search
   - move-ordering
@@ -21,23 +22,30 @@ ordinal: 66000
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-The killer table has two independent defects: it is sized for far fewer plies than the search can reach, and its replacement policy ranks slots by a counter that does not measure what the policy needs.
+The killer table is structurally integrated into the main search but is not acceptable as a strength and performance foundation in its current form. It has two concrete defects and lacks the measurement needed to establish whether its ordering policy remains useful once stronger contextual history is available.
 
-Capacity. The table is constructed with 20 plies (`KillerTable::new(20)` at search.rs:508) while MAX_DEPTH is 255 (search.rs:26). `KillerTable::probe` returns `(None, None)` for any draft beyond its length (killer.rs:37-42), so killers silently stop being available past ply 20 rather than failing loudly. Extensions and reductions will make the reachable ply range harder to reason about, not easier.
+Capacity. The main search is bounded by MAX_PLY = 256, while KILLER_PLIES = 21 covers only plies 1 through 20. Probe and store silently ignore deeper plies. Selective search, reductions and extensions make nominal iteration depth an unreliable proxy for reachable ply, and the memory saved by truncating this small per-worker table is negligible. MAX_PLY should be the single authoritative capacity unless measurement supports a deliberately smaller, explicitly tested boundary.
 
-Replacement metric. Each slot carries a usize alongside the move (killer.rs:12-15). `probe` increments that counter for every move it finds merely legal in the current position (killer.rs:46-60), and `store` evicts whichever slot has the lower count (killer.rs:65-84). The counter therefore measures how often a move was offered, not how often it produced a cutoff. A quiet move that happens to be legal across many positions and never causes a cutoff accumulates a high count and outlives a genuinely effective killer. The counter is also used to reorder the two returned moves (killer.rs:56-59), so the same wrong signal decides which killer is tried first.
+Replacement and ordering. Each slot carries a usize counter. Probe increments it whenever the stored move is legal in the current position, and store evicts the lower-count slot. This measures how often a move was offered, not how often it caused a cutoff. A frequently legal but ineffective move can become permanent while a newly successful refutation starts at zero and is preferentially evicted. Probe is therefore stateful, returned order reflects exposure rather than usefulness, and the unbounded counters can eventually overflow.
 
-The conventional alternative is a shift-down on store, where the incoming move takes the first slot and the previous first slot moves to the second. It is simpler than the present scheme and does not require a counter at all.
+Replace this with a simple two-slot recency table by default: on a distinct quiet beta cutoff, move the previous first slot to the second slot and install the new killer first. Re-storing the current first slot is a no-op. This makes slot order deterministic, keeps probe observationally read-only and leaves long-term or contextual evidence to history, counter-move and continuation-history tables. Use a fixed per-worker table covering the complete main-search ply range; legality validation remains required because a killer was learned in a different position at the same ply.
 
-This task depends on the ply refactor because the correct capacity and the correct index are both expressed in terms of ply, and re-sizing the table against a derived draft would need redoing.
+Integration. Quiet beta cutoffs already update both killers and butterfly history, hash and quiet duplicates are suppressed by staged ordering, and search-local ownership is suitable for future per-worker Lazy SMP state. Preserve those properties. Define whether killers persist only across iterative-deepening iterations or also across separate Search::run calls and future worker reuse; reset behavior must be deliberate and tested.
+
+Measurement. Existing telemetry counts legal killers offered, which is availability rather than effectiveness. Record attempted killer moves and beta cutoffs by slot after duplicate suppression so the ordering policy can be evaluated. Compare fixed-depth node counts and search throughput with killers disabled, one recency slot and two recency slots. Measure the chosen design with TASK-27. A later ablation after counter-move and continuation history lands must decide whether killers still add strength or merely duplicate stronger contextual evidence; deletion is an acceptable result if measurement supports it.
+
+This task retains the current staged-ordering architecture rather than requiring a search rewrite. It depends on TASK-64.1 because capacity and indexing are expressed in explicit ply.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The killer table covers the full ply range the search can reach, or a documented cap with an explicit and tested behaviour at the boundary
-- [ ] #2 Slot replacement no longer ranks candidates by how often they were offered
-- [ ] #3 The order in which the two killers are yielded is determined by a documented policy that reflects cutoff usefulness
-- [ ] #4 A test asserts that a killer stored at a deep ply is retrievable at that ply
-- [ ] #5 A test asserts that a frequently-legal but never-cutting move does not evict a recently successful killer
-- [ ] #6 Measured with the TASK-27 strength-regression script, with results recorded in the implementation notes
+- [ ] #1 The killer table uses MAX_PLY, or another single authoritative main-search ply bound justified by measurement, and a killer stored at the deepest supported main-search ply is retrievable there
+- [ ] #2 Probe is observationally read-only and slot replacement does not use legality, probe frequency or another exposure metric as a proxy for cutoff usefulness
+- [ ] #3 Distinct quiet beta cutoffs use a documented deterministic replacement policy; by default the newest successful killer occupies slot one and the previous distinct slot-one move shifts to slot two
+- [ ] #4 Tests cover deep-ply retrieval, neighbouring-ply isolation, duplicate stores, deterministic returned order, replacement after three distinct cutoffs and the exact supported boundary
+- [ ] #5 Killer legality validation and hash/killer/quiet duplicate suppression remain intact before unsafe move execution
+- [ ] #6 Killer reset and persistence semantics are documented and tested across iterative-deepening iterations, separate Search::run calls and the ownership model expected for Lazy SMP workers
+- [ ] #7 Telemetry distinguishes killer attempts and beta cutoffs by slot after duplicate suppression rather than reporting availability alone
+- [ ] #8 Fixed-depth node counts and search throughput are recorded for killers disabled, one recency slot and two recency slots, with the selected policy justified by the results
+- [ ] #9 The selected design is measured with the TASK-27 strength-regression script and results are recorded in implementation notes
 <!-- AC:END -->

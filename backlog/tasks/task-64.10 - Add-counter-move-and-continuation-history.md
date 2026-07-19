@@ -4,13 +4,14 @@ title: Add counter-move and continuation history
 status: To Do
 assignee: []
 created_date: '2026-07-19 13:32'
-updated_date: '2026-07-19 13:44'
+updated_date: '2026-07-19 23:49'
 labels:
   - search
   - move-ordering
 dependencies:
   - TASK-64.1
   - TASK-64.2
+  - TASK-64.3
   - TASK-64.17
 references:
   - engine/src/history.rs
@@ -25,26 +26,29 @@ ordinal: 73000
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-Quiet move ordering uses a single butterfly from-to table and nothing else. Add the counter-move heuristic and continuation history, which condition the score of a quiet move on the moves that preceded it rather than on the moving piece alone.
+Quiet move ordering currently combines a two-slot per-ply killer stage with one side-specific from-to butterfly history table. Add counter-move and continuation history so ordering can condition a quiet move on the moves that preceded it rather than only on its origin and destination.
 
-Current state. `HistoryTable` (history.rs:79-82) holds one 64x64 from-to table per side and nothing more. There is no counter-move table, no continuation history at any distance, and the ordering phases (ordering.rs:242-266) run HashTable, QueenPromotions, GoodCaptures, EqualCaptures, Killers, Quiet, BadCaptures, Underpromotions with no stage between Killers and Quiet where a counter-move would conventionally sit.
+Current state. HistoryTable holds one 64x64 from-to table per side. There is no counter-move table and no continuation history. The staged order is HashTable, QueenPromotions, GoodCaptures, EqualCaptures, Killers, Quiet, BadCaptures, Underpromotions. TASK-64.3 repairs the killer table into a small recency cache of same-ply refutations; this task must determine empirically how that cache should coexist with stronger contextual evidence rather than assuming every heuristic deserves a permanent independent stage.
 
-Continuation history is the single largest remaining move-ordering gain available once plain history is working. A from-to table cannot distinguish a quiet move that is good in general from one that is good specifically as a reply to the opponent's last move, and most quiet moves that matter are of the second kind.
+Continuation history is a major remaining move-ordering opportunity. A global from-to table cannot distinguish a move that is generally useful from one that is specifically a strong reply to the preceding position. Maintain continuation evidence for at least one and two plies back; consider additional distances only with a recorded rationale and acceptable memory/cache behavior.
 
-The counter-move heuristic is the one-ply special case: index the previous move to a single refutation move, and try it after the killers. Continuation history generalises it to a score keyed on the previous move at one, two and four plies back. Which distances to implement is a scope decision to settle and record; one and two ply are the usual minimum.
+A counter-move table is the one-ply special case that retains one candidate reply to the previous move. A dedicated counter stage after killers is a reasonable initial implementation, but it is a hypothesis rather than a required final architecture. Compare it against folding counter and killer candidates into a combined contextual quiet ranking. Also measure whether equal captures should remain ahead of killers. Prefer the simplest ordering that wins on fixed-depth node count, throughput and strength.
 
-This depends on the ply and search-stack refactor, because continuation history requires reading the move played at ply minus N, which is exactly the per-ply state that refactor introduces and which has nowhere to live today. It depends on history activation because the bonus, malus and aging scheme established there should be shared rather than reinvented per table.
+Use the per-ply search stack to obtain preceding moves. Share the bounded bonus, malus and aging scheme established for plain history rather than introducing independent unbounded counters. New candidates or stages must participate in hash, killer, counter and quiet duplicate suppression and every externally stored move must be validated before unsafe execution.
 
-Adding a counter-move stage means a new Phase variant and a corresponding Loader method. The ordering module dedups later phases against earlier ones explicitly (`dedup_segments`, ordering.rs:546-554, and the re-checks in KillerIter and QuietsIter), and a new stage must participate in that scheme rather than yield duplicates.
+This depends on TASK-64.1, TASK-64.2, TASK-64.3 and TASK-64.17. Coordinate measurement with TASK-64.3: once contextual history is active, run an ablation with killers disabled, one slot and two slots. Retaining, combining or deleting killers are all acceptable outcomes when supported by results.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A counter-move is tracked per previous move and yielded as an ordering stage after killers, participating in the existing duplicate-suppression scheme
-- [ ] #2 Continuation history is maintained for at least one and two plies back and contributes to quiet move scores
-- [ ] #3 The set of continuation distances implemented is recorded with rationale
-- [ ] #4 Bonus, malus and aging follow the scheme established for plain history rather than a separate ad hoc scheme
-- [ ] #5 A test asserts that a quiet move good only as a reply to a specific previous move is ordered ahead of a quiet move with a higher plain history score
-- [ ] #6 Node counts at fixed depth are reduced on a representative position set, with figures recorded in the implementation notes
-- [ ] #7 Measured with the TASK-27 strength-regression script, with results recorded in the implementation notes
+- [ ] #1 A counter-move is tracked by previous move and participates in ordering with complete duplicate suppression; a dedicated stage after killers may be the initial implementation but is not mandated as the final architecture
+- [ ] #2 Continuation history is maintained for at least one and two plies back and contributes to quiet move ordering
+- [ ] #3 The implemented continuation distances, indexing scheme, memory footprint and expected per-worker ownership are recorded with rationale
+- [ ] #4 Bonus, malus and aging use the bounded scheme established for plain history rather than separate unbounded or exposure-based counters
+- [ ] #5 Tests show that contextual evidence can order a reply ahead of a move with higher plain history and cover duplicate suppression against hash, killer, counter and ordinary quiet candidates
+- [ ] #6 Externally stored killer and counter candidates are legality-validated before unsafe move execution
+- [ ] #7 Fixed-depth node counts and search throughput compare a dedicated killer/counter stage with a combined contextual quiet-ranking design, and compare equal captures before versus after refutation candidates
+- [ ] #8 After contextual history is active, an ablation compares killers disabled, one slot and two slots; the recorded decision may retain, combine or remove the killer heuristic
+- [ ] #9 Representative fixed-depth node counts improve without an unacceptable throughput regression, with figures recorded in implementation notes
+- [ ] #10 The selected design is measured with the TASK-27 strength-regression script and results are recorded in implementation notes
 <!-- AC:END -->
