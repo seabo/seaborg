@@ -1,7 +1,7 @@
 ---
 id: TASK-65
 title: Stop quiescence-draft Exact entries from evicting deeper main-search entries
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-19 15:07'
@@ -60,3 +60,27 @@ Implemented one shared replacement_quality calculation for same-key and cross-sl
 
 Cross-slot victim-selection control flow and constants are unchanged; it now calls the extracted calculation that is algebraically identical to the previous inline expression. Focused TT tests and the warm-versus-cold search test pass. Same-machine base/target Criterion medians were 40.055/41.643 us (+4.0%) with deadline and 40.916/40.642 us (-0.7%) without; both are within the documented 5% investigation threshold. Hash-load base/target node counts were 2,501,994/2,501,994 (startpos), 5,241,036/5,241,117 (kiwipete), 5,780,828/5,780,828 (middlegame), and 1,839,611/1,839,719 (endgame), all unchanged or under +0.01%. Repository gates pass: fmt, strict Clippy, and workspace tests (336 passed, 0 failed, 2 ignored).
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @codex
+created: 2026-07-19 20:47
+---
+Implementation handoff
+Branch: task-65-quiescence-exact-replacement
+Worktree: /Users/seabo/seaborg-worktrees/task-65-quiescence-exact-replacement
+Base: df6f37346aa3167fe330d45fd443e84701baee8e
+Implementation target: ab829769ba19af1a0c8133eed6a9b76e45fddf10
+Resolved findings: none
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass, no warnings
+- cargo test --workspace: pass, 336 passed / 0 failed / 2 ignored
+- cargo test -p engine tt::tests: pass, 35 passed / 0 failed
+- cargo test -p engine a_warm_table_matches_the_cold_result_and_never_costs_more_nodes -- --nocapture: pass
+- cargo bench --bench search -- "search startpos depth 7": base/target medians +4.0% with deadline and -0.7% without; within 5% threshold
+- hash-load telemetry: two node counts identical; kiwipete +81 and endgame +108, both under +0.01%
+Known failures: none
+---
+<!-- COMMENTS:END -->
