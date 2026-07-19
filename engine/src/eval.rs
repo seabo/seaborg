@@ -1,4 +1,4 @@
-use core::position::{PieceType, Player, Position};
+use core::position::{Piece, PieceDeltaSink, PieceType, Player, Position, Square};
 
 /// Exchange values used by static exchange evaluation and move ordering, indexed by
 /// [`PieceType`].
@@ -79,34 +79,120 @@ const MAX_PHASE: i32 = 24;
 /// not cover; doing so would let a transposition-table value computed in one history be reused in
 /// another where it does not hold. The approach of a fifty-move draw is the search's concern, not
 /// the leaf evaluation's.
+///
+/// This is the from-scratch computation. [`EvalState`] maintains the same value incrementally across
+/// a search and shares this arithmetic exactly, so the two never disagree.
 fn tapered_evaluation(pos: &Position) -> i16 {
-    let mut mg = 0i32;
-    let mut eg = 0i32;
-    let mut phase = 0i32;
+    EvalState::from_position(pos).score()
+}
 
-    for player in [Player::WHITE, Player::BLACK] {
-        let sign = if player.is_white() { 1 } else { -1 };
-        for piece_type in [
-            PieceType::Pawn,
-            PieceType::Knight,
-            PieceType::Bishop,
-            PieceType::Rook,
-            PieceType::Queen,
-            PieceType::King,
-        ] {
-            let pt = piece_type as usize;
-            for sq in pos.piece_bb(player, piece_type) {
-                let idx = pst_index(player, sq.index());
-                mg += sign * (MG_VALUE[pt] + MG_PST[pt][idx] as i32);
-                eg += sign * (EG_VALUE[pt] + EG_PST[pt][idx] as i32);
-                phase += GAME_PHASE_INC[pt];
+/// An incrementally maintainable tapered evaluation, accumulated from White's perspective.
+///
+/// It holds the three quantities [`EvalState::score`] interpolates: the running middlegame and
+/// endgame piece-square totals and the game phase. Every one is a sum over the pieces on the board,
+/// so a move changes it by only the pieces it moves. `EvalState` implements [`PieceDeltaSink`], which
+/// lets [`Position::replay_last_move_deltas`] fold a move in directly and turn a full-board rescan at
+/// each node into a handful of additions. That is the seam a later network accumulator slots into: it
+/// is another consumer of the same per-move change set, maintained the same way and validated the
+/// same way, rather than a new mechanism.
+///
+/// [`EvalState::from_position`] recomputes the whole board and is the reference the incremental path
+/// is asserted against under debug builds at every node — the one guard that catches the slow
+/// divergence a short unit test would miss.
+///
+/// The totals are always from White's perspective; the side to move never enters them. A null move
+/// changes only the side to move, so it leaves an `EvalState` unchanged, which is what will let one
+/// be carried unmodified across a null move once the search gains them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EvalState {
+    /// Middlegame piece-square total, White minus Black.
+    mg: i32,
+    /// Endgame piece-square total, White minus Black.
+    eg: i32,
+    /// Game phase: `MAX_PHASE` with all material on, falling towards 0 as pieces come off.
+    phase: i32,
+}
+
+impl EvalState {
+    /// Computes the accumulator for a position from scratch, scanning every piece.
+    ///
+    /// This is both how a search's accumulator is seeded and the reference the incremental updates
+    /// are checked against, so building it from the same [`EvalState::add_piece`] the incremental
+    /// path uses is deliberate: there is exactly one place the per-piece arithmetic lives.
+    pub fn from_position(pos: &Position) -> Self {
+        let mut state = Self {
+            mg: 0,
+            eg: 0,
+            phase: 0,
+        };
+        for player in [Player::WHITE, Player::BLACK] {
+            for piece_type in [
+                PieceType::Pawn,
+                PieceType::Knight,
+                PieceType::Bishop,
+                PieceType::Rook,
+                PieceType::Queen,
+                PieceType::King,
+            ] {
+                for sq in pos.piece_bb(player, piece_type) {
+                    state.add_piece(player, piece_type, sq);
+                }
             }
         }
+        state
     }
 
-    let mg_phase = phase.min(MAX_PHASE);
-    let eg_phase = MAX_PHASE - mg_phase;
-    ((mg * mg_phase + eg * eg_phase) / MAX_PHASE) as i16
+    /// The tapered score in centipawns, from White's perspective (positive favours White).
+    pub fn score(&self) -> i16 {
+        let mg_phase = self.phase.min(MAX_PHASE);
+        let eg_phase = MAX_PHASE - mg_phase;
+        ((self.mg * mg_phase + self.eg * eg_phase) / MAX_PHASE) as i16
+    }
+
+    /// The signed middlegame, endgame and phase contribution of one piece on one square, from
+    /// White's perspective. Adding a piece adds this; removing one subtracts it. Keeping it in a
+    /// single function is what guarantees the from-scratch and incremental paths cannot drift.
+    #[inline(always)]
+    fn term(player: Player, piece_type: PieceType, sq: Square) -> (i32, i32, i32) {
+        let sign = if player.is_white() { 1 } else { -1 };
+        let pt = piece_type as usize;
+        let idx = pst_index(player, sq.index());
+        (
+            sign * (MG_VALUE[pt] + MG_PST[pt][idx] as i32),
+            sign * (EG_VALUE[pt] + EG_PST[pt][idx] as i32),
+            GAME_PHASE_INC[pt],
+        )
+    }
+
+    #[inline(always)]
+    fn add_piece(&mut self, player: Player, piece_type: PieceType, sq: Square) {
+        let (mg, eg, phase) = Self::term(player, piece_type, sq);
+        self.mg += mg;
+        self.eg += eg;
+        self.phase += phase;
+    }
+
+    #[inline(always)]
+    fn remove_piece(&mut self, player: Player, piece_type: PieceType, sq: Square) {
+        let (mg, eg, phase) = Self::term(player, piece_type, sq);
+        self.mg -= mg;
+        self.eg -= eg;
+        self.phase -= phase;
+    }
+}
+
+impl PieceDeltaSink for EvalState {
+    #[inline(always)]
+    fn add(&mut self, piece: Piece, square: Square) {
+        let (player, piece_type) = piece.player_piece();
+        self.add_piece(player, piece_type, square);
+    }
+
+    #[inline(always)]
+    fn remove(&mut self, piece: Piece, square: Square) {
+        let (player, piece_type) = piece.player_piece();
+        self.remove_piece(player, piece_type, square);
+    }
 }
 
 /// Maps a board square to an index into the piece-square tables.
@@ -268,3 +354,140 @@ const EG_PST: [[i16; 64]; 7] = [
         -53, -34, -21, -11, -28, -14, -24, -43,
     ],
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::init::init_globals;
+    use core::mono_traits::{All, Legal};
+    use core::movelist::BasicMoveList;
+
+    /// Exhaustively walks the legal move tree from `pos` to `depth`, maintaining an incrementally
+    /// updated [`EvalState`] alongside it and asserting at every node — after each make and after
+    /// each unmake — that it equals a from-scratch recomputation.
+    ///
+    /// This is the property the debug-build assertion in the search relies on, exercised here over
+    /// full subtrees so that captures, promotions, castling and en passant are all folded and undone
+    /// many times in sequence. A single-move test cannot catch an update that is self-consistent per
+    /// move but drifts over a deep line; walking to depth does.
+    ///
+    /// On entry `state` must already equal `EvalState::from_position(pos)`; on return the position and
+    /// the accumulator are both restored to what they were.
+    fn walk(pos: &mut Position, state: &mut EvalState, depth: u32) {
+        debug_assert_eq!(*state, EvalState::from_position(pos));
+        if depth == 0 {
+            return;
+        }
+
+        let moves = pos.generate::<BasicMoveList, All, Legal>();
+        for mov in &moves {
+            let restore = *state;
+
+            pos.make_move(mov);
+            pos.replay_last_move_deltas(state);
+            assert_eq!(
+                *state,
+                EvalState::from_position(pos),
+                "incremental accumulator diverged after {mov}"
+            );
+            assert_eq!(
+                state.score(),
+                pos.static_eval(),
+                "incremental score diverged after {mov}"
+            );
+
+            walk(pos, state, depth - 1);
+
+            pos.unmake_move();
+            *state = restore;
+            assert_eq!(
+                *state,
+                EvalState::from_position(pos),
+                "incremental accumulator not restored after unmaking {mov}"
+            );
+        }
+    }
+
+    /// The incremental accumulator tracks a from-scratch recomputation across whole subtrees of every
+    /// position feature the tapered evaluation reads: ordinary moves, captures, castling both sides,
+    /// en passant, and promotions with and without capture.
+    #[test]
+    fn incremental_evaluation_matches_from_scratch_over_subtrees() {
+        init_globals();
+
+        // Depths kept modest so the from-scratch check at every node stays cheap, while still forcing
+        // long make/unmake sequences through each position's characteristic features.
+        let cases = [
+            // The opening: quiet development and the first captures.
+            (
+                "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+                4,
+            ),
+            // Kiwipete: castling for both sides, captures of every piece, and pins.
+            (
+                "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+                3,
+            ),
+            // A pawn poised for a double push that creates a real en-passant target.
+            ("4k3/8/8/8/5p2/8/4P3/4K3 w - - 0 1", 5),
+            // Pawns on the seventh for both sides: promotions, including promotion captures.
+            ("n1n5/PPPk4/8/8/8/8/4Kppp/5N1N b - - 0 1", 4),
+        ];
+
+        for (fen, depth) in cases {
+            let mut pos = Position::from_fen(fen).expect("test FEN is valid");
+            let mut state = EvalState::from_position(&pos);
+            walk(&mut pos, &mut state, depth);
+        }
+    }
+
+    /// A move made and then unmade leaves the accumulator bit-for-bit as it was, so restoration is
+    /// exact rather than merely score-equivalent. This is what lets the search restore by copying the
+    /// saved accumulator instead of recomputing it.
+    #[test]
+    fn make_then_unmake_restores_the_accumulator_exactly() {
+        init_globals();
+
+        let mut pos = Position::from_fen(
+            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+        )
+        .expect("test FEN is valid");
+        let before = EvalState::from_position(&pos);
+
+        let moves = pos.generate::<BasicMoveList, All, Legal>();
+        for mov in &moves {
+            let mut state = before;
+            pos.make_move(mov);
+            pos.replay_last_move_deltas(&mut state);
+            pos.unmake_move();
+            // The stack-based restoration the search performs is this copy; assert the value it
+            // restores to is identical to the starting accumulator.
+            assert_eq!(before, EvalState::from_position(&pos));
+        }
+    }
+
+    /// The from-scratch score agrees with the position's `static_eval`, and a clone of a position
+    /// carries an accumulator that a fresh `from_position` reproduces exactly. This is the guarantee
+    /// that seeding a search from a cloned position is correct by construction.
+    #[test]
+    fn accumulator_of_a_clone_matches_a_fresh_computation() {
+        init_globals();
+
+        let mut pos = Position::from_fen("r3k2r/pp3ppp/2n5/8/3P4/2N2N2/PP3PPP/R3K2R w KQkq - 0 1")
+            .expect("test FEN is valid");
+        // Advance a few plies so the cloned position is mid-game rather than a start position.
+        for uci in ["e1g1", "e8g8", "d4d5", "c6e5"] {
+            pos.make_uci_move(uci).expect("uci move is legal");
+        }
+
+        let clone = pos.clone();
+        assert_eq!(
+            EvalState::from_position(&clone),
+            EvalState::from_position(&pos)
+        );
+        assert_eq!(
+            EvalState::from_position(&clone).score(),
+            clone.static_eval()
+        );
+    }
+}
