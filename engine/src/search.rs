@@ -415,6 +415,37 @@ pub struct Search<'engine> {
     /// this counter before searching its children and compares it afterwards; if it moved, the
     /// node's value depends on the current history and must not be stored as position-intrinsic
     /// exact information. See `is_history_draw` (TASK-58).
+    ///
+    /// # Transposition-table reuse policy
+    ///
+    /// The Zobrist key covers pieces, side to move, castling rights and the en-passant file. It does
+    /// not cover the halfmove clock or the move history, so a stored search value is only reusable
+    /// where those uncovered parts of the state cannot change the answer. Three rules enforce that,
+    /// and one known gap remains:
+    ///
+    /// 1. *Writes are suppressed for history-sensitive values.* A node whose subtree claimed a
+    ///    repetition or fifty-move draw is not written at all (Step 24). Downgrading `Exact` to a
+    ///    bound would not do: a draw score can raise a value to a beta cutoff as readily as it can
+    ///    cap it, so the resulting bound is unsound in an incompatible history too. Consequently no
+    ///    entry in the table embeds a draw that depends on how the position was reached.
+    ///
+    /// 2. *Reads are gated on the halfmove clock.* Because of rule 1, a stored value ignores the
+    ///    fifty-move rule; `clock_permits_tt_reuse` therefore only allows a cutoff where the rule is
+    ///    still out of reach within the stored depth.
+    ///
+    /// 3. *Leaf values are position-intrinsic.* `evaluate` does not read the clock, so the only
+    ///    clock dependence left in a propagated score is the one rules 1 and 2 handle.
+    ///
+    /// # Known gap: repetition on the read side
+    ///
+    /// Rules 1 and 2 make a stored value independent of the history it was *computed* in. They do
+    /// not make it valid in every history it is *read* in. A value computed where no descendant
+    /// repeated can still be reused on a path where a descendant now repeats a position played
+    /// before the root, and there the true value is a draw. This is the graph-history-interaction
+    /// problem, and closing it needs entries keyed or gated by path history. [`crate::tt::Entry`] is
+    /// a fully packed `u64` with no spare bits, so that means widening the entry and reworking the
+    /// table's layout, replacement policy and sizing. That is deliberately out of scope here; the
+    /// engine accepts the resulting rare misvaluation, as mainstream engines do (TASK-58).
     history_draws: u64,
     /// Flag to indicate when the search should start unwinding due to user intervention.
     stopping: &'engine AtomicBool,
@@ -657,7 +688,8 @@ impl<'engine> Search<'engine> {
         if !Node::pv() && tt_move {
             let entry = tt_entry.read();
 
-            if !entry.is_empty() && entry.depth >= depth {
+            if !entry.is_empty() && entry.depth >= depth && self.clock_permits_tt_reuse(entry.depth)
+            {
                 match entry.bound() {
                     Bound::Exact => {
                         return Some(entry.score);
@@ -947,19 +979,50 @@ impl<'engine> Search<'engine> {
         }
     }
 
+    /// Plies a subtree may be searched beyond its nominal depth, through quiescence and check
+    /// extensions. Used only to keep [`Self::clock_permits_tt_reuse`] on the conservative side of
+    /// the fifty-move boundary.
+    const HORIZON_SLACK: u32 = 16;
+
+    /// Reports whether a stored result of the given depth may be reused at this node, as far as the
+    /// halfmove clock is concerned.
+    ///
+    /// Making the static evaluation position-intrinsic is not on its own enough to make reuse
+    /// sound. A search value also reflects any fifty-move draw reachable inside its own subtree,
+    /// and whether one is reachable depends on the clock, which the Zobrist key does not cover. The
+    /// write side of this contract is enforced at Step 24: a node whose subtree claimed a fifty-move
+    /// or repetition draw is never written, so a stored value never embeds such a draw. This is the
+    /// matching read side: a value computed where the rule was out of reach must only be reused
+    /// where it is still out of reach, or a drawn line is scored as if it played on.
+    ///
+    /// The horizon is bounded by the stored depth plus [`Self::HORIZON_SLACK`], since quiescence
+    /// and check extensions can search past the nominal depth. That slack is a conservative
+    /// allowance rather than a proof: quiescence follows captures, which reset the clock, and quiet
+    /// check evasions, which do not, and the length of a forcing evasion sequence has no tight
+    /// static bound. Erring high costs only hit rate, and only near the boundary (TASK-58).
+    #[inline(always)]
+    fn clock_permits_tt_reuse(&self, entry_depth: u8) -> bool {
+        self.pos.half_move_clock() + entry_depth as u32 + Self::HORIZON_SLACK
+            < Position::FIFTY_MOVE_RULE_PLIES
+    }
+
     /// Returns the static evaluation, from the perspective of the side to move.
     ///
     /// This is deliberately *position-intrinsic*: it depends only on state that the Zobrist key
-    /// covers, and in particular not on the halfmove clock. That is what makes transposition-table
-    /// reuse sound. The key identifies pieces, side to move, castling rights and the en-passant
-    /// file, so any score derived from this evaluation is reusable at every visit to a position
-    /// with the same key, whatever the clock reads there (TASK-58).
+    /// covers, and in particular not on the halfmove clock. The key identifies pieces, side to
+    /// move, castling rights and the en-passant file, so the value returned here is the same at
+    /// every visit to a position with the same key, whatever the clock reads there (TASK-58).
     ///
     /// This evaluation previously scaled material towards zero as the halfmove clock approached
     /// the fifty-move threshold. That made every propagated score a function of a value the key
     /// does not cover, so a warm table could return a score computed under a materially different
     /// clock. The approach of a fifty-move draw is instead left to the draw detection in `search`
     /// and `quiesce`, which the search discovers within its own horizon.
+    ///
+    /// Note that this makes the *leaf* value clock-independent, which is necessary for sound
+    /// transposition-table reuse but not sufficient: a propagated value still reflects any
+    /// fifty-move draw reachable inside its own subtree. That residual dependence is what
+    /// [`Self::clock_permits_tt_reuse`] and the write suppression at Step 24 exist to contain.
     #[inline(always)]
     fn evaluate(&mut self) -> Score {
         Score::cp(self.pos.material_eval() * self.pov())
@@ -1026,7 +1089,11 @@ impl<'engine> Search<'engine> {
             // A quiescence node has depth zero, so results from quiescence or any deeper main
             // search are sufficiently deep. The stored score remains an alpha-beta bound; it is
             // never a replacement for the position's static evaluation.
-            if tt_hit && !entry.is_empty() {
+            //
+            // The clock gate applies here for the same reason it applies in the main search: a
+            // stored value never accounts for the fifty-move rule, so it may only be reused where
+            // the rule is still out of reach (TASK-58).
+            if tt_hit && !entry.is_empty() && self.clock_permits_tt_reuse(entry.depth) {
                 match entry.bound() {
                     Bound::Exact => {
                         return Some(entry.score);
@@ -1585,6 +1652,159 @@ mod tests {
             warm, cold,
             "a warm table changed the score at a different halfmove clock"
         );
+    }
+
+    /// AC#1, REV-1-01. Position-intrinsic evaluation is not on its own enough. A stored value never
+    /// accounts for the fifty-move rule, because a node whose subtree claimed the draw is not
+    /// written at all. Reusing such a value where the boundary *is* within reach scores a dead-drawn
+    /// line as if it played on, so the read side must refuse the cutoff.
+    ///
+    /// AC#1, REV-1-01. Establishes the premise the read gate exists for: one key, two materially
+    /// different true values, told apart only by the halfmove clock.
+    ///
+    /// White is a queen and a knight up against a bare king. At a fresh clock that is worth the full
+    /// 1200. At clock 96 a four-ply search sees that every quiet continuation runs the clock to 100
+    /// and draws, so its best line is to hang the queen: the king's capture resets the clock and
+    /// keeps the knight, worth 300. Reusing the 1200 where the 300 applies is the defect.
+    #[test]
+    fn the_same_key_is_worth_different_scores_at_different_halfmove_clocks() {
+        core::init::init_globals();
+
+        let score_at = |halfmove_clock: u32| {
+            let fen = format!("4k3/8/8/8/8/5N2/8/Q3K3 w - - {halfmove_clock} 1");
+            let pos = Position::from_fen(&fen).unwrap();
+            let flag = AtomicBool::new(false);
+            let table = Table::new(16);
+            let mut search = Search::new(pos, &flag, None, &table);
+            search.run::<Master>(4).unwrap().score
+        };
+
+        assert_eq!(
+            score_at(0),
+            Score::cp(1200),
+            "material is intact at a fresh clock"
+        );
+        assert_eq!(
+            score_at(96),
+            Score::cp(300),
+            "near the boundary the queen must be given up to reset the clock"
+        );
+    }
+
+    /// AC#1, REV-1-01. The main search must refuse a stored cutoff once the fifty-move boundary is
+    /// within the stored entry's reach.
+    ///
+    /// Seeding the entry directly, rather than warming the table with a real search, is deliberate:
+    /// it pins the cutoff path under test instead of depending on which keys a warming search
+    /// happens to leave behind and at what depth. The previous revision's warm-table test asserted
+    /// only that two searches agreed, which held whether or not the gate was present (REV-1-01).
+    #[test]
+    fn the_main_search_refuses_a_stored_cutoff_near_the_fifty_move_boundary() {
+        core::init::init_globals();
+
+        // Bare kings: the true value is 0, so a seeded 300 can only come from the table.
+        let seeded_score = Score::cp(300);
+        let seeded_depth = 8;
+
+        let score_at = |halfmove_clock: u32| {
+            let fen = format!("7k/8/8/8/8/8/8/K7 w - - {halfmove_clock} 1");
+            let position = Position::from_fen(&fen).unwrap();
+            let flag = AtomicBool::new(false);
+            let table = Table::new(1);
+
+            // Step 4 only takes a cutoff when the entry also carries a usable move.
+            let moves = position.generate::<BasicMoveList, AllGen, Legal>();
+            let mov = *moves
+                .iter()
+                .find(|m| format!("{m}").contains("a1b2"))
+                .expect("the king move must be legal");
+            table.probe(&position).into_inner().write(
+                &position,
+                seeded_score,
+                seeded_depth,
+                Bound::Exact,
+                &mov,
+            );
+
+            let mut search = Search::new(position, &flag, None, &table);
+            search.search_depth = 4;
+            search.pvt = PVTable::new(4);
+            search.search::<Master, NonPv>(Score::cp(299), Score::cp(300), 4)
+        };
+
+        assert_eq!(
+            score_at(0),
+            Some(seeded_score),
+            "well below the boundary the stored cutoff must still be taken"
+        );
+
+        // 90 + 8 + 16 exceeds 100, so the rule is within the entry's reach and the value it was
+        // computed under no longer applies. With the cutoff refused the position is searched, the
+        // true value of 0 is far below the window, and the null-window search fails low on alpha.
+        assert_eq!(
+            score_at(90),
+            Some(Score::cp(299)),
+            "a stored value was reused where the fifty-move rule is within its reach"
+        );
+    }
+
+    /// AC#1, REV-1-01. Quiescence probes the same table and needs the same gate.
+    #[test]
+    fn quiescence_refuses_a_stored_cutoff_near_the_fifty_move_boundary() {
+        core::init::init_globals();
+
+        let score_at = |halfmove_clock: u32| {
+            let fen = format!("7k/8/8/8/8/8/8/K7 w - - {halfmove_clock} 1");
+            let position = Position::from_fen(&fen).unwrap();
+            let flag = AtomicBool::new(false);
+            let table = Table::new(1);
+            table.probe(&position).into_inner().write(
+                &position,
+                Score::cp(300),
+                8,
+                Bound::Exact,
+                &Move::null(),
+            );
+
+            let mut search = Search::new(position, &flag, None, &table);
+            search.quiesce::<Master, NonPv>(Score::cp(299), Score::cp(300))
+        };
+
+        assert_eq!(score_at(0), Some(Score::cp(300)));
+
+        // As above, refusing the cutoff leaves a stand-pat of 0 below the window, so quiescence
+        // fails low on alpha rather than returning the seeded score.
+        assert_eq!(
+            score_at(90),
+            Some(Score::cp(299)),
+            "quiescence reused a stored value across the fifty-move boundary"
+        );
+    }
+
+    /// The clock gate must be a boundary condition, not a blanket disable: reuse has to remain
+    /// available at the clocks a search actually spends most of its time at.
+    #[test]
+    fn the_clock_gate_only_bites_near_the_fifty_move_boundary() {
+        core::init::init_globals();
+
+        let permits = |halfmove_clock: u32, entry_depth: u8| {
+            let fen = format!("4k3/8/8/8/8/5N2/8/Q3K3 w - - {halfmove_clock} 1");
+            let pos = Position::from_fen(&fen).unwrap();
+            let flag = AtomicBool::new(false);
+            let tt = Table::new(1);
+            let search = Search::new(pos, &flag, None, &tt);
+            search.clock_permits_tt_reuse(entry_depth)
+        };
+
+        assert!(permits(0, 8), "reuse must be available at a fresh clock");
+        assert!(permits(60, 8), "reuse must survive an ordinary quiet phase");
+
+        // 83 + 8 + 16 slack reaches exactly 100, the fifty-move boundary.
+        assert!(!permits(83, 8), "reuse must stop at the boundary");
+        assert!(!permits(96, 4), "reuse must stop close to the boundary");
+
+        // Deeper entries reach further, so they must be cut off sooner.
+        assert!(permits(60, 8) && !permits(60, 24));
     }
 
     /// Plays a four-ply king shuffle, returning a position whose history already contains one
