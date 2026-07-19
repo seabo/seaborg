@@ -1,11 +1,11 @@
 ---
 id: TASK-64.14
 title: Replace material-only evaluation with a tapered hand-crafted evaluation
-status: Ready to Merge
+status: Changes Requested
 assignee:
   - '@codex'
 created_date: '2026-07-19 13:33'
-updated_date: '2026-07-19 21:03'
+updated_date: '2026-07-19 21:07'
 labels:
   - evaluation
   - strength
@@ -176,6 +176,17 @@ Verification:
 - cargo test --workspace: pass (43 core; 266 engine passed, 2 ignored; 19 integration; 1 doc test)
 - /tmp/seaborg-strength-64_14-rework/artifacts-razoring-depth6/report.json: present and matches recorded 10W-0D-10L result
 - perft/movegen benchmark: not verdict evidence because these benches do not exercise static evaluation; another task was also actively benchmarking, so the machine did not meet the required idle condition
+---
+
+author: @codex
+created: 2026-07-19 21:07
+---
+Merge integration failure
+Primary tip tested: c7826f15b267cd89b0c1c02c97b5294f6ec9bf57
+Detached trial merge: dadd71d
+Failing command: clean-CARGO_TARGET_DIR cargo clippy --workspace --all-targets --all-features -- -D warnings
+Evidence: benches/search.rs:186 still calls Position::material_eval(), which TASK-64.14 replaces with static_eval(); Clippy also reports the Evaluation import unused as a consequence. The benchmark file landed on master after the task's recorded base, so the approved target passed in isolation but does not integrate with the live primary tip.
+Expected rework: update the search evaluation benchmark to call and describe static_eval(), verify the benchmark still measures the intended evaluator, then rerun the repository gates. cargo fmt --check passed and cargo test --workspace passed on the trial merge, but strict Clippy is a blocking integration gate. Master was not advanced.
 ---
 <!-- COMMENTS:END -->
 
