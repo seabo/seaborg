@@ -1,7 +1,7 @@
 ---
 id: TASK-57
 title: Rewrite the transposition table around clustered verified snapshots
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-19 00:00'
@@ -105,3 +105,28 @@ Deliberate decisions the reviewer should weigh:
 3. `Table::probe`/`store` take a raw `u64` key rather than `&Position`. Positions cannot be constructed with chosen keys, so a `&Position` API would have made the adversarial index/key tests inexpressible.
 4. `SearchEngine::clear_hash` now takes `&mut self` and panics if a search still holds the table. Both existing callers already join their worker first, so the boundary is met; the panic is deliberate, since the alternative is silently clearing under a live worker.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @codex
+created: 2026-07-19 12:55
+---
+Implementation handoff
+Branch: task-57-tt-clustered-snapshots
+Worktree: /Users/seabo/seaborg-worktrees/task-57-tt-clustered-snapshots
+Base: 9b7bf3392ccd4adf43effdaa990bacb45c40a15c
+Implementation target: fe46d6d81bde8e685f0c69b174805fd629b0c82d
+Resolved findings: none (first implementation attempt)
+Verification:
+- cargo fmt --check: clean
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean, no warnings
+- cargo test --workspace: 279 passed, 0 failed, 2 ignored (both pre-existing #[ignore])
+- cargo bench --bench tt: recorded in BENCHMARKS.md
+- cargo bench --bench search, round-robin base vs target over 3 rounds: level (42.48 us vs 42.11 us, best of three, with deadline)
+- go depth 10 from startpos, round-robin base vs target over 9 rounds: identical score and PV at every depth; 4,883,269 -> 4,762,311 nodes (2.5% fewer, exact and reproducible); best time 882 ms vs 891 ms, inside the machine's drift band
+Known failures: none
+
+Note for the reviewer: master has moved since this branch was cut. TASK-55 merged as 909d54e after this base commit, so the branch is behind primary. Nothing here touches the search-documentation change TASK-55 made, but the merge gate will be integrating against a newer tip than the measured base.
+---
+<!-- COMMENTS:END -->
