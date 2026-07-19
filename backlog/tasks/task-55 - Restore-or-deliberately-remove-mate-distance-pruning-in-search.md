@@ -1,11 +1,11 @@
 ---
 id: TASK-55
 title: Restore or deliberately remove mate-distance pruning in search
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-18 23:42'
-updated_date: '2026-07-19 12:26'
+updated_date: '2026-07-19 12:32'
 labels:
   - engine
   - search
@@ -51,6 +51,8 @@ Decide deliberately between reinstating correct position-relative mate-distance 
 Deliberately removed mate-distance pruning as a claimed optimisation: with position-relative mate scores, ply-from-root cannot tighten a node's attainable mate range, so reinstating the old root-relative bounds would be unsound. Retained the clamp and collapsed-window return solely as required node-score/INF/child-bound sanitation from TASK-56; production behavior is unchanged.
 
 Verification evidence: focused out-of-band search and quiescence tests passed; gives_correct_answers passed; the ignored debug wac_root_scores_format_without_panicking sweep passed all 900 searches in 315.76s. Criterion target/base comparison at startpos depth 7 was target [40.457, 40.539, 40.639] us versus base [40.594, 40.663, 40.745] us; no-deadline target [40.314, 41.673, 43.458] us versus base [40.154, 40.227, 40.310] us, reported as no performance change. Required fmt, strict Clippy, and workspace tests all passed.
+
+Merge verification on integrated commit ac3668707622431bd2dfd34b61a339fcded49807: cargo fmt --check passed; clean CARGO_TARGET_DIR strict Clippy passed; cargo test --workspace passed (43 core, 205 engine, 5 build-metadata, 1 doc; 0 failed). No merge-time benchmark was required because the landed implementation changes comments and task metadata only.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -100,6 +102,12 @@ Verification:
 Scope and immutability: 13af47e descends from the recorded base; the sole later commit c0d05d9 changes only TASK-55 handoff metadata. No implementation file changed after the target, no #[allow] was added, and the worktree was clean at review start.
 
 Approved implementation SHA: 13af47e7aa653810fae3d4556854f76cc07dc29c
+---
+
+author: @codex
+created: 2026-07-19 12:32
+---
+Merged locally onto master as ac3668707622431bd2dfd34b61a339fcded49807 after compare-and-swap verification against primary tip 9b7bf3392ccd4adf43effdaa990bacb45c40a15c. Integration gates passed: cargo fmt --check; fresh-target cargo clippy --workspace --all-targets --all-features -- -D warnings; cargo test --workspace. No code overlap with primary changes since the recorded base and no executable hot-path change requiring a merge-time benchmark.
 ---
 <!-- COMMENTS:END -->
 
