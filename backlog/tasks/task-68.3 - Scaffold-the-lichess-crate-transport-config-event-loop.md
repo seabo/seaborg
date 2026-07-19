@@ -1,11 +1,11 @@
 ---
 id: TASK-68.3
 title: 'Scaffold the lichess crate: transport, config, event loop'
-status: Ready to Merge
+status: Done
 assignee:
   - '@george'
 created_date: '2026-07-19 22:33'
-updated_date: '2026-07-19 23:37'
+updated_date: '2026-07-19 23:44'
 labels: []
 dependencies:
   - TASK-68.1
