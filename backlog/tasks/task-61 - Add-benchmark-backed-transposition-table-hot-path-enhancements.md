@@ -1,11 +1,11 @@
 ---
 id: TASK-61
 title: Add benchmark-backed transposition-table hot-path enhancements
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-19 00:01'
-updated_date: '2026-07-19 20:18'
+updated_date: '2026-07-19 20:27'
 labels:
   - transposition-table
   - performance
@@ -176,10 +176,38 @@ Known failures: none
 
 Reviewer note: this is a fresh immutable target created solely to re-integrate the approved b76a0c2 work onto current primary after a merge eject. The code delta from that prior-approved target is limited to the two prefetch call sites now sitting after make_move_unchecked(&mov) and before the ply-carrying quiesce recursion (TASK-64.1 signatures); tt.rs, benches/search.rs and BENCHMARKS.md are unchanged from the approved target. AC#3's benefit remains mechanism-based and explicitly unquantified as before (documented in BENCHMARKS.md); the machine still carries concurrent load, so a clean round-robin was not obtainable.
 ---
+
+author: @claude
+created: 2026-07-19 20:26
+---
+Review attempt: 2
+Reviewed branch: task-61-tt-hot-path-enhancements
+Reviewed implementation: c6bf7622fd657932389b59b68fe9940edde898d1
+Verdict: approved
+
+Independent review of the full base-to-target diff (aa915d8..c6bf762). This target is a stale-base re-integration of the previously-approved b76a0c2 onto current primary after a merge eject (comment #3). Target immutability confirmed: c6bf762 descends from base aa915d8, the sole post-target commit (652787a) touches only the task file, and the code diff target..tip is empty.
+
+Re-integration faithfulness: tt.rs, benches/search.rs and BENCHMARKS.md are byte-identical to the approved b76a0c2 (empty diff). The search.rs task-delta over the new primary is exactly the two prefetch calls, correctly placed against TASK-64.1's new signatures: self.tt.prefetch(self.pos.zobrist().0) sits after 'unsafe { self.pos.make_move_unchecked(&mov) }' in both the main search and quiescence, and before the ply-carrying quiesce(..., ply + 1) recursion. The aa915d8..c6bf762 code diff is exactly Search::trace() + 2 prefetch calls (search.rs), Table::prefetch + prefetch_moves_no_observable_state (tt.rs), the 'search hash load' / 'static evaluation' bench harness (benches/search.rs), and BENCHMARKS.md. No accidental or out-of-scope changes.
+
+Acceptance criteria:
+- AC#1 (baseline harness): PROVEN. benches/search.rs 'search hash load' group over four fixed-depth positions with the table cleared outside the timed region, plus report_hash_load_telemetry printing exact nodes/probes/hits/hashfull. Documented in BENCHMARKS.md.
+- AC#2 (static eval specified + gated): PROVEN. Value/validity conditions specified; rejected on measured 2.8 ns material_eval (3.6% ceiling of a ~78 ns node, unreachable given 20-48% hit rates) and on entry space (RESERVED_MASK = 0x7FFF<<48 is exactly 15 spare bits vs 16 for an i16); TASK-50/51/52 read the current node's eval so gain nothing; TASK-58 interaction addressed (position-intrinsic); revisit condition recorded.
+- AC#3 (prefetch evaluated + conditionally retained): ACCEPTED on mechanism grounds. The positive speed benefit is unquantified: the machine is under sustained load (I independently confirmed load avg ~11), the worst case for a latency-hiding benchmark, so a clean base-vs-target round-robin is unobtainable, exactly as documented. Retention is justified by affirmatively-proven no-harm: node-count neutrality by construction (a hint changes no observable state; pinned by prefetch_moves_no_observable_state), portability (empty body on unsupported targets), and safety (two contained unsafe blocks each with a correct SAFETY comment; x86_64 _mm_prefetch cannot fault, aarch64 prfm hint is readonly/nostack/preserves_flags). The task owner accepted mechanism-based retention in lieu of a measured benefit; BENCHMARKS.md records the revisit-on-idle-hardware condition. This matches review attempt 1's finding on the identical code.
+- AC#4 (coverage + recorded rejection): PROVEN. Rejected candidate's measurements and decision are in BENCHMARKS.md; retained candidate has the node-neutrality regression test and the benchmark harness.
+- AC#5 (compact layout asserted): PROVEN. Layout unchanged; cluster_is_one_cache_line_and_slots_fill_it and clusters_are_cache_line_aligned_in_the_allocation pass.
+
+Comment quality, SAFETY justifications, and #[allow] usage checked: comments are self-contained; no #[allow] introduced; no scope creep.
+
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean (fresh CARGO_TARGET_DIR)
+- cargo test --workspace: pass (43 + 265 + 19 + 1; 2 ignored pre-existing perft suites)
+- Hot-path benchmark round-robin: not run to a verdict; sustained machine load (avg ~11) precludes a clean measurement, and the change is node-count-neutral by construction so it carries no search-quality regression risk.
+---
 <!-- COMMENTS:END -->
 
 ## Final Summary
 
 <!-- SECTION:FINAL_SUMMARY:BEGIN -->
-Evaluated two TT hot-path candidates against a new reproducible hash-loading search benchmark: retained child-cluster prefetching, rejected storing the static eval. Reviewed target b76a0c2. Verified: cargo fmt --check (pass); cargo clippy --workspace --all-targets --all-features -- -D warnings (clean, fresh CARGO_TARGET_DIR); cargo test --workspace (43+245+17+1 pass, 2 pre-existing ignored perft suites), including prefetch_moves_no_observable_state and cluster_is_one_cache_line_and_slots_fill_it. AC#3's repeatable-benefit measurement was unobtainable under sustained machine load (avg 6.1, worst case for a latency-hiding benchmark); prefetch retained on mechanism grounds (proven node-count-neutral and portability/safety no-harm, standard technique), accepted by the task owner this review session in lieu of a measured benefit.
+Evaluated two TT hot-path candidates against a new reproducible hash-loading search benchmark: retained child-cluster prefetching, rejected storing the static eval. Reviewed re-integration target c6bf762 (base aa915d8), a faithful re-integration of the previously-approved b76a0c2 onto current primary after a stale-base merge eject; tt.rs, benches/search.rs and BENCHMARKS.md are byte-identical to the approved target, and the two prefetch calls sit correctly after make_move_unchecked(&mov) and before the ply-carrying quiesce (TASK-64.1 signatures). Verified on the target: cargo fmt --check (pass); cargo clippy --workspace --all-targets --all-features -- -D warnings (clean, fresh CARGO_TARGET_DIR); cargo test --workspace (43+265+19+1 pass, 2 pre-existing ignored perft suites), incl. prefetch_moves_no_observable_state and cluster_is_one_cache_line_and_slots_fill_it. AC#3's positive speed benefit is unquantified: the machine remains under sustained load (avg ~11), independently confirmed, so a clean round-robin is unobtainable; prefetch retained on mechanism grounds (proven node-count-neutral and portability/safety no-harm, standard technique) per the task owner's recorded decision, with the idle-hardware revisit condition recorded in BENCHMARKS.md.
 <!-- SECTION:FINAL_SUMMARY:END -->
