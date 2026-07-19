@@ -1,10 +1,11 @@
 ---
 id: TASK-62
 title: Adopt the cburnett piece set under its BSD 3-clause option
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-19 01:27'
-updated_date: '2026-07-19 01:34'
+updated_date: '2026-07-19 14:25'
 labels: []
 dependencies: []
 references:
@@ -94,3 +95,16 @@ Note that this does **not** discharge the attribution obligation described above
 - [ ] #9 The white and black pieces are visually distinguishable under the chosen coloring model, and the drag, arrival, capture, and snapback animations still render correctly
 - [ ] #10 Implementation notes state which coloring model was chosen and whether the promotion chooser moved off Unicode glyphs, with the reasoning for each
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Download the twelve cburnett originals from Wikimedia Commons (Special:FilePath/Chess_<piece><color>t45.svg) into a scratch dir; record each source URL and SHA-256 so provenance is traceable and not inherited from any downstream bundle.
+2. Rebuild engine/src/ui/assets/pieces.svg from those files: wrap each source <g> in <symbol id="<color>-<kind>" viewBox="0 0 45 45">, preserving cburnett fills and strokes verbatim; keep the twelve existing symbol ids exactly so pieceAssetId interpolation and the committed JS are untouched. Drop the old <defs><style> .body/.detail contract, which the new artwork does not use.
+3. Coloring model: keep the artwork's baked colors and retire the CSS coloring layer. Remove .piece color, .piece-white/.piece-black color, and the .piece-white use / .piece-black use stroke rules from style.css; keep sizing, drop-shadow, and every drag/arrival/capture/snapback class.
+4. Add engine/src/ui/assets/pieces.svg.LICENSE.md following the tools/strength/openings-v1.LICENSE.md precedent: names Colin M.L. Burnett, states the BSD 3-clause election from the Commons multi-license, reproduces the full BSD 3-clause notice/conditions/disclaimer, and lists per-file source URLs with checksums.
+5. Make the notice reach a user of the built binary two ways: export it as a pub const from the engine ui module, serve it at GET /licenses as text/plain with a footer link on the page (new const + route arm + method-not-allowed entry), and add a --licenses flag to the CLI that prints it and exits.
+6. Extend engine/src/ui/tests.rs: /licenses content type and body markers, POST /licenses is 405, and the sprite defines all twelve <symbol> ids.
+7. Real-browser run against the loopback UI: confirm no CSP violation or console error, all twelve pieces render in both orientations, 64 squares stay equal and square at desktop and narrow widths, and the animations still play.
+8. Run cargo fmt --check, strict clippy, cargo test --workspace, the node frontend tests, and confirm engine/src/ui/assets/*.js is byte-identical.
+<!-- SECTION:PLAN:END -->

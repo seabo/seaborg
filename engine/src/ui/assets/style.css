@@ -242,6 +242,18 @@ h2 {
   background: transparent;
 }
 
+/*
+ * The piece artwork carries its own fills and strokes, so nothing here colours it.
+ *
+ * An earlier sprite drew white and black from identical geometry and separated them with
+ * `currentColor` and an inherited stroke set from these rules. The current set draws the two
+ * colours as genuinely different artwork — black pieces carry white interior detail lines that no
+ * single inherited stroke colour can express — so driving it from CSS would mean repainting the
+ * artwork rather than styling it. Sizing and the drop shadow stay; the colour is the asset's.
+ *
+ * `.piece-white` and `.piece-black` are still emitted on each piece element and remain available
+ * as hooks, but deliberately carry no colour of their own.
+ */
 .piece {
   position: relative;
   z-index: 1;
@@ -249,25 +261,8 @@ h2 {
   width: 86%;
   height: 86%;
   overflow: visible;
-  color: #182121;
   filter: drop-shadow(0 0.13rem 0.08rem rgb(0 0 0 / 0.28));
   pointer-events: none;
-}
-
-.piece.piece-white {
-  color: #f4f1dd;
-}
-
-.piece.piece-black {
-  color: #182121;
-}
-
-.piece-white use {
-  stroke: #25302f;
-}
-
-.piece-black use {
-  stroke: #dce4d5;
 }
 
 .drag-origin > .piece {
@@ -547,6 +542,19 @@ button.danger:hover:not(:disabled) {
   color: var(--muted);
   font-size: 0.76rem;
   line-height: 1.5;
+}
+
+.colophon {
+  margin-top: 1.5rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+.colophon a {
+  color: var(--blue);
 }
 
 .promotion-dialog {

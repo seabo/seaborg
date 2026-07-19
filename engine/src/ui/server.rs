@@ -1,6 +1,6 @@
 //! The loopback HTTP server exposing the game controller to a local browser.
 //!
-//! The surface is deliberately fixed: six embedded assets, one state document, one event
+//! The surface is deliberately fixed: seven embedded assets, one state document, one event
 //! stream, and five bounded commands. There is no file-path routing and no general engine
 //! command endpoint, so nothing outside this list is reachable however the request is spelled.
 
@@ -27,6 +27,14 @@ const BOARD_JS: &str = include_str!("assets/board.js");
 const FORMAT_JS: &str = include_str!("assets/format.js");
 const STYLE_CSS: &str = include_str!("assets/style.css");
 const PIECES_SVG: &str = include_str!("assets/pieces.svg");
+
+/// The notice the embedded piece artwork is distributed under.
+///
+/// The artwork is third-party work taken under a permissive license whose one condition is that
+/// this notice reaches whoever receives the binary. Seaborg ships the artwork inside the
+/// executable, so the notice has to ship inside it too: a file in the source tree would not reach
+/// someone who only ever runs the built program. It is served here and printed by `--licenses`.
+pub const PIECE_ARTWORK_LICENSE: &str = include_str!("assets/pieces.svg.LICENSE.md");
 
 /// The marker in the embedded page replaced with this process's session token.
 const TOKEN_PLACEHOLDER: &str = "__SEABORG_TOKEN__";
@@ -540,6 +548,13 @@ fn route(stream: &mut TcpStream, request: &Request, state: &ServerState) -> io::
             NO_STORE,
             PIECES_SVG.as_bytes(),
         ),
+        ("GET", "/licenses") => write_response(
+            stream,
+            Status::Ok,
+            "text/plain; charset=utf-8",
+            NO_STORE,
+            PIECE_ARTWORK_LICENSE.as_bytes(),
+        ),
         ("GET", "/api/state") => {
             let (_, json) = state.session.current();
             write_json(stream, Status::Ok, &json)
@@ -556,6 +571,7 @@ fn route(stream: &mut TcpStream, request: &Request, state: &ServerState) -> io::
         | (_, "/format.js")
         | (_, "/style.css")
         | (_, "/pieces.svg")
+        | (_, "/licenses")
         | (_, "/api/state")
         | (_, "/api/events") => write_error(stream, Status::MethodNotAllowed, "method_not_allowed"),
         (_, "/api/move")
