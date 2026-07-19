@@ -1,11 +1,11 @@
 ---
 id: TASK-61
 title: Add benchmark-backed transposition-table hot-path enhancements
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-19 00:01'
-updated_date: '2026-07-19 20:27'
+updated_date: '2026-07-19 20:33'
 labels:
   - transposition-table
   - performance
