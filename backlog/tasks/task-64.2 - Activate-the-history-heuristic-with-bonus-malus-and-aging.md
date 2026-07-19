@@ -1,10 +1,11 @@
 ---
 id: TASK-64.2
 title: 'Activate the history heuristic with bonus, malus and aging'
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@george'
 created_date: '2026-07-19 13:30'
-updated_date: '2026-07-19 13:44'
+updated_date: '2026-07-19 21:10'
 labels:
   - search
   - move-ordering
@@ -44,3 +45,13 @@ Whether history should be retained across moves within a game, rather than reset
 - [ ] #7 The history value read at the ordering sites is not narrowed by a truncating cast: search.rs:1499 and search.rs:1559 currently cast a u32 table value to i16, which wraps above 32767 and orders a repeatedly successful quiet move last
 - [ ] #8 A test drives a history value past the storage boundary of the ordering score type and asserts the move is still ordered ahead of an untrained move
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Replace the unsigned accumulating history entry with a signed, bounded gravity update and depth-squared bonus/malus helpers, retaining per-search lifetime so iterative-deepening evidence carries forward without leaking between unrelated UCI searches.
+2. Track previously searched quiet moves at each main-search node; on a quiet beta cutoff reward the cutoff move and penalize those failed quiet predecessors.
+3. Widen ordering scores to i32 end-to-end so bounded history values above i16::MAX remain ordered without truncation.
+4. Add focused history and staged-ordering regressions covering bounded updates, bonus/malus behavior, trained quiet ordering, and values beyond the former i16 boundary.
+5. Run focused tests, the TASK-27 strength-regression smoke comparison, and all repository-required formatting, strict Clippy, and workspace tests; record evidence and hand off an immutable commit for review.
+<!-- SECTION:PLAN:END -->
