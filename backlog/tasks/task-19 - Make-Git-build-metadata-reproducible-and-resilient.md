@@ -1,11 +1,11 @@
 ---
 id: TASK-19
 title: Make Git build metadata reproducible and resilient
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-19 14:47'
+updated_date: '2026-07-19 14:54'
 labels:
   - build
   - metadata
@@ -70,6 +70,23 @@ Verified empirically rather than by inspection:
 - Source archive with no .git ('git archive HEAD' extracted outside any repository): cargo check succeeds, GIT_HASH=unknown.
 - SEABORG_GIT_HASH=pinned-1.2.3: embedded verbatim, repository watches suppressed.
 - Baseline in-repo build: GIT_HASH equals HEAD, three watch paths declared.
+
+Rework for review attempt 1.
+
+Resolved REV-1-01. Confirmed the finding first, independently: a declared-but-missing rerun-if-changed path leaves the unit Dirty on every subsequent build, and since the script re-emits the same path each rerun the crate recompiles forever. Reproduced at the reviewed target in a packed clone ('the file .git/refs/heads/<branch> is missing' on every invocation).
+
+The fix establishes an invariant: every emitted watch path exists at emit time. Since a branch ref is stored either loose or packed, no single file can satisfy that, so the ref's containing directory is watched instead of the ref file. Cargo scans a watched directory recursively (verified: creating, removing, and rewriting a nested file in place each mark the unit dirty), so a commit and both directions of the loose/packed transition remain observable. The climb to the nearest surviving ancestor handles a packed hierarchical name such as refs/heads/feature/work whose intermediate levels do not exist, and stops at 'refs' so the object store is never scanned — watching the Git directory itself would be both expensive and permanently dirty. packed-refs is watched additionally when present, because a packed ref can change value without touching any directory.
+
+Factored a pure watch_paths(git_dir, common_dir, head_contents) so layout rules are testable against synthetic repositories rather than only the current checkout. Seven new tests cover the loose layout, the fully packed layout, a packed hierarchical name, the refs floor, the linked-worktree split, a detached HEAD, and an exhaustive presence/absence sweep asserting no returned path is missing.
+
+Resolved REV-1-02. Verified the reviewer's reading: engine/src/engine.rs emits 'id name {name} {version}' with no commit, and the commit appears only in the startup banner written to the diagnostic channel. README now says so.
+
+Empirical verification of the fix, each built twice or more:
+- Packed clone (reviewer trigger b): build 2 and 3 Fresh; an empty commit reruns the script, embeds the new HEAD, then settles Fresh.
+- git-init repo with no packed-refs file (reviewer trigger a): builds 2 and 3 Fresh; a commit reruns.
+- Loose clone: Fresh on no-op; 'git pack-refs --all' reruns, then settles Fresh.
+- Linked worktree (this one): emits worktree-local HEAD, the shared .git/refs/heads directory, and packed-refs; GIT_HASH equals HEAD.
+- Re-verified the previously proven behaviour after the rewrite: git absent from PATH and a repo-less source archive both build with GIT_HASH=unknown and no watch paths, and the archive stays Fresh on rebuild; SEABORG_GIT_HASH='  pinned-1.2.3  ' embeds 'pinned-1.2.3' with watches suppressed; a whitespace-only value falls through to discovery.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -189,5 +206,25 @@ Verification (all run by the reviewer on 7935a33, not taken from the handoff):
   pre-existing at the base commit.
 - Benchmarks not run: the diff touches only build-time metadata emission and no move generation or
   search code.
+---
+
+author: @claude
+created: 2026-07-19 14:54
+---
+Implementation handoff
+Branch: task-19-git-build-metadata
+Worktree: /Users/seabo/seaborg-worktrees/task-19-git-build-metadata
+Base: 74494612f016a6f44e2bd23bd73661e99a96dc3a
+Implementation target: a85e60451ce0fd7eaddbe9dfbcab56c6d339f1c1
+Resolved findings: REV-1-01, REV-1-02
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass, no warnings
+- cargo test --workspace: pass, 43 + 235 + 17 + 1 tests, 0 failed, 2 ignored (pre-existing)
+- no-op rebuild stays Fresh: verified in a packed clone, a loose clone, a git-init repo with no packed-refs, and a repo-less source archive
+- revision changes still rerun: verified by an empty commit in the packed and git-init repos, and by 'git pack-refs --all' in the loose clone
+Known failures: none
+
+Note for the reviewer: the two non-blocking observations from review attempt 1 were left alone as out of scope. 'cargo package' still fails at base and target on the pre-existing 'dependency core does not specify a version', and the 'Acceptance #3/#4/#5' comments at engine/src/engine.rs:413 and :527 predate this branch.
 ---
 <!-- COMMENTS:END -->
