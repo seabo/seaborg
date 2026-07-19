@@ -309,9 +309,8 @@ impl<'a> Parser<'a> {
         // - movetime
         // - infinite
         //
-        // We only support time control, depth and infinite for now. We'll match on the next
-        // token, and handle the legitimate UCI commands with a panic saying that we don't support
-        // that time control (or we could just return `go infinite` and at least not crash).
+        // Time control, depth, nodes, movetime and infinite are supported; the remaining
+        // legitimate UCI subcommands are rejected as unsupported rather than silently ignored.
 
         match self.peek() {
             Some(tok) => match *tok {
@@ -323,7 +322,7 @@ impl<'a> Parser<'a> {
                 Token::Kw(Keyword::Binc) => self.parse_time_control(),
                 Token::Kw(Keyword::MovesToGo) => self.parse_time_control(),
                 Token::Kw(Keyword::Depth) => self.parse_depth(),
-                Token::Kw(Keyword::Nodes) => self.unsupported_time_control(),
+                Token::Kw(Keyword::Nodes) => self.parse_nodes(),
                 Token::Kw(Keyword::Mate) => self.unsupported_time_control(),
                 Token::Kw(Keyword::MoveTime) => self.parse_movetime(),
                 Token::Kw(Keyword::Infinite) => self.parse_infinite(),
@@ -403,6 +402,13 @@ impl<'a> Parser<'a> {
 
         let movetime = self.parse_u64()?;
         self.expect_end(Ok(Command::Go(TimingMode::MoveTime(movetime))))
+    }
+
+    fn parse_nodes(&mut self) -> PResult {
+        self.advance().ok_or(Error::UnexpectedEnd)?;
+
+        let nodes = self.parse_u64()?;
+        self.expect_end(Ok(Command::Go(TimingMode::Nodes(nodes))))
     }
 
     fn unsupported_time_control(&mut self) -> PResult {
@@ -571,6 +577,8 @@ mod tests {
             "go depth 256",
             "go depth 999999999999999999999999999999999999",
             "go movetime 999999999999999999999999999999999999",
+            "go nodes 999999999999999999999999999999999999",
+            "go nodes notanumber",
             "setoption name Hash value 0",
             "setoption name Hash value 1025",
             "perft 999999999999999999999999999999999999",
@@ -592,6 +600,7 @@ mod tests {
             "go depth 1 extra",
             "go infinite extra",
             "go movetime 1 extra",
+            "go nodes 1 extra",
             "move e2e4 extra",
             "perft 1 extra",
         ] {
@@ -618,6 +627,20 @@ mod tests {
         assert!(matches!(
             command,
             Command::Go(TimingMode::MoveTime(4_294_967_296))
+        ));
+    }
+
+    #[test]
+    fn parses_go_nodes() {
+        assert!(matches!(
+            Parser::parse("go nodes 100000"),
+            Ok(Command::Go(TimingMode::Nodes(100_000)))
+        ));
+
+        // A datagen budget can run to billions of nodes, so the count must not narrow to u32.
+        assert!(matches!(
+            Parser::parse("go nodes 4294967296"),
+            Ok(Command::Go(TimingMode::Nodes(4_294_967_296)))
         ));
     }
 

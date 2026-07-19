@@ -204,3 +204,116 @@ The `cargo bench --bench search` harness was also run round-robin over three
 rounds and showed the two commits level (base 42.48 µs, TASK-57 42.11 µs, best of
 three, with deadline). That harness is not sensitive to this change and is
 reported only to show it did not move.
+
+## Transposition-table hot-path enhancements
+
+Two hot-path candidates were evaluated against the hash-loading search benchmark
+rather than adopted on the usual folklore: storing a position's static evaluation
+in its entry, and prefetching a child's cluster before the recursive descent.
+Storing the eval was rejected on the arithmetic below; prefetching was retained.
+Both records exist so neither experiment is rediscovered from scratch.
+
+### The measurement harness
+
+`cargo bench --bench search` gained a `search hash load` group. The pre-existing
+`search startpos depth 7` pair cannot see a transposition-table change: criterion
+re-runs its closure against a table the previous iteration left warm, which
+answers nearly every probe with an immediate cutoff and collapses the tree from
+135k nodes to 579. The new group instead searches four positions to fixed depths
+large enough to load a 16MB table, clearing the table *outside* the timed region
+so every iteration searches the whole tree.
+
+Node counts and probe outcomes are printed before the timings, because elapsed
+time alone cannot attribute a change: a search that finishes sooner over the same
+nodes got cheaper per node, one that finishes sooner over fewer nodes got better
+informed, and the two call for opposite conclusions. Unlike the timings these
+figures are exact and reproduce run to run.
+
+| Position | Nodes | Probes | Hit rate | `hashfull` |
+| --- | ---: | ---: | ---: | ---: |
+| `startpos depth 9` | 2,501,994 | 2,501,994 | 45.6% | 648 |
+| `kiwipete depth 8` | 5,241,036 | 5,241,036 | 20.6% | 1000 |
+| `middlegame depth 8` | 5,780,828 | 5,780,828 | 21.3% | 1000 |
+| `endgame depth 11` | 1,839,611 | 1,839,611 | 48.2% | 513 |
+
+Per-node cost derived from these is about 75–82 ns: `startpos` runs 2.50M nodes
+in a clean ~187 ms, `endgame` 1.84M in ~150 ms. That figure is the denominator
+for both decisions below.
+
+Run it with:
+
+```sh
+cargo bench --bench search -- "hash load"
+```
+
+### Rejected: storing the static evaluation in the entry
+
+Two facts, either sufficient on its own, reject it.
+
+**It does not pay.** A `static evaluation` benchmark group measures one
+`material_eval` call at **2.8 ns** across all four positions. Against a ~78 ns
+node that is 3.6%, and 3.6% is an unreachable ceiling, not the expected saving: a
+value must be computed at least once to be stored, so the recompute is only ever
+avoided on a *later* probe that hits, and only 20–48% of probes hit. The
+realistic saving is a fraction of a fraction of one node's cost. This engine's
+evaluation is ten popcounts on bitboards already in cache; the technique exists
+for evaluations that are expensive, which this is not.
+
+**It does not fit.** The data word documents exactly 15 spare bits (`bits 48..63`,
+the `RESERVED_MASK`), and those bits are the entry's entire migration headroom —
+what lets a future field be added without rewriting every stored entry. An `i16`
+evaluation needs 16 bits, so it would not merely spend that headroom but overrun
+it, forcing the entry from 16 bytes to a wider slot and halving entries per
+megabyte a second time on top of the density already traded away at TASK-57.
+
+**The imminent pruning consumers do not need it either.** TASK-50's futility and
+null-move pruning read the static evaluation of the node they are *already at*,
+which the search computes at step 6 before either pruning step is reached. Neither
+wants an ancestor's or a stored eval, so a table-resident eval buys them nothing.
+
+The condition to revisit is explicit: if the evaluation stops being material-only
+— a piece-square table, or an NNUE whose per-call cost is tens to hundreds of
+nanoseconds — re-run the `static evaluation` group and redo this arithmetic. At
+that point the saving may justify a wider entry. It does not now.
+
+### Retained: prefetching the child cluster
+
+`Table::prefetch` issues a hardware prefetch hint (`_mm_prefetch` on x86_64, a
+`prfm pldl1keep` hint on aarch64 since `core::arch::aarch64::_prefetch` is still
+unstable, and an empty body elsewhere). The search calls it immediately after
+`make_move`, in both the main search and quiescence, at the earliest point the
+child's key exists — so the cache miss the child's probe would take begins
+overlapping the recursive descent instead of stalling in front of it.
+
+It is retained on mechanism and risk rather than on a measured speedup, because a
+clean speedup could not be obtained: every benchmarking round of this task ran on
+a machine carrying sustained load from other worktrees' benchmarks (load average
+4–6 throughout), and a prefetch benchmark is precisely the worst case for that
+contention, since its entire mechanism is hiding memory latency that a contended
+memory bus changes. The minimum-of-six-rounds figures were `startpos` 197.3 →
+185.6 ms (−5.9%) and `endgame` 154.3 → 155.6 ms (+0.8%): a non-negative direction,
+clearly positive on the position with the coldest table, but not a repeatable
+figure, and the base floors here sit above the ~187 ms a genuinely idle run
+produced, so even the minima are contaminated. **Do not cite these percentages as
+the effect; cite them only as the reason the effect could not be pinned down.**
+
+What justifies keeping it without that number:
+
+- **Zero search-quality risk.** A prefetch changes no architecturally visible
+  state, so node counts are identical by construction — verified, not measured.
+  There is no efficiency component to trade against, only per-node cost.
+- **The hint is never wasted.** The prefetched cluster is exactly the one the
+  child immediately probes, so it cannot pull in a line the search does not use.
+- **The mechanism is standard.** Prefetching the transposition entry right after
+  the move is made is textbook practice in strength-leading engines.
+
+The cost side is one `unsafe` block per supported architecture. On x86_64
+`_mm_prefetch` is unsafe only for taking a raw pointer and cannot fault; on
+aarch64 the hint is hand-written inline assembly with no memory or flag effects.
+`prefetch_moves_no_observable_state` pins the correctness contract — the hint
+perturbs nothing a probe returns, for a stored key, a cluster sibling, and an
+unstored key alike — and passes on a target whose prefetch compiles to nothing.
+
+If this machine, or any documented idle machine, later yields a clean
+round-robin, record the quantified figure here and promote the decision from
+mechanism-based to measurement-based.

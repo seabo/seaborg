@@ -1,9 +1,11 @@
 ---
 id: TASK-64.6
 title: Add a node-count search limit
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@claude'
 created_date: '2026-07-19 13:31'
+updated_date: '2026-07-19 20:37'
 labels:
   - search
   - uci
@@ -43,3 +45,15 @@ Two existing guarantees interact with this and must be preserved. The guaranteed
 - [ ] #5 Explicit cancellation remains responsive and unthrottled under a node limit
 - [ ] #6 Tests cover budget exhaustion mid-iteration, a budget below one ply, and reproducibility across runs
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. search.rs: add SearchLimit::Nodes(u64) variant.
+2. search.rs: add node_limit: Option<u64> field on Search; thread through build/with_events (new keeps None). Map the limit in start_inner to (depth, deadline, node_limit).
+3. search.rs: honour the node budget in stopping() after the min_search_complete gate and before the time deadline, so a budget below one ply still returns a searched move and explicit cancellation stays unthrottled. Node count is already read each call, so no throttling.
+4. time.rs: add TimingMode::Nodes(u64).
+5. uci.rs: route go nodes to a new parse_nodes producing TimingMode::Nodes; add parser test.
+6. engine.rs: map TimingMode::Nodes -> SearchLimit::Nodes.
+7. Tests: mid-iteration budget exhaustion, budget below one ply returns a legal move, reproducibility across runs; plus a UCI parse test.
+<!-- SECTION:PLAN:END -->
