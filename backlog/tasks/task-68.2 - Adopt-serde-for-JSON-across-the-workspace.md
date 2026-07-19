@@ -1,9 +1,11 @@
 ---
 id: TASK-68.2
 title: Adopt serde for JSON across the workspace
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@george'
 created_date: '2026-07-19 22:33'
+updated_date: '2026-07-19 22:48'
 labels: []
 dependencies: []
 parent_task_id: TASK-68
@@ -32,3 +34,14 @@ Note: npx tsc silently no-ops in this repo, so do not rely on a TypeScript compi
 - [ ] #4 Existing UI server/wire tests pass; add serde round-trip coverage for the wire types
 - [ ] #5 cargo fmt --check, clippy (workspace, all-targets, all-features, -D warnings), and cargo test --workspace all pass
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Add serde (derive) + serde_json to [workspace.dependencies] in root Cargo.toml; inherit both in engine/Cargo.toml as regular deps. Leave core untouched.
+2. Rewrite engine/src/ui/wire.rs to serialize via serde-derived output DTO structs/enums that mirror the exact wire shape (internally 'kind'-tagged enums for engineLimit/gameStatus/score/engineStatus; camelCase field renames). Build DTOs from the engine's typed values (preserving mate-moves math and inf-first ordering) and emit via serde_json::to_string. Keep byte output identical: same field order (serde emits in declaration order), same integer/bool formatting, no extra escaping.
+3. Replace inbound command parsing in server.rs: parse the request body with serde_json into serde_json::Value, keep the object check and per-field error codes (missing_uci, missing_revision, missing_human_side, missing_engine_limit) using Value::get/as_str/as_u64.
+4. Replace http.rs write_error's hand-rolled body with serde_json.
+5. Delete engine/src/ui/json.rs and drop the mod json; its strict parsing/escaping is now serde_json's job.
+6. Update wire.rs tests to parse with serde_json::Value; add golden exact-byte assertions per wire sub-type and a Value round-trip, plus an inbound-body parse test. Verify fmt, clippy -D warnings, cargo test --workspace.
+<!-- SECTION:PLAN:END -->
