@@ -1,11 +1,11 @@
 ---
 id: TASK-64.17
 title: Replace the yielded-flag ordering buffer with partition-and-shrink selection
-status: In Review
+status: Changes Requested
 assignee:
   - '@codex'
 created_date: '2026-07-19 13:43'
-updated_date: '2026-07-19 15:04'
+updated_date: '2026-07-19 15:29'
 labels:
   - search
   - move-ordering
@@ -132,5 +132,41 @@ Known failures: none
 Reviewer notes. Two things are worth attention. First, the order-preservation argument rests on selection taking the first maximum and rotating rather than swapping it into place; a swap looks equivalent and is not, and the test selection_yields_by_score_then_generation_order is what pins this. Second, underpromotions are now expanded eagerly at promotion-load time rather than at the underpromotion phase, because in-place selection reorders the promotion segment; underpromotions_survive_a_queen_promotion_that_duplicates_the_hash_move covers it, and I confirmed that test fails when the expansion is moved back after the partition, so it is not vacuous.
 
 The benchmark was taken on a machine carrying competing load from other worktrees in this repository, which I could not quiet. The relative figure is consistent across rounds but the absolute numbers are inflated, so BENCHMARKS.md is deliberately left unchanged.
+---
+
+author: @codex
+created: 2026-07-19 15:29
+---
+Review attempt: 1
+Reviewed branch: task-64.17-partition-shrink-ordering
+Reviewed implementation: b2790cba9b03c5fcac76521f1357ca3bc173c6ef
+Verdict: changes_requested
+
+REV-1-01 [P2] The OrderedMoves doc comment claims a once-only iteration guarantee the type does not provide
+Location: engine/src/ordering.rs:193-197
+Impact: Blocks AC#7, which requires the doc comment to match the implementation. The comment states that "each phase's moves can only be drawn once" and that the mutable borrow makes this "visible in the type rather than being a trap for the caller". Neither holds. `IntoIterator for &mut OrderedMoves` rebuilds a `SelectionSort` over the full stored segment range on every call, and iteration never narrows `self.segments`, so a second `(&mut moves).into_iter()` re-yields the entire phase. The `&mut` borrow prevents two live iterators and removes the shared-borrow-that-mutates hazard the task described, but it does not prevent sequential re-iteration. The failure mode has changed rather than gone: the flag scheme silently yielded nothing on a second pass, and this yields every move a second time. A caller who trusts the stated contract and re-enters a phase would double-search each move, corrupting move counts, killer and history updates and node accounting. No current caller does this, so there is no live defect; the defect is that a public type documents a guarantee it does not enforce.
+Reproduction: On b2790cb, appending this test to the `tests` module in engine/src/ordering.rs and running `cargo test --package engine probe_double_iteration -- --nocapture` prints `first = 5 moves`, `second = 5 moves`, `equal = true`:
+
+    let moves = sample_moves(5);
+    let loader = ScriptedLoader { quiets: moves.clone(), ..Default::default() };
+    let mut om = OrderedMoves::new();
+    while om.load_next_phase(loader.clone()) {
+        if om.phase() == Phase::Quiet {
+            let first: Vec<Move> = (&mut om).into_iter().collect();
+            let second: Vec<Move> = (&mut om).into_iter().collect();
+            println!("first {} second {} equal {}", first.len(), second.len(), first == second);
+        }
+    }
+
+Expected: Either the comment states what the type actually guarantees (the mutable borrow rules out a shared-borrow-that-consumes and concurrent iterators; drawing a phase twice is a caller error that is not prevented), or the type is made to honour the claim by narrowing the stored segment range as moves are drawn, so a second pass yields nothing. If the second route is taken, a test should pin it, since this is the property the comment sells to callers.
+
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass, no warnings, confirmed with a clean CARGO_TARGET_DIR so the result is not a cached one
+- cargo test --workspace: pass, 248 tests, 0 failed, 2 ignored (the handoff reports 291; the count differs but nothing fails)
+- Order preservation, independently reproduced: 12 positions (start position, Kiwipete, a rook-and-pawn endgame, perft position 3, a capture-promotion position, a promotion race and six WAC positions) searched to depth 9 by fresh processes built from base aec9992 and from b2790cb. All 132 iteration and bestmove lines are byte-identical, covering 50,909,448 nodes at the final iterations. The only differing lines were `currmove` telemetry, which is gated on a 3-second wall clock and appeared only in the slower base run.
+- cargo bench --bench search, four paired round-robin rounds alternating base and target on this machine: base minimums 40.172 us and 39.117 us, target minimums 37.462 us and 36.267 us, i.e. -6.7% and -7.3%. The target was faster in all four rounds in both configurations with non-overlapping Criterion intervals. The base figures land on the BENCHMARKS.md baseline of 40.25 us and 39.73 us, which is evidence these runs were not distorted; agreeing that BENCHMARKS.md should not be rewritten from them.
+
+Everything else in the diff verifies. AC#1, #2, #3, #4, #6 and #8 are met on the evidence above and on the tests the diff adds, which I checked are not vacuous: `selection_yields_by_score_then_generation_order` encodes descending-score-then-generation-order through a stable sort rather than restating the implementation, and the underpromotion test genuinely depends on eager expansion. The three-way capture partition, the removal of the raw-pointer segment construction, the i16::MIN seed fix and the collapse of the setters, accessors and PhaseIter pass-through are all correct, and I traced the dedup, promotion and underpromotion paths against the base implementation and found them order-equivalent. Only AC#7 is unproven.
 ---
 <!-- COMMENTS:END -->
