@@ -1,11 +1,11 @@
 ---
 id: TASK-45
 title: Honor UCI cancellation after recording a legal root fallback
-status: Ready to Merge
+status: Changes Requested
 assignee:
   - '@claude'
 created_date: '2026-07-18 18:28'
-updated_date: '2026-07-19 00:06'
+updated_date: '2026-07-19 00:27'
 labels:
   - engine
   - search
@@ -136,6 +136,30 @@ Verification:
 - cargo test -p engine stdin_eof -- --nocapture: pass (2)
 - cargo test -p engine replacement_stop_and_quit_are_serialized -- --nocapture: pass (1)
 - cargo bench --bench perft --bench movegen, base vs target: movegen 194.76 ns vs 189.91 ns; perft 22.708 ms vs 22.570 ms; no regression
+---
+
+author: @claude
+created: 2026-07-19 00:27
+---
+Merge attempt: 1
+Primary tip tested: 4d48c35917a2955550f5a0bbc6a0120d3b0cc957
+Merged: decb102 (approved target c303c08)
+Result: ejected — textual conflict, no integrated checks run
+
+Failing command: `git merge --no-ff decb102`
+Evidence:
+```
+Auto-merging engine/src/search.rs
+CONFLICT (content): Merge conflict in engine/src/search.rs
+```
+
+Three conflicting regions, all against TASK-46 (merge d279898, approved target 35b4994), which changed the same abort machinery in `engine/src/search.rs`:
+
+1. `Search` struct fields (~line 419): TASK-46 added `#[cfg(test)] abort_after_nodes: Option<usize>`; TASK-45 added `root_fallback_ready` / `root_fallback` at the same insertion point.
+2. `Search` constructor (~line 478): the matching initializers collide at the same position.
+3. `stopping()` (~line 899): a genuine semantic overlap, not mere adjacency. TASK-46 rewrote the body to short-circuit on `abort_after_nodes` and return `stopping || deadline`; TASK-45 rewrote the same body to return `root_fallback_ready` when the cancellation flag is set and to gate only the time deadline on `min_search_complete`. Rework must combine both: keep the TASK-46 test hook and node-limit short-circuit, and keep TASK-45's split gating (cancellation gated on `root_fallback_ready`, deadline gated on `min_search_complete`).
+
+The primary branch was not advanced; the trial merge was aborted and primary remains at 4d48c35. Merge current primary into the task branch, resolve the above, re-run the required checks, and return the task to In Review — the approval pinned to c303c08 is void once the implementation changes.
 ---
 <!-- COMMENTS:END -->
 
