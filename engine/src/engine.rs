@@ -156,6 +156,7 @@ where
 
                 let limit = match timing {
                     TimingMode::Depth(depth) => SearchLimit::Depth(depth),
+                    TimingMode::Nodes(nodes) => SearchLimit::Nodes(nodes),
                     TimingMode::Infinite => SearchLimit::Infinite,
                     TimingMode::Timed(tc) => {
                         let move_time = tc.to_move_time(pos.move_number(), pos.turn());
