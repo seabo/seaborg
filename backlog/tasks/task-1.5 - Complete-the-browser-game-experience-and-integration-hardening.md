@@ -1,11 +1,11 @@
 ---
 id: TASK-1.5
 title: Complete the browser game experience and integration hardening
-status: In Review
+status: Changes Requested
 assignee:
   - '@claude'
 created_date: '2026-07-17 15:40'
-updated_date: '2026-07-19 01:10'
+updated_date: '2026-07-19 01:21'
 labels: []
 dependencies:
   - TASK-1.4
@@ -127,5 +127,97 @@ The real fool's mate line is 1.f3 e5 2.g4, where e5 opens the diagonal. In that 
 Mate detection and mate scoring are correct. The supporting 'go movetime 1000 returned only depth 1, 20 nodes' observation was also an artifact: I piped quit immediately after go and truncated the search. Given its time the same position reaches depth 9 over 3M nodes.
 
 Nothing in the implementation or its verification depends on this claim; only the handoff note was wrong.
+---
+
+author: @claude
+created: 2026-07-19 01:21
+---
+Review attempt: 1
+Reviewed branch: task-1.5-browser-game-experience
+Reviewed implementation: f3052af30e8f2db2c7e2264d8ba96f154f775c26
+Verdict: changes_requested
+
+The implementation is strong: the controller, protocol, and server work is correct under
+adversarial tracing, all repository-required checks pass on a clean target directory, and I
+independently reproduced the engine-limit, PV-SAN, reload-during-search, quit, and occupied-port
+behaviour against a live server. Two blocking findings remain.
+
+REV-1-01 [P1] A failed quit brands a live server as stopped and cannot be recovered
+Location: engine/src/ui/frontend/app.ts:716-728 (quit)
+Impact: Blocks acceptance criterion #4. quit() is the only caller that discards postCommand`s
+  null return, contradicting the contract documented at app.ts:476-482. On any non-2xx the page
+  enters a permanent false terminal state: quitting stays true, so canInteract locks the board
+  and busy = commandPending || quitting disables every control including the quit button, the
+  SSE stream is closed, and the accurate message postCommand just wrote is overwritten by
+  "Seaborg has stopped. You can close this tab." Only a manual reload recovers. This is the one
+  case where recoverable feedback matters most, and it is the case where it is suppressed.
+Reproduction: Two reachable server paths, both confirmed against the running binary:
+  - 403 invalid_token. handle_command authenticates before dispatch (server.rs:576-578).
+    /api/events is deliberately not token-checked (server.rs:547), so a tab left open across a
+    server restart reconnects its stream and reads "Connected" while every command 403s.
+    Clicking Quit then reports a stopped server that is still running. Verified live:
+      curl -s -w " HTTP=%{http_code}" -X POST -H "Content-Type: application/json" \
+        -d "{}" http://127.0.0.1:PORT/api/quit
+      -> {"error":"invalid_token"} HTTP=403, and GET /api/state still answered 200.
+  - 503 too_many_connections. Refused at the accept loop before routing (server.rs:349-351,
+    refuse -> ServiceUnavailable at server.rs:228-230) once MAX_CONNECTIONS = 64 is reached.
+    postCommand takes its status >= 500 branch and returns null.
+Expected: Enter the stopped state only when the quit was actually accepted, or when the request
+  failed at the transport layer (the genuine shutdown signal already handled at app.ts:502-509).
+  On a rejection, roll quitting back to false, leave the controls live, and keep the message
+  postCommand produced. Cover the rejected-quit path with a test.
+
+REV-1-02 [P2] Acceptance criterion #6 has no documented manual check procedure
+Location: repository-wide; no documentation file is added or changed between 4d48c35 and f3052af
+Impact: Blocks acceptance criterion #6, which requires automated AND documented manual checks
+  covering desktop and narrow layouts, both player colours, promotion, castling, en passant,
+  terminal states, reload during search, and reduced-motion behavior. Implementation plan step 7
+  committed to adding this procedure and it is absent, so the criterion cannot be checked.
+  The handoff comment records a one-off run of results rather than a repeatable procedure, and
+  it does not cover promotion, castling, en passant, or reduced motion at all. Reduced motion
+  and the narrow layout have no automated coverage in this task either, so nothing in the
+  repository establishes how those are to be checked.
+Reproduction:
+  git diff --name-only 4d48c35..f3052af | grep -iE "\.md$|docs/|README"
+  -> only backlog/tasks/task-1.5, i.e. no documentation was added.
+Expected: A committed, repeatable manual check procedure covering every item the criterion names,
+  stating for each what to do and what a pass looks like, and naming which items are covered by
+  automated tests instead.
+
+Non-blocking observations, offered as notes and not as required changes:
+- engine/src/ui/frontend/app.ts:354-382. renderEnginePanel only overwrites the stats when
+  progress is non-null and the PV when it is non-empty. Every search starts with progress None
+  (game.rs:131-137), so the snapshot published the instant a human move lands shows the previous
+  search`s eval/depth/nodes/NPS/PV underneath a live "Thinking" chip until the first progress
+  event arrives. The retention comment at app.ts:363-367 justifies this by the chip reading
+  "Idle", which is not the case here. The window is short but the reasoning does not cover it.
+- engine/src/game.rs:325-326. The doc comment states that "undo and reset cancel the search
+  before touching the position". That holds for replace_position but not for undo, which calls
+  self.position.unmake_move() at game.rs:242 before self.cancel_search() at game.rs:245. The
+  invariant is still observably true, because undo takes &mut self under the session mutex and
+  the search thread owns an independent cloned position, so this is an inaccurate justification
+  rather than a defect. Worth correcting so a later reader does not rely on an ordering the code
+  does not have.
+- engine/src/ui/frontend/format.ts:79-85. formatCount yields "1000k" for 999,999 and "1000M" for
+  999,999,999 instead of rolling to the next unit, which costs a character of the stable width
+  its own doc comment describes.
+
+Verification (all run by me on f3052af, not taken from the handoff):
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings, clean CARGO_TARGET_DIR:
+  pass, exit 0, zero warnings
+- cargo test --workspace: pass, 0 failed, 2 ignored (both pre-existing)
+- tsc 5.9.3 -p engine/src/ui/frontend/tsconfig.json then git diff --exit-code engine/src/ui/assets:
+  pass, regenerated JS byte-identical to the committed assets
+- node --test board.test.mjs format.test.mjs: pass, 15/15
+- Live server on 127.0.0.1:39117: engine-limit accepted and published (time 750); depth 64,
+  infinite, and a missing token refused 422/422/403; /format.js served as text/javascript;
+  principalVariationSan derived correctly beside its UCI line, including bxa4 and Rxa4; three
+  reloads during a live search held revision 1, searchId 1, history length 1
+- Live quit: unauthenticated quit refused 403 with the server surviving; authenticated quit
+  answered {"quitting":true} 200, printed "Seaborg UI stopped.", and exited 0
+- Occupied fixed port: second instance exited 1 naming the port and suggesting --ui-port
+- Diff touches no search, movegen, or core file, so the hot-path benchmarks were not required
+- No #[allow] is added anywhere in the diff; no external network reference exists in the assets
 ---
 <!-- COMMENTS:END -->
