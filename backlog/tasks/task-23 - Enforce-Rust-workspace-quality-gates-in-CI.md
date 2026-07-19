@@ -1,11 +1,11 @@
 ---
 id: TASK-23
 title: Enforce Rust workspace quality gates in CI
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-17 17:15'
-updated_date: '2026-07-19 14:29'
+updated_date: '2026-07-19 14:35'
 labels:
   - ci
   - quality
@@ -28,11 +28,11 @@ The repository has no checked-in automation enforcing formatting, debug workspac
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 CI runs cargo fmt --check on every proposed change
-- [ ] #2 CI runs cargo test --workspace in the debug profile and fails on any test failure
-- [ ] #3 CI runs cargo clippy --workspace --all-targets --all-features -- -D warnings
-- [ ] #4 The workflow uses a pinned or explicitly managed Rust toolchain and dependency cache inputs
-- [ ] #5 Contributor documentation states the same local verification commands
+- [x] #1 CI runs cargo fmt --check on every proposed change
+- [x] #2 CI runs cargo test --workspace in the debug profile and fails on any test failure
+- [x] #3 CI runs cargo clippy --workspace --all-targets --all-features -- -D warnings
+- [x] #4 The workflow uses a pinned or explicitly managed Rust toolchain and dependency cache inputs
+- [x] #5 Contributor documentation states the same local verification commands
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -90,4 +90,45 @@ Known failures: none
 
 Reviewer note: the workflow has not been executed on GitHub Actions, since this task authorizes no push. Its correctness rests on the three commands being verified to pass locally at the target commit and on the YAML parsing, not on an observed green run. The first push to the remote is what will confirm the runner-side steps (rustup install, cache restore).
 ---
+
+author: @claude
+created: 2026-07-19 14:35
+---
+Review verdict: APPROVED
+
+Implementation target: d17edfcef9067c9f5b5691d48613a927800e4f1c
+Base: cb9d36a14365103ab22ccf0e4389c73550d3973d
+Branch: task-23-ci-quality-gates (tip a76f9d6 adds task metadata only; no implementation file changed after the target)
+
+Verification run by the reviewer at the target commit, clean CARGO_TARGET_DIR:
+- cargo fmt --check: exit 0
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: exit 0, zero warnings across core, engine and seaborg
+- cargo test --workspace: exit 0, 284 passed, 0 failed, 2 ignored
+No #[allow] added by the diff. No benchmark run: the diff touches only .github/workflows/ci.yml and README.md, so no move generation or search hot path is affected.
+
+Acceptance criteria:
+- #1 The fmt job runs 'cargo fmt --check' and the workflow triggers on pull_request (unrestricted by branch) plus push to master. Coverage of every workspace member and target by the bare 'cargo fmt --check' was confirmed empirically during implementation and is consistent with the command passing here.
+- #2 'cargo test --workspace' runs with no --release, so the debug profile applies and debug_assert! sites stay live. A non-zero test exit fails the step and the job.
+- #3 The Clippy step matches the repository-required command exactly, including -D warnings.
+- #4 RUST_VERSION is pinned to 1.97.1 (a real release, 2026-07-14) and installed with 'rustup toolchain install', which is available on the ubuntu-latest image. The actions/cache key covers runner OS, the pinned version and hashFiles('**/Cargo.lock'); Cargo.lock is tracked, so that hash is non-empty and the key is meaningful.
+- #5 README.md's new Development section states the same three commands as AGENTS.md, verbatim.
+
+Points checked and cleared:
+- RUSTFLAGS: "" does override build.rustflags from .cargo/config.toml. Cargo consults the config only when the env var is unset; a set-but-empty value yields an empty flag list. Confirmed no workspace code is conditional on CPU features (no target_os, target_arch, target_feature, is_x86_feature_detected, pext or bmi2 in core, engine, src, build_metadata.rs or tests), so the override changes speed only, not behavior.
+- Shallow actions/checkout is safe for build.rs: the build_metadata tests exercise resolve_git_hash as a pure function over injected output and do not depend on repository git state.
+- Comments in the workflow are self-contained and state their reasons rather than restating the code or citing task or finding identifiers.
+- Scope is limited to the two files the task calls for.
+
+Residual not provable under this task's authority: the workflow has never executed on GitHub Actions, since neither implementation nor review authorizes a push. Static correctness was checked as far as it can be locally -- valid YAML and job structure, real action major versions (actions/checkout@v4, actions/cache@v4), valid rustup invocations, and the env context being available in a step's with: block. The first push is what will exercise the runner-side install and cache-restore steps.
+
+Non-blocking observations, recorded rather than raised as findings:
+- concurrency.cancel-in-progress applies to master pushes too, so back-to-back merges can leave an intermediate master commit without a completed CI result. The merge skill's own re-verification covers that gap.
+- Neither cargo invocation uses --locked, so a Cargo.lock that drifts from the manifests would be silently updated in CI rather than reported. Outside this task's acceptance criteria.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Added .github/workflows/ci.yml enforcing the three repository-required gates on pull_request and push to master: a cheap fmt job running 'cargo fmt --check', and a lint-and-test job running strict Clippy then 'cargo test --workspace' in the debug profile over a shared target directory. The toolchain is pinned via a workflow-level RUST_VERSION installed with rustup, and actions/cache is keyed on runner OS, that pinned version and the tracked Cargo.lock. CI clears RUSTFLAGS to override the checked-in '-C target-cpu=native', which is unsafe to cache across a heterogeneous runner fleet. README.md gained a Development section stating the identical three commands. Verified at d17edfce on a clean CARGO_TARGET_DIR: cargo fmt --check (exit 0), cargo clippy --workspace --all-targets --all-features -- -D warnings (exit 0, zero warnings, all three members), cargo test --workspace (exit 0, 284 passed, 0 failed).
+<!-- SECTION:FINAL_SUMMARY:END -->
