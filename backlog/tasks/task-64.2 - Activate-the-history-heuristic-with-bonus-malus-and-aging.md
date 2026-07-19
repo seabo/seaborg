@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@george'
 created_date: '2026-07-19 13:30'
-updated_date: '2026-07-19 21:10'
+updated_date: '2026-07-19 21:20'
 labels:
   - search
   - move-ordering
@@ -51,7 +51,17 @@ Whether history should be retained across moves within a game, rather than reset
 <!-- SECTION:PLAN:BEGIN -->
 1. Replace the unsigned accumulating history entry with a signed, bounded gravity update and depth-squared bonus/malus helpers, retaining per-search lifetime so iterative-deepening evidence carries forward without leaking between unrelated UCI searches.
 2. Track previously searched quiet moves at each main-search node; on a quiet beta cutoff reward the cutoff move and penalize those failed quiet predecessors.
-3. Widen ordering scores to i32 end-to-end so bounded history values above i16::MAX remain ordered without truncation.
-4. Add focused history and staged-ordering regressions covering bounded updates, bonus/malus behavior, trained quiet ordering, and values beyond the former i16 boundary.
+3. Convert history values to compact ordering scores with explicit saturation, preserving ordering beyond the i16 boundary without a wrapping cast or increasing the per-ply move-ordering footprint.
+4. Add focused history and staged-ordering regressions covering bounded updates, bonus/malus behavior, trained quiet ordering, and values beyond the i16 boundary.
 5. Run focused tests, the TASK-27 strength-regression smoke comparison, and all repository-required formatting, strict Clippy, and workspace tests; record evidence and hand off an immutable commit for review.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented signed butterfly history with depth-squared evidence and bounded gravity updates in [-32,768, 32,768]. A quiet beta cutoff receives the positive update; every fully searched quiet predecessor at that node receives the matching malus. History-to-ordering conversion saturates explicitly to i16, so a table value of 32,768 remains ahead of an untrained move instead of wrapping negative, while OrderedMoves retains its existing compact footprint.
+
+Persistence decision: retain the existing per-search lifetime. Evidence is shared across iterative-deepening iterations within one Search::run, then reset when that run finishes; it does not persist across moves within a game. Search objects and their positions are request-specific today, so carrying this table across moves would require a new game-owned heuristic boundary and reset semantics. Keeping it local avoids leaking stale evidence across unrelated searches while still adapting throughout the tree where the gathered evidence is relevant.
+
+TASK-27 strength smoke: baseline c7826f15b267cd89b0c1c02c97b5294f6ec9bf57 versus candidate working tree, optimized cargo build --release --bin seaborg, FastChess alpha 1.5.0, 4 paired-colour games at depth=4, concurrency=2, Hash=64, Threads=1. Result: non-authoritative INCONCLUSIVE, 2 wins / 0 draws / 2 losses, LLR 0.0 within [-2.94, 2.94], 0 forfeits, 0 crashes, runner exit 0. This smoke run establishes successful match integration but is too small to claim a strength result.
+<!-- SECTION:NOTES:END -->

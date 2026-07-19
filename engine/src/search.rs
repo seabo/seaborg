@@ -1,4 +1,4 @@
-use crate::history::HistoryTable;
+use crate::history::{HistoryTable, HISTORY_MAX};
 
 use super::eval::Evaluation;
 use super::killer::KillerTable;
@@ -33,6 +33,16 @@ const MAX_DEPTH: u8 = 255;
 /// saturating guard, and one missed guard wraps to a near-infinite depth rather than failing
 /// loudly. Letting depth go negative removes the hazard at the type level.
 pub type Depth = i16;
+
+/// Depth-squared history evidence, capped to the gravity table's representable range.
+fn history_bonus(depth: Depth) -> i32 {
+    i32::from(depth.max(1)).pow(2).min(HISTORY_MAX)
+}
+
+/// Preserve history ordering when the bounded table extends beyond the move list's compact score.
+fn history_ordering_score(value: i32) -> i16 {
+    value.clamp(i16::MIN.into(), i16::MAX.into()) as i16
+}
 
 /// The greatest ply from the root that per-ply state is kept for.
 ///
@@ -957,6 +967,7 @@ impl<'engine> Search<'engine> {
         let mut moves = OrderedMoves::new();
         let mut move_count = 0;
         let mut did_raise_alpha = false;
+        let mut failed_quiets = BasicMoveList::empty();
 
         'move_loop: while moves.load_next_phase(MoveLoader::from(self, tt_mov, ply)) {
             for mov in &mut moves {
@@ -1064,18 +1075,22 @@ impl<'engine> Search<'engine> {
                             // beta-cutoff; record killer and history
                             if mov.is_quiet() {
                                 self.kt.store(mov, ply);
+                                let bonus = history_bonus(depth);
+                                let side = self.pos.turn();
+                                self.history.update(mov.orig(), mov.dest(), bonus, side);
+                                for failed in &failed_quiets {
+                                    self.history
+                                        .update(failed.orig(), failed.dest(), -bonus, side);
+                                }
                             }
-
-                            // self.history.inc(
-                            //     mov.orig(),
-                            //     mov.dest(),
-                            //     depth as u32 * depth as u32,
-                            //     self.pos.turn(),
-                            // );
 
                             break 'move_loop;
                         }
                     }
+                }
+
+                if mov.is_quiet() {
+                    failed_quiets.push(mov);
                 }
             }
         }
@@ -1828,10 +1843,11 @@ impl<'a, 'search> Loader for MoveLoader<'a, 'search> {
         for (mov, score) in quiets {
             // SAFETY: these are legal moves, so both squares are valid.
             unsafe {
-                *score = self
-                    .search
-                    .history
-                    .get_unchecked(mov.orig(), mov.dest(), turn) as i16;
+                *score = history_ordering_score(self.search.history.get_unchecked(
+                    mov.orig(),
+                    mov.dest(),
+                    turn,
+                ));
             }
         }
     }
@@ -1888,10 +1904,11 @@ impl<'a, 'search> Loader for QMoveLoader<'a, 'search> {
         for (mov, score) in quiets {
             // SAFETY: these are legal moves, so both squares are valid.
             unsafe {
-                *score = self
-                    .search
-                    .history
-                    .get_unchecked(mov.orig(), mov.dest(), turn) as i16;
+                *score = history_ordering_score(self.search.history.get_unchecked(
+                    mov.orig(),
+                    mov.dest(),
+                    turn,
+                ));
             }
         }
     }
@@ -1900,6 +1917,7 @@ impl<'a, 'search> Loader for QMoveLoader<'a, 'search> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ordering::Phase;
     use core::mov::MoveType;
     use core::position::Square;
     use std::time::Duration;
@@ -1943,6 +1961,59 @@ mod tests {
         assert!(should_razor(1, Score::cp(-1_000), Score::cp(0)));
         assert!(!should_razor(1, Score::cp(-1_000), Score::mate(5)));
         assert!(!should_razor(1, Score::cp(-1_000), Score::INF_P));
+    }
+
+    #[test]
+    fn trained_quiets_are_ordered_without_narrowing_history_scores() {
+        core::init::init_globals();
+
+        let position = Position::start_pos();
+        let generated = position.generate::<BasicMoveList, Quiets, Legal>();
+        let poor = generated[0];
+        let good = generated[1];
+        let side = position.turn();
+        let flag = AtomicBool::new(false);
+        let table = Table::new(1);
+        let mut search = Search::new(position, &flag, None, &table);
+
+        search
+            .history
+            .update(poor.orig(), poor.dest(), -HISTORY_MAX, side);
+        search
+            .history
+            .update(good.orig(), good.dest(), HISTORY_MAX, side);
+        assert!(search.history.get(good.orig(), good.dest(), side) > i16::MAX.into());
+
+        let mut ordered = OrderedMoves::new();
+        while ordered.load_next_phase(MoveLoader::from(&mut search, None, 0)) {
+            if ordered.phase() == Phase::Quiet {
+                let quiets: Vec<Move> = (&mut ordered).into_iter().collect();
+                let good_index = quiets.iter().position(|mov| *mov == good).unwrap();
+                let poor_index = quiets.iter().position(|mov| *mov == poor).unwrap();
+                assert!(good_index < poor_index);
+                return;
+            }
+            for _ in &mut ordered {}
+        }
+
+        panic!("quiet phase was not loaded");
+    }
+
+    #[test]
+    fn history_bonus_grows_with_depth_and_gravity_applies_malus() {
+        let from = Square::A2;
+        let to = Square::A3;
+        let side = Player::WHITE;
+        let mut shallow = HistoryTable::new();
+        let mut deep = HistoryTable::new();
+
+        shallow.update(from, to, history_bonus(2), side);
+        deep.update(from, to, history_bonus(8), side);
+        assert!(deep.get(from, to, side) > shallow.get(from, to, side));
+
+        let before = deep.get(from, to, side);
+        deep.update(from, to, -history_bonus(8), side);
+        assert!(deep.get(from, to, side) < before);
     }
 
     #[test]
