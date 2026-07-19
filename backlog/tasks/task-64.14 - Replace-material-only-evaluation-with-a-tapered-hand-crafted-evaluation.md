@@ -1,11 +1,11 @@
 ---
 id: TASK-64.14
 title: Replace material-only evaluation with a tapered hand-crafted evaluation
-status: In Review
+status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-19 13:33'
-updated_date: '2026-07-19 21:13'
+updated_date: '2026-07-19 21:20'
 labels:
   - evaluation
   - strength
@@ -211,4 +211,32 @@ Verification:
 - cargo test --workspace: pass (45 core; 273 engine passed, 2 ignored; 19 integration; 1 doc test; 0 failed)
 Known failures: none
 ---
+
+author: @codex
+created: 2026-07-19 21:20
+---
+Review attempt: 3
+Reviewed branch: task-64.14-tapered-eval
+Reviewed implementation: 04c6986bb22d1b131e5194a90de1b8221e4d8b18
+Verdict: approved
+
+The merge-integration rework is correct: the subsequently landed search benchmark now calls static_eval() and describes the evaluator generically. The complete c7826f1..04c6986 diff satisfies all acceptance criteria, and commits after the target contain task metadata only.
+
+Verification:
+- git merge-base --is-ancestor c7826f15b267cd89b0c1c02c97b5294f6ec9bf57 04c6986bb22d1b131e5194a90de1b8221e4d8b18: pass
+- git diff --name-status 04c6986bb22d1b131e5194a90de1b8221e4d8b18..aa714a55675ca08309b5eda73a1b7c43465f7758: task metadata only
+- cargo fmt --check: pass
+- clean-CARGO_TARGET_DIR cargo clippy --workspace --all-targets --all-features -- -D warnings: pass
+- cargo test --workspace: pass (45 core; 273 engine passed, 2 ignored; 19 integration; 1 doc test)
+- TASK-27 strength report: archived 19W-0D-1L evaluator smoke result remains recorded
+- TASK-27 razoring report: /tmp/seaborg-strength-64_14-rework/artifacts-razoring-depth6/report.json matches 10W-0D-10L, 0 Elo, zero crashes/forfeits
+- cargo bench --bench search -- "static evaluation" --sample-size 20 on base and target: pass for all four positions; target cost measured about 11-43 ns versus material-only base about 3-8 ns, an expected bounded cost for the new positional terms
+- perft/movegen benchmark: not verdict evidence because neither benchmark executes static evaluation; the focused evaluation benchmark directly covers the changed hot path
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Replaced material-only static evaluation with the PeSTO tapered middlegame/endgame material and piece-square evaluator, kept evaluation position-intrinsic, repaired the search evaluation benchmark after integration, and retained the landed razoring margin after an isolated TASK-27 smoke comparison. Independently verified target 04c6986 with formatting, clean-target strict Clippy, the full workspace test suite, evaluator invariance/symmetry/tapering tests, archived strength evidence, and focused base/target evaluation benchmarks.
+<!-- SECTION:FINAL_SUMMARY:END -->
