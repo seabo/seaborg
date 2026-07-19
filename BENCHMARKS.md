@@ -41,7 +41,8 @@ hardware, and toolchain used. Do not lower the baseline from a single noisy run.
 
 ## Search baseline
 
-The search baseline is commit `e1370e6` (TASK-41). `benches/search.rs` measures
+The search baseline is commit `946091b` (TASK-41), the commit that introduced the
+two-configuration harness these figures come from. `benches/search.rs` measures
 the start position at depth 7 in two configurations, both searching an identical
 579-node tree:
 
@@ -56,6 +57,10 @@ figure: a real UCI search under a time control always carries a deadline. The
 second removes the deadline entirely, taking `stopping()` down a path that never
 reads the clock. **The gap between the two is the cost of deadline checking.**
 Keeping both measurable is what makes a regression in that cost attributable.
+
+The measurements were taken on an Apple M3 Pro with 6 performance and 6
+efficiency cores, using `rustc 1.97.1` and `cargo 1.97.1` — the same hardware and
+toolchain as the move-generation baseline above.
 
 Investigate results slower than the baseline by 5% or more:
 
@@ -72,12 +77,20 @@ read has escaped its throttle.
 | --- | ---: | ---: | ---: |
 | `ebf4289` (pre-TASK-41 base) | 39.25 µs | 49.45 µs | 10.20 µs |
 | `22a2512` (master, TASK-45/46) | 40.43 µs | 49.59 µs | 9.16 µs |
-| `e1370e6` (TASK-41 throttle) | 39.73 µs | 40.25 µs | 0.52 µs |
+| `946091b` (TASK-41 throttle) | 39.73 µs | 40.25 µs | 0.52 µs |
 
 Measured round-robin across three worktrees over three rounds, taking the
 minimum per configuration; run-to-run drift on this machine is roughly 3%, which
 is larger than several of the differences above, so single runs are not
 trustworthy at this resolution.
+
+Neither earlier commit carries the two-configuration harness — `ebf4289` and
+`22a2512` benchmark the search with no deadline at all, so their own harnesses
+never exercise the clock read. The `946091b` harness was therefore copied onto
+detached worktrees of both so that all three rows measure the same two
+configurations. Reproducing this table requires that copy; running
+`cargo bench --bench search` at either earlier commit yields a single figure that
+belongs in neither column.
 
 Two things this table establishes:
 
