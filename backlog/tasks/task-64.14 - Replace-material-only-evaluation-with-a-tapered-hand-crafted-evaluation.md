@@ -1,11 +1,11 @@
 ---
 id: TASK-64.14
 title: Replace material-only evaluation with a tapered hand-crafted evaluation
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-19 13:33'
-updated_date: '2026-07-19 20:18'
+updated_date: '2026-07-19 20:43'
 labels:
   - evaluation
   - strength
@@ -61,3 +61,52 @@ Decisions (recorded per AC#4/#5): (a) scope = material + PST only, tapered MG/EG
 5. Strength: build baseline (master) + candidate release binaries, run tools/strength/strength_test.py in fixed-depth smoke mode, record report path + W/D/L/Elo in implementation notes (AC#6). AC#7: only razoring margin is landed; re-measure/record whether the razoring constant needs revision under the new eval, else record no revision.
 6. Record AC#2 values, AC#4 term set + rationale, AC#5 tuning method in implementation notes.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented a tapered piece-square evaluation replacing the material-only popcount.
+
+Design decisions (surfaced to and chosen by the user):
+- Scope (AC#4): material + piece-square tables only, tapered between a middlegame and an endgame phase. No mobility/king-safety/pawn-structure terms. Rationale: the task frames PSTs as the minimum; keeping the term set minimal keeps the surface small, keeps every term trivially incrementally updatable (the seam scheduled next), and makes the eventual NNUE accumulator a substitution rather than a new mechanism. Terms implemented: per-piece middlegame/endgame material values + per-piece middlegame/endgame piece-square tables, blended by a game-phase weight.
+- Tuning method (AC#5): adopted the published Texel-tuned PeSTO ("Piece-Square Tables Only") parameter set by Ronald Friederich (rofChade), reproduced from the Chess Programming Wiki and verified digit-for-digit against that source. These were fitted by logistic regression against game outcomes; no hand-tuning was applied. They are used as a coherent set (MG/EG material values, MG/EG PSTs, and game-phase increments).
+- Distinct knight/bishop values (AC#2): knight MG 337 / EG 281; bishop MG 365 / EG 297 (centipawns). Bishop > knight in both phases. Full recorded value set: pawn 82/94, knight 337/281, bishop 365/297, rook 477/512, queen 1025/936, king 0/0. Game-phase increments: pawn 0, knight 1, bishop 1, rook 2, queen 4, king 0 (summing to 24 at the opening). The static-exchange-evaluation values in eval.rs (PIECE_VALUES, knight=bishop=300) are deliberately left unchanged and documented as separate exchange prices; this isolates the eval change so the strength measurement below attributes cleanly.
+
+Implementation:
+- engine/src/eval.rs: PeSTO MG/EG value arrays, MG/EG PST arrays (stored in published a8=0 orientation), game-phase increments, and tapered_evaluation summing White-minus-Black (material+PST) for both phases and interpolating by phase (saturated at 24). Trait method renamed material_eval -> static_eval; returns a White-relative centipawn score.
+- engine/src/search.rs: Search::evaluate now calls static_eval; the position-intrinsic contract (no halfmove-clock read) is preserved and its documentation retained.
+
+Position-intrinsic invariant (AC#3): evaluation reads only piece placement and colour (all Zobrist-covered). Test static_evaluation_is_independent_of_the_halfmove_clock asserts the score is identical at clocks 0/50/99. Added the_evaluation_is_symmetric_under_a_colour_mirror (a position and its colour-and-rank mirror score exactly opposite; catches PST orientation bugs) and piece_square_scores_are_tapered_by_game_phase (a central king is penalised with heavy pieces on the board but rewarded once they are gone; only tapering can express both).
+
+Test updates: search tests that pinned material-only scores were updated to the tapered values, with comments rewritten to explain the number rather than cite the old material figure. Bare-king positions used as fixed-value anchors were switched from 7k/8/8/8/8/8/8/K7 (asymmetric under PSTs, evaluates to -10) to the colour-symmetric k7/8/8/8/8/8/8/K7 (evaluates to exactly 0), keeping the existing 'true value is 0' reasoning literally correct.
+
+Strength measurement (AC#6): per the user's choice, a fixed-depth smoke SPRT via tools/strength/strength_test.py (FastChess alpha 1.5.0), candidate git:88b78c0 vs baseline git:aa915d8 (the branch point), depth=4, 20 games. Result: candidate 19 wins, 0 draws, 1 loss; pentanomial [0,0,1,0,9]; Elo point estimate +511.5; LLR 0.2 within [-2.94, 2.94]. Verdict INCONCLUSIVE, which is smoke mode's mandatory non-authoritative label and the game cap (20), not a weak signal: 19-1 at equal fixed depth is a decisive directional confirmation that the tapered eval is much stronger than material-only. Report archived at /tmp/seaborg-strength-64_14/artifacts-smoke/report.json. An authoritative timed SPRT is out of scope here: it requires a time-based limit and commonly thousands of games, and the strength doc cautions seaborg's fast-time-control play is not yet reliable; fixed depth deliberately removes that confound.
+
+Margin re-measurement (AC#7): of the margin-based pruning techniques named in the task (razoring, reverse futility, futility, quiescence delta), only razoring is currently landed (should_razor, search.rs; margin 426 + 252*depth*depth). Futility, reverse futility, null-move and quiescence delta pruning are still unimplemented TODO stubs, so there is nothing else to re-measure. The razoring comparison is eval + margin < alpha, on the same centipawn scale as before; the new evaluation does not change that scale, and the smoke games ran with razoring active and no misbehaviour. No razoring-margin revision is made here: choosing an optimal margin under the new evaluation is a tuning question that needs an authoritative timed SPRT and belongs to the razoring-margin task (TASK-64.4). Recorded: no margin revision.
+
+Verification (on target 88b78c0):
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (0 warnings)
+- cargo test --workspace: pass (266 engine + 43 core + others; 0 failed)
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @claude
+created: 2026-07-19 20:43
+---
+Implementation handoff
+Branch: task-64.14-tapered-eval
+Worktree: /Users/seabo/seaborg-worktrees/task-64.14-tapered-eval
+Base: aa915d85d32d03d829d0636c6af3e71b40a6632f
+Implementation target: 88b78c0
+Resolved findings: none (initial implementation)
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (0 warnings)
+- cargo test --workspace: pass (0 failed)
+- fixed-depth smoke SPRT (depth=4, 20 games), candidate 88b78c0 vs baseline aa915d8: 19W-0D-1L, Elo est +511.5, verdict INCONCLUSIVE (smoke is non-authoritative and capped at 20 games); report at /tmp/seaborg-strength-64_14/artifacts-smoke/report.json
+Known failures: none. Note: base is the branch point aa915d8; master has since advanced to df6f373, so the merge gate should re-integrate onto the live tip.
+---
+<!-- COMMENTS:END -->
