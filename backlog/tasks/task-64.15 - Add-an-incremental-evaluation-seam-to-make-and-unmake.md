@@ -1,11 +1,11 @@
 ---
 id: TASK-64.15
 title: Add an incremental evaluation seam to make and unmake
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-19 13:34'
-updated_date: '2026-07-19 22:30'
+updated_date: '2026-07-19 22:38'
 labels:
   - evaluation
   - nnue
