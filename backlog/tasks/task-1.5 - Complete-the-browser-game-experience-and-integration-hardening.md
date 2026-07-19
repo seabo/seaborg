@@ -1,11 +1,11 @@
 ---
 id: TASK-1.5
 title: Complete the browser game experience and integration hardening
-status: Changes Requested
+status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-07-17 15:40'
-updated_date: '2026-07-19 01:21'
+updated_date: '2026-07-19 01:31'
 labels: []
 dependencies:
   - TASK-1.4
@@ -37,13 +37,12 @@ Finish the application around the chessboard, integrate game and engine informat
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Controller: add a runtime-settable engine search limit (applies from the next search), expose it on GameSnapshot, and derive a SAN principal variation from the searched position, truncating at the first move that is not legal.
-2. Wire/server: serialize engineLimit and principalVariationSan; add POST /api/engine-limit with validated time and depth bounds, and POST /api/quit that answers before stopping the accept loop and session. Share one shutdown path between UiHandle and the quit route.
-3. Frontend: extract pure presentation helpers into format.ts (score to White-relative text, node/NPS/limit formatting, human-readable command errors) so they are unit testable without a DOM.
-4. Frontend app: add board flip (orientation independent of humanSide, used by rendering and keyboard navigation), restart, engine-limit select, and quit; add a companion panel rendering SAN history, turn, result, engine thinking state, evaluation, depth, nodes, NPS, hashfull and SAN principal variation.
-5. Frontend feedback: readable messages for rejected moves, lost connections, server errors, and a terminal state after quit that stops reconnecting.
-6. Tests: Rust unit tests for the limit command, quit, engineLimit/PV SAN serialization, reload during search not duplicating a search or move, and an HTTP-level full game to a terminal status; node --test coverage for the new pure frontend helpers; regenerate committed JS with tsc and verify it is byte-identical.
-7. Docs: add a documented manual check procedure covering desktop and narrow layouts, both colours, promotion, castling, en passant, terminal states, reload during search, and reduced motion; run all repository-required checks.
+Rework of review attempt 1 findings on target f3052af.
+
+1. REV-1-01: distinguish a command rejection from a transport failure in postCommand, which currently collapses both to null. quit() must enter the stopped state only when the quit was accepted (2xx) or the request failed at the transport layer (the genuine shutdown signal); on a 4xx/5xx rejection it must roll quitting back to false, leave the controls live, and keep the message postCommand produced. Add a regression test for the rejected-quit path.
+2. REV-1-02: root cause is .gitignore line 3 '/docs', which silently swallowed docs/browser-ui-manual-checks.md — the procedure was written last attempt but never committed, so the reviewer correctly saw no doc in the diff. Per human decision, remove the '/docs' ignore rule so docs/ is a normal tracked directory, and commit the manual-check procedure. Extend it with the rejected-quit case from step 1.
+3. Address the reviewer's three non-blocking notes, each of which is an inaccurate comment or a stated-invariant violation rather than a defect: the engine-panel retention justification (app.ts:363-367), the undo ordering claim (game.rs:325-326), and formatCount unit rollover at 999,999 / 999,999,999.
+4. Recompile the frontend with a real tsc, confirm the committed JS is byte-identical, and run all repository-required Rust gates before handing a new immutable target to review.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
