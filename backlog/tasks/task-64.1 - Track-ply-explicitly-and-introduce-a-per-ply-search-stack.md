@@ -1,11 +1,11 @@
 ---
 id: TASK-64.1
 title: Track ply explicitly and introduce a per-ply search stack
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-19 13:30'
-updated_date: '2026-07-19 16:10'
+updated_date: '2026-07-19 16:38'
 labels:
   - search
   - architecture
@@ -65,3 +65,45 @@ This refactor should be behaviour-preserving. The search test suite in search.rs
 6. Add regression tests: a node searched deeper than its PV table's nominal depth (no panic, legal PV); killer store/probe by ply independent of depth; quiescence reached at a ply below the nominal horizon leaves no stale row.
 7. Run cargo fmt --check, clippy -D warnings, cargo test --workspace.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Ply is now a parameter of `search`/`search_inner`/`quiesce`/`quiesce_inner`/`quiesce_evasions`, root ply 0. `Search::search_depth` and the `search_depth - depth` derivation are deleted outright, so nothing can reintroduce the subtraction.
+
+Depth is `pub type Depth = i16`. Step 5 tests `depth <= 0` rather than `== 0`, since a reduction can cross zero in one step. The transposition table's draft field is still a byte, so `Search::tt_draft` narrows on store; it saturates downwards, which understates how deeply an entry was searched and costs hit rate rather than soundness.
+
+`StackEntry` (static eval, move being searched, excluded move) is a `pub` struct with `pub` fields, held as `Box<[StackEntry; MAX_PLY]>`. Public because the excluded-move slot has no reader yet — singular extensions are later work — and a private write-only field would be a `dead_code` failure under strict Clippy. Its doc records the constraint a future user must also honour: an excluded re-search must be kept out of the transposition table, since its value describes a restricted move list rather than the position. A node with no room for a child (`ply + 1 >= MAX_PLY`) hands over to quiescence, which is what lets every stack index in the node body be unguarded.
+
+`PVTable` was rewritten rather than patched: rows are indexed by ply and stored in forward order, so `pv()` reads row 0 left to right instead of the previous reversed depth-derived layout. `clear_at`/`copy_to` are no-ops above the nominal ply count, which is how an extended subtree neither panics nor writes another ply's row. The deepest row holds exactly one move, so it never reads a child row that does not exist. The pv_table unit tests were rewritten for ply arguments; their assertions are unchanged in substance.
+
+`KillerTable` indexes `data[ply]` directly. Sized `KILLER_PLIES = 21` so the reach is exactly the plies 1..=20 the old `data[draft - 1]` with size 20 covered — deliberately not widened, to keep the change behaviour-preserving.
+
+Quiescence receives a ply but does not index per-ply state with it, because nothing bounds the quiescence tree yet. Threading the value is what makes the cap expressible later.
+
+Behaviour preservation was measured, not assumed: fixed-depth UCI searches (`go depth 8`) on startpos, Kiwipete and `8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1` produce byte-identical `info` lines — node counts, scores and PVs at every iteration — against the base commit c55508b. No search test assertion was modified; only call sites gained the ply argument and the deleted `search_depth` setup lines were dropped.
+
+Observed but not changed, as it is outside this task: `KillerTable::store` compares slot hit counts with `<`, so with both counters at zero it always writes slot B. Slot A is only reached after a probe has incremented B's counter. Pre-existing on master and unaffected by the re-indexing.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @claude
+created: 2026-07-19 16:38
+---
+Implementation handoff
+Branch: task-64.1-explicit-ply-search-stack
+Worktree: /Users/seabo/seaborg-worktrees/task-64.1-explicit-ply-search-stack
+Base: c55508b3383577ed9bb62a9ebadb21fc3ecedc1f
+Implementation target: ea17ad7
+Resolved findings: none
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass, no warnings
+- cargo test --workspace: pass, 250 passed / 0 failed / 2 ignored (engine lib), all other targets green
+- behaviour-preservation probe: fixed-depth 'go depth 8' UCI searches on startpos, Kiwipete and 8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1 produce info lines identical to base c55508b (node counts, scores and PVs at every iteration)
+New tests: search::tests::a_node_searched_past_the_nominal_horizon_still_reports_a_legal_pv, search::tests::a_depth_reduced_below_zero_hands_over_to_quiescence, three killer::tests ply-indexing tests, two pv_table::tests covering plies beyond the table
+Known failures: none
+---
+<!-- COMMENTS:END -->
