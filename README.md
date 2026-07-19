@@ -4,6 +4,20 @@ Seaborg is a chess engine written from scratch in Rust. It isn't based
 on any existing engine, although the move generation scheme is heavily
 inspired by the approach used in [Pleco](https://github.com/sfleischman105/Pleco).
 
+## Building
+
+`cargo build` is all that is required. The build embeds the current Git commit,
+reported by `seaborg --uci` in the UCI `id` response and in startup diagnostics.
+
+Git is optional. Building from a source archive, or on a machine without Git
+installed, succeeds and embeds the commit as `unknown`. To pin a known revision
+in that situation — for a release tarball or a distribution package — set
+`SEABORG_GIT_HASH` at build time:
+
+```sh
+SEABORG_GIT_HASH=$(cat REVISION) cargo build --release
+```
+
 ## Past and future development
 
 Seaborg currently has minimal built-in understanding of chess strategy -
