@@ -18,6 +18,12 @@ license = "MIT"
 [workspace.dependencies]
 rand = "0.10.2"
 separator = "0.4"
+# One JSON stack for the whole workspace. The browser UI serializes its wire
+# types with serde derive today, and the forthcoming Lichess client will parse
+# the same way; declaring them here keeps that single version aligned as the
+# second consumer arrives.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [package]
 name = "seaborg"

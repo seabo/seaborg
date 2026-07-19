@@ -335,9 +335,8 @@ pub fn write_json(stream: &mut TcpStream, status: Status, body: &str) -> io::Res
 
 /// Write a JSON error body carrying a stable machine-readable code.
 pub fn write_error(stream: &mut TcpStream, status: Status, code: &str) -> io::Result<()> {
-    let mut body = String::from("{\"error\":");
-    super::json::write_string(&mut body, code);
-    body.push('}');
+    // Serializing a single string field cannot fail, so the body is always well-formed JSON.
+    let body = serde_json::json!({ "error": code }).to_string();
     write_json(stream, status, &body)
 }
 

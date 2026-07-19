@@ -6,7 +6,6 @@
 //! to 127.0.0.1.
 
 mod http;
-mod json;
 mod server;
 mod session;
 mod wire;

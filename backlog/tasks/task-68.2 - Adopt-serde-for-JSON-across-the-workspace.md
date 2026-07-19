@@ -1,9 +1,11 @@
 ---
 id: TASK-68.2
 title: Adopt serde for JSON across the workspace
-status: To Do
-assignee: []
+status: Ready to Merge
+assignee:
+  - '@george'
 created_date: '2026-07-19 22:33'
+updated_date: '2026-07-19 23:04'
 labels: []
 dependencies: []
 parent_task_id: TASK-68
@@ -26,9 +28,79 @@ Note: npx tsc silently no-ops in this repo, so do not rely on a TypeScript compi
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 `serde` (with derive) and `serde_json` are added as workspace dependencies following the workspace manifest policy
-- [ ] #2 engine/src/ui JSON handling uses serde/serde_json; the bespoke json.rs hand-rolled encoder/parser is removed or reduced to nothing custom
-- [ ] #3 All existing /api/* endpoints produce and accept the same wire format the current frontend expects (no frontend changes required)
-- [ ] #4 Existing UI server/wire tests pass; add serde round-trip coverage for the wire types
-- [ ] #5 cargo fmt --check, clippy (workspace, all-targets, all-features, -D warnings), and cargo test --workspace all pass
+- [x] #1 `serde` (with derive) and `serde_json` are added as workspace dependencies following the workspace manifest policy
+- [x] #2 engine/src/ui JSON handling uses serde/serde_json; the bespoke json.rs hand-rolled encoder/parser is removed or reduced to nothing custom
+- [x] #3 All existing /api/* endpoints produce and accept the same wire format the current frontend expects (no frontend changes required)
+- [x] #4 Existing UI server/wire tests pass; add serde round-trip coverage for the wire types
+- [x] #5 cargo fmt --check, clippy (workspace, all-targets, all-features, -D warnings), and cargo test --workspace all pass
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Add serde (derive) + serde_json to [workspace.dependencies] in root Cargo.toml; inherit both in engine/Cargo.toml as regular deps. Leave core untouched.
+2. Rewrite engine/src/ui/wire.rs to serialize via serde-derived output DTO structs/enums that mirror the exact wire shape (internally 'kind'-tagged enums for engineLimit/gameStatus/score/engineStatus; camelCase field renames). Build DTOs from the engine's typed values (preserving mate-moves math and inf-first ordering) and emit via serde_json::to_string. Keep byte output identical: same field order (serde emits in declaration order), same integer/bool formatting, no extra escaping.
+3. Replace inbound command parsing in server.rs: parse the request body with serde_json into serde_json::Value, keep the object check and per-field error codes (missing_uci, missing_revision, missing_human_side, missing_engine_limit) using Value::get/as_str/as_u64.
+4. Replace http.rs write_error's hand-rolled body with serde_json.
+5. Delete engine/src/ui/json.rs and drop the mod json; its strict parsing/escaping is now serde_json's job.
+6. Update wire.rs tests to parse with serde_json::Value; add golden exact-byte assertions per wire sub-type and a Value round-trip, plus an inbound-body parse test. Verify fmt, clippy -D warnings, cargo test --workspace.
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Adopted serde/serde_json for all engine/src/ui JSON handling.
+
+- Dependencies: added serde (derive) + serde_json to [workspace.dependencies] in the root Cargo.toml and inherited both in engine/Cargo.toml via .workspace = true. core is untouched. Cargo.lock now records serde 1.0.229 / serde_json 1.0.150. Per the task description this centralizes the JSON stack ahead of the Lichess work; only engine consumes it today.
+- Outbound (wire.rs): replaced the hand-written String builders with borrowing Serialize DTOs. engineLimit/gameStatus/score/engineStatus are internally 'kind'-tagged enums; snapshot/progress/moveRecord use rename_all=camelCase. From impls carry over the exact conversions (mate-in-N moves math, INF_P/INF_N taken before is_mate, score cp raw i16). snapshot_to_json now returns serde_json::to_string(&SnapshotDto::from(snapshot)).
+- Byte-compatibility: serde emits fields in declaration order, so the DTO field order reproduces the previous output exactly. A new golden test (snapshot_serializes_to_the_exact_wire_bytes) pins the full byte string for a representative thinking snapshot; the frontend (which JSON.parses, order-independent) needs no changes.
+- Inbound (server.rs): request bodies are parsed with serde_json::from_str::<Value>; the object check and the per-field error codes (missing_uci, missing_revision, missing_human_side, invalid_human_side, missing_engine_limit) are preserved via Value::get/as_str/as_u64. Value::as_u64 matches the old strict as_u64 for the integer revisions the frontend sends; it additionally rejects exponent-form integers (e.g. 1e3) that the old parser accepted — the frontend never emits those, so this is a safe tightening for hand-crafted inputs only.
+- Errors (http.rs): write_error now builds the {"error":code} body with serde_json::json!.
+- Removed engine/src/ui/json.rs entirely (AC#2). session.rs and tests.rs migrated from the custom Json/parse to serde_json::Value; wire.rs tests re-expressed against serde_json::Value plus golden-byte assertions for each tagged sub-type (AC#4).
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @george
+created: 2026-07-19 22:57
+---
+Implementation handoff
+Branch: task-68.2-serde-json
+Worktree: /Users/seabo/seaborg-worktrees/task-68.2-serde-json
+Base: 064f883e63cb04883cc3c764d15dd520f7e59441
+Implementation target: e78daa1bbdf576300f55073a86bb877ac8c178c1
+Resolved findings: none
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass
+- cargo test --workspace: pass (all binaries; engine lib 269 passed/2 ignored, ui 77 of them; integration + doc suites green)
+Known failures: none
+---
+
+author: @george
+created: 2026-07-19 23:04
+---
+Approved TASK-68.2 at implementation SHA e78daa1bbdf576300f55073a86bb877ac8c178c1 (base 064f883e63cb04883cc3c764d15dd520f7e59441).
+
+Full base-to-target diff reviewed. All five acceptance criteria proven:
+- AC#1: serde (derive)+serde_json in root [workspace.dependencies], inherited via .workspace=true in engine/Cargo.toml; core untouched; serde 1.0.229 pinned in Cargo.lock.
+- AC#2: engine/src/ui/json.rs removed and mod json dropped; all UI JSON now uses serde/serde_json.
+- AC#3: /api/* wire format unchanged. snapshot_serializes_to_the_exact_wire_bytes pins the exact output; I traced it against the removed hand-rolled encoder and it is byte-identical (same field order, same integer/bool formatting). Inbound error codes (missing_uci/missing_revision/missing_human_side/invalid_human_side/missing_engine_limit, malformed_json) preserved. The only behavior change is Value::as_u64 rejecting exponent-form integers, a safe tightening the frontend never emits.
+- AC#4: existing server/wire tests migrated to serde_json::Value and pass; added golden-byte and tagged-subtype coverage.
+- AC#5: independently ran the three required checks on the target.
+
+Verification commands (run in the task worktree at the target code):
+- cargo fmt --check -> pass
+- CARGO_TARGET_DIR=/tmp/t682-clippy cargo clippy --workspace --all-targets --all-features -- -D warnings -> clean
+- cargo test --workspace -> pass (0 failures)
+
+No #[allow] introduced; comments are self-contained. Not a hot path, so no benchmarks required. Moving to Ready to Merge.
+---
+<!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Migrated engine/src/ui JSON to serde/serde_json. serde (derive) + serde_json added to root [workspace.dependencies] and inherited by engine only (core untouched); the hand-rolled engine/src/ui/json.rs is deleted. Outbound wire types serialize via borrowing #[derive(Serialize)] DTOs whose declaration order reproduces the previous byte layout exactly; inbound bodies parse via serde_json::Value preserving all per-field error codes. Verified: cargo fmt --check pass; cargo clippy --workspace --all-targets --all-features -- -D warnings clean (fresh CARGO_TARGET_DIR); cargo test --workspace pass (core 45, engine 269/2 ignored, build_metadata 19, doc 1). Wire byte-compatibility confirmed by a golden exact-byte test and by tracing the DTO output against the removed encoder for the most complex nested snapshot.
+<!-- SECTION:FINAL_SUMMARY:END -->
