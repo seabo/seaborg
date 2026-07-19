@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # One pinned toolchain for every job, so a change is judged against the same
+  # compiler that contributors run locally. rustfmt's output and Clippy's lint
+  # set both shift between releases; on a floating channel a toolchain upgrade
+  # turns into a CI failure on an unrelated pull request. Bump this
+  # deliberately, alongside whatever formatting or lint fallout it causes.
+  RUST_VERSION: "1.97.1"
+  # `.cargo/config.toml` builds with `-C target-cpu=native` for engine speed.
+  # Hosted runners are a heterogeneous fleet, so "native" resolves to a
+  # different microarchitecture from run to run while Cargo's fingerprint sees
+  # an unchanged flag string -- a restored cache can therefore contain objects
+  # using instructions the current host does not implement. Build with portable
+  # defaults instead. Nothing in this workspace is conditional on CPU features,
+  # so this affects speed only, and CI measures correctness rather than speed.
+  RUSTFLAGS: ""
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    name: Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --component rustfmt
+          rustup default "$RUST_VERSION"
+
+      # No dependency build is involved, so this job needs no cache and reports
+      # long before the compiling jobs finish.
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+  lint-and-test:
+    name: Lints and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --component clippy
+          rustup default "$RUST_VERSION"
+
+      # Clippy and the test build share one target directory, which is why both
+      # run in a single job: the second step reuses most of what the first
+      # compiled. The key covers everything that invalidates those artifacts --
+      # runner image, toolchain, and the resolved dependency graph.
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-${{ env.RUST_VERSION }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ env.RUST_VERSION }}-
+
+      - name: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      # Debug profile: the assertions the engine relies on to catch invalid
+      # board states are compiled out of a release build.
+      - name: cargo test --workspace
+        run: cargo test --workspace
