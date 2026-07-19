@@ -1,11 +1,11 @@
 ---
 id: TASK-66
 title: Keep embedded revision fresh under Git's reftable backend
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-19 15:13'
-updated_date: '2026-07-19 18:34'
+updated_date: '2026-07-19 19:39'
 labels:
   - build
   - metadata
