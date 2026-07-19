@@ -146,6 +146,26 @@ pub struct Position {
     pub(crate) zobrist: Zobrist,
 }
 
+/// Receiver for the individual piece placements that a single move changes.
+///
+/// A quantity derived purely from where the pieces stand — a material and piece-square score today,
+/// a neural accumulator later — can be kept up to date across a move by folding in only the pieces
+/// that moved, instead of rescanning the whole board. This trait is the seam through which
+/// [`Position`] hands such a consumer that per-move change set without the consumer having to know
+/// castling, en-passant, or promotion geometry, and without [`Position`] having to know what the
+/// consumer computes from it.
+///
+/// [`Position::replay_last_move_deltas`] reports a move as a sequence of `remove` and `add` calls
+/// that, applied to the board as it stood before the move, yield the board after it. Order is not
+/// significant: a consumer that treats placements as a commutative set (adding a value on `add`,
+/// subtracting it on `remove`) reaches the same result whatever order the calls arrive in.
+pub trait PieceDeltaSink {
+    /// A `piece` now stands on `square` that did not before this move.
+    fn add(&mut self, piece: Piece, square: Square);
+    /// A `piece` that stood on `square` before this move no longer does.
+    fn remove(&mut self, piece: Piece, square: Square);
+}
+
 impl Position {
     /// Number of halfmoves without a pawn move or capture that triggers the fifty-move rule.
     pub const FIFTY_MOVE_RULE_PLIES: u32 = 100;
@@ -476,6 +496,92 @@ impl Position {
             Some(undoable_move)
         } else {
             None
+        }
+    }
+
+    /// Replays the board changes of the most recently made move onto `sink`.
+    ///
+    /// Must be called immediately after [`Position::make_move`] or
+    /// [`Position::make_move_unchecked`], while the position holds the post-move board and the move
+    /// just made is still the last entry in the history. It reads that entry and reports every piece
+    /// the move took off a square (`remove`) and put on a square (`add`), so a consumer maintaining a
+    /// placement-derived quantity can update it without rescanning the board or reimplementing move
+    /// geometry. See [`PieceDeltaSink`].
+    ///
+    /// The reported changes are exactly those `make_move` applied: the moving piece leaves its origin
+    /// and arrives at its destination (as the promoted piece, on a promotion); a capture removes the
+    /// taken piece from its square, which for en passant is behind the destination; and castling adds
+    /// the rook's move to the king's. The pre-move and post-move boards differ in precisely these
+    /// placements.
+    ///
+    /// This must not be called for a null move. A null move changes only the side to move, so it
+    /// leaves every placement-derived quantity untouched and has no deltas to replay; a consumer that
+    /// stores its quantity from one side's perspective simply carries the same value across it. Null
+    /// moves do not exist in this engine yet, and defining that carry-across is a constraint on
+    /// whichever change introduces them.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no move has been made, and in debug builds if the last move was null.
+    pub fn replay_last_move_deltas<S: PieceDeltaSink>(&self, sink: &mut S) {
+        let mov = self
+            .history
+            .last()
+            .expect("replay_last_move_deltas called with no move in history");
+        debug_assert!(
+            !mov.is_null(),
+            "a null move changes no placement and must not be replayed"
+        );
+
+        // The move has already been made, so the side to move has flipped; the mover is the side
+        // that is no longer to move.
+        let us = !self.turn();
+        let them = !us;
+        let from = mov.orig;
+        let to = mov.dest;
+
+        if mov.is_castle() {
+            // Mirrors `apply_castling`: a king one file towards the h-file castles kingside, otherwise
+            // queenside, and the rook jumps to the square the king passed over.
+            let (r_orig, r_dest) = if from < to {
+                (
+                    us.relative_square(Square::H1),
+                    us.relative_square(Square::F1),
+                )
+            } else {
+                (
+                    us.relative_square(Square::A1),
+                    us.relative_square(Square::D1),
+                )
+            };
+            sink.remove(Piece::make(us, PieceType::King), from);
+            sink.add(Piece::make(us, PieceType::King), to);
+            sink.remove(Piece::make(us, PieceType::Rook), r_orig);
+            sink.add(Piece::make(us, PieceType::Rook), r_dest);
+            return;
+        }
+
+        if mov.captured != PieceType::None {
+            // En passant takes the pawn behind the destination square, not on it.
+            let cap_sq = if mov.is_en_passant() {
+                let back = match us {
+                    Player::WHITE => -8,
+                    Player::BLACK => 8,
+                };
+                // SAFETY: an en-passant destination is on the mover's sixth rank, so the captured
+                // pawn's square is always on the board.
+                unsafe { to.offset_unchecked(back) }
+            } else {
+                to
+            };
+            sink.remove(Piece::make(them, mov.captured), cap_sq);
+        }
+
+        sink.remove(mov.piece, from);
+        if let Some(promo) = mov.promo_piece_type {
+            sink.add(Piece::make(us, promo), to);
+        } else {
+            sink.add(mov.piece, to);
         }
     }
 

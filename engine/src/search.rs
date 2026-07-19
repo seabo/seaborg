@@ -1,6 +1,6 @@
 use crate::history::HistoryTable;
 
-use super::eval::Evaluation;
+use super::eval::{EvalState, Evaluation};
 use super::killer::KillerTable;
 use super::ordering::{Loader, OrderedMoves, ScoredMoveList, Scorer};
 use super::pv_table::PVTable;
@@ -501,6 +501,21 @@ impl NodeType for Root {
 pub struct Search<'engine> {
     /// The internal board position.
     pub(super) pos: Position,
+    /// The static evaluation of `pos`, maintained incrementally in step with it.
+    ///
+    /// Rather than rescan the board at every leaf, the search updates this accumulator by the pieces
+    /// each move touches (see [`Search::make_move`]) and restores it on unmake from `eval_stack`. It
+    /// is seeded from `pos` when the search is built, so it is correct whatever position — including a
+    /// clone taken to start a search — the search was handed. Under debug builds every make asserts it
+    /// against a from-scratch recomputation, so a divergence surfaces at the node it happens on rather
+    /// than as a mysterious later misvaluation.
+    eval_state: EvalState,
+    /// Saved evaluation accumulators, one per made-but-not-unmade move, newest last.
+    ///
+    /// `make_move` pushes the pre-move accumulator here and `unmake_move` pops it, so restoring the
+    /// evaluation on unmake is an O(1) copy rather than a recomputation or a reverse-delta. It grows
+    /// and shrinks in lockstep with the position's own move history.
+    eval_stack: Vec<EvalState>,
     /// Table for tracking the principal variation of the search.
     pvt: PVTable,
     /// Tracer to track search stats.
@@ -618,8 +633,11 @@ impl<'engine> Search<'engine> {
         tt: &'engine Table,
         events: Option<Sender<SearchEvent>>,
     ) -> Self {
+        let eval_state = EvalState::from_position(&pos);
         Self {
             pos,
+            eval_state,
+            eval_stack: Vec::with_capacity(MAX_PLY),
             tt,
             kt: KillerTable::new(KILLER_PLIES),
             history: HistoryTable::new(),
@@ -982,7 +1000,7 @@ impl<'engine> Search<'engine> {
 
                 // Step 18. Make the move.
                 // SAFETY: ordered moves originate from move generation for `self.pos`.
-                unsafe { self.pos.make_move_unchecked(&mov) };
+                unsafe { self.make_move(&mov) };
 
                 // The child's first act is to probe this cluster, and the table is far larger than
                 // cache, so that probe misses. Starting the fetch here overlaps the miss with the
@@ -999,7 +1017,7 @@ impl<'engine> Search<'engine> {
                         ply + 1,
                     );
                     let Some(child) = child else {
-                        self.pos.unmake_move();
+                        self.unmake_move();
                         return None;
                     };
                     value = child.neg().inc_mate();
@@ -1019,7 +1037,7 @@ impl<'engine> Search<'engine> {
                         ply + 1,
                     );
                     let Some(child) = child else {
-                        self.pos.unmake_move();
+                        self.unmake_move();
                         return None;
                     };
                     value = child.neg().inc_mate();
@@ -1028,7 +1046,7 @@ impl<'engine> Search<'engine> {
                 debug_assert!(Node::pv() || !(value > alpha && (Node::root() || value < beta)));
 
                 // Step 21. Undo move.
-                self.pos.unmake_move();
+                self.unmake_move();
 
                 debug_assert!(value > Score::INF_N);
                 debug_assert!(value < Score::INF_P);
@@ -1318,7 +1336,64 @@ impl<'engine> Search<'engine> {
     /// [`Self::clock_permits_tt_reuse`] and the write suppression at Step 24 exist to contain.
     #[inline(always)]
     fn evaluate(&mut self) -> Score {
-        Score::cp(self.pos.static_eval() * self.pov())
+        // The incremental accumulator is the working value; the from-scratch evaluation is only its
+        // debug-build reference. The per-make assertion in `sync_eval_after_make` already guards the
+        // accumulator at every node, and this reasserts it at the point the value is actually
+        // consumed.
+        debug_assert_eq!(
+            self.eval_state.score(),
+            self.pos.static_eval(),
+            "incremental evaluation disagrees with from-scratch recomputation"
+        );
+        Score::cp(self.eval_state.score() * self.pov())
+    }
+
+    /// Makes a move on the search position and updates the evaluation accumulator to match.
+    ///
+    /// # Safety
+    ///
+    /// Carries the same contract as [`Position::make_move_unchecked`]: `mov` must be a legal move
+    /// generated for the current position.
+    #[inline(always)]
+    unsafe fn make_move(&mut self, mov: &Move) {
+        self.eval_stack.push(self.eval_state);
+        self.pos.make_move_unchecked(mov);
+        self.sync_eval_after_make();
+    }
+
+    /// Makes a move validated against the current position and updates the evaluation accumulator.
+    ///
+    /// The checked counterpart of [`Search::make_move`], for the few call sites that have not already
+    /// established the move's legality.
+    #[inline(always)]
+    fn make_move_checked(&mut self, mov: &Move) {
+        self.eval_stack.push(self.eval_state);
+        self.pos.make_move(mov);
+        self.sync_eval_after_make();
+    }
+
+    /// Folds the move just made into the accumulator and, under debug builds, checks the result.
+    #[inline(always)]
+    fn sync_eval_after_make(&mut self) {
+        self.pos.replay_last_move_deltas(&mut self.eval_state);
+        debug_assert_eq!(
+            self.eval_state,
+            EvalState::from_position(&self.pos),
+            "incremental evaluation diverged from a from-scratch recomputation after a move"
+        );
+    }
+
+    /// Unmakes the most recent move and restores the accumulator that went with the prior position.
+    ///
+    /// Restoration is a copy of the value `make_move` saved, not a recomputation, so it is exact and
+    /// cheap however deep the search has gone.
+    #[inline(always)]
+    fn unmake_move(&mut self) {
+        self.pos.unmake_move();
+        self.eval_state = self
+            .eval_stack
+            .pop()
+            .expect("unmake_move without a matching make_move");
     }
 
     /// Returns 1 if the player to move is White, -1 if Black. Useful wherever we are using
@@ -1502,13 +1577,13 @@ impl<'engine> Search<'engine> {
                 }
 
                 // SAFETY: quiescence moves originate from move generation for `self.pos`.
-                unsafe { self.pos.make_move_unchecked(&mov) };
+                unsafe { self.make_move(&mov) };
                 // As in the main search: start the child's cluster fetch as soon as its key exists,
                 // so the miss overlaps the descent instead of stalling in front of the probe.
                 self.tt.prefetch(self.pos.zobrist().0);
                 let child =
                     self.quiesce::<T, Node>(beta.child_bound(), alpha.child_bound(), ply + 1);
-                self.pos.unmake_move();
+                self.unmake_move();
                 // An aborted child leaves no usable value, and returning here without storing is
                 // what keeps a truncated subtree out of the table.
                 let score = child?.neg().inc_mate();
@@ -1572,9 +1647,9 @@ impl<'engine> Search<'engine> {
                 return None;
             }
 
-            self.pos.make_move(mov);
+            self.make_move_checked(mov);
             let child = self.quiesce::<T, Node>(beta.child_bound(), alpha.child_bound(), ply + 1);
-            self.pos.unmake_move();
+            self.unmake_move();
             let score = child?.neg().inc_mate();
 
             if score >= beta {
