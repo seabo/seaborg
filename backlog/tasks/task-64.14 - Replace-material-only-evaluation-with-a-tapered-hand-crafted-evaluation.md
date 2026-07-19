@@ -1,9 +1,11 @@
 ---
 id: TASK-64.14
 title: Replace material-only evaluation with a tapered hand-crafted evaluation
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-19 13:33'
+updated_date: '2026-07-19 20:07'
 labels:
   - evaluation
   - strength
