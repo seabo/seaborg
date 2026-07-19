@@ -1,11 +1,11 @@
 ---
 id: TASK-68.1
 title: Restructure the CLI into subcommands
-status: Ready to Merge
+status: Done
 assignee:
   - '@george'
 created_date: '2026-07-19 22:33'
-updated_date: '2026-07-19 22:59'
+updated_date: '2026-07-19 23:05'
 labels: []
 dependencies: []
 parent_task_id: TASK-68
