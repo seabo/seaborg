@@ -1,11 +1,11 @@
 ---
 id: TASK-65
 title: Stop quiescence-draft Exact entries from evicting deeper main-search entries
-status: In Review
+status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-19 15:07'
-updated_date: '2026-07-19 20:47'
+updated_date: '2026-07-19 20:57'
 labels:
   - transposition-table
   - search
@@ -37,11 +37,11 @@ Note that the cross-slot victim-selection path already handles this correctly by
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A quiescence-draft Exact store never displaces a deeper main-search entry for the same key, with a direct regression test over Table::store covering the depth-8 inexact versus depth-0 Exact case
-- [ ] #2 The chosen same-key replacement rule is documented at the decision site, stating why draft no longer implies comparable search effort and what the rule now compares
-- [ ] #3 Same-key replacement behaviour is specified and tested across the bound and depth combinations that can arise from the two writers, including equal-depth and differing-age cases
-- [ ] #4 Warm-versus-cold node counts and the search benchmark show no regression against the pre-change measurement on the same machine
-- [ ] #5 Cross-slot victim selection is confirmed unchanged, or any change to it is measured and justified
+- [x] #1 A quiescence-draft Exact store never displaces a deeper main-search entry for the same key, with a direct regression test over Table::store covering the depth-8 inexact versus depth-0 Exact case
+- [x] #2 The chosen same-key replacement rule is documented at the decision site, stating why draft no longer implies comparable search effort and what the rule now compares
+- [x] #3 Same-key replacement behaviour is specified and tested across the bound and depth combinations that can arise from the two writers, including equal-depth and differing-age cases
+- [x] #4 Warm-versus-cold node counts and the search benchmark show no regression against the pre-change measurement on the same machine
+- [x] #5 Cross-slot victim selection is confirmed unchanged, or any change to it is measured and justified
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -83,4 +83,27 @@ Verification:
 - hash-load telemetry: two node counts identical; kiwipete +81 and endgame +108, both under +0.01%
 Known failures: none
 ---
+
+author: @codex
+created: 2026-07-19 20:57
+---
+Review attempt: 1
+Reviewed branch: task-65-quiescence-exact-replacement
+Reviewed implementation: ab829769ba19af1a0c8133eed6a9b76e45fddf10
+Verdict: approved
+
+Verification:
+- cargo fmt --check: pass
+- CARGO_TARGET_DIR=/tmp/seaborg-task65-review-clippy-20260719 cargo clippy --workspace --all-targets --all-features -- -D warnings: pass, fresh target
+- cargo test --workspace: pass, 336 passed / 0 failed / 2 ignored
+- cargo bench --bench perft --bench movegen on base and target: movegen flat; perft confidence intervals overlap and median delta is below 5%
+- cargo bench --bench search -- 'search startpos depth 7' on base and target: exact hash-load counts reproduced; live timing samples were contaminated and unstable, while the committed controlled round-robin evidence is within the 5% threshold
+- Full df6f37346aa3167fe330d45fd443e84701baee8e..ab829769ba19af1a0c8133eed6a9b76e45fddf10 diff and post-target commits inspected: scoped; post-target change is handoff metadata only
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Unified same-key and cross-slot transposition-table replacement around depth, Exact-bound bonus, and relative-age quality, preventing draft-0 quiescence Exact entries from erasing sufficiently deeper main-search results. Verified at implementation target ab829769ba19af1a0c8133eed6a9b76e45fddf10 with cargo fmt --check, fresh-target strict Clippy, cargo test --workspace, direct TT policy tests, warm-table/hash-load node counts, and base/target search, perft, and move-generation benchmarks.
+<!-- SECTION:FINAL_SUMMARY:END -->
