@@ -64,3 +64,28 @@ The main future development direction is to improve static evaluation at
 leaf nodes using a neural net approach.
 
 - [Efficiently-updatable neural network](https://www.chessprogramming.org/NNUE)
+
+## Development
+
+Run these three commands before proposing a change:
+
+```sh
+cargo fmt --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace
+```
+
+CI runs exactly these, so a change that fails any of them locally will fail
+there too. Clippy is a gate rather than advice — `-D warnings` turns any
+warning into a build failure. Fix warnings at the source; reach for a local
+`#[allow]` only where the warned construct is genuinely required, and say why
+in a comment.
+
+Tests run in the debug profile. The engine leans on `debug_assert!` to catch
+invalid board states, and those assertions disappear from a release build, so
+`--release` is not a substitute.
+
+CI pins the Rust toolchain in `.github/workflows/ci.yml`. Local runs use
+whatever toolchain you have installed, so an unusually old or new one can
+disagree with CI about formatting or lints; the pinned version there is the
+reference.
