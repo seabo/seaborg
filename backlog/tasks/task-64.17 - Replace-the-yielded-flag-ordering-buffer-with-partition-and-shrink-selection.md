@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-19 13:43'
-updated_date: '2026-07-19 14:25'
+updated_date: '2026-07-19 14:53'
 labels:
   - search
   - move-ordering
@@ -73,3 +73,11 @@ Sequencing. TASK-64.10 adds a phase variant and TASK-64.11 changes capture scori
 8. Update the OrderedMoves doc comment to the measured size, and add a test asserting that size so the doc cannot silently drift.
 9. Verify order preservation by comparing fixed-depth UCI node counts against the base commit over a position set, and run the search benchmark round-robin against a base worktree per BENCHMARKS.md.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Order preservation evidence (AC#4). Compared the full UCI info stream between the base commit aec9992 and this branch over 65 positions (start position, Kiwipete, a pawn endgame, a promotion race, a capture-promotion position, and the first 60 WAC positions), searching each to depth 10 with a fresh engine process. The records compare depth, score, node count, hashfull and principal variation at every iteration, with the wall-clock fields (nps, time) stripped. The two records are byte-identical across all 873 lines, covering 312,863,482 nodes at the final iteration. Identical principal variations as well as identical node counts is a stronger check than node counts alone: a reordering that happened to preserve a count would still surface as a different line.
+
+Underpromotion ordering hazard found and covered. Selection now reorders the buffer in place, and underpromotions are derived from the queen promotion segment, so deriving them after the promotion phase had sorted would make their order depend on that sort. The hash-move duplicate makes this observable: the queen promotion matching the hash move is not yielded again, but its rook, knight and bishop siblings are ordinary moves that must still be searched in the same relative position. Underpromotions are therefore expanded at promotion-load time, while the segment is still in generation order. The regression test for this was confirmed to fail when the expansion is moved after the partition, so it is not vacuous.
+<!-- SECTION:NOTES:END -->
