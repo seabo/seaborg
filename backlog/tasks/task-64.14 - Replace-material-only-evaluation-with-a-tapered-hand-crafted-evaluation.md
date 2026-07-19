@@ -1,11 +1,11 @@
 ---
 id: TASK-64.14
 title: Replace material-only evaluation with a tapered hand-crafted evaluation
-status: Changes Requested
+status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-19 13:33'
-updated_date: '2026-07-19 21:07'
+updated_date: '2026-07-19 21:10'
 labels:
   - evaluation
   - strength
@@ -52,11 +52,11 @@ Scope beyond piece-square tables and tapering, such as mobility, king safety and
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-Rework plan for REV-1-01:
-1. Preserve the reviewed tapered evaluator and create a task-scoped candidate variant that disables razoring while leaving the evaluator and all other search behavior unchanged.
-2. Build release binaries for the current-margin implementation and the razoring-disabled comparator, then use the TASK-27 strength harness at equal fixed depth to produce an attributable paired result under the tapered evaluator.
-3. Use the result to decide whether the current razoring margin remains warranted; restore the intended source configuration and record the artifact, W/D/L, Elo/LLR, decision, and Resolved REV-1-01 evidence.
-4. Run cargo fmt --check, strict workspace Clippy, and workspace tests; commit the rework target and a task-only In Review handoff.
+Integration rework plan:
+1. Commit the Changes Requested claim, then merge the current primary tip c7826f1 into the persistent task branch so the newly landed evaluation benchmark is part of the reviewable target.
+2. Update benches/search.rs to call static_eval() and revise its description to match the tapered evaluator; run the focused benchmark to verify it still measures static evaluation.
+3. Run cargo fmt --check, strict workspace Clippy, and cargo test --workspace; commit the integrated implementation and record resolution evidence for the merge-gate failure.
+4. Record a new immutable implementation target and task-only In Review handoff for independent review.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
@@ -189,9 +189,3 @@ Evidence: benches/search.rs:186 still calls Position::material_eval(), which TAS
 Expected rework: update the search evaluation benchmark to call and describe static_eval(), verify the benchmark still measures the intended evaluator, then rerun the repository gates. cargo fmt --check passed and cargo test --workspace passed on the trial merge, but strict Clippy is a blocking integration gate. Master was not advanced.
 ---
 <!-- COMMENTS:END -->
-
-## Final Summary
-
-<!-- SECTION:FINAL_SUMMARY:BEGIN -->
-Replaced material-only evaluation with the PeSTO tapered material-and-piece-square evaluator, preserving position-intrinsic TT semantics and recording parameter provenance, scope, and distinct phase-dependent piece values. Verified immutable target 88b78c0 with cargo fmt --check, clean-target strict workspace Clippy, cargo test --workspace, the archived 19W-0D-1L evaluator smoke comparison, and the isolated 10W-0D-10L retained-razoring-versus-disabled comparison; the landed razoring margin remains unchanged.
-<!-- SECTION:FINAL_SUMMARY:END -->
