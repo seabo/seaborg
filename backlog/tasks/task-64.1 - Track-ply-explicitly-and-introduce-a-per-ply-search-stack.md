@@ -1,11 +1,11 @@
 ---
 id: TASK-64.1
 title: Track ply explicitly and introduce a per-ply search stack
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-19 13:30'
-updated_date: '2026-07-19 19:54'
+updated_date: '2026-07-19 19:58'
 labels:
   - search
   - architecture
