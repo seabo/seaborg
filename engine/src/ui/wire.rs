@@ -2,13 +2,16 @@
 //!
 //! This is the browser counterpart to [`crate::info`], which formats the same typed values for
 //! UCI. Both adapters read the engine's typed reports; neither is authoritative over game state.
+//!
+//! The wire shape is defined by the `*Dto` types below: serde serializes them in field-declaration
+//! order, so the browser sees a fixed layout without this module hand-writing any JSON. The DTOs
+//! borrow from the engine's typed values rather than owning a second copy of the state.
 
-use super::json::{write_key, write_string};
 use crate::game::{CommandError, DrawReason, EngineStatus, GameSnapshot, GameStatus, MoveRecord};
 use crate::score::Score;
 use crate::search::{SearchLimit, SearchProgress};
 use core::position::Player;
-use std::fmt::Write as _;
+use serde::Serialize;
 use std::time::Duration;
 
 fn player_name(player: Player) -> &'static str {
@@ -82,240 +85,230 @@ pub fn parse_engine_limit(kind: &str, value: u64) -> Result<SearchLimit, &'stati
     }
 }
 
-/// Write the limit the next engine turn will use, tagged so the browser need not decode a unit.
-fn write_engine_limit(out: &mut String, limit: SearchLimit) {
-    let mut first = true;
-    out.push('{');
-    write_key(out, &mut first, "kind");
-    match limit {
-        SearchLimit::Time(duration) => {
-            write_string(out, "time");
-            write_key(out, &mut first, "milliseconds");
-            let _ = write!(out, "{}", duration.as_millis());
+/// The limit the next engine turn will use, tagged so the browser need not decode a unit.
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum EngineLimitDto {
+    Time { milliseconds: u128 },
+    Depth { plies: u8 },
+    Nodes { nodes: u64 },
+    Infinite,
+}
+
+impl From<SearchLimit> for EngineLimitDto {
+    fn from(limit: SearchLimit) -> Self {
+        match limit {
+            SearchLimit::Time(duration) => EngineLimitDto::Time {
+                milliseconds: duration.as_millis(),
+            },
+            SearchLimit::Depth(plies) => EngineLimitDto::Depth { plies },
+            SearchLimit::Nodes(nodes) => EngineLimitDto::Nodes { nodes },
+            // Not reachable through `parse_engine_limit`, but the CLI default could name it and a
+            // snapshot must stay total.
+            SearchLimit::Infinite => EngineLimitDto::Infinite,
         }
-        SearchLimit::Depth(plies) => {
-            write_string(out, "depth");
-            write_key(out, &mut first, "plies");
-            let _ = write!(out, "{plies}");
-        }
-        SearchLimit::Nodes(nodes) => {
-            write_string(out, "nodes");
-            write_key(out, &mut first, "nodes");
-            let _ = write!(out, "{nodes}");
-        }
-        // Not reachable through `parse_engine_limit`, but the CLI default could name it and a
-        // snapshot must stay total.
-        SearchLimit::Infinite => write_string(out, "infinite"),
     }
-    out.push('}');
 }
 
-fn write_move_record(out: &mut String, record: &MoveRecord) {
-    let mut first = true;
-    out.push('{');
-    write_key(out, &mut first, "uci");
-    write_string(out, &record.uci);
-    write_key(out, &mut first, "san");
-    write_string(out, &record.san);
-    out.push('}');
+#[derive(Serialize)]
+struct MoveRecordDto<'a> {
+    uci: &'a str,
+    san: &'a str,
 }
 
-fn write_game_status(out: &mut String, status: GameStatus) {
-    let mut first = true;
-    out.push('{');
-    match status {
-        GameStatus::Ongoing => {
-            write_key(out, &mut first, "kind");
-            write_string(out, "ongoing");
+impl<'a> From<&'a MoveRecord> for MoveRecordDto<'a> {
+    fn from(record: &'a MoveRecord) -> Self {
+        MoveRecordDto {
+            uci: &record.uci,
+            san: &record.san,
         }
-        GameStatus::Checkmate { winner } => {
-            write_key(out, &mut first, "kind");
-            write_string(out, "checkmate");
-            write_key(out, &mut first, "winner");
-            write_string(out, player_name(winner));
-        }
-        GameStatus::Draw(reason) => {
-            write_key(out, &mut first, "kind");
-            write_string(out, "draw");
-            write_key(out, &mut first, "reason");
-            write_string(
-                out,
-                match reason {
+    }
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum GameStatusDto {
+    Ongoing,
+    Checkmate { winner: &'static str },
+    Draw { reason: &'static str },
+}
+
+impl From<GameStatus> for GameStatusDto {
+    fn from(status: GameStatus) -> Self {
+        match status {
+            GameStatus::Ongoing => GameStatusDto::Ongoing,
+            GameStatus::Checkmate { winner } => GameStatusDto::Checkmate {
+                winner: player_name(winner),
+            },
+            GameStatus::Draw(reason) => GameStatusDto::Draw {
+                reason: match reason {
                     DrawReason::Stalemate => "stalemate",
                     DrawReason::ThreefoldRepetition => "threefold_repetition",
                     DrawReason::FiftyMoveRule => "fifty_move_rule",
                 },
-            );
+            },
         }
     }
-    out.push('}');
 }
 
-/// Write a score as a tagged value so the browser never has to decode the engine's integer coding.
-fn write_score(out: &mut String, score: Score) {
-    let mut first = true;
-    out.push('{');
-    let raw = score.to_i16();
-    if score == Score::INF_P || score == Score::INF_N {
-        // The infinities sit outside the mate band but satisfy `is_mate`, so they must be taken
-        // first — exactly as `Score`'s `Display` does. Falling through would run the conversion
-        // below on a value it was never derived for and invert the sign: `INF_P` would render as
-        // a mate *against* the side to move. No search result reaches the browser as an infinity
-        // today, so this guards a representation rather than a live path.
-        write_key(out, &mut first, "kind");
-        write_string(out, if score == Score::INF_P { "inf" } else { "-inf" });
-    } else if score.is_mate() {
-        // Mirrors the UCI `mate N` conversion in `Score`'s `Display`: negative means the side to
-        // move is being mated, and the value counts moves rather than plies.
-        let moves = if raw < 0 {
-            -((raw + 20_100) / 2)
+/// A score, tagged so the browser never has to decode the engine's integer coding.
+#[derive(Serialize)]
+#[serde(tag = "kind")]
+enum ScoreDto {
+    #[serde(rename = "inf")]
+    Inf,
+    #[serde(rename = "-inf")]
+    NegInf,
+    #[serde(rename = "mate")]
+    Mate { moves: i16 },
+    #[serde(rename = "cp")]
+    Cp { centipawns: i16 },
+}
+
+impl From<Score> for ScoreDto {
+    fn from(score: Score) -> Self {
+        let raw = score.to_i16();
+        if score == Score::INF_P {
+            // The infinities sit outside the mate band but satisfy `is_mate`, so they must be
+            // taken first — exactly as `Score`'s `Display` does. Falling through would run the
+            // conversion below on a value it was never derived for and invert the sign: `INF_P`
+            // would render as a mate *against* the side to move. No search result reaches the
+            // browser as an infinity today, so this guards a representation rather than a live path.
+            ScoreDto::Inf
+        } else if score == Score::INF_N {
+            ScoreDto::NegInf
+        } else if score.is_mate() {
+            // Mirrors the UCI `mate N` conversion in `Score`'s `Display`: negative means the side
+            // to move is being mated, and the value counts moves rather than plies.
+            let moves = if raw < 0 {
+                -((raw + 20_100) / 2)
+            } else {
+                (20_100 - raw + 1) / 2
+            };
+            ScoreDto::Mate { moves }
         } else {
-            (20_100 - raw + 1) / 2
-        };
-        write_key(out, &mut first, "kind");
-        write_string(out, "mate");
-        write_key(out, &mut first, "moves");
-        let _ = write!(out, "{moves}");
-    } else {
-        write_key(out, &mut first, "kind");
-        write_string(out, "cp");
-        write_key(out, &mut first, "centipawns");
-        let _ = write!(out, "{raw}");
-    }
-    out.push('}');
-}
-
-fn write_string_array(out: &mut String, values: impl IntoIterator<Item = impl AsRef<str>>) {
-    out.push('[');
-    for (index, value) in values.into_iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        write_string(out, value.as_ref());
-    }
-    out.push(']');
-}
-
-fn write_progress(out: &mut String, progress: &SearchProgress) {
-    let mut first = true;
-    out.push('{');
-    write_key(out, &mut first, "depth");
-    let _ = write!(out, "{}", progress.depth);
-    write_key(out, &mut first, "score");
-    write_score(out, progress.score);
-    write_key(out, &mut first, "elapsedMs");
-    let _ = write!(out, "{}", progress.elapsed.as_millis());
-    write_key(out, &mut first, "nodes");
-    let _ = write!(out, "{}", progress.nodes);
-    write_key(out, &mut first, "nps");
-    let _ = write!(out, "{}", progress.nps);
-    write_key(out, &mut first, "hashfull");
-    let _ = write!(out, "{}", progress.hashfull);
-    write_key(out, &mut first, "principalVariation");
-    write_string_array(
-        out,
-        progress
-            .principal_variation
-            .iter()
-            .map(|mov| mov.to_uci_string()),
-    );
-    out.push('}');
-}
-
-fn write_engine_status(out: &mut String, status: &EngineStatus) {
-    let mut first = true;
-    out.push('{');
-    match status {
-        EngineStatus::Idle => {
-            write_key(out, &mut first, "kind");
-            write_string(out, "idle");
-        }
-        EngineStatus::Thinking {
-            search_id,
-            position_revision,
-            progress,
-            principal_variation_san,
-        } => {
-            write_key(out, &mut first, "kind");
-            write_string(out, "thinking");
-            write_key(out, &mut first, "searchId");
-            let _ = write!(out, "{search_id}");
-            write_key(out, &mut first, "positionRevision");
-            let _ = write!(out, "{position_revision}");
-            write_key(out, &mut first, "progress");
-            match progress {
-                Some(progress) => write_progress(out, progress),
-                None => out.push_str("null"),
-            }
-            // SAN sits beside `progress` rather than inside it because the search reports moves
-            // and only the controller can read them against a position.
-            write_key(out, &mut first, "principalVariationSan");
-            write_string_array(out, principal_variation_san);
+            ScoreDto::Cp { centipawns: raw }
         }
     }
-    out.push('}');
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProgressDto {
+    depth: u8,
+    score: ScoreDto,
+    elapsed_ms: u128,
+    nodes: usize,
+    nps: u32,
+    hashfull: u16,
+    principal_variation: Vec<String>,
+}
+
+impl From<&SearchProgress> for ProgressDto {
+    fn from(progress: &SearchProgress) -> Self {
+        ProgressDto {
+            depth: progress.depth,
+            score: progress.score.into(),
+            elapsed_ms: progress.elapsed.as_millis(),
+            nodes: progress.nodes,
+            nps: progress.nps,
+            hashfull: progress.hashfull,
+            principal_variation: progress
+                .principal_variation
+                .iter()
+                .map(|mov| mov.to_uci_string())
+                .collect(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum EngineStatusDto<'a> {
+    Idle,
+    #[serde(rename_all = "camelCase")]
+    Thinking {
+        search_id: u64,
+        position_revision: u64,
+        progress: Option<ProgressDto>,
+        // SAN sits beside `progress` rather than inside it because the search reports moves and
+        // only the controller can read them against a position.
+        principal_variation_san: &'a [String],
+    },
+}
+
+impl<'a> From<&'a EngineStatus> for EngineStatusDto<'a> {
+    fn from(status: &'a EngineStatus) -> Self {
+        match status {
+            EngineStatus::Idle => EngineStatusDto::Idle,
+            EngineStatus::Thinking {
+                search_id,
+                position_revision,
+                progress,
+                principal_variation_san,
+            } => EngineStatusDto::Thinking {
+                search_id: *search_id,
+                position_revision: *position_revision,
+                progress: progress.as_ref().map(ProgressDto::from),
+                principal_variation_san,
+            },
+        }
+    }
+}
+
+/// The complete authoritative snapshot the browser renders.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SnapshotDto<'a> {
+    revision: u64,
+    human_side: &'static str,
+    fen: &'a str,
+    side_to_move: &'static str,
+    in_check: bool,
+    legal_moves: &'a [String],
+    last_move: Option<MoveRecordDto<'a>>,
+    move_history: Vec<MoveRecordDto<'a>>,
+    game_status: GameStatusDto,
+    engine_status: EngineStatusDto<'a>,
+    engine_limit: EngineLimitDto,
+}
+
+impl<'a> From<&'a GameSnapshot> for SnapshotDto<'a> {
+    fn from(snapshot: &'a GameSnapshot) -> Self {
+        SnapshotDto {
+            revision: snapshot.revision,
+            human_side: player_name(snapshot.human_side),
+            fen: &snapshot.fen,
+            side_to_move: player_name(snapshot.side_to_move),
+            in_check: snapshot.in_check,
+            legal_moves: &snapshot.legal_moves,
+            last_move: snapshot.last_move.as_ref().map(MoveRecordDto::from),
+            move_history: snapshot
+                .move_history
+                .iter()
+                .map(MoveRecordDto::from)
+                .collect(),
+            game_status: snapshot.game_status.into(),
+            engine_status: (&snapshot.engine_status).into(),
+            engine_limit: snapshot.engine_limit.into(),
+        }
+    }
 }
 
 /// Serialize a complete authoritative snapshot for the browser.
 pub fn snapshot_to_json(snapshot: &GameSnapshot) -> String {
-    let mut out = String::with_capacity(1024);
-    let mut first = true;
-    out.push('{');
-
-    write_key(&mut out, &mut first, "revision");
-    let _ = write!(out, "{}", snapshot.revision);
-    write_key(&mut out, &mut first, "humanSide");
-    write_string(&mut out, player_name(snapshot.human_side));
-    write_key(&mut out, &mut first, "fen");
-    write_string(&mut out, &snapshot.fen);
-    write_key(&mut out, &mut first, "sideToMove");
-    write_string(&mut out, player_name(snapshot.side_to_move));
-    write_key(&mut out, &mut first, "inCheck");
-    out.push_str(if snapshot.in_check { "true" } else { "false" });
-
-    write_key(&mut out, &mut first, "legalMoves");
-    out.push('[');
-    for (index, uci) in snapshot.legal_moves.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        write_string(&mut out, uci);
-    }
-    out.push(']');
-
-    write_key(&mut out, &mut first, "lastMove");
-    match &snapshot.last_move {
-        Some(record) => write_move_record(&mut out, record),
-        None => out.push_str("null"),
-    }
-
-    write_key(&mut out, &mut first, "moveHistory");
-    out.push('[');
-    for (index, record) in snapshot.move_history.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        write_move_record(&mut out, record);
-    }
-    out.push(']');
-
-    write_key(&mut out, &mut first, "gameStatus");
-    write_game_status(&mut out, snapshot.game_status);
-    write_key(&mut out, &mut first, "engineStatus");
-    write_engine_status(&mut out, &snapshot.engine_status);
-    write_key(&mut out, &mut first, "engineLimit");
-    write_engine_limit(&mut out, snapshot.engine_limit);
-
-    out.push('}');
-    out
+    // Serialization of the borrowing DTO cannot fail: every field is a plain scalar, string, or
+    // sequence, none of which serde_json rejects.
+    serde_json::to_string(&SnapshotDto::from(snapshot))
+        .expect("wire snapshot is always serializable")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::json::{parse, Json};
     use core::init::init_globals;
     use core::position::Position;
+    use serde_json::Value;
     use std::time::Duration;
 
     fn start_snapshot() -> GameSnapshot {
@@ -336,17 +329,21 @@ mod tests {
         }
     }
 
+    fn parse(json: &str) -> Value {
+        serde_json::from_str(json).expect("wire output is valid JSON")
+    }
+
     #[test]
     fn serializes_a_snapshot_the_parser_accepts() {
         let mut snapshot = start_snapshot();
         snapshot.in_check = true;
         let json = snapshot_to_json(&snapshot);
-        let value = parse(&json).unwrap();
+        let value = parse(&json);
         assert_eq!(value.get("revision").unwrap().as_u64(), Some(3));
         assert_eq!(value.get("humanSide").unwrap().as_str(), Some("white"));
         assert_eq!(value.get("sideToMove").unwrap().as_str(), Some("white"));
-        assert_eq!(value.get("inCheck"), Some(&Json::Bool(true)));
-        assert_eq!(value.get("lastMove"), Some(&Json::Null));
+        assert_eq!(value.get("inCheck"), Some(&Value::Bool(true)));
+        assert_eq!(value.get("lastMove"), Some(&Value::Null));
         assert_eq!(
             value
                 .get("gameStatus")
@@ -365,10 +362,7 @@ mod tests {
                 .as_str(),
             Some("idle")
         );
-        let moves = match value.get("legalMoves").unwrap() {
-            Json::Array(items) => items,
-            other => panic!("expected array, got {other:?}"),
-        };
+        let moves = value.get("legalMoves").unwrap().as_array().unwrap();
         assert_eq!(moves.len(), 2);
         assert_eq!(moves[0].as_str(), Some("e2e4"));
     }
@@ -379,7 +373,7 @@ mod tests {
         snapshot.game_status = GameStatus::Checkmate {
             winner: Player::BLACK,
         };
-        let value = parse(&snapshot_to_json(&snapshot)).unwrap();
+        let value = parse(&snapshot_to_json(&snapshot));
         let status = value.get("gameStatus").unwrap();
         assert_eq!(status.get("kind").unwrap().as_str(), Some("checkmate"));
         assert_eq!(status.get("winner").unwrap().as_str(), Some("black"));
@@ -390,7 +384,7 @@ mod tests {
             (DrawReason::FiftyMoveRule, "fifty_move_rule"),
         ] {
             snapshot.game_status = GameStatus::Draw(reason);
-            let value = parse(&snapshot_to_json(&snapshot)).unwrap();
+            let value = parse(&snapshot_to_json(&snapshot));
             let status = value.get("gameStatus").unwrap();
             assert_eq!(status.get("kind").unwrap().as_str(), Some("draw"));
             assert_eq!(status.get("reason").unwrap().as_str(), Some(expected));
@@ -423,7 +417,7 @@ mod tests {
             principal_variation_san: vec!["e4".to_owned()],
         };
 
-        let value = parse(&snapshot_to_json(&snapshot)).unwrap();
+        let value = parse(&snapshot_to_json(&snapshot));
         assert_eq!(
             value.get("lastMove").unwrap().get("san").unwrap().as_str(),
             Some("e4")
@@ -438,16 +432,18 @@ mod tests {
         assert_eq!(progress.get("nodes").unwrap().as_u64(), Some(9_000));
         let score = progress.get("score").unwrap();
         assert_eq!(score.get("kind").unwrap().as_str(), Some("cp"));
-        assert_eq!(score.get("centipawns"), Some(&Json::Number(-42.0)));
-        let pv = match progress.get("principalVariation").unwrap() {
-            Json::Array(items) => items,
-            other => panic!("expected array, got {other:?}"),
-        };
+        assert_eq!(score.get("centipawns").unwrap().as_i64(), Some(-42));
+        let pv = progress
+            .get("principalVariation")
+            .unwrap()
+            .as_array()
+            .unwrap();
         assert_eq!(pv[0].as_str(), Some("e2e4"));
-        let san = match engine.get("principalVariationSan").unwrap() {
-            Json::Array(items) => items,
-            other => panic!("expected array, got {other:?}"),
-        };
+        let san = engine
+            .get("principalVariationSan")
+            .unwrap()
+            .as_array()
+            .unwrap();
         assert_eq!(san[0].as_str(), Some("e4"));
     }
 
@@ -456,13 +452,13 @@ mod tests {
         let mut snapshot = start_snapshot();
 
         snapshot.engine_limit = SearchLimit::Time(Duration::from_millis(2_500));
-        let value = parse(&snapshot_to_json(&snapshot)).unwrap();
+        let value = parse(&snapshot_to_json(&snapshot));
         let limit = value.get("engineLimit").unwrap();
         assert_eq!(limit.get("kind").unwrap().as_str(), Some("time"));
         assert_eq!(limit.get("milliseconds").unwrap().as_u64(), Some(2_500));
 
         snapshot.engine_limit = SearchLimit::Depth(6);
-        let value = parse(&snapshot_to_json(&snapshot)).unwrap();
+        let value = parse(&snapshot_to_json(&snapshot));
         let limit = value.get("engineLimit").unwrap();
         assert_eq!(limit.get("kind").unwrap().as_str(), Some("depth"));
         assert_eq!(limit.get("plies").unwrap().as_u64(), Some(6));
@@ -470,7 +466,7 @@ mod tests {
         // Not selectable from the browser, but the CLI default could name it and the snapshot
         // must stay parseable whatever the controller holds.
         snapshot.engine_limit = SearchLimit::Infinite;
-        let value = parse(&snapshot_to_json(&snapshot)).unwrap();
+        let value = parse(&snapshot_to_json(&snapshot));
         assert_eq!(
             value
                 .get("engineLimit")
@@ -530,40 +526,36 @@ mod tests {
             progress: None,
             principal_variation_san: Vec::new(),
         };
-        let value = parse(&snapshot_to_json(&snapshot)).unwrap();
+        let value = parse(&snapshot_to_json(&snapshot));
         assert_eq!(
             value.get("engineStatus").unwrap().get("progress"),
-            Some(&Json::Null)
+            Some(&Value::Null)
         );
         assert_eq!(
             value
                 .get("engineStatus")
                 .unwrap()
                 .get("principalVariationSan"),
-            Some(&Json::Array(Vec::new()))
+            Some(&Value::Array(Vec::new()))
         );
     }
 
     #[test]
     fn encodes_mate_scores_in_moves_matching_uci() {
         for moves in [1_i8, 3, 5] {
-            let mut out = String::new();
-            write_score(&mut out, Score::mate(2 * moves - 1));
-            let value = parse(&out).unwrap();
+            let value = serde_json::to_value(ScoreDto::from(Score::mate(2 * moves - 1))).unwrap();
             assert_eq!(value.get("kind").unwrap().as_str(), Some("mate"));
             assert_eq!(
-                value.get("moves"),
-                Some(&Json::Number(f64::from(moves))),
+                value.get("moves").unwrap().as_i64(),
+                Some(i64::from(moves)),
                 "positive mate in {moves}"
             );
 
-            let mut out = String::new();
-            write_score(&mut out, Score::mate(-2 * moves));
-            let value = parse(&out).unwrap();
+            let value = serde_json::to_value(ScoreDto::from(Score::mate(-2 * moves))).unwrap();
             assert_eq!(value.get("kind").unwrap().as_str(), Some("mate"));
             assert_eq!(
-                value.get("moves"),
-                Some(&Json::Number(f64::from(-moves))),
+                value.get("moves").unwrap().as_i64(),
+                Some(i64::from(-moves)),
                 "negative mate in {moves}"
             );
         }
@@ -598,25 +590,76 @@ mod tests {
         );
     }
 
-    /// Review attempt 1: `write_score` tested `is_mate` before the infinities, which satisfy it
-    /// while sitting outside the mate band. `INF_P` therefore ran through the positive-mate
-    /// conversion and came out as `{"kind":"mate","moves":-4949}` — an infinite advantage
-    /// rendered as being mated. `Score`'s `Display` takes the infinities first; so does this now.
+    /// The infinities satisfy `is_mate` while sitting outside the mate band, so an is-mate-first
+    /// ordering would run `INF_P` through the positive-mate conversion and render an infinite
+    /// advantage as being mated. `Score`'s `Display` takes the infinities first; so does the DTO.
     #[test]
     fn infinite_scores_are_tagged_rather_than_converted_as_mates() {
-        let mut out = String::new();
-        write_score(&mut out, Score::INF_P);
-        assert_eq!(out, r#"{"kind":"inf"}"#);
-
-        let mut out = String::new();
-        write_score(&mut out, Score::INF_N);
-        assert_eq!(out, r#"{"kind":"-inf"}"#);
+        assert_eq!(
+            serde_json::to_string(&ScoreDto::from(Score::INF_P)).unwrap(),
+            r#"{"kind":"inf"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&ScoreDto::from(Score::INF_N)).unwrap(),
+            r#"{"kind":"-inf"}"#
+        );
 
         // The guard is exact, so the mate band it sits above is untouched — the deepest mate this
-        // engine represents still converts. `encodes_mate_scores_in_moves_matching_uci` covers
-        // the band itself; this only shows the new branch does not swallow part of it.
-        let mut out = String::new();
-        write_score(&mut out, Score::mate(-98));
-        assert_eq!(out, r#"{"kind":"mate","moves":-49}"#);
+        // engine represents still converts. `encodes_mate_scores_in_moves_matching_uci` covers the
+        // band itself; this only shows the new branch does not swallow part of it.
+        assert_eq!(
+            serde_json::to_string(&ScoreDto::from(Score::mate(-98))).unwrap(),
+            r#"{"kind":"mate","moves":-49}"#
+        );
+    }
+
+    /// The browser reads the snapshot as a fixed byte layout: field order and value formatting are
+    /// part of the contract, not merely the set of keys present. This pins the exact bytes serde
+    /// emits for a representative snapshot, so a field reorder or a formatting change cannot pass
+    /// silently past the structural assertions above.
+    #[test]
+    fn snapshot_serializes_to_the_exact_wire_bytes() {
+        init_globals();
+        let mut position = Position::start_pos();
+        let mov = position.make_uci_move("e2e4").unwrap();
+        let mut snapshot = start_snapshot();
+        snapshot.last_move = Some(MoveRecord {
+            uci: "e2e4".to_owned(),
+            san: "e4".to_owned(),
+        });
+        snapshot.move_history = vec![MoveRecord {
+            uci: "e2e4".to_owned(),
+            san: "e4".to_owned(),
+        }];
+        snapshot.engine_status = EngineStatus::Thinking {
+            search_id: 7,
+            position_revision: 3,
+            progress: Some(SearchProgress {
+                depth: 5,
+                score: Score::cp(-42),
+                elapsed: Duration::from_millis(250),
+                nodes: 9_000,
+                nps: 36_000,
+                hashfull: 11,
+                principal_variation: vec![mov],
+            }),
+            principal_variation_san: vec!["e4".to_owned()],
+        };
+
+        let expected = concat!(
+            r#"{"revision":3,"humanSide":"white","#,
+            r#""fen":"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1","#,
+            r#""sideToMove":"white","inCheck":false,"#,
+            r#""legalMoves":["e2e4","d2d4"],"#,
+            r#""lastMove":{"uci":"e2e4","san":"e4"},"#,
+            r#""moveHistory":[{"uci":"e2e4","san":"e4"}],"#,
+            r#""gameStatus":{"kind":"ongoing"},"#,
+            r#""engineStatus":{"kind":"thinking","searchId":7,"positionRevision":3,"#,
+            r#""progress":{"depth":5,"score":{"kind":"cp","centipawns":-42},"#,
+            r#""elapsedMs":250,"nodes":9000,"nps":36000,"hashfull":11,"#,
+            r#""principalVariation":["e2e4"]},"principalVariationSan":["e4"]},"#,
+            r#""engineLimit":{"kind":"time","milliseconds":1500}}"#,
+        );
+        assert_eq!(snapshot_to_json(&snapshot), expected);
     }
 }

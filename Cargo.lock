@@ -330,6 +330,8 @@ dependencies = [
  "open",
  "rand",
  "separator",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

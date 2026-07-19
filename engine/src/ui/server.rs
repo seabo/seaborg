@@ -8,11 +8,11 @@ use super::http::{
     self, read_request, write_error, write_event_stream_head, write_json, write_response, Request,
     Status,
 };
-use super::json::{self, Json};
 use super::session::{self, Session};
 use super::wire::{command_error_code, parse_engine_limit, parse_player};
 use crate::search::SearchLimit;
 use core::position::Player;
+use serde_json::Value;
 use std::fmt;
 use std::io::{self, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
@@ -607,31 +607,33 @@ fn handle_command(
     let Ok(body) = std::str::from_utf8(&request.body) else {
         return write_error(stream, Status::BadRequest, "malformed_json");
     };
-    let Ok(document) = json::parse(body) else {
+    let Ok(document) = serde_json::from_str::<Value>(body) else {
         return write_error(stream, Status::BadRequest, "malformed_json");
     };
-    if !matches!(document, Json::Object(_)) {
+    if !document.is_object() {
         return write_error(stream, Status::BadRequest, "malformed_json");
     }
 
+    // `Value::as_u64` yields a value only for a JSON integer in range, so fractional, negative, and
+    // out-of-range revisions are rejected here rather than truncated onto the wrong game state.
     let outcome = match request.path.as_str() {
         "/api/move" => {
-            let Some(uci) = document.get("uci").and_then(Json::as_str) else {
+            let Some(uci) = document.get("uci").and_then(Value::as_str) else {
                 return write_error(stream, Status::UnprocessableContent, "missing_uci");
             };
-            let Some(revision) = document.get("revision").and_then(Json::as_u64) else {
+            let Some(revision) = document.get("revision").and_then(Value::as_u64) else {
                 return write_error(stream, Status::UnprocessableContent, "missing_revision");
             };
             state.session.play_move(uci, revision)
         }
         "/api/undo" => {
-            let Some(revision) = document.get("revision").and_then(Json::as_u64) else {
+            let Some(revision) = document.get("revision").and_then(Value::as_u64) else {
                 return write_error(stream, Status::UnprocessableContent, "missing_revision");
             };
             state.session.undo(revision)
         }
         "/api/new-game" => {
-            let Some(side) = document.get("humanSide").and_then(Json::as_str) else {
+            let Some(side) = document.get("humanSide").and_then(Value::as_str) else {
                 return write_error(stream, Status::UnprocessableContent, "missing_human_side");
             };
             let Some(side) = parse_player(side) else {
@@ -641,10 +643,10 @@ fn handle_command(
             Ok(())
         }
         "/api/engine-limit" => {
-            let Some(kind) = document.get("kind").and_then(Json::as_str) else {
+            let Some(kind) = document.get("kind").and_then(Value::as_str) else {
                 return write_error(stream, Status::UnprocessableContent, "missing_engine_limit");
             };
-            let Some(value) = document.get("value").and_then(Json::as_u64) else {
+            let Some(value) = document.get("value").and_then(Value::as_u64) else {
                 return write_error(stream, Status::UnprocessableContent, "missing_engine_limit");
             };
             match parse_engine_limit(kind, value) {

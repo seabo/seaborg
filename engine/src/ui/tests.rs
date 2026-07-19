@@ -4,11 +4,11 @@
 //! the event stream — rather than the routing functions in isolation, so a regression in the
 //! hand-rolled HTTP layer cannot pass by satisfying an internal signature.
 
-use super::json::{parse, Json};
 use super::server::{bind, UiConfig, UiError, UiHandle, MAX_CONNECTIONS, MAX_REQUEST_BODY};
 use crate::search::SearchLimit;
 use core::init::init_globals;
 use core::position::Player;
+use serde_json::Value;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::thread::JoinHandle;
@@ -83,15 +83,16 @@ impl Response {
             .map(|(_, value)| value.as_str())
     }
 
-    fn json(&self) -> Json {
-        parse(&self.body).unwrap_or_else(|_| panic!("expected JSON, got {:?}", self.body))
+    fn json(&self) -> Value {
+        serde_json::from_str(&self.body)
+            .unwrap_or_else(|_| panic!("expected JSON, got {:?}", self.body))
     }
 
     /// The `error` code from a rejection body.
     fn error_code(&self) -> String {
         self.json()
             .get("error")
-            .and_then(Json::as_str)
+            .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned()
     }
@@ -182,12 +183,12 @@ fn revision(server: &TestServer) -> u64 {
     get(server, "/api/state")
         .json()
         .get("revision")
-        .and_then(Json::as_u64)
+        .and_then(Value::as_u64)
         .expect("a revision")
 }
 
 /// Poll the state endpoint until `predicate` holds, so tests never race the engine.
-fn wait_for_state(server: &TestServer, predicate: impl Fn(&Json) -> bool) -> Json {
+fn wait_for_state(server: &TestServer, predicate: impl Fn(&Value) -> bool) -> Value {
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         let state = get(server, "/api/state").json();
@@ -237,7 +238,7 @@ impl EventStream {
     }
 
     /// Read the next `id`/`data` event, skipping keepalive comments and `retry` lines.
-    fn next_event(&mut self) -> (u64, Json) {
+    fn next_event(&mut self) -> (u64, Value) {
         let mut id = None;
         loop {
             let mut line = String::new();
@@ -249,7 +250,7 @@ impl EventStream {
             } else if let Some(value) = line.strip_prefix("data: ") {
                 return (
                     id.expect("an event id precedes its data"),
-                    parse(value).unwrap(),
+                    serde_json::from_str(value).unwrap(),
                 );
             }
         }
@@ -494,14 +495,17 @@ fn serves_the_current_state_as_json() {
     );
 
     let state = response.json();
-    assert_eq!(state.get("revision").and_then(Json::as_u64), Some(0));
-    assert_eq!(state.get("humanSide").and_then(Json::as_str), Some("white"));
+    assert_eq!(state.get("revision").and_then(Value::as_u64), Some(0));
     assert_eq!(
-        state.get("sideToMove").and_then(Json::as_str),
+        state.get("humanSide").and_then(Value::as_str),
         Some("white")
     );
-    assert_eq!(state.get("inCheck"), Some(&Json::Bool(false)));
-    let Some(Json::Array(moves)) = state.get("legalMoves") else {
+    assert_eq!(
+        state.get("sideToMove").and_then(Value::as_str),
+        Some("white")
+    );
+    assert_eq!(state.get("inCheck"), Some(&Value::Bool(false)));
+    let Some(Value::Array(moves)) = state.get("legalMoves") else {
         panic!("expected legal moves");
     };
     assert_eq!(moves.len(), 20, "twenty legal opening moves");
@@ -516,12 +520,12 @@ fn applies_a_legal_move_and_returns_the_resulting_snapshot() {
     assert_eq!(response.status, 200);
 
     let state = response.json();
-    assert_eq!(state.get("revision").and_then(Json::as_u64), Some(1));
+    assert_eq!(state.get("revision").and_then(Value::as_u64), Some(1));
     assert_eq!(
         state
             .get("lastMove")
             .and_then(|last| last.get("san"))
-            .and_then(Json::as_str),
+            .and_then(Value::as_str),
         Some("e4")
     );
 
@@ -529,14 +533,14 @@ fn applies_a_legal_move_and_returns_the_resulting_snapshot() {
     let state = wait_for_state(&server, |state| {
         state
             .get("revision")
-            .and_then(Json::as_u64)
+            .and_then(Value::as_u64)
             .is_some_and(|revision| revision >= 2)
     });
     assert_eq!(
-        state.get("sideToMove").and_then(Json::as_str),
+        state.get("sideToMove").and_then(Value::as_str),
         Some("white")
     );
-    let Some(Json::Array(history)) = state.get("moveHistory") else {
+    let Some(Value::Array(history)) = state.get("moveHistory") else {
         panic!("expected a move history");
     };
     assert_eq!(history.len(), 2, "the engine should have replied");
@@ -549,7 +553,7 @@ fn undo_rewinds_to_the_humans_turn() {
     wait_for_state(&server, |state| {
         state
             .get("revision")
-            .and_then(Json::as_u64)
+            .and_then(Value::as_u64)
             .is_some_and(|revision| revision >= 2)
     });
 
@@ -560,7 +564,7 @@ fn undo_rewinds_to_the_humans_turn() {
     );
     assert_eq!(response.status, 200);
     let state = response.json();
-    let Some(Json::Array(history)) = state.get("moveHistory") else {
+    let Some(Value::Array(history)) = state.get("moveHistory") else {
         panic!("expected a move history");
     };
     assert!(history.is_empty(), "undo should rewind the full turn");
@@ -574,16 +578,16 @@ fn a_new_game_switches_sides_and_lets_the_engine_open() {
     let response = post(&server, "/api/new-game", r#"{"humanSide":"black"}"#);
     assert_eq!(response.status, 200);
     assert_eq!(
-        response.json().get("humanSide").and_then(Json::as_str),
+        response.json().get("humanSide").and_then(Value::as_str),
         Some("black")
     );
 
     let state = wait_for_state(
         &server,
-        |state| matches!(state.get("moveHistory"), Some(Json::Array(history)) if !history.is_empty()),
+        |state| matches!(state.get("moveHistory"), Some(Value::Array(history)) if !history.is_empty()),
     );
     assert_eq!(
-        state.get("sideToMove").and_then(Json::as_str),
+        state.get("sideToMove").and_then(Value::as_str),
         Some("black")
     );
 }
@@ -864,17 +868,17 @@ fn a_new_stream_receives_the_current_state_then_live_updates() {
     let mut stream = EventStream::open(&server, &[]);
 
     let (first_id, first) = stream.next_event();
-    assert_eq!(first.get("revision").and_then(Json::as_u64), Some(0));
+    assert_eq!(first.get("revision").and_then(Value::as_u64), Some(0));
 
     post(&server, "/api/move", r#"{"uci":"e2e4","revision":0}"#);
 
     let (next_id, next) = stream.next_event();
     assert!(next_id > first_id, "event ids must increase");
-    assert_eq!(next.get("revision").and_then(Json::as_u64), Some(1));
+    assert_eq!(next.get("revision").and_then(Value::as_u64), Some(1));
     assert_eq!(
         next.get("lastMove")
             .and_then(|last| last.get("san"))
-            .and_then(Json::as_str),
+            .and_then(Value::as_str),
         Some("e4")
     );
 }
@@ -939,7 +943,7 @@ fn a_reconnecting_stream_resumes_from_its_last_event_id() {
     assert!(
         resumed
             .get("revision")
-            .and_then(Json::as_u64)
+            .and_then(Value::as_u64)
             .is_some_and(|revision| revision >= 1),
         "the resumed snapshot should be current"
     );
@@ -950,7 +954,7 @@ fn a_reconnecting_stream_resumes_from_its_last_event_id() {
         state
             .get("engineStatus")
             .and_then(|engine| engine.get("kind"))
-            .and_then(Json::as_str)
+            .and_then(Value::as_str)
             == Some("idle")
     });
 
@@ -964,7 +968,7 @@ fn a_reconnecting_stream_resumes_from_its_last_event_id() {
     loop {
         let (after_id, after) = current.next_event();
         assert!(after_id > latest_id, "expected only newer events");
-        if matches!(after.get("moveHistory"), Some(Json::Array(history)) if history.is_empty()) {
+        if matches!(after.get("moveHistory"), Some(Value::Array(history)) if history.is_empty()) {
             break;
         }
         assert!(
@@ -984,13 +988,13 @@ fn a_last_event_id_from_a_previous_process_still_receives_current_state() {
 
     let (id, state) = stream.next_event();
     assert_eq!(id, server_event_id(&server));
-    assert_eq!(state.get("revision").and_then(Json::as_u64), Some(0));
+    assert_eq!(state.get("revision").and_then(Value::as_u64), Some(0));
 
     // It is a working stream, not just a one-off snapshot.
     post(&server, "/api/move", r#"{"uci":"e2e4","revision":0}"#);
     let (next_id, next) = stream.next_event();
     assert!(next_id > id);
-    assert_eq!(next.get("revision").and_then(Json::as_u64), Some(1));
+    assert_eq!(next.get("revision").and_then(Value::as_u64), Some(1));
 }
 
 /// The event ID a fresh stream is currently served, used to compare resume behaviour.
@@ -1025,14 +1029,14 @@ fn many_concurrent_streams_all_observe_the_same_update() {
     let mut streams: Vec<EventStream> = (0..8).map(|_| EventStream::open(&server, &[])).collect();
     for stream in &mut streams {
         let (_, initial) = stream.next_event();
-        assert_eq!(initial.get("revision").and_then(Json::as_u64), Some(0));
+        assert_eq!(initial.get("revision").and_then(Value::as_u64), Some(0));
     }
 
     post(&server, "/api/move", r#"{"uci":"d2d4","revision":0}"#);
 
     for stream in &mut streams {
         let (_, update) = stream.next_event();
-        assert_eq!(update.get("revision").and_then(Json::as_u64), Some(1));
+        assert_eq!(update.get("revision").and_then(Value::as_u64), Some(1));
     }
 }
 
@@ -1053,7 +1057,7 @@ fn search_progress_reaches_the_stream_while_the_engine_thinks() {
         ids.push(id);
         saw_reply = event
             .get("revision")
-            .and_then(Json::as_u64)
+            .and_then(Value::as_u64)
             .is_some_and(|revision| revision >= 2);
     }
     assert!(saw_reply, "the engine's reply should reach the stream");
@@ -1183,13 +1187,13 @@ fn engine_limit(server: &TestServer) -> (String, u64) {
     let limit = state.get("engineLimit").expect("a published engine limit");
     let kind = limit
         .get("kind")
-        .and_then(Json::as_str)
+        .and_then(Value::as_str)
         .expect("a limit kind")
         .to_owned();
     let amount = limit
         .get("milliseconds")
         .or_else(|| limit.get("plies"))
-        .and_then(Json::as_u64)
+        .and_then(Value::as_u64)
         .unwrap_or_default();
     (kind, amount)
 }
@@ -1209,7 +1213,7 @@ fn a_new_engine_limit_is_accepted_and_published_to_every_client() {
         first
             .get("engineLimit")
             .and_then(|limit| limit.get("kind"))
-            .and_then(Json::as_str),
+            .and_then(Value::as_str),
         Some("depth")
     );
 
@@ -1225,8 +1229,8 @@ fn a_new_engine_limit_is_accepted_and_published_to_every_client() {
     // being told: the change is published even though no move was made.
     let (_, updated) = stream.next_event();
     let limit = updated.get("engineLimit").expect("a limit on the stream");
-    assert_eq!(limit.get("kind").and_then(Json::as_str), Some("time"));
-    assert_eq!(limit.get("milliseconds").and_then(Json::as_u64), Some(750));
+    assert_eq!(limit.get("kind").and_then(Value::as_str), Some("time"));
+    assert_eq!(limit.get("milliseconds").and_then(Value::as_u64), Some(750));
 
     // The revision tracks the game, not the settings, so changing a limit must not look to the
     // client like the position moved on and invalidate the command it is about to send.
@@ -1287,7 +1291,7 @@ fn quit_answers_before_stopping_the_server() {
     // socket with the reply still queued, which reads to the page as a lost connection.
     let response = post(&server, "/api/quit", "{}");
     assert_eq!(response.status, 200);
-    assert_eq!(response.json().get("quitting"), Some(&Json::Bool(true)));
+    assert_eq!(response.json().get("quitting"), Some(&Value::Bool(true)));
 
     // `stop` joins the serving thread, so this returning at all is the assertion: the accept loop
     // observed the request and returned on its own, without the handle being used to wake it.
@@ -1328,13 +1332,13 @@ fn reloading_during_a_search_reconstructs_the_game_without_duplicating_it() {
         state
             .get("engineStatus")
             .and_then(|status| status.get("kind"))
-            .and_then(Json::as_str)
+            .and_then(Value::as_str)
             == Some("thinking")
     });
     let search_id = thinking
         .get("engineStatus")
         .and_then(|status| status.get("searchId"))
-        .and_then(Json::as_u64)
+        .and_then(Value::as_u64)
         .expect("a search id");
 
     // A reload is a fresh page: it fetches the state and opens a new stream. Neither is a command,
@@ -1345,23 +1349,23 @@ fn reloading_during_a_search_reconstructs_the_game_without_duplicating_it() {
         let (_, streamed) = stream.next_event();
         for reconstructed in [&state, &streamed] {
             assert_eq!(
-                reconstructed.get("revision").and_then(Json::as_u64),
+                reconstructed.get("revision").and_then(Value::as_u64),
                 Some(1)
             );
             assert_eq!(
                 reconstructed
                     .get("engineStatus")
                     .and_then(|status| status.get("searchId"))
-                    .and_then(Json::as_u64),
+                    .and_then(Value::as_u64),
                 Some(search_id),
                 "a reload must attach to the running search rather than start another"
             );
-            let Some(Json::Array(history)) = reconstructed.get("moveHistory") else {
+            let Some(Value::Array(history)) = reconstructed.get("moveHistory") else {
                 panic!("expected a move history");
             };
             assert_eq!(history.len(), 1, "the move must not be duplicated");
             assert_eq!(
-                history[0].get("san").and_then(Json::as_str),
+                history[0].get("san").and_then(Value::as_str),
                 Some("e4"),
                 "history is reconstructed in SAN"
             );
@@ -1370,9 +1374,9 @@ fn reloading_during_a_search_reconstructs_the_game_without_duplicating_it() {
 
     // The single search still completes into a single reply.
     let settled = wait_for_state(&server, |state| {
-        state.get("revision").and_then(Json::as_u64) == Some(2)
+        state.get("revision").and_then(Value::as_u64) == Some(2)
     });
-    let Some(Json::Array(history)) = settled.get("moveHistory") else {
+    let Some(Value::Array(history)) = settled.get("moveHistory") else {
         panic!("expected a move history");
     };
     assert_eq!(history.len(), 2);
@@ -1395,13 +1399,13 @@ fn a_thinking_snapshot_carries_a_san_variation_the_browser_can_show() {
         state
             .get("engineStatus")
             .and_then(|status| status.get("principalVariationSan"))
-            .is_some_and(|san| matches!(san, Json::Array(items) if !items.is_empty()))
+            .is_some_and(|san| matches!(san, Value::Array(items) if !items.is_empty()))
     });
     let status = state.get("engineStatus").unwrap();
-    let Some(Json::Array(san)) = status.get("principalVariationSan") else {
+    let Some(Value::Array(san)) = status.get("principalVariationSan") else {
         panic!("expected a SAN variation");
     };
-    let Some(Json::Array(uci)) = status
+    let Some(Value::Array(uci)) = status
         .get("progress")
         .and_then(|progress| progress.get("principalVariation"))
     else {
@@ -1434,26 +1438,26 @@ fn a_complete_game_can_be_played_to_a_terminal_status_over_the_command_surface()
             state
                 .get("engineStatus")
                 .and_then(|status| status.get("kind"))
-                .and_then(Json::as_str)
+                .and_then(Value::as_str)
                 == Some("idle")
         });
         let status = state
             .get("gameStatus")
             .and_then(|status| status.get("kind"));
-        if status.and_then(Json::as_str) != Some("ongoing") {
+        if status.and_then(Value::as_str) != Some("ongoing") {
             break state;
         }
 
         assert_eq!(
-            state.get("sideToMove").and_then(Json::as_str),
+            state.get("sideToMove").and_then(Value::as_str),
             Some("white"),
             "the human is on move whenever the engine is idle and the game is live"
         );
-        let Some(Json::Array(moves)) = state.get("legalMoves") else {
+        let Some(Value::Array(moves)) = state.get("legalMoves") else {
             panic!("expected legal moves");
         };
         let uci = moves[0].as_str().expect("a UCI move").to_owned();
-        let at = state.get("revision").and_then(Json::as_u64).unwrap();
+        let at = state.get("revision").and_then(Value::as_u64).unwrap();
         let response = post(
             &server,
             "/api/move",
@@ -1473,7 +1477,7 @@ fn a_complete_game_can_be_played_to_a_terminal_status_over_the_command_surface()
     let kind = terminal
         .get("gameStatus")
         .and_then(|status| status.get("kind"))
-        .and_then(Json::as_str)
+        .and_then(Value::as_str)
         .expect("a terminal status");
     assert!(
         kind == "checkmate" || kind == "draw",
@@ -1482,11 +1486,11 @@ fn a_complete_game_can_be_played_to_a_terminal_status_over_the_command_surface()
 
     // A finished game refuses further moves with a code the browser turns into a sentence, rather
     // than silently accepting them.
-    let at = terminal.get("revision").and_then(Json::as_u64).unwrap();
-    let Some(Json::Array(moves)) = terminal.get("legalMoves") else {
+    let at = terminal.get("revision").and_then(Value::as_u64).unwrap();
+    let Some(Value::Array(moves)) = terminal.get("legalMoves") else {
         panic!("expected a legal move list");
     };
-    if let Some(uci) = moves.first().and_then(Json::as_str) {
+    if let Some(uci) = moves.first().and_then(Value::as_str) {
         let response = post(
             &server,
             "/api/move",

@@ -235,8 +235,14 @@ fn generate_token() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::json::parse;
     use core::init::init_globals;
+    use serde_json::Value;
+
+    /// Parse a published snapshot for inspection. Kept fallible so call sites can assert on the
+    /// error, matching how the rest of these tests treat malformed output as a failure to surface.
+    fn parse(input: &str) -> serde_json::Result<Value> {
+        serde_json::from_str(input)
+    }
 
     fn session() -> Arc<Session> {
         init_globals();
