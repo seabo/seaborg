@@ -3,11 +3,11 @@ id: TASK-41
 title: >-
   Throttle the clock read in Search::stopping() to avoid a per-node
   Instant::now()
-status: Changes Requested
+status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-18 12:17'
-updated_date: '2026-07-19 01:59'
+updated_date: '2026-07-19 02:01'
 labels:
   - engine
   - search
