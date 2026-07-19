@@ -1,11 +1,11 @@
 ---
 id: TASK-64.17
 title: Replace the yielded-flag ordering buffer with partition-and-shrink selection
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-19 13:43'
-updated_date: '2026-07-19 16:08'
+updated_date: '2026-07-19 16:11'
 labels:
   - search
   - move-ordering
@@ -105,6 +105,16 @@ Documented size (AC#7). The doc claimed 3KB. Removing the flag shrinks the entry
 Unsafe segment construction (AC#8). Replaced with safe indexing rather than re-justified. The check being avoided was one per segment construction, not one per move, and the benchmark above shows the search got faster with the bounds checks in place, so the recorded measurement does not support keeping the unsafe.
 
 Scope note. The capture partition uses rotations, which is O(C^2) element moves in the worst case rather than the O(C) a scratch-buffer partition would give. Captures number in the tens at most and each move is 6 bytes, and the alternatives are a scratch buffer the size of the segment or O(n log n) rotations. The reasoning is recorded in the function's doc comment.
+
+Resolved REV-1-01. The doc comment claimed each phase's moves could only be drawn once and that the mutable borrow made this visible in the type. The reviewer is right that neither held: IntoIterator rebuilds a SelectionSort over the full stored segment range on every call, so a second pass re-yields the whole phase.
+
+Behaviour changed: the comment now states the guarantee the type actually provides. The mutable borrow rules out two live iterators over one phase and stops the type advertising a shared borrow while rewriting behind it; it does not detect sequential re-entry, which re-yields the phase in the same order and would double-search it. The comment says so plainly and tells the caller to draw each phase once.
+
+Why the enforcement route was rejected rather than taken. The reviewer's alternative was to narrow the stored segment range as moves are drawn so a second pass yields nothing. That is not available here: segments.hash and segments.killers are read by later phase loads to deduplicate the capture, killer and quiet segments (the segregate_duplicates calls in load_next_phase). Emptying a phase range once drawn would remove the hash move from the exclusion set for every later phase, so the hash move would be generated and searched a second time - trading a documentation defect for a live one. Enforcing the claim would therefore need a separate drawn marker, and a second draw that silently yields nothing is exactly the trap this task set out to remove: the flag scheme was called out in the task description precisely because iterating a phase twice silently yielded nothing. Reinstating that behaviour under a new mechanism is not an improvement.
+
+Test added: drawing_a_phase_twice_yields_it_again_in_the_same_order. It asserts the first pass yields the phase and the second yields the same moves in the same order, so it fails if a future change makes a second pass yield nothing or reorder - the comment is now pinned by an executable check rather than by assertion.
+
+Scope of the change since the reviewed target b2790cb. The only production change is the doc comment; the rest of the diff is the new test. Verified with git diff b2790cb over engine, core and src: no non-comment change outside the tests module. The order-preservation evidence and the benchmark figures recorded above therefore stand unchanged, since no code path was touched.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -166,5 +176,26 @@ Verification:
 - cargo bench --bench search, four paired round-robin rounds alternating base and target on this machine: base minimums 40.172 us and 39.117 us, target minimums 37.462 us and 36.267 us, i.e. -6.7% and -7.3%. The target was faster in all four rounds in both configurations with non-overlapping Criterion intervals. The base figures land on the BENCHMARKS.md baseline of 40.25 us and 39.73 us, which is evidence these runs were not distorted; agreeing that BENCHMARKS.md should not be rewritten from them.
 
 Everything else in the diff verifies. AC#1, #2, #3, #4, #6 and #8 are met on the evidence above and on the tests the diff adds, which I checked are not vacuous: `selection_yields_by_score_then_generation_order` encodes descending-score-then-generation-order through a stable sort rather than restating the implementation, and the underpromotion test genuinely depends on eager expansion. The three-way capture partition, the removal of the raw-pointer segment construction, the i16::MIN seed fix and the collapse of the setters, accessors and PhaseIter pass-through are all correct, and I traced the dedup, promotion and underpromotion paths against the base implementation and found them order-equivalent. Only AC#7 is unproven.
+---
+
+author: @codex
+created: 2026-07-19 16:11
+---
+Implementation handoff
+Branch: task-64.17-partition-shrink-ordering
+Worktree: /Users/seabo/seaborg-worktrees/task-64.17-partition-shrink-ordering
+Base: aec999283d9f4c623c27a2badfb95c3cd7737a59
+Implementation target: 44c7b5c42d6761e108fc7d9593ae7f1958c68173
+Resolved findings: REV-1-01
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass, no warnings
+- cargo test --workspace: pass, 292 tests, 0 failed, 2 pre-existing ignored
+- git diff b2790cb over engine, core and src: the only production change is the OrderedMoves doc comment; every other line is the new test. No code path was touched, so the order-preservation and benchmark evidence recorded against b2790cb stands unchanged and was not re-run.
+Known failures: none
+
+Reviewer notes. REV-1-01 is resolved by correcting the comment rather than by enforcing the claim, and the choice is worth checking rather than taking on trust. Narrowing the stored segment range as moves are drawn, which the finding offered as the alternative, would break deduplication: segments.hash and segments.killers are read by later phase loads to build the exclusion set for the capture, killer and quiet segments, so emptying a range once drawn would let the hash move be searched twice. Enforcing the claim needs separate state, and a second draw that silently yields nothing is the same trap the task description criticised in the flag scheme. If you disagree that this is the right trade, the disagreement is about which contract the type should offer, not about whether the comment now matches the code.
+
+The new test asserts the second pass equals the first rather than that it is empty, so it pins the documented behaviour and fails if a later change makes re-entry silently empty.
 ---
 <!-- COMMENTS:END -->
