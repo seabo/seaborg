@@ -117,3 +117,90 @@ Run the search benchmarks with:
 ```sh
 cargo bench --bench search
 ```
+
+## Transposition table
+
+`benches/tt.rs` measures the table directly, because the search benchmark above
+cannot: its depth-7 tree is 579 nodes, which barely touches the hash. Measured at
+TASK-57 (`849cdf5`) on the same Apple M3 Pro, `rustc 1.97.1`.
+
+| Benchmark | Result |
+| --- | ---: |
+| `tt lifecycle/construct 256MB` | 19.26 ms |
+| `tt lifecycle/clear 256MB` | 2.39 ms |
+| `tt probe hit` | 36.46 ns |
+| `tt probe miss` | 32.78 ns |
+| `tt store` | 42.22 ns |
+| `tt multi worker/1 workers, mixed probe/store` | 23.80 ms |
+| `tt multi worker/4 workers, mixed probe/store` | 8.33 ms |
+
+Run them with:
+
+```sh
+cargo bench --bench tt
+```
+
+### Retained lifecycle costs
+
+Both lifecycle figures are costs the design accepts rather than costs it avoids,
+so they are recorded rather than assumed negligible:
+
+- **Construction is 19.3 ms for 256MB**, paid at `setoption name Hash`. It is
+  zero-initialisation of the whole allocation, linear in size.
+- **Clearing is 2.39 ms for 256MB**, paid at `ucinewgame`. The previous table
+  cleared in constant time by advancing a generation counter, so this is a real
+  regression at that boundary — deliberately taken. A generation bump leaves
+  stale entries physically present, which forces the wrap case to walk the table
+  anyway, and lets an entry come back to life if the counter ever laps. A linear
+  clear of an allocation that has just been declared worthless, at 2.4 ms per
+  256MB and once per game, buys exact invalidation.
+
+The probe and store figures are on a 64MB table, far larger than cache, so each
+includes the cache miss a real search pays. That miss dominates: all four slots
+of a cluster share one 64-byte line, so scanning four candidates instead of one
+costs arithmetic on data already in flight, not a second fetch.
+
+The multi-worker figures run identical total work (1,000,000 mixed operations)
+across 1 and 4 threads over one shared table with no key partitioning. Four
+workers complete it 2.86× faster than one. The shortfall against 4× is memory
+bandwidth, not table contention: the operations are unsynchronised relaxed loads
+and stores with no compare-exchange, and workers contend for individual cache
+lines only when they collide on the same cluster. What this benchmark is for is
+catching the opposite result — throughput that fails to improve, or degrades,
+with worker count would mean false sharing or replacement contention.
+
+### Effect on search
+
+Measured against the task's base commit `9b7bf33`, round-robin across two
+worktrees over nine rounds, `go depth 10` from the start position at the default
+16MB hash:
+
+| Measure | Base `9b7bf33` | TASK-57 | Change |
+| --- | ---: | ---: | ---: |
+| Nodes to depth 10 | 4,883,269 | 4,762,311 | **2.5% fewer** |
+| Best time to depth 10 | 882 ms | 891 ms | 1.0% slower |
+| Best NPS | 5.54 million | 5.34 million | 3.4% lower |
+
+Both engines return the same score and the same principal variation at every
+depth.
+
+The node count is exact and reproduces identically on every run, so the 2.5%
+reduction is a real search-efficiency gain from four-way associative clusters and
+depth- and age-aware replacement. The timings are not comparable at that
+resolution: individual runs ranged from 882 ms to 1510 ms on the same binary, so
+only the minimum of nine rounds is quoted, and a 1% difference between minima is
+inside the drift. **Read this row as level, not as a regression and not as a
+win.**
+
+The NPS figures are the honest cost side. Roughly 3% of per-node throughput goes
+to the new layout: a probe scans up to four slots rather than one, and a 16-byte
+entry holding the full key gives half as many entries per megabyte as the old
+8-byte entry did (visible as `hashfull` 607 against 294 at the same depth and
+hash size). Fewer nodes and a slightly dearer node cancel out, which is the
+trade this task made deliberately: full-key verification and snapshot-consistent
+probes in exchange for entry density, at no net cost in time to depth.
+
+The `cargo bench --bench search` harness was also run round-robin over three
+rounds and showed the two commits level (base 42.48 µs, TASK-57 42.11 µs, best of
+three, with deadline). That harness is not sensitive to this change and is
+reported only to show it did not move.
