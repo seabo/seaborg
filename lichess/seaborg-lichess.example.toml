@@ -1,0 +1,45 @@
+# Example Seaborg Lichess bot configuration.
+#
+# Every field is optional; the values shown here are the built-in defaults that
+# apply when the file (or an individual field) is absent. Copy this to
+# `seaborg-lichess.toml` in the working directory, or point at it explicitly with
+# `seaborg lichess --config PATH`, and edit what you need.
+
+# Most games to play at once. Challenges that would exceed this are declined
+# until a game finishes.
+max_concurrent_games = 1
+
+[challenge]
+# Accepted variant keys (Lichess `variant.key` values). Standard chess only by
+# default.
+variants = ["standard"]
+
+# Accept rated and/or casual challenges.
+accept_rated = true
+accept_casual = true
+
+# Accept challenges from other bots and/or from humans.
+accept_bots = false
+accept_humans = true
+
+# Clock bounds, in seconds, applied to the initial time and the increment.
+min_initial_seconds = 60
+max_initial_seconds = 1800
+min_increment_seconds = 0
+max_increment_seconds = 60
+
+# Opponent rating bounds in the relevant pool.
+min_rating = 0
+max_rating = 4000
+
+# Accept games with no real-time clock (correspondence or unlimited). The engine
+# is built for clocked play, so this is off by default.
+accept_unlimited = false
+
+[engine]
+# Transposition table size in mebibytes.
+hash_mb = 64
+
+# Time subtracted from each move's budget to cover network and scheduling
+# latency, in milliseconds.
+move_overhead_ms = 100
