@@ -1,11 +1,11 @@
 ---
 id: TASK-65
 title: Stop quiescence-draft Exact entries from evicting deeper main-search entries
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-19 15:07'
-updated_date: '2026-07-19 20:57'
+updated_date: '2026-07-19 21:03'
 labels:
   - transposition-table
   - search
@@ -99,6 +99,19 @@ Verification:
 - cargo bench --bench perft --bench movegen on base and target: movegen flat; perft confidence intervals overlap and median delta is below 5%
 - cargo bench --bench search -- 'search startpos depth 7' on base and target: exact hash-load counts reproduced; live timing samples were contaminated and unstable, while the committed controlled round-robin evidence is within the 5% threshold
 - Full df6f37346aa3167fe330d45fd443e84701baee8e..ab829769ba19af1a0c8133eed6a9b76e45fddf10 diff and post-target commits inspected: scoped; post-target change is handoff metadata only
+---
+
+author: @codex
+created: 2026-07-19 21:03
+---
+Merged locally onto master.
+Integrated merge: 68ca28212d5d2e15f31c90f29fa393799dc11ad4
+Primary tip tested: df6f37346aa3167fe330d45fd443e84701baee8e
+Verification:
+- cargo fmt --check: pass
+- CARGO_TARGET_DIR=/tmp/seaborg-task65-merge-clippy-68ca282 cargo clippy --workspace --all-targets --all-features -- -D warnings: pass, fresh target
+- cargo test --workspace: pass, 336 passed / 0 failed / 2 ignored
+- cargo bench --bench perft --bench movegen: perft improved; isolated movegen repeat 183.48 ns, no repeatable regression
 ---
 <!-- COMMENTS:END -->
 
