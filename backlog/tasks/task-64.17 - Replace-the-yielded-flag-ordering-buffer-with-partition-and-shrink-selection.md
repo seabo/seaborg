@@ -1,9 +1,11 @@
 ---
 id: TASK-64.17
 title: Replace the yielded-flag ordering buffer with partition-and-shrink selection
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-19 13:43'
+updated_date: '2026-07-19 14:25'
 labels:
   - search
   - move-ordering
@@ -57,3 +59,17 @@ Sequencing. TASK-64.10 adds a phase variant and TASK-64.11 changes capture scori
 - [ ] #7 The OrderedMoves doc comment matches the implementation, including its actual size
 - [ ] #8 The unsafe in segment construction is either justified by a recorded measurement or replaced with safe indexing
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Replace the buffer element with a bare ScoredMove, deleting the Cell<bool> yielded flag.
+2. Make deduplication physical rather than flag-based. The deduplicated segment is always the last segment in the buffer, so matching moves are removed by stable left-compaction and the buffer is truncated. Add ArrayVec::truncate in core to support this. Fold the per-yield hash/killer checks in KillerIter and QuietsIter into this one load-time pass, which collapses both iterators.
+3. Add a stable in-place partition helper over a segment. Use it once on the capture segment to produce good/equal/bad subranges, and once each on the promotion and underpromotion segments to put capture-promotions first, replacing the predicate-filtered rescans.
+4. Rewrite SelectionSort as a shrinking selection over &mut [ScoredMove]: scan only segment[head..], take the first maximum, rotate it into position head so the relative order of the unyielded remainder is preserved, then advance head. Rotation rather than swap is what makes the yielded order identical to the flag scheme on ties. Seed the running maximum from the first remaining candidate instead of i16::MIN, so every i16 score is selectable and the undocumented Loader constraint disappears.
+5. Yield Move by value. A shrinking selection mutates the segment as it goes, so it cannot hand out references borrowed for the whole iteration; Move is Copy and 4 bytes.
+6. Implement IntoIterator for &mut OrderedMoves and collapse PhaseIter's pass-through match.
+7. Replace the six set_*_segment methods with one close_segment helper, and the six accessors with safe slice indexing. Remove the unsafe pointer segment construction and record the benchmark that justifies the replacement.
+8. Update the OrderedMoves doc comment to the measured size, and add a test asserting that size so the doc cannot silently drift.
+9. Verify order preservation by comparing fixed-depth UCI node counts against the base commit over a position set, and run the search benchmark round-robin against a base worktree per BENCHMARKS.md.
+<!-- SECTION:PLAN:END -->
