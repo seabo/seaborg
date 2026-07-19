@@ -155,7 +155,14 @@ impl TimeControl {
             // moment is precisely backwards.
             Some(n) => {
                 let period_budget = usable_time.saturating_add(inc.saturating_mul(n - 1));
-                period_budget / (n + BOUNDARY_CUSHION_MOVES)
+
+                // `n` arrives straight off the wire and is not range-checked anywhere, so the
+                // divisor saturates like the budget above it: unguarded, a horizon near `u64::MAX`
+                // wraps it to zero and the division takes the process down mid-game. Saturating
+                // divides to nothing instead, and the floor at the end of this function answers
+                // with a single millisecond — which is honest, since a period that long really
+                // does mean spreading the clock arbitrarily thin.
+                period_budget / n.saturating_add(BOUNDARY_CUSHION_MOVES)
             }
             // No boundary in sight: this clock is all we are going to get, so it is spread over an
             // estimate of the moves left in the game.
@@ -271,6 +278,42 @@ mod tests {
             (u64::from(u32::MAX) * 40 - MOVE_OVERHEAD) / (20 + BOUNDARY_CUSHION_MOVES)
         );
         assert!(move_time > u64::from(u32::MAX));
+    }
+
+    /// An absurd `movestogo` must not take the engine down.
+    ///
+    /// The value is parsed straight off the wire into a `u64` with no range check, so a GUI or a
+    /// hostile peer can send a horizon large enough to overflow the divisor the periodic branch
+    /// builds from it. Unguarded that panics in debug and, worse, wraps the divisor to zero and
+    /// divides by it in release — killing the process mid-game on an otherwise well-formed `go`
+    /// line. The clock and increment on the same line are already saturating; this covers the
+    /// horizon itself, which the other overflow test holds fixed at 20 while it varies them.
+    #[test]
+    fn an_absurd_moves_to_go_allots_a_finite_time_rather_than_overflowing() {
+        let usable = 10_000 - MOVE_OVERHEAD;
+        let cap = usable - usable / MAX_CLOCK_SHARE_DIVISOR;
+
+        for moves_to_go in [
+            u64::MAX,
+            u64::MAX - 1,
+            u64::MAX / 2,
+            u32::MAX.into(),
+            1_000_000,
+        ] {
+            let control = TimeControl::new(10_000, 10_000, 100, 100, Some(moves_to_go));
+            let move_time = control.to_move_time(1, Player::WHITE);
+
+            // With time on the clock we always search for at least a moment, however thinly the
+            // horizon spreads it, and a horizon this long can never justify a large slice.
+            assert!(
+                (1..=cap).contains(&move_time),
+                "movestogo {moves_to_go} allotted {move_time}ms"
+            );
+        }
+
+        // At the extreme the division genuinely yields nothing and the floor is what answers.
+        let saturated = TimeControl::new(10_000, 10_000, 100, 100, Some(u64::MAX));
+        assert_eq!(saturated.to_move_time(1, Player::WHITE), 1);
     }
 
     #[test]
