@@ -171,7 +171,7 @@ fn report_hash_load_telemetry() {
 /// never exceed one evaluation per node that probes successfully, so an evaluation cost per node,
 /// set against the search's own cost per node in the hash-load group above, is the ceiling on any
 /// such scheme. Recording it makes the trade arithmetic rather than folklore, and makes it
-/// re-checkable the moment the evaluation stops being material-only.
+/// re-checkable whenever the evaluation terms or their implementation change.
 fn evaluation_benchmark(c: &mut Criterion) {
     init_globals();
 
@@ -183,7 +183,7 @@ fn evaluation_benchmark(c: &mut Criterion) {
             name.split(" depth")
                 .next()
                 .expect("name has a depth suffix"),
-            |b| b.iter(|| black_box(black_box(&pos).material_eval())),
+            |b| b.iter(|| black_box(black_box(&pos).static_eval())),
         );
     }
 
