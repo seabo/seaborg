@@ -1,11 +1,11 @@
 ---
 id: TASK-67
 title: Centralize Cargo workspace manifest policy
-status: In Progress
+status: In Review
 assignee:
   - '@george'
 created_date: '2026-07-19 21:18'
-updated_date: '2026-07-19 21:50'
+updated_date: '2026-07-19 21:54'
 labels:
   - architecture
 dependencies: []
@@ -40,3 +40,37 @@ Make the workspace's Cargo policy explicit and consistent by selecting the resol
 4. Keep internal path deps (chess_core, engine, core) and single-member deps explicit (AC#4).
 5. Verify: cargo metadata succeeds, cargo fmt --check, clippy -D warnings, cargo test --workspace. Confirm Cargo.lock unchanged (no dependency/feature drift).
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Centralized workspace manifest policy across Cargo.toml, core/Cargo.toml, engine/Cargo.toml.
+
+- AC#1 (resolver): added resolver = "2" to [workspace]. This is the edition-2021 default the workspace already used implicitly, so it is a no-op in behavior; pinning it keeps the resolver fixed independent of any future edition change. A comment records the rationale.
+- AC#2 (shared metadata): added [workspace.package] with version, authors, edition, license; all three members inherit via <field>.workspace = true. version/edition/license were previously repeated in all three. authors was previously only on the root package; it is now inherited by core and engine as well (single author for the whole workspace), which is why cargo metadata now reports the author on every member. This is a deliberate consistency choice — internal crates, not published — and changes no build/runtime behavior.
+- AC#3 (shared dependencies): added [workspace.dependencies] with rand = "0.10.2" (core dependency + engine dev-dependency, unified to 0.10.2 by TASK-21) and separator = "0.4" (root + engine). Both are inherited with .workspace = true using default features only, matching their prior declarations. Cargo.lock is byte-identical (0 changed lines), confirming no version or feature drift.
+- AC#4 (member-specific): internal path deps (chess_core, engine, core) and single-member deps (clap, log, simple_logger, arrayvec, bitflags, unicode-segmentation, crossbeam-channel, open, criterion) remain explicit in their own manifests.
+
+Verified inherited metadata resolves for all three members via cargo metadata.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @george
+created: 2026-07-19 21:54
+---
+Implementation handoff
+Branch: task-67-centralize-workspace-manifest
+Worktree: /Users/seabo/seaborg-worktrees/task-67-centralize-workspace-manifest
+Base: 18a4fa2326d825abcd654b9ef3d54dbedf0832b9
+Implementation target: b9e89af28a454313c197534cd5f782fbf5e537fb
+Resolved findings: none
+Verification:
+- cargo metadata --format-version=1: OK (Cargo.lock unchanged, 0 diff lines)
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (no warnings)
+- cargo test --workspace: pass (all suites green; 273/45/19/others passed, 0 failed, 2 ignored pre-existing)
+Known failures: none
+---
+<!-- COMMENTS:END -->
