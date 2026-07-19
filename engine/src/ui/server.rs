@@ -1,7 +1,7 @@
 //! The loopback HTTP server exposing the game controller to a local browser.
 //!
-//! The surface is deliberately fixed: five embedded assets, one state document, one event
-//! stream, and three bounded commands. There is no file-path routing and no general engine
+//! The surface is deliberately fixed: six embedded assets, one state document, one event
+//! stream, and five bounded commands. There is no file-path routing and no general engine
 //! command endpoint, so nothing outside this list is reachable however the request is spelled.
 
 use super::http::{
@@ -10,7 +10,7 @@ use super::http::{
 };
 use super::json::{self, Json};
 use super::session::{self, Session};
-use super::wire::{command_error_code, parse_player};
+use super::wire::{command_error_code, parse_engine_limit, parse_player};
 use crate::search::SearchLimit;
 use core::position::Player;
 use std::fmt;
@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 const INDEX_HTML: &str = include_str!("assets/index.html");
 const APP_JS: &str = include_str!("assets/app.js");
 const BOARD_JS: &str = include_str!("assets/board.js");
+const FORMAT_JS: &str = include_str!("assets/format.js");
 const STYLE_CSS: &str = include_str!("assets/style.css");
 const PIECES_SVG: &str = include_str!("assets/pieces.svg");
 
@@ -151,6 +152,32 @@ struct ServerState {
     /// The page with the session token already substituted.
     index_html: String,
     port: u16,
+    /// Everything needed to stop the server from a connection thread, for `/api/quit`.
+    shutdown: ShutdownSignal,
+}
+
+/// The three things that together stop a running server.
+///
+/// `UiHandle` and the `/api/quit` route must do exactly the same thing, so they share this rather
+/// than each open-coding the sequence — a quit that forgot to wake the accept loop would leave the
+/// process alive with the browser already told it had stopped.
+#[derive(Clone)]
+struct ShutdownSignal {
+    session: Arc<Session>,
+    local_addr: SocketAddr,
+    accepting: Arc<AtomicBool>,
+}
+
+impl ShutdownSignal {
+    /// Stop the server and release every open stream.
+    ///
+    /// The accept loop blocks in `accept`, so it is woken by dialing the listener once; the loop
+    /// then observes the cleared flag and returns.
+    fn trigger(&self) {
+        self.accepting.store(false, Ordering::SeqCst);
+        self.session.shutdown();
+        let _ = TcpStream::connect_timeout(&self.local_addr, Duration::from_secs(1));
+    }
 }
 
 /// A bound, not-yet-serving UI server.
@@ -234,20 +261,13 @@ fn refuse(stream: &mut TcpStream, code: &str) {
 /// A cloneable handle for stopping a running server.
 #[derive(Clone)]
 pub struct UiHandle {
-    session: Arc<Session>,
-    local_addr: SocketAddr,
-    accepting: Arc<AtomicBool>,
+    shutdown: ShutdownSignal,
 }
 
 impl UiHandle {
     /// Stop the server and release every open stream.
-    ///
-    /// The accept loop blocks in `accept`, so it is woken by dialing the listener once; the loop
-    /// then observes the cleared flag and returns.
     pub fn shutdown(&self) {
-        self.accepting.store(false, Ordering::SeqCst);
-        self.session.shutdown();
-        let _ = TcpStream::connect_timeout(&self.local_addr, Duration::from_secs(1));
+        self.shutdown.trigger();
     }
 }
 
@@ -262,6 +282,12 @@ pub fn bind(config: &UiConfig) -> Result<UiServer, UiError> {
 
     let session = Session::new(config.human_side, config.search_limit, config.hash_size_mb);
     let index_html = INDEX_HTML.replace(TOKEN_PLACEHOLDER, session.token());
+    let accepting = Arc::new(AtomicBool::new(true));
+    let shutdown = ShutdownSignal {
+        session: Arc::clone(&session),
+        local_addr,
+        accepting: Arc::clone(&accepting),
+    };
 
     Ok(UiServer {
         listener,
@@ -269,9 +295,10 @@ pub fn bind(config: &UiConfig) -> Result<UiServer, UiError> {
             session,
             index_html,
             port: local_addr.port(),
+            shutdown,
         }),
         local_addr,
-        accepting: Arc::new(AtomicBool::new(true)),
+        accepting,
         connections: Arc::new(AtomicUsize::new(0)),
     })
 }
@@ -292,9 +319,7 @@ impl UiServer {
 
     pub fn handle(&self) -> UiHandle {
         UiHandle {
-            session: Arc::clone(&self.state.session),
-            local_addr: self.local_addr,
-            accepting: Arc::clone(&self.accepting),
+            shutdown: self.state.shutdown.clone(),
         }
     }
 
@@ -494,6 +519,13 @@ fn route(stream: &mut TcpStream, request: &Request, state: &ServerState) -> io::
             NO_STORE,
             BOARD_JS.as_bytes(),
         ),
+        ("GET", "/format.js") => write_response(
+            stream,
+            Status::Ok,
+            "text/javascript; charset=utf-8",
+            NO_STORE,
+            FORMAT_JS.as_bytes(),
+        ),
         ("GET", "/style.css") => write_response(
             stream,
             Status::Ok,
@@ -513,19 +545,24 @@ fn route(stream: &mut TcpStream, request: &Request, state: &ServerState) -> io::
             write_json(stream, Status::Ok, &json)
         }
         ("GET", "/api/events") => stream_events(stream, request, state),
-        ("POST", "/api/move") | ("POST", "/api/undo") | ("POST", "/api/new-game") => {
-            handle_command(stream, request, state)
-        }
+        ("POST", "/api/move")
+        | ("POST", "/api/undo")
+        | ("POST", "/api/new-game")
+        | ("POST", "/api/engine-limit")
+        | ("POST", "/api/quit") => handle_command(stream, request, state),
         (_, "/")
         | (_, "/app.js")
         | (_, "/board.js")
+        | (_, "/format.js")
         | (_, "/style.css")
         | (_, "/pieces.svg")
         | (_, "/api/state")
         | (_, "/api/events") => write_error(stream, Status::MethodNotAllowed, "method_not_allowed"),
-        (_, "/api/move") | (_, "/api/undo") | (_, "/api/new-game") => {
-            write_error(stream, Status::MethodNotAllowed, "method_not_allowed")
-        }
+        (_, "/api/move")
+        | (_, "/api/undo")
+        | (_, "/api/new-game")
+        | (_, "/api/engine-limit")
+        | (_, "/api/quit") => write_error(stream, Status::MethodNotAllowed, "method_not_allowed"),
         _ => write_error(stream, Status::NotFound, "not_found"),
     }
 }
@@ -587,8 +624,31 @@ fn handle_command(
             state.session.new_game(side);
             Ok(())
         }
-        // `route` dispatches only the three paths above. Answering anything else explicitly keeps
-        // a command route added there later from silently falling into one of these branches.
+        "/api/engine-limit" => {
+            let Some(kind) = document.get("kind").and_then(Json::as_str) else {
+                return write_error(stream, Status::UnprocessableContent, "missing_engine_limit");
+            };
+            let Some(value) = document.get("value").and_then(Json::as_u64) else {
+                return write_error(stream, Status::UnprocessableContent, "missing_engine_limit");
+            };
+            match parse_engine_limit(kind, value) {
+                Ok(limit) => {
+                    state.session.set_engine_limit(limit);
+                    Ok(())
+                }
+                Err(code) => return write_error(stream, Status::UnprocessableContent, code),
+            }
+        }
+        "/api/quit" => {
+            // The response is written before the server is stopped, so the browser learns the
+            // request was accepted rather than seeing the connection drop under it. Shutting down
+            // first would close this socket while the reply was still queued.
+            write_json(stream, Status::Ok, "{\"quitting\":true}")?;
+            state.shutdown.trigger();
+            return Ok(());
+        }
+        // `route` dispatches only the paths above. Answering anything else explicitly keeps a
+        // command route added there later from silently falling into one of these branches.
         _ => return write_error(stream, Status::NotFound, "not_found"),
     };
 

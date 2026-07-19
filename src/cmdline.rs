@@ -83,7 +83,7 @@ fn run_ui(args: &Args) {
 
     let url = server.url();
     println!("Seaborg UI listening on {url}");
-    println!("Press Ctrl-C to stop.");
+    println!("Use Quit Seaborg in the browser, or press Ctrl-C, to stop.");
 
     // Serve before announcing the URL to the browser, so the first request cannot outrun the
     // accept loop. The listener already accepts connections at this point either way.
@@ -101,4 +101,7 @@ fn run_ui(args: &Args) {
         eprintln!("the Seaborg UI server stopped unexpectedly");
         std::process::exit(1);
     }
+
+    // Reached when the browser asked the server to quit: the accept loop returned on its own.
+    println!("Seaborg UI stopped.");
 }

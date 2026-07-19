@@ -385,11 +385,51 @@ button.quiet:hover:not(:disabled) {
   background: rgb(255 255 255 / 0.04);
 }
 
-.history-section {
-  min-height: 8rem;
+.control-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
 }
 
-.history-heading {
+.control-row button {
+  min-height: 2.65rem;
+  padding: 0.65rem 0.8rem;
+}
+
+button.danger:hover:not(:disabled) {
+  border-color: var(--rust);
+  color: var(--rust);
+}
+
+.field {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.35rem 0 0;
+}
+
+.field label {
+  color: var(--muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.field select {
+  min-height: 2.65rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  background: rgb(255 255 255 / 0.03);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.86rem;
+}
+
+.field select:disabled {
+  opacity: 0.55;
+}
+
+.section-heading {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -398,26 +438,106 @@ button.quiet:hover:not(:disabled) {
   border-bottom: 1px solid var(--line);
 }
 
-.history-heading span {
+.section-heading span {
   color: var(--muted);
   font-size: 0.66rem;
 }
 
-.history {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.25rem 1.6rem;
-  max-height: 14rem;
-  margin: 0.7rem 0 0;
-  padding-left: 1.75rem;
-  overflow: auto;
+.engine-state {
+  padding: 0.15rem 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
   color: var(--muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.82rem;
+  font-size: 0.66rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
 }
 
-.history li::marker {
-  color: #667b77;
+.engine-state.is-thinking {
+  border-color: var(--rust);
+  color: var(--rust);
+}
+
+.engine-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(3.4rem, 1fr));
+  gap: 0.5rem 0.75rem;
+  margin: 0.8rem 0 0;
+}
+
+.engine-stats div {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.engine-stats dt {
+  color: var(--muted);
+  font-size: 0.63rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.engine-stats dd {
+  margin: 0;
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.88rem;
+  /* Digits change every poll, so a fixed advance keeps the row from shifting under the eye. */
+  font-variant-numeric: tabular-nums;
+}
+
+.variation-label {
+  margin: 0.9rem 0 0.3rem;
+  color: var(--muted);
+  font-size: 0.63rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.variation {
+  max-height: 3.4rem;
+  margin: 0;
+  overflow: auto;
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.variation.is-empty {
+  color: var(--muted);
+}
+
+.history-section {
+  min-height: 8rem;
+}
+
+.history-scroll {
+  max-height: 14rem;
+  margin-top: 0.7rem;
+  overflow: auto;
+}
+
+.history {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.history th,
+.history td {
+  padding: 0.16rem 0.3rem;
+  text-align: left;
+  font-weight: 400;
+}
+
+.history th[scope="row"] {
+  width: 2.4rem;
+  color: var(--muted);
 }
 
 .interaction-note {
@@ -486,6 +606,9 @@ button.quiet:hover:not(:disabled) {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  /* The move list and the closing note read across the full width; the controls and the engine
+     stats are compact enough to sit side by side. */
+  .history-section,
   .interaction-note {
     grid-column: 1 / -1;
   }
@@ -514,6 +637,7 @@ button.quiet:hover:not(:disabled) {
     grid-template-columns: 1fr;
   }
 
+  .history-section,
   .interaction-note {
     grid-column: auto;
   }

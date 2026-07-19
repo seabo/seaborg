@@ -149,6 +149,17 @@ impl Session {
         result
     }
 
+    /// Choose the limit for subsequent engine turns, publishing the new setting.
+    ///
+    /// The setting is part of the snapshot, so this publishes even though no move was made: a
+    /// browser that reloads must see the limit that is actually in force, and a second tab must
+    /// not keep showing the old one.
+    pub fn set_engine_limit(&self, limit: SearchLimit) {
+        let mut controller = self.lock_controller();
+        controller.set_search_limit(limit);
+        self.publish(&controller);
+    }
+
     /// Start a fresh game for `human_side`.
     pub fn new_game(&self, human_side: Player) {
         let mut controller = self.lock_controller();

@@ -6,9 +6,10 @@
 use super::json::{write_key, write_string};
 use crate::game::{CommandError, DrawReason, EngineStatus, GameSnapshot, GameStatus, MoveRecord};
 use crate::score::Score;
-use crate::search::SearchProgress;
+use crate::search::{SearchLimit, SearchProgress};
 use core::position::Player;
 use std::fmt::Write as _;
+use std::time::Duration;
 
 fn player_name(player: Player) -> &'static str {
     if player.is_white() {
@@ -38,6 +39,70 @@ pub fn command_error_code(error: &CommandError) -> &'static str {
         CommandError::IllegalMove => "illegal_move",
         CommandError::NothingToUndo => "nothing_to_undo",
     }
+}
+
+/// The shortest engine thinking time the browser may select, in milliseconds.
+///
+/// A limit below this leaves the guaranteed-minimum search doing all the work, so every choice
+/// under it would play identically while reading as a distinct setting.
+pub const MIN_ENGINE_TIME_MS: u64 = 50;
+
+/// The longest engine thinking time the browser may select, in milliseconds.
+///
+/// The board is locked while the engine thinks, so an unbounded value entered by hand would look
+/// exactly like the UI having hung.
+pub const MAX_ENGINE_TIME_MS: u64 = 60_000;
+
+/// The deepest fixed-depth engine limit the browser may select.
+///
+/// Fixed depth has no time bound at all, so this caps how long one turn can take. It is the depth
+/// beyond which a mid-game search stops being interactive.
+pub const MAX_ENGINE_DEPTH: u64 = 12;
+
+/// Parse an engine limit from a browser command.
+///
+/// `Infinite` is deliberately unreachable: a search that only ends when cancelled would leave the
+/// game with no engine reply and the board locked forever.
+pub fn parse_engine_limit(kind: &str, value: u64) -> Result<SearchLimit, &'static str> {
+    match kind {
+        "time" => {
+            if !(MIN_ENGINE_TIME_MS..=MAX_ENGINE_TIME_MS).contains(&value) {
+                return Err("invalid_engine_limit");
+            }
+            Ok(SearchLimit::Time(Duration::from_millis(value)))
+        }
+        "depth" => {
+            if !(1..=MAX_ENGINE_DEPTH).contains(&value) {
+                return Err("invalid_engine_limit");
+            }
+            // The cap keeps this inside `u8`.
+            Ok(SearchLimit::Depth(value as u8))
+        }
+        _ => Err("invalid_engine_limit"),
+    }
+}
+
+/// Write the limit the next engine turn will use, tagged so the browser need not decode a unit.
+fn write_engine_limit(out: &mut String, limit: SearchLimit) {
+    let mut first = true;
+    out.push('{');
+    write_key(out, &mut first, "kind");
+    match limit {
+        SearchLimit::Time(duration) => {
+            write_string(out, "time");
+            write_key(out, &mut first, "milliseconds");
+            let _ = write!(out, "{}", duration.as_millis());
+        }
+        SearchLimit::Depth(plies) => {
+            write_string(out, "depth");
+            write_key(out, &mut first, "plies");
+            let _ = write!(out, "{plies}");
+        }
+        // Not reachable through `parse_engine_limit`, but the CLI default could name it and a
+        // snapshot must stay total.
+        SearchLimit::Infinite => write_string(out, "infinite"),
+    }
+    out.push('}');
 }
 
 fn write_move_record(out: &mut String, record: &MoveRecord) {
@@ -115,6 +180,17 @@ fn write_score(out: &mut String, score: Score) {
     out.push('}');
 }
 
+fn write_string_array(out: &mut String, values: impl IntoIterator<Item = impl AsRef<str>>) {
+    out.push('[');
+    for (index, value) in values.into_iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        write_string(out, value.as_ref());
+    }
+    out.push(']');
+}
+
 fn write_progress(out: &mut String, progress: &SearchProgress) {
     let mut first = true;
     out.push('{');
@@ -131,14 +207,13 @@ fn write_progress(out: &mut String, progress: &SearchProgress) {
     write_key(out, &mut first, "hashfull");
     let _ = write!(out, "{}", progress.hashfull);
     write_key(out, &mut first, "principalVariation");
-    out.push('[');
-    for (index, mov) in progress.principal_variation.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        write_string(out, &mov.to_uci_string());
-    }
-    out.push(']');
+    write_string_array(
+        out,
+        progress
+            .principal_variation
+            .iter()
+            .map(|mov| mov.to_uci_string()),
+    );
     out.push('}');
 }
 
@@ -154,6 +229,7 @@ fn write_engine_status(out: &mut String, status: &EngineStatus) {
             search_id,
             position_revision,
             progress,
+            principal_variation_san,
         } => {
             write_key(out, &mut first, "kind");
             write_string(out, "thinking");
@@ -166,6 +242,10 @@ fn write_engine_status(out: &mut String, status: &EngineStatus) {
                 Some(progress) => write_progress(out, progress),
                 None => out.push_str("null"),
             }
+            // SAN sits beside `progress` rather than inside it because the search reports moves
+            // and only the controller can read them against a position.
+            write_key(out, &mut first, "principalVariationSan");
+            write_string_array(out, principal_variation_san);
         }
     }
     out.push('}');
@@ -218,6 +298,8 @@ pub fn snapshot_to_json(snapshot: &GameSnapshot) -> String {
     write_game_status(&mut out, snapshot.game_status);
     write_key(&mut out, &mut first, "engineStatus");
     write_engine_status(&mut out, &snapshot.engine_status);
+    write_key(&mut out, &mut first, "engineLimit");
+    write_engine_limit(&mut out, snapshot.engine_limit);
 
     out.push('}');
     out
@@ -245,6 +327,7 @@ mod tests {
             move_history: Vec::new(),
             game_status: GameStatus::Ongoing,
             engine_status: EngineStatus::Idle,
+            engine_limit: SearchLimit::Time(Duration::from_millis(1_500)),
         }
     }
 
@@ -332,6 +415,7 @@ mod tests {
                 hashfull: 11,
                 principal_variation: vec![mov],
             }),
+            principal_variation_san: vec!["e4".to_owned()],
         };
 
         let value = parse(&snapshot_to_json(&snapshot)).unwrap();
@@ -355,6 +439,81 @@ mod tests {
             other => panic!("expected array, got {other:?}"),
         };
         assert_eq!(pv[0].as_str(), Some("e2e4"));
+        let san = match engine.get("principalVariationSan").unwrap() {
+            Json::Array(items) => items,
+            other => panic!("expected array, got {other:?}"),
+        };
+        assert_eq!(san[0].as_str(), Some("e4"));
+    }
+
+    #[test]
+    fn serializes_each_engine_limit_with_its_unit() {
+        let mut snapshot = start_snapshot();
+
+        snapshot.engine_limit = SearchLimit::Time(Duration::from_millis(2_500));
+        let value = parse(&snapshot_to_json(&snapshot)).unwrap();
+        let limit = value.get("engineLimit").unwrap();
+        assert_eq!(limit.get("kind").unwrap().as_str(), Some("time"));
+        assert_eq!(limit.get("milliseconds").unwrap().as_u64(), Some(2_500));
+
+        snapshot.engine_limit = SearchLimit::Depth(6);
+        let value = parse(&snapshot_to_json(&snapshot)).unwrap();
+        let limit = value.get("engineLimit").unwrap();
+        assert_eq!(limit.get("kind").unwrap().as_str(), Some("depth"));
+        assert_eq!(limit.get("plies").unwrap().as_u64(), Some(6));
+
+        // Not selectable from the browser, but the CLI default could name it and the snapshot
+        // must stay parseable whatever the controller holds.
+        snapshot.engine_limit = SearchLimit::Infinite;
+        let value = parse(&snapshot_to_json(&snapshot)).unwrap();
+        assert_eq!(
+            value
+                .get("engineLimit")
+                .unwrap()
+                .get("kind")
+                .unwrap()
+                .as_str(),
+            Some("infinite")
+        );
+    }
+
+    #[test]
+    fn accepts_engine_limits_inside_their_bounds_and_rejects_the_rest() {
+        assert_eq!(
+            parse_engine_limit("time", 1_000),
+            Ok(SearchLimit::Time(Duration::from_millis(1_000)))
+        );
+        assert_eq!(
+            parse_engine_limit("time", MIN_ENGINE_TIME_MS),
+            Ok(SearchLimit::Time(Duration::from_millis(MIN_ENGINE_TIME_MS)))
+        );
+        assert_eq!(
+            parse_engine_limit("time", MAX_ENGINE_TIME_MS),
+            Ok(SearchLimit::Time(Duration::from_millis(MAX_ENGINE_TIME_MS)))
+        );
+        assert_eq!(parse_engine_limit("depth", 1), Ok(SearchLimit::Depth(1)));
+        assert_eq!(
+            parse_engine_limit("depth", MAX_ENGINE_DEPTH),
+            Ok(SearchLimit::Depth(MAX_ENGINE_DEPTH as u8))
+        );
+
+        for (kind, value) in [
+            ("time", MIN_ENGINE_TIME_MS - 1),
+            ("time", MAX_ENGINE_TIME_MS + 1),
+            ("time", 0),
+            ("depth", 0),
+            ("depth", MAX_ENGINE_DEPTH + 1),
+            // An unbounded search would never produce a reply and would lock the board forever.
+            ("infinite", 0),
+            ("", 1),
+            ("Time", 1_000),
+        ] {
+            assert_eq!(
+                parse_engine_limit(kind, value),
+                Err("invalid_engine_limit"),
+                "{kind} {value} should be rejected"
+            );
+        }
     }
 
     #[test]
@@ -364,11 +523,19 @@ mod tests {
             search_id: 1,
             position_revision: 0,
             progress: None,
+            principal_variation_san: Vec::new(),
         };
         let value = parse(&snapshot_to_json(&snapshot)).unwrap();
         assert_eq!(
             value.get("engineStatus").unwrap().get("progress"),
             Some(&Json::Null)
+        );
+        assert_eq!(
+            value
+                .get("engineStatus")
+                .unwrap()
+                .get("principalVariationSan"),
+            Some(&Json::Array(Vec::new()))
         );
     }
 
