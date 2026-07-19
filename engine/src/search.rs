@@ -1318,7 +1318,7 @@ impl<'engine> Search<'engine> {
     /// [`Self::clock_permits_tt_reuse`] and the write suppression at Step 24 exist to contain.
     #[inline(always)]
     fn evaluate(&mut self) -> Score {
-        Score::cp(self.pos.material_eval() * self.pov())
+        Score::cp(self.pos.static_eval() * self.pov())
     }
 
     /// Returns 1 if the player to move is White, -1 if Black. Useful wherever we are using
@@ -1924,12 +1924,12 @@ mod tests {
                 ("r5k1/2qn2pp/2nN1p2/3pP2Q/3P1p2/5N2/4B1PP/1b4K1 w - - 0 25", 8, Score::mate(7), Score::mate(7), "h5f7"),
 
                 // // Winning material
-                ("rn1q1rk1/5pp1/pppb4/5Q1p/3P4/3BPP1P/PP3PK1/R1B2R2 b - - 1 15", 7, Score::cp(290), Score::cp(310), "g7g6"),
-                ("4k3/8/8/4q3/8/8/7P/3K2R1 w - - 0 1", 3, Score::cp(100), Score::cp(100), "g1e1"), 
+                ("rn1q1rk1/5pp1/pppb4/5Q1p/3P4/3BPP1P/PP3PK1/R1B2R2 b - - 1 15", 7, Score::cp(345), Score::cp(385), "g7g6"),
+                ("4k3/8/8/4q3/8/8/7P/3K2R1 w - - 0 1", 3, Score::cp(40), Score::cp(90), "g1e1"),
                 ("6k1/8/3q4/8/8/3B4/2P5/1K1R4 w - - 0 1", 3, Score::cp(850), Score::cp(950), "d3c4"),
-                ("r5k1/p1P5/8/8/8/8/3RK3/8 w - - 0 1", 6, Score::cp(900), Score::cp(900), "d2d8"),
-                ("6k1/8/8/3q4/8/8/P7/1KNB4 w - - 0 1", 4, Score::cp(380), Score::cp(420), "d1b3"),
-                ("2kr3r/ppp1qpb1/5n2/5b1p/6p1/1PNP4/PBPQBPPP/2KRR3 b - - 6 14", 5, Score::cp(380), Score::cp(420), "g7h6"),
+                ("r5k1/p1P5/8/8/8/8/3RK3/8 w - - 0 1", 6, Score::cp(905), Score::cp(955), "d2d8"),
+                ("6k1/8/8/3q4/8/8/P7/1KNB4 w - - 0 1", 4, Score::cp(330), Score::cp(370), "d1b3"),
+                ("2kr3r/ppp1qpb1/5n2/5b1p/6p1/1PNP4/PBPQBPPP/2KRR3 b - - 6 14", 5, Score::cp(408), Score::cp(448), "g7h6"),
                 ("7k/2R5/8/8/6q1/7p/7P/7K w - - 0 1", 6, Score::cp(0), Score::cp(0), "c7h7"),
 
                 // Pawn race
@@ -1973,10 +1973,12 @@ mod tests {
 
         let score = search.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P, 0);
 
-        // Losing the rook is worth exactly its material value. This previously read -495: the
-        // evasion search advanced the halfmove clock to 1, and the old clock-scaled evaluation
-        // shaded the score by a percent for it. Evaluation is now position-intrinsic.
-        assert_eq!(score, Some(Score::cp(-500)));
+        // White is in check from the rook and has only quiet king moves to escape with, so the
+        // returned value is the static evaluation of the best evasion: a rook down, plus the small
+        // piece-square difference the king move makes. The exact figure is incidental; the point is
+        // that a position with no captures or checks to make is still scored below equality, which
+        // can only happen if the quiet evasions were searched at all.
+        assert_eq!(score, Some(Score::cp(-449)));
         assert!(search.trace.q_nodes_visited() > 1);
     }
 
@@ -2040,26 +2042,116 @@ mod tests {
         }
     }
 
-    /// The evaluation must not depend on the halfmove clock, which the Zobrist key does not
-    /// cover. It previously scaled material towards zero as the clock advanced, so this position
-    /// evaluated to 450 at a clock of 50 and 900 at a clock of 0.
+    /// The evaluation must not depend on the halfmove clock, which the Zobrist key does not cover;
+    /// a leaf value that read it could be computed under one clock and then silently reused under a
+    /// materially different one. The evaluation once scaled material towards zero as the clock
+    /// advanced, so this position — a white queen against a bare king — evaluated differently at
+    /// each clock. It must now score identically at every clock.
+    ///
+    /// The value is the tapered blend of the middlegame and endgame tables. With only a queen left
+    /// the game phase is 4 of 24, so the score is (1024 * 4 + 903 * 20) / 24 = 923: not a round
+    /// material figure, precisely because the piece-square terms are folded in.
     #[test]
-    fn material_evaluation_is_independent_of_the_halfmove_clock() {
+    fn static_evaluation_is_independent_of_the_halfmove_clock() {
         core::init::init_globals();
 
-        for halfmove_clock in [0, 50, 99] {
+        let eval_at = |halfmove_clock: u32| {
             let fen = format!("4k3/8/8/8/8/8/8/Q3K3 w - - {halfmove_clock} 1");
             let pos = Position::from_fen(&fen).unwrap();
             let flag = AtomicBool::new(false);
             let tt = Table::new(1);
             let mut search = Search::new(pos, &flag, None, &tt);
+            search.evaluate()
+        };
 
+        for halfmove_clock in [0, 50, 99] {
             assert_eq!(
-                search.evaluate(),
-                Score::cp(900),
+                eval_at(halfmove_clock),
+                Score::cp(923),
                 "evaluation moved at halfmove clock {halfmove_clock}"
             );
         }
+    }
+
+    /// The evaluation is a pure function of piece placement and colour, so a position and its
+    /// colour-and-rank mirror must receive equal and opposite scores. This is the check that the
+    /// piece-square tables are oriented correctly: reading White's table for a Black piece, or
+    /// forgetting to flip the square, would break here even where a single position still looked
+    /// plausible.
+    #[test]
+    fn the_evaluation_is_symmetric_under_a_colour_mirror() {
+        core::init::init_globals();
+
+        for fen in [
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w - - 0 1",
+            "4k3/8/8/8/8/8/8/Q3K3 w - - 0 1",
+            "r3k2r/pp3ppp/2n5/8/3P4/2N2N2/PP3PPP/R3K2R w - - 0 1",
+            "8/2k5/8/4N3/2B5/8/5K2/8 w - - 0 1",
+        ] {
+            let pos = Position::from_fen(fen).unwrap();
+            let mirror = Position::from_fen(&colour_mirror_fen(fen)).unwrap();
+            assert_eq!(
+                pos.static_eval(),
+                -mirror.static_eval(),
+                "{fen} and its colour mirror were not opposite"
+            );
+        }
+    }
+
+    /// Flips a FEN vertically and swaps the piece colours, producing the colour mirror of the
+    /// position. Only the piece-placement field affects the evaluation, so the remaining fields are
+    /// set to neutral values.
+    fn colour_mirror_fen(fen: &str) -> String {
+        let board = fen.split(' ').next().unwrap();
+        let mirrored = board
+            .split('/')
+            .rev()
+            .map(|rank| {
+                rank.chars()
+                    .map(|c| {
+                        if c.is_ascii_uppercase() {
+                            c.to_ascii_lowercase()
+                        } else if c.is_ascii_lowercase() {
+                            c.to_ascii_uppercase()
+                        } else {
+                            c
+                        }
+                    })
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("/");
+        format!("{mirrored} w - - 0 1")
+    }
+
+    /// The piece-square scores are interpolated by the game phase, so the same positional feature
+    /// can be worth opposite amounts in the opening and the endgame. A king in the centre is
+    /// exposed while the heavy pieces are on but active once they are gone, so the evaluation must
+    /// reward in the endgame the very central king it penalises in the middlegame. A single set of
+    /// untapered tables could not express both.
+    #[test]
+    fn piece_square_scores_are_tapered_by_game_phase() {
+        core::init::init_globals();
+
+        let eval = |fen: &str| Position::from_fen(fen).unwrap().static_eval();
+
+        // Full queens and rooks on both sides: a middlegame. With everything else symmetric, moving
+        // only White's king off its home square to the centre must lower White's score.
+        let king_home_mg = eval("r2qk2r/8/8/8/8/8/8/R2QK2R w - - 0 1");
+        let king_centre_mg = eval("r2qk2r/8/8/8/4K3/8/8/R2Q3R w - - 0 1");
+        assert!(
+            king_home_mg > king_centre_mg,
+            "a central king was not penalised in the middlegame ({king_home_mg} !> {king_centre_mg})"
+        );
+
+        // The same two king squares with the heavy pieces removed: an endgame. Now the central king
+        // must score higher than the one still on the back rank.
+        let king_home_eg = eval("4k3/8/8/8/8/8/8/4K3 w - - 0 1");
+        let king_centre_eg = eval("4k3/8/8/8/4K3/8/8/8 w - - 0 1");
+        assert!(
+            king_centre_eg > king_home_eg,
+            "a central king was not rewarded in the endgame ({king_centre_eg} !> {king_home_eg})"
+        );
     }
 
     /// A table warmed at one halfmove clock must return the same score when the identical
@@ -2098,10 +2190,10 @@ mod tests {
     ///
     /// The position below establishes the premise that gate exists for: one key, two materially
     /// different true values, told apart only by the halfmove clock. White is a queen and a knight
-    /// up against a bare king. At a fresh clock that is worth the full 1200. At clock 96 a four-ply
-    /// search sees that every quiet continuation runs the clock to 100 and draws, so its best line
-    /// is to hang the queen: the king's capture resets the clock and keeps the knight, worth 300.
-    /// Reusing the 1200 where the 300 applies is the defect.
+    /// up against a bare king, which the tapered evaluation scores at 1295 with its placement. At
+    /// clock 96 a four-ply search sees that every quiet continuation runs the clock to 100 and
+    /// draws, so its best line is to hang the queen: the king's capture resets the clock and leaves
+    /// White only a knight up, worth 244. Reusing the 1295 where the 244 applies is the defect.
     #[test]
     fn the_same_key_is_worth_different_scores_at_different_halfmove_clocks() {
         core::init::init_globals();
@@ -2117,12 +2209,12 @@ mod tests {
 
         assert_eq!(
             score_at(0),
-            Score::cp(1200),
+            Score::cp(1295),
             "material is intact at a fresh clock"
         );
         assert_eq!(
             score_at(96),
-            Score::cp(300),
+            Score::cp(244),
             "near the boundary the queen must be given up to reset the clock"
         );
     }
@@ -2143,7 +2235,7 @@ mod tests {
         let seeded_depth = 8;
 
         let score_at = |halfmove_clock: u32| {
-            let fen = format!("7k/8/8/8/8/8/8/K7 w - - {halfmove_clock} 1");
+            let fen = format!("k7/8/8/8/8/8/8/K7 w - - {halfmove_clock} 1");
             let position = Position::from_fen(&fen).unwrap();
             let flag = AtomicBool::new(false);
             let table = Table::new(1);
@@ -2189,7 +2281,7 @@ mod tests {
         core::init::init_globals();
 
         let score_at = |halfmove_clock: u32| {
-            let fen = format!("7k/8/8/8/8/8/8/K7 w - - {halfmove_clock} 1");
+            let fen = format!("k7/8/8/8/8/8/8/K7 w - - {halfmove_clock} 1");
             let position = Position::from_fen(&fen).unwrap();
             let flag = AtomicBool::new(false);
             let table = Table::new(1);
@@ -2396,7 +2488,7 @@ mod tests {
     fn quiescence_does_not_use_a_search_score_as_static_evaluation() {
         core::init::init_globals();
 
-        let position = Position::from_fen("7k/8/8/8/8/8/8/K7 w - - 0 1").unwrap();
+        let position = Position::from_fen("k7/8/8/8/8/8/8/K7 w - - 0 1").unwrap();
         let flag = AtomicBool::new(false);
         let table = Table::new(1);
         table.store(
@@ -2424,7 +2516,7 @@ mod tests {
         mov: &Move,
         depth: u8,
     ) -> (NodeResult, usize) {
-        let position = Position::from_fen("7k/8/8/8/8/8/8/K7 w - - 0 1").unwrap();
+        let position = Position::from_fen("k7/8/8/8/8/8/8/K7 w - - 0 1").unwrap();
         let flag = AtomicBool::new(false);
         let table = Table::new(1);
         table.store(position.zobrist().0, seeded, depth, bound, mov);
@@ -2641,8 +2733,8 @@ mod tests {
     fn quiescence_ignores_tt_slot_clashes() {
         core::init::init_globals();
 
-        let position = Position::from_fen("7k/8/8/8/8/8/8/K7 w - - 0 1").unwrap();
-        let clashing_position = Position::from_fen("7k/8/8/8/8/8/8/K7 b - - 0 1").unwrap();
+        let position = Position::from_fen("k7/8/8/8/8/8/8/K7 w - - 0 1").unwrap();
+        let clashing_position = Position::from_fen("k7/8/8/8/8/8/8/K7 b - - 0 1").unwrap();
         let flag = AtomicBool::new(false);
         // The smallest table is a single cluster, so both positions necessarily share it.
         let table = Table::new(0);
