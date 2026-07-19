@@ -1,11 +1,11 @@
 ---
 id: TASK-45
 title: Honor UCI cancellation after recording a legal root fallback
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-18 18:28'
-updated_date: '2026-07-18 23:45'
+updated_date: '2026-07-19 00:06'
 labels:
   - engine
   - search
@@ -34,11 +34,11 @@ Change cancellation semantics without weakening the TASK-32/EOF invariant: estab
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 An immediate stop during the first iteration returns a legal bestmove whenever the root position has a legal move, including when cancellation wins the race before any searched root move completes
-- [ ] #2 Explicit cancellation can terminate depth 1 without waiting for the full quiescence tree, and deterministic tests prove the cancellation path rather than relying only on a loose wall-clock assertion
-- [ ] #3 Quit, stdin EOF, replacement go, and other active-search replacement paths preserve their current legal-bestmove and teardown behavior because they share the cancellation mechanism
-- [ ] #4 Terminal root positions still return bestmove 0000
-- [ ] #5 Time-deadline behavior remains unchanged: zero and near-zero budgets still return a legal move; TASK-29 may cap quiet check extensions on its own merits but is not responsible for bounding capture/promotion interleaving or the total depth-1 quiescence tree
+- [x] #1 An immediate stop during the first iteration returns a legal bestmove whenever the root position has a legal move, including when cancellation wins the race before any searched root move completes
+- [x] #2 Explicit cancellation can terminate depth 1 without waiting for the full quiescence tree, and deterministic tests prove the cancellation path rather than relying only on a loose wall-clock assertion
+- [x] #3 Quit, stdin EOF, replacement go, and other active-search replacement paths preserve their current legal-bestmove and teardown behavior because they share the cancellation mechanism
+- [x] #4 Terminal root positions still return bestmove 0000
+- [x] #5 Time-deadline behavior remains unchanged: zero and near-zero budgets still return a legal move; TASK-29 may cap quiet check extensions on its own merits but is not responsible for bounding capture/promotion interleaving or the total depth-1 quiescence tree
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -116,4 +116,31 @@ Verification:
 - cargo test --workspace: pass (171 + 35 + 5 + 1 tests, 0 failed, 2 ignored)
 Known failures: none
 ---
+
+author: @codex
+created: 2026-07-19 00:06
+---
+Review attempt: 1
+Reviewed branch: task-45-honor-cancellation-after-root-fallback
+Reviewed implementation: c303c08
+Verdict: approved
+
+No blocking findings. The base-to-target diff is scoped, the implementation target descends from recorded base 092eb88d6c9635fff5043a918525390dd2c93e13, and the sole later commit contains handoff metadata only.
+
+Verification:
+- cargo fmt --check: pass
+- CARGO_TARGET_DIR=<fresh temp> cargo clippy --workspace --all-targets --all-features -- -D warnings: pass
+- cargo test --workspace --quiet: pass (35 core; 171 engine passed, 2 ignored; 5 metadata; 1 doc)
+- cargo test -p engine cancellation -- --nocapture: pass (3)
+- cargo test -p engine time_limited_search -- --nocapture: pass (1)
+- cargo test -p engine stdin_eof -- --nocapture: pass (2)
+- cargo test -p engine replacement_stop_and_quit_are_serialized -- --nocapture: pass (1)
+- cargo bench --bench perft --bench movegen, base vs target: movegen 194.76 ns vs 189.91 ns; perft 22.708 ms vs 22.570 ms; no regression
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Established a legal root fallback before honoring explicit cancellation, allowing depth-1 search to abort immediately while preserving legal bestmove, terminal 0000, driver teardown, and time-deadline behavior. Verified at implementation c303c08 with deterministic cancellation tests (zero visited nodes), UCI EOF/replacement regressions, formatting, fresh-target strict Clippy, full workspace tests, and base/target performance benchmarks.
+<!-- SECTION:FINAL_SUMMARY:END -->
