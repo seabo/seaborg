@@ -1,83 +1,78 @@
 use crate::dev::dev;
 use crate::perft::{perft, PerftArgs};
-use clap::{ArgGroup, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 // Leading `::` names the crate: importing `engine::engine` otherwise shadows the crate name for
 // the remaining imports.
 use ::engine::{engine, ui};
 
-// The run modes are grouped so clap rejects any combination of them: an `ArgGroup` is
-// single-valued unless declared otherwise, and each mode takes over the process. This is a plain
-// comment because a doc comment here would replace the crate description in `--help`.
+// This is a plain comment because a doc comment here would replace the crate description in
+// `--help`.
+//
+// Each run mode is its own subcommand so that per-mode arguments stay isolated (for example the
+// UI's port only makes sense under `ui`). Bare `seaborg` with no subcommand starts UCI, which is
+// what a chess GUI expects when it launches the executable directly.
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
-#[clap(group(ArgGroup::new("mode")))]
 pub struct Args {
-    /// Run the engine in UCI mode
-    #[clap(short, long, group = "mode")]
-    uci: bool,
-
-    /// Run the dev mode loop
-    #[clap(short, long, group = "mode")]
-    dev: bool,
-
-    /// Play in a local browser UI served on the loopback interface
-    #[clap(long, group = "mode")]
-    ui: bool,
-
-    /// Serve the browser UI on a fixed port instead of an available one
-    #[clap(long, value_name = "PORT", requires = "ui")]
-    ui_port: Option<u16>,
-
-    /// Do not open a browser when starting the UI
-    #[clap(long, requires = "ui")]
-    no_open: bool,
-
-    /// Print the notices for third-party material embedded in this executable
-    #[clap(long, group = "mode")]
-    licenses: bool,
-
     #[clap(subcommand)]
     command: Option<Commands>,
 }
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    /// Run the engine in UCI mode (the default when no subcommand is given)
+    Uci,
+    /// Play in a local browser UI served on the loopback interface
+    Ui(UiArgs),
+    /// Run perft on a given FEN position
     Perft(PerftArgs),
+    /// Run the dev mode loop
+    Dev,
+    /// Print the notices for third-party material embedded in this executable
+    Licenses,
+    // A `lichess` subcommand for online play is expected here; it dispatches like the peers above.
+}
+
+/// Arguments for the browser UI mode.
+#[derive(Debug, clap::Args)]
+pub struct UiArgs {
+    /// Serve the browser UI on a fixed port instead of an available one
+    #[clap(long, value_name = "PORT")]
+    port: Option<u16>,
+
+    /// Do not open a browser when starting the UI
+    #[clap(long)]
+    no_open: bool,
 }
 
 pub fn cmdline() {
     let args = Args::parse();
 
-    if args.licenses {
-        // The embedded piece artwork is permissively licensed on the one condition that its notice
-        // reaches whoever receives the binary. Someone who only ever runs the executable never sees
-        // the source tree, so the notice has to be printable from the executable itself.
-        print!("{}", ui::PIECE_ARTWORK_LICENSE);
-    } else if args.uci {
-        engine::launch(engine::EngineInfo {
+    // No subcommand means UCI, so a chess GUI can launch `seaborg` directly.
+    match args.command.unwrap_or(Commands::Uci) {
+        Commands::Uci => engine::launch(engine::EngineInfo {
             name: "seaborg",
             version: env!("CARGO_PKG_VERSION"),
             author: "George Seabridge",
             commit: env!("GIT_HASH"),
-        })
-    } else if args.dev {
-        dev();
-    } else if args.ui {
-        run_ui(&args);
-    } else {
-        match &args.command {
-            Some(Commands::Perft(perft_args)) => {
-                perft(perft_args);
-            }
-            None => {}
+        }),
+        Commands::Ui(ui_args) => run_ui(&ui_args),
+        Commands::Perft(perft_args) => perft(&perft_args),
+        Commands::Dev => dev(),
+        Commands::Licenses => {
+            // The embedded piece artwork is permissively licensed on the one condition that its
+            // notice reaches whoever receives the binary. Someone who only ever runs the executable
+            // never sees the source tree, so the notice has to be printable from the executable
+            // itself.
+            print!("{}", ui::PIECE_ARTWORK_LICENSE);
         }
     }
 }
 
 /// Serve the browser UI until the process is interrupted.
-fn run_ui(args: &Args) {
+fn run_ui(args: &UiArgs) {
     let config = ui::UiConfig {
-        port: args.ui_port,
+        port: args.port,
         open_browser: !args.no_open,
         ..ui::UiConfig::default()
     };
