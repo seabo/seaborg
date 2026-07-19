@@ -1,11 +1,11 @@
 ---
 id: TASK-68.1
 title: Restructure the CLI into subcommands
-status: In Progress
+status: In Review
 assignee:
   - '@george'
 created_date: '2026-07-19 22:33'
-updated_date: '2026-07-19 22:45'
+updated_date: '2026-07-19 22:49'
 labels: []
 dependencies: []
 parent_task_id: TASK-68
@@ -52,3 +52,29 @@ Note: `seaborg lichess` is added by a later subtask; leave a clean place to hook
 6. Leave a clear place to hook in the future lichess subcommand without implementing it.
 7. Run fmt, clippy, and workspace tests.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Restructured src/cmdline.rs from ArgGroup mode booleans to a clap subcommand enum (Uci/Ui/Perft/Dev/Licenses). Bare seaborg dispatches to UCI via unwrap_or(Commands::Uci). UI arguments moved into a dedicated UiArgs struct exposing --port and --no-open; run_ui now takes &UiArgs. Old --uci/--dev/--ui/--licenses flags removed with no aliases. Left a comment marker where the future lichess subcommand hooks in. Verified dispatch via smoke tests: bare/explicit uci both emit UCI id lines, perft -n 2 = 400 nodes, licenses prints the artwork notice, ui --help shows --port/--no-open, and --uci now errors as an unexpected argument.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @george
+created: 2026-07-19 22:49
+---
+Implementation handoff
+Branch: task-68.1-cli-subcommands
+Worktree: /Users/seabo/seaborg-worktrees/task-68.1-cli-subcommands
+Base: 064f883e63cb04883cc3c764d15dd520f7e59441
+Implementation target: 3d1e99a
+Resolved findings: none
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean)
+- cargo test --workspace: pass (all suites 0 failed)
+Known failures: none
+---
+<!-- COMMENTS:END -->
