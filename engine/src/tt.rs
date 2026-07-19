@@ -19,9 +19,42 @@
 //!
 //! # Entry identity
 //!
-//! A slot holds the full 64-bit key, so acceptance requires a genuine Zobrist collision rather than
-//! a truncated-signature coincidence. See [`Slot`] for the publication and validation protocol, and
-//! the module tests for the adverse schedules it is checked against.
+//! A slot holds the full 64-bit key rather than a truncated signature, and the key is what a probe
+//! is verified against. See [`Slot`] for the publication and validation protocol, and the module
+//! tests for the adverse schedules it is checked against.
+//!
+//! ## Why the full key, and not a signature
+//!
+//! Storing a signature is the cheaper option, and it is what the previous table did with 16 bits.
+//! It is not good enough here. Take a 1GB table: 16,777,216 clusters, so the index fixes 24 bits of
+//! the key and a 16-bit signature verifies 16 more. Forty bits are checked and 24 are not, so two
+//! distinct positions landing in the same cluster agree by accident once in 2^16 times. A long
+//! search probes on the order of 10^9 times, so at a realistic hit rate that is on the order of
+//! 10^4 accepted entries per search belonging to a different position — each one a score, a bound
+//! and a depth for a position that is not the one being searched.
+//!
+//! Engines live with that because a stored move is usually illegal in the wrong position, so most
+//! false hits are filtered by legality. That filter is not proof of identity: it says nothing about
+//! an entry stored without a move, and a move can be pseudo-legal in both positions. Precisely the
+//! entries the search cuts off against — the move-less bounds — are the ones it does not cover.
+//!
+//! Verifying all 64 bits removes the failure mode instead of filtering it. Accepting another
+//! position's entry now requires a genuine Zobrist collision, which is a property of the hash
+//! function rather than of the table, and which the engine already has to accept. The cost is
+//! entry width: 16 bytes rather than 8, so half as many entries per megabyte. See BENCHMARKS.md
+//! for what that trade measures out at.
+//!
+//! # Target requirements
+//!
+//! The table requires native lock-free 64-bit atomics. There is no fallback: on a target without
+//! them the build fails rather than silently substituting a lock-based `AtomicU64`, which would put
+//! a mutex under every probe and store on the search hot path and quietly invalidate the
+//! lock-freedom this module documents.
+
+#[cfg(not(target_has_atomic = "64"))]
+compile_error!(
+    "the transposition table requires native 64-bit atomics; probe and store must be lock-free"
+);
 
 use super::score::Score;
 use core::mov::{Move, MoveType};
