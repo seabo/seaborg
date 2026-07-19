@@ -20,6 +20,28 @@ static MOVE_OVERHEAD: u64 = 30;
 /// by accident.
 static MAX_CLOCK_SHARE_DIVISOR: u64 = 4;
 
+/// Size of the reserve we refuse to spend down, measured in moves' worth of increment.
+///
+/// In an increment game the increment funds the steady state and the base clock is a separate
+/// pool. Spending a fixed fraction of the whole clock every move drains that pool geometrically,
+/// so the allocation converges onto the bare increment and the engine ends up playing
+/// hand-to-mouth from roughly move 60 at fast controls. Holding back this reserve makes the
+/// converged state an explicit choice: the clock settles at `MOVE_OVERHEAD + reserve` rather than
+/// at `MOVE_OVERHEAD` plus whatever rounding leaves behind.
+///
+/// Ten moves of increment is enough to absorb a run of moves that overshoot their allotment, and
+/// to leave something worth spending if the game reaches a critical late position. It is
+/// deliberately expressed in increments rather than milliseconds: a flat reserve would be the same
+/// mistake as the flat per-move buffer that starved fast controls before, and it would penalise a
+/// sudden-death control, where spending the clock down to nothing is the correct policy.
+///
+/// The reserve caps how fast we may drain, rather than being deducted from the pool we divide.
+/// Deducting it up front also works, but it pays for the reserve in the opening and midgame,
+/// where the clock is nowhere near it and the time buys real strength; a 1711-game self-play
+/// match measured that at -7.9 Elo. Capping the drain leaves every allocation above the reserve
+/// exactly as it was and only binds on the approach.
+static RESERVE_INCREMENT_MOVES: u64 = 10;
+
 #[derive(Clone, Debug)]
 pub enum TimingMode {
     Timed(TimeControl),
@@ -86,10 +108,28 @@ impl TimeControl {
             return 0;
         }
 
-        // Our share of the clock for this move, plus the increment we will earn back by playing
-        // it. Both terms scale with the time control, so the allocation degrades proportionally
-        // as the clock shrinks rather than collapsing at a fixed threshold.
-        let allocation = (usable_time / est_remaining_moves).saturating_add(inc);
+        // The reserve we intend to still be holding when the game ends. Zero without an
+        // increment, where there is no steady state to fund and spending down is correct.
+        let reserve = inc.saturating_mul(RESERVE_INCREMENT_MOVES);
+
+        let allocation = match usable_time.checked_sub(reserve) {
+            // Above the reserve: the increment we will earn back by playing this move, plus our
+            // share of the clock. Both terms scale with the time control, so the allocation
+            // degrades proportionally as the clock shrinks rather than collapsing at a fixed
+            // threshold.
+            //
+            // Spending `inc + x` and earning `inc` back drains the clock by exactly `x`, so
+            // holding `x` to the headroom above the reserve is precisely the statement that this
+            // move will not take us below it. Far from the reserve this never binds and the
+            // allocation is unchanged; on the approach it is what arrests the decay, leaving the
+            // clock at the reserve instead of asymptoting onto the bare increment.
+            Some(headroom) => inc.saturating_add((usable_time / est_remaining_moves).min(headroom)),
+            // Below the reserve, because the opponent's play or our own overshoot took us there.
+            // Spend a tenth of what we hold, which is strictly less than the increment down here
+            // (`usable_time < reserve` means `usable_time / RESERVE_INCREMENT_MOVES < inc`), so
+            // the clock climbs back towards the reserve instead of creeping further past it.
+            None => usable_time / RESERVE_INCREMENT_MOVES,
+        };
 
         // Refuse to commit more than a fixed share of what we actually hold, however generous the
         // increment or `movestogo` estimate is. Written as a subtraction so it cannot overflow for
@@ -117,11 +157,14 @@ mod tests {
 
     #[test]
     fn increment_contributes_to_allocation() {
-        let control = TimeControl::new(1_000, 1_000, 200, 300, Some(10));
+        // A clock comfortably above both sides' reserves, so the surplus term is what is being
+        // divided and the increment is what distinguishes the two colours.
+        let control = TimeControl::new(10_000, 10_000, 200, 400, Some(20));
 
-        // (1_000 - 30) / 10, plus the side's increment.
-        assert_eq!(control.to_move_time(1, Player::WHITE), 297);
-        assert_eq!(control.to_move_time(1, Player::BLACK), 397);
+        // (10_000 - 30) / 20, plus the side's increment. The reserve is not close enough to bind
+        // on either side, so the increment is the whole of the difference.
+        assert_eq!(control.to_move_time(1, Player::WHITE), 698);
+        assert_eq!(control.to_move_time(1, Player::BLACK), 898);
     }
 
     #[test]
@@ -147,10 +190,18 @@ mod tests {
 
     #[test]
     fn huge_increment_cannot_allocate_more_than_the_clock_holds() {
-        // Without the share cap this would allot 1_000 + 5_000 against a 1_000ms clock.
-        let control = TimeControl::new(1_000, 1_000, 5_000, 5_000, Some(1));
+        // A 5_000ms increment against a 1_000ms clock. This once allotted 728ms, the share cap
+        // trimming a 1_000 + 5_000 allocation. The reserve policy now binds first and harder: we
+        // are far below a 50_000ms reserve, so we spend a tenth of what we hold and let the
+        // increment refill the clock over the next few moves.
+        let huge_increment = TimeControl::new(1_000, 1_000, 5_000, 5_000, Some(1));
+        assert_eq!(huge_increment.to_move_time(1, Player::WHITE), 97);
 
-        assert_eq!(control.to_move_time(1, Player::WHITE), 728);
+        // The share cap is still the binding constraint where the reserve is not. Here the
+        // surplus above a 1_000ms reserve, divided over a single remaining move, would allot
+        // 9_070ms of a 10_000ms clock; three quarters of the usable clock is the most we commit.
+        let one_move_left = TimeControl::new(10_000, 10_000, 100, 100, Some(1));
+        assert_eq!(one_move_left.to_move_time(1, Player::WHITE), 7_478);
     }
 
     #[test]
@@ -180,8 +231,10 @@ mod tests {
 
     #[test]
     fn fast_time_controls_receive_a_positive_proportional_allocation() {
-        // The 2+0.05 opening position from TASK-38: (2_000 - 30) / 39 + 50. This allotted 0ms
-        // before the fix, which is what had the engine playing its opening at depth 1.
+        // The 2+0.05 opening: (2_000 - 30) / 39 + 50. A flat per-move buffer once made this 0ms,
+        // which had the engine playing its whole opening at depth 1. The reserve caps how fast the
+        // clock may drain rather than shrinking the pool being divided, and an opening clock is
+        // nowhere near the reserve, so these allocations are untouched by it.
         let two_plus_005 = TimeControl::new(2_000, 2_000, 50, 50, None);
         assert_eq!(two_plus_005.to_move_time(1, Player::WHITE), 100);
 
@@ -217,6 +270,120 @@ mod tests {
 
             previous = Some(move_time);
         }
+    }
+
+    /// Play a self-play game against the allocation policy alone, spending exactly what is
+    /// allotted and earning the increment back, and report the clock after each move number.
+    ///
+    /// Nothing here models search overshoot or transport delay; the question is whether the
+    /// policy itself drains the clock, which it once did all the way down to the increment.
+    fn simulate_game(base: u64, inc: u64, moves: u32) -> Vec<(u32, u64, u64)> {
+        let mut clock = base;
+        let mut history = Vec::new();
+
+        for move_number in 1..=moves {
+            let control = TimeControl::new(clock, clock, inc, inc, None);
+            let allotted = control.to_move_time(move_number, Player::WHITE);
+
+            assert!(
+                allotted < clock,
+                "move {move_number} allotted {allotted}ms of a {clock}ms clock"
+            );
+
+            clock = clock - allotted + inc;
+            history.push((move_number, allotted, clock));
+        }
+
+        history
+    }
+
+    #[test]
+    fn an_increment_game_settles_on_the_reserve_rather_than_the_increment() {
+        // Dividing the whole clock every move converged these to 49ms, 96ms and 163ms: a reserve
+        // of tens of milliseconds above the fixed overhead, whatever the time control. The
+        // converged clock is now the reserve the policy asks for, plus the overhead it holds
+        // back once.
+        for (base, inc) in [(1_000, 10), (2_000, 50), (10_000, 100)] {
+            let reserve = inc * RESERVE_INCREMENT_MOVES;
+            let history = simulate_game(base, inc, 140);
+
+            for &(move_number, _, clock) in &history {
+                assert!(
+                    clock > reserve,
+                    "{base}+{inc}: clock fell to {clock}ms at move {move_number}, \
+                     below the {reserve}ms reserve"
+                );
+            }
+
+            for probe in [60, 100, 140] {
+                let (_, allotted, clock) = history[probe - 1];
+
+                assert!(
+                    clock >= reserve + MOVE_OVERHEAD,
+                    "{base}+{inc}: clock was {clock}ms at move {probe}, below the \
+                     {reserve}ms reserve plus the {MOVE_OVERHEAD}ms overhead"
+                );
+                assert!(
+                    allotted >= inc,
+                    "{base}+{inc}: move {probe} allotted {allotted}ms, below the {inc}ms \
+                     increment"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_late_game_move_can_still_be_allotted_far_more_than_the_increment() {
+        // Move 100 of a 1+0.01 game, holding a clock that a policy decaying onto the increment
+        // would never still have: whatever sits above the reserve stays spendable, so a critical
+        // late position gets a real think rather than the bare increment.
+        let control = TimeControl::new(2_000, 2_000, 10, 10, None);
+        let allotted = control.to_move_time(100, Player::WHITE);
+
+        // 10 + (2_000 - 30) / 20; the reserve is far away, so it does not bind here.
+        assert_eq!(allotted, 108);
+        assert!(allotted > 10 * 10);
+    }
+
+    #[test]
+    fn a_clock_below_the_reserve_spends_less_than_the_increment_and_recovers() {
+        // Dropping below the reserve must be self-correcting, or the reserve is a label rather
+        // than a floor. Start well under it and check the clock climbs back.
+        let inc = 100;
+        let reserve = inc * RESERVE_INCREMENT_MOVES;
+        let mut clock = 400;
+
+        for _ in 0..40 {
+            let control = TimeControl::new(clock, clock, inc, inc, None);
+            let allotted = control.to_move_time(100, Player::WHITE);
+
+            assert!(
+                allotted < inc,
+                "allotted {allotted}ms below the reserve, at or above the {inc}ms increment"
+            );
+
+            clock = clock - allotted + inc;
+        }
+
+        assert!(
+            clock > reserve,
+            "clock recovered only to {clock}ms, still below the {reserve}ms reserve"
+        );
+    }
+
+    #[test]
+    fn sudden_death_holds_no_reserve() {
+        // Without an increment there is no steady state to protect, so the reserve is zero and
+        // the clock is spent down as before. This is what keeps the reserve from behaving like
+        // a flat per-move buffer, which starved fast controls by taking a share that grew
+        // without bound as the time control shortened.
+        let history = simulate_game(60_000, 0, 100);
+        let (_, _, final_clock) = history[99];
+
+        assert!(
+            final_clock < 1_000,
+            "sudden death held {final_clock}ms back instead of spending the clock down"
+        );
     }
 
     #[test]

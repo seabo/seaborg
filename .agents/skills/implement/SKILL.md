@@ -54,6 +54,31 @@ For new work, implement every acceptance criterion within scope. For rework:
 
 Preserve unrelated changes. Do not edit the task's copy on the primary branch.
 
+## Write comments for a reader who has no task context
+
+Code outlives the task that produced it. Write every comment and doc comment so
+it stands alone for someone reading the file years later with no access to the
+Backlog board.
+
+Do not cite process artifacts in code: no acceptance-criterion labels (`AC#3`),
+review finding IDs (`REV-1-02`), task IDs (`TASK-58`), or document handles.
+These identify *why the work was scheduled*, not what the code does, and they
+make the comment uninterpretable without external state.
+
+State the reason instead of naming the ticket that recorded it. Replace
+`(TASK-58)` with the constraint itself — what breaks without this code, what
+invariant it protects, what non-obvious fact motivated it. If a fix is subtle
+enough that a bare ID felt necessary, that is the signal the underlying reason
+belongs in the comment.
+
+Reserve comments for what the code cannot say: invariants, non-local
+consequences, rejected alternatives, and surprising constraints. Do not restate
+what the next line already shows. Test doc comments describe the behavior under
+test and why it matters, not which criterion demanded the test.
+
+Task-scoped traceability lives in commit messages, implementation notes, and the
+Backlog task — where a reader can follow it. Keep it there.
+
 ## Stop when the correct fix is larger than the task
 
 Sometimes a defect is a symptom of a design that makes the correct behavior hard

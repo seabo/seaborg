@@ -1013,9 +1013,9 @@ fn search_progress_reaches_the_stream_while_the_engine_thinks() {
     assert!(ids.windows(2).all(|pair| pair[1] > pair[0]), "ids: {ids:?}");
 }
 
-// --- Regressions from review attempt 1 -------------------------------------------------------
+// --- Connection-flood and drain regressions ---------------------------------------------------
 
-/// REV-1-01: the accept loop is capped, so a flood is refused rather than accumulating threads.
+/// The accept loop is capped, so a flood is refused rather than accumulating threads.
 ///
 /// The original loop called `thread::spawn` per connection with no cap. `thread::spawn` panics
 /// when the OS refuses a thread, and it ran on the accept-loop thread, so the panic unwound
@@ -1068,7 +1068,7 @@ fn connections_past_the_cap_are_refused_and_the_server_keeps_serving() {
     }
 }
 
-/// REV-1-02: draining a rejected request is bounded by elapsed time, not just by bytes.
+/// Draining a rejected request is bounded by elapsed time, not just by bytes.
 ///
 /// `DRAIN_TIMEOUT` was installed as a per-read socket timeout, so a client delivering one byte
 /// inside each timeout kept the drain productive all the way to the 1 MiB cap — on the order of

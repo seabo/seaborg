@@ -29,7 +29,7 @@ enum DriverEvent {
 ///
 /// This is only a backstop. Completion is normally observed the instant the worker
 /// signals it; the poll exists so that a lost channel wakeup costs at most this much
-/// latency instead of deadlocking the driver forever (TASK-35).
+/// latency instead of deadlocking the driver forever.
 const SEARCH_LIVENESS_POLL: Duration = Duration::from_millis(50);
 
 /// Authoritative engine identity used for UCI `id` responses and human
@@ -578,8 +578,8 @@ mod tests {
     /// the events channel disconnecting when the worker drops its `Sender`.
     ///
     /// The test pins that channel open for the whole search, which is exactly the
-    /// state a lost disconnect wakeup leaves the driver in (TASK-35 / doc-2). Before
-    /// the fix `next_event` had no other way to learn the worker had exited, so this
+    /// state a lost disconnect wakeup leaves the driver in. Without the explicit
+    /// signal `next_event` has no other way to learn the worker has exited, so this
     /// parks forever; the watchdog turns that hang into a failure instead of a
     /// wedged test binary.
     #[test]

@@ -289,7 +289,7 @@ def parse_result(output: str) -> Result:
         raise InfrastructureError("malformed runner output: invalid SPRT bounds")
     if games != wins + losses + draws:
         raise InfrastructureError("malformed runner output: game totals disagree")
-    elo = re.findall(r"Elo:\s*([-+\d.]+)\s*\+/-\s*([-+\d.]+|nan)", output, re.I)
+    elo = re.findall(r"\bElo:\s*([-+\d.]+)\s*\+/-\s*([-+\d.]+|nan)", output, re.I)
     ptnml = re.findall(
         r"Ptnml\(0-2\):\s*\[(\d+),\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\]", output)
     elo_value = float(elo[-1][0]) if elo else None

@@ -198,7 +198,7 @@ impl SearchEngine {
             drop(search);
             // The explicit completion signal. The driver must never have to infer that
             // this thread finished from the events channel disconnecting: that wakeup
-            // has been observed to be lost, parking the driver forever (TASK-35).
+            // has been observed to be lost, parking the driver forever.
             let _ = finished_tx.send(());
             outcome
         });
@@ -440,7 +440,7 @@ pub struct Search<'engine> {
     /// reached, not of the position itself, so it is not covered by the Zobrist key. A node samples
     /// this counter before searching its children and compares it afterwards; if it moved, the
     /// node's value depends on the current history and must not be stored as position-intrinsic
-    /// exact information. See `is_history_draw` (TASK-58).
+    /// exact information. See `is_history_draw`.
     ///
     /// # Transposition-table reuse policy
     ///
@@ -471,7 +471,7 @@ pub struct Search<'engine> {
     /// problem, and closing it needs entries keyed or gated by path history. [`crate::tt::Entry`] is
     /// a fully packed `u64` with no spare bits, so that means widening the entry and reworking the
     /// table's layout, replacement policy and sizing. That is deliberately out of scope here; the
-    /// engine accepts the resulting rare misvaluation, as mainstream engines do (TASK-58).
+    /// engine accepts the resulting rare misvaluation, as mainstream engines do.
     history_draws: u64,
     /// Flag to indicate when the search should start unwinding due to user intervention.
     stopping: &'engine AtomicBool,
@@ -628,7 +628,7 @@ impl<'engine> Search<'engine> {
     ///
     /// Explicit cancellation is honored only once this has run. Root move generation is finite and
     /// cheap, so the window in which cancellation is ignored is bounded by move generation rather
-    /// than by the depth-1 quiescence tree, which has no practically small bound (TASK-39).
+    /// than by the depth-1 quiescence tree, which has no practically small bound.
     fn establish_root_fallback(&mut self) {
         self.root_fallback = self
             .pos
@@ -695,26 +695,28 @@ impl<'engine> Search<'engine> {
         // Sampled before any child is searched, and compared again at the transposition-table write
         // below. If a history-sensitive draw was claimed anywhere in this subtree, `best_value`
         // depends on the path taken to reach this node and cannot be stored as exact information
-        // about the position itself (TASK-58).
+        // about the position itself.
         let history_draws_on_entry = self.history_draws;
 
-        // Step 2. Mate distance pruning.
+        // Normalize search bounds into the range a node can return.
         if !Node::root() {
-            // Scores are position-relative: at every node, being checkmated now and mating on the
-            // next ply are the worst and best possible mate values. Using `draft` here treats the
-            // bounds as root-relative; those wrong-parity bounds can escape a cutoff and masquerade
-            // as an exact root result.
+            // This is deliberately not mate-distance pruning. Mate scores are position-relative,
+            // so the root ply does not tighten a descendant's attainable mate range: every node
+            // can still be checkmated now or mate on its next ply. The old root-relative `draft`
+            // bounds were therefore unsound, and no equivalent pruning remains.
             //
-            // Both bounds are clamped at both ends, not just towards the middle. `child_bound` is
-            // exact, so a window at the very bottom of the band arrives here as
+            // The clamp is still required as representation hygiene. `child_bound` is exact, so a
+            // window at the very bottom of the band arrives here as
             // `(Score(20_100), Score(20_101))`: entirely above anything a node can score. Clamping
-            // only inwards would leave `alpha` at 20_100 and return it, and the parent's
-            // `neg().inc_mate()` would turn that into an odd-ply negative mate — the wrong-parity
-            // score TASK-54 removed. Clamping outwards is free, because neither direction can
-            // discard an attainable score: `alpha` is returned as an upper bound and nothing
-            // exceeds `mate(1)`, `beta` as a lower bound and nothing falls below `mate(0)`.
+            // both ends also maps the infinity bounds used at the root into the node-score band.
+            // Neither operation discards an attainable score; it only prevents a threshold from
+            // escaping as a fail-soft return value.
             alpha = alpha.clamp(Score::mate(0), Score::mate(1));
             beta = beta.clamp(Score::mate(0), Score::mate(1));
+            // An exact child-bound conversion can put the whole window above or below the node
+            // band. Normalization then collapses it. Returning the in-band threshold is required
+            // before another recursive call, whose window must be non-empty; this is bound
+            // sanitation, not a mate-distance cutoff.
             if alpha >= beta {
                 return Some(alpha);
             }
@@ -963,7 +965,7 @@ impl<'engine> Search<'engine> {
         // apply there. Neither is it enough to downgrade `Exact` to a bound: a draw score can raise
         // the value to a beta cutoff just as easily as it can cap it, so the resulting `Lower` or
         // `Upper` bound is unsound in an incompatible history too. The entry is therefore left
-        // unwritten and the position is re-searched when it is next reached (TASK-58).
+        // unwritten and the position is re-searched when it is next reached.
         if self.history_draws == history_draws_on_entry {
             self.tt.store(
                 self.pos.zobrist().0,
@@ -1006,7 +1008,7 @@ impl<'engine> Search<'engine> {
         // Explicit cancellation (`stop`, `quit`, stdin EOF, or a command replacing the active
         // search) aborts as soon as the root fallback exists, which is before the first node is
         // searched. A legal bestmove is therefore always available without waiting for the depth-1
-        // quiescence tree, whose size has no practically small bound (TASK-39). This check reads an
+        // quiescence tree, whose size has no practically small bound. This check reads an
         // atomic bool, which is cheap enough to run on every call and must stay unthrottled so that
         // cancellation responsiveness is unaffected.
         //
@@ -1058,7 +1060,7 @@ impl<'engine> Search<'engine> {
     /// Both conditions read `Position::history`, which the Zobrist key does not cover: the same key
     /// is a draw in one line and a live position in another. Every caller must go through here so
     /// that the claim is counted, and so that both the main search and quiescence agree on the
-    /// fifty-move boundary (TASK-58).
+    /// fifty-move boundary.
     #[inline(always)]
     fn is_history_draw(&mut self) -> bool {
         if self.pos.in_threefold() || self.pos.fifty_move_rule_reached() {
@@ -1089,7 +1091,7 @@ impl<'engine> Search<'engine> {
     /// and check extensions can search past the nominal depth. That slack is a conservative
     /// allowance rather than a proof: quiescence follows captures, which reset the clock, and quiet
     /// check evasions, which do not, and the length of a forcing evasion sequence has no tight
-    /// static bound. Erring high costs only hit rate, and only near the boundary (TASK-58).
+    /// static bound. Erring high costs only hit rate, and only near the boundary.
     #[inline(always)]
     fn clock_permits_tt_reuse(&self, entry_depth: u8) -> bool {
         self.pos.half_move_clock() + entry_depth as u32 + Self::HORIZON_SLACK
@@ -1101,7 +1103,7 @@ impl<'engine> Search<'engine> {
     /// This is deliberately *position-intrinsic*: it depends only on state that the Zobrist key
     /// covers, and in particular not on the halfmove clock. The key identifies pieces, side to
     /// move, castling rights and the en-passant file, so the value returned here is the same at
-    /// every visit to a position with the same key, whatever the clock reads there (TASK-58).
+    /// every visit to a position with the same key, whatever the clock reads there.
     ///
     /// This evaluation previously scaled material towards zero as the halfmove clock approached
     /// the fifty-move threshold. That made every propagated score a function of a value the key
@@ -1171,14 +1173,15 @@ impl<'engine> Search<'engine> {
         // must happen before following another evasion.
         //
         // This must use the same boundary as the main search: the fifty-move rule counts 100 plies,
-        // not 50. Comparing the clock against 50 here reported a draw at 25 moves (TASK-58).
+        // not 50. Comparing the clock against 50 here reported a draw at 25 moves.
         if self.is_history_draw() {
             return Some(Score::zero());
         }
 
-        // Step 2. Mate distance pruning, on the same terms as `search`.
+        // Normalize search bounds into the range a node can return, on the same terms as `search`.
         //
-        // Quiescence had no equivalent of this, which is what let the bound excursion compound:
+        // This is not mate-distance pruning. Quiescence once had no equivalent normalization,
+        // which let the bound excursion compound:
         // `child_bound` is exact, so `Score(20_101)` became the next ply's alpha, then
         // `Score(-20_102)`, and so on. Quiescence returns `alpha` and `beta` directly as fail-soft
         // scores, so those out-of-band bounds became node scores.
@@ -1203,7 +1206,7 @@ impl<'engine> Search<'engine> {
             //
             // The clock gate applies here for the same reason it applies in the main search: a
             // stored value never accounts for the fifty-move rule, so it may only be reused where
-            // the rule is still out of reach (TASK-58).
+            // the rule is still out of reach.
             if let Some(entry) = tt_entry.filter(|e| self.clock_permits_tt_reuse(e.depth())) {
                 match entry.bound() {
                     Bound::Exact => {
@@ -1646,7 +1649,7 @@ mod tests {
 
         // Losing the rook is worth exactly its material value. This previously read -495: the
         // evasion search advanced the halfmove clock to 1, and the old clock-scaled evaluation
-        // shaded the score by a percent for it. Evaluation is now position-intrinsic (TASK-58).
+        // shaded the score by a percent for it. Evaluation is now position-intrinsic.
         assert_eq!(score, Some(Score::cp(-500)));
         assert!(search.trace.q_nodes_visited() > 1);
     }
@@ -1711,9 +1714,9 @@ mod tests {
         }
     }
 
-    /// AC#1. The evaluation must not depend on the halfmove clock, which the Zobrist key does not
+    /// The evaluation must not depend on the halfmove clock, which the Zobrist key does not
     /// cover. It previously scaled material towards zero as the clock advanced, so this position
-    /// evaluated to 450 at a clock of 50 and 900 at a clock of 0 (TASK-58).
+    /// evaluated to 450 at a clock of 50 and 900 at a clock of 0.
     #[test]
     fn material_evaluation_is_independent_of_the_halfmove_clock() {
         core::init::init_globals();
@@ -1733,7 +1736,7 @@ mod tests {
         }
     }
 
-    /// AC#1. A table warmed at one halfmove clock must return the same score when the identical
+    /// A table warmed at one halfmove clock must return the same score when the identical
     /// position is searched at a materially different clock. Before evaluation became
     /// position-intrinsic the warm result was computed under the warming clock and silently reused.
     #[test]
@@ -1762,18 +1765,17 @@ mod tests {
         );
     }
 
-    /// AC#1, REV-1-01. Position-intrinsic evaluation is not on its own enough. A stored value never
-    /// accounts for the fifty-move rule, because a node whose subtree claimed the draw is not
-    /// written at all. Reusing such a value where the boundary *is* within reach scores a dead-drawn
-    /// line as if it played on, so the read side must refuse the cutoff.
+    /// Position-intrinsic evaluation is not on its own enough. A stored value never accounts for
+    /// the fifty-move rule, because a node whose subtree claimed the draw is not written at all.
+    /// Reusing such a value where the boundary *is* within reach scores a dead-drawn line as if it
+    /// played on, so the read side must refuse the cutoff.
     ///
-    /// AC#1, REV-1-01. Establishes the premise the read gate exists for: one key, two materially
-    /// different true values, told apart only by the halfmove clock.
-    ///
-    /// White is a queen and a knight up against a bare king. At a fresh clock that is worth the full
-    /// 1200. At clock 96 a four-ply search sees that every quiet continuation runs the clock to 100
-    /// and draws, so its best line is to hang the queen: the king's capture resets the clock and
-    /// keeps the knight, worth 300. Reusing the 1200 where the 300 applies is the defect.
+    /// The position below establishes the premise that gate exists for: one key, two materially
+    /// different true values, told apart only by the halfmove clock. White is a queen and a knight
+    /// up against a bare king. At a fresh clock that is worth the full 1200. At clock 96 a four-ply
+    /// search sees that every quiet continuation runs the clock to 100 and draws, so its best line
+    /// is to hang the queen: the king's capture resets the clock and keeps the knight, worth 300.
+    /// Reusing the 1200 where the 300 applies is the defect.
     #[test]
     fn the_same_key_is_worth_different_scores_at_different_halfmove_clocks() {
         core::init::init_globals();
@@ -1799,13 +1801,13 @@ mod tests {
         );
     }
 
-    /// AC#1, REV-1-01. The main search must refuse a stored cutoff once the fifty-move boundary is
+    /// The main search must refuse a stored cutoff once the fifty-move boundary is
     /// within the stored entry's reach.
     ///
     /// Seeding the entry directly, rather than warming the table with a real search, is deliberate:
     /// it pins the cutoff path under test instead of depending on which keys a warming search
     /// happens to leave behind and at what depth. The previous revision's warm-table test asserted
-    /// only that two searches agreed, which held whether or not the gate was present (REV-1-01).
+    /// only that two searches agreed, which held whether or not the gate was present.
     #[test]
     fn the_main_search_refuses_a_stored_cutoff_near_the_fifty_move_boundary() {
         core::init::init_globals();
@@ -1856,7 +1858,7 @@ mod tests {
         );
     }
 
-    /// AC#1, REV-1-01. Quiescence probes the same table and needs the same gate.
+    /// Quiescence probes the same table and needs the same gate.
     #[test]
     fn quiescence_refuses_a_stored_cutoff_near_the_fifty_move_boundary() {
         core::init::init_globals();
@@ -1932,7 +1934,7 @@ mod tests {
         pos
     }
 
-    /// AC#2. A value produced by a repetition claim depends on the moves played before the root,
+    /// A value produced by a repetition claim depends on the moves played before the root,
     /// which the key does not cover, so it must not reach the table at all.
     #[test]
     fn a_repetition_derived_value_is_not_stored_in_the_table() {
@@ -1962,7 +1964,7 @@ mod tests {
         );
     }
 
-    /// AC#2. The same holds for the fifty-move rule, the other draw the key does not cover: a
+    /// The same holds for the fifty-move rule, the other draw the key does not cover: a
     /// subtree that crosses the boundary produces a value that only applies at this clock.
     #[test]
     fn a_fifty_move_derived_value_is_not_stored_in_the_table() {
@@ -1990,7 +1992,7 @@ mod tests {
         );
     }
 
-    /// AC#2. A position whose subtree never claimed a history-sensitive draw is ordinary
+    /// A position whose subtree never claimed a history-sensitive draw is ordinary
     /// position-intrinsic information and must still be stored, so the policy above is not a
     /// blanket suppression of the table.
     #[test]
@@ -2015,8 +2017,8 @@ mod tests {
         );
     }
 
-    /// AC#2. Both the main search and quiescence must claim the fifty-move draw at the same
-    /// boundary. Quiescence compared the clock against 50, reporting a draw at 25 moves (TASK-58).
+    /// Both the main search and quiescence must claim the fifty-move draw at the same
+    /// boundary. Quiescence compared the clock against 50, reporting a draw at 25 moves.
     #[test]
     fn quiescence_uses_the_same_fifty_move_boundary_as_the_main_search() {
         core::init::init_globals();
@@ -2260,8 +2262,8 @@ mod tests {
     /// Sweep the 300-position Win At Chess tactical suite and format every root score, at the
     /// depths where mate scores start appearing in quantity. This is the broad counterpart to the
     /// targeted window tests: it is not looking for a specific value but for any score the search
-    /// can reach whose rendering panics, which is how TASK-54's parity violation surfaced. Debug
-    /// assertions must be live for it to mean anything, so run it on a debug build:
+    /// can reach whose rendering panics, which is how a `Display` parity violation once surfaced.
+    /// Debug assertions must be live for it to mean anything, so run it on a debug build:
     ///
     /// ```text
     /// cargo test -p engine -- --ignored wac_root_scores_format_without_panicking
@@ -2336,10 +2338,9 @@ mod tests {
     /// The window `(Score(20_100), Score(20_101))` is not contrived: it is exactly what a child
     /// receives when its parent searches the null window at the very bottom of the mate band,
     /// since `child_bound` is exact and both ends of that window sit above the top of the band.
-    /// Every score is below such an alpha, so the node fails low and returns alpha as its
-    /// fail-soft bound. Returning the raw 20_100 put a value outside the node score band into the
-    /// parent, where `neg().inc_mate()` turned it into a positive mate at an even ply count — the
-    /// wrong-parity score that panics `Display` on the UCI thread (TASK-54).
+    /// Every score is below such an alpha. The entry clamp keeps the threshold inside the node
+    /// band. A collapsed window returns that in-band threshold before recursion; this is required
+    /// bound sanitation rather than mate-distance pruning.
     #[test]
     fn out_of_band_windows_do_not_leak_into_returned_scores() {
         core::init::init_globals();
@@ -2380,7 +2381,7 @@ mod tests {
     }
 
     /// The same window, entered directly at quiescence. Quiescence is where the excursion used to
-    /// compound, because it had no mate distance pruning to absorb an out-of-band bound and it
+    /// compound, because it had no window normalization to absorb an out-of-band bound and it
     /// returns `alpha` and `beta` themselves as fail-soft scores.
     #[test]
     fn quiescence_clamps_out_of_band_windows_into_the_node_score_band() {
@@ -2708,8 +2709,8 @@ mod tests {
         assert!(searched_nodes > 1_000, "baseline must be a real search");
 
         // With cancellation already set, the search returns without visiting a single node: it
-        // never enters the depth-1 quiescence tree that TASK-39 showed has no small bound. This is
-        // the deterministic form of "an explicit stop is honored promptly".
+        // never enters the depth-1 quiescence tree, whose size has no practically small bound.
+        // This is the deterministic form of "an explicit stop is honored promptly".
         let cancelled = AtomicBool::new(true);
         let mut search = Search::new(position.clone(), &cancelled, None, &table);
         let result = search

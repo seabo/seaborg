@@ -35,12 +35,12 @@ use std::ops::{Add, Neg, Sub};
 ///   -20_100 to 20_099. Scores are position-relative, so the worst a node can do is be mated now
 ///   and the best is to mate on the next ply; no larger mate distance can be reported from the
 ///   position it is measured against. [`Score::is_node_score`] tests this band, and both `search`
-///   and `quiesce` clamp their windows into it before use.
+///   and `quiesce` normalize their windows into it before use.
 /// * *Window bounds* range more widely, since a bound only has to be a threshold to compare
 ///   against, not a value anything can hold. They span the infinities, and in transit they reach
 ///   `Score(20_101)`: [`Score::child_bound`] is exact, so converting the parent bound `mate(0)`
-///   yields one step past the top of the mate band. That value is consumed by the child's entry
-///   clamp and never becomes a score.
+///   yields one step past the top of the mate band. That value is consumed by the child's window
+///   normalization and never becomes a score.
 #[derive(Copy, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Score(i16);
 
@@ -83,8 +83,8 @@ impl Score {
     /// and callers rely on that to keep a null window null. Exactness means the result can sit one
     /// step outside the mate band — `child_bound(mate(0))` is `Score(20_101)`, asking for a value
     /// one better than mating on the next ply, which nothing can attain. Such a bound is
-    /// meaningful as a threshold but is not a score. Callers clamp their windows into the node
-    /// band on entry (see [`Self::is_node_score`]), which is what keeps the excursion from
+    /// meaningful as a threshold but is not a score. Callers normalize their windows into the
+    /// node band on entry (see [`Self::is_node_score`]), which is what keeps the excursion from
     /// reaching a returned score or compounding across plies.
     pub fn child_bound(self) -> Self {
         if self.0 < -20_000 && self.0 > -30_000 {
@@ -348,8 +348,8 @@ mod tests {
                 "{debug} was not recognised as a score variant",
             );
 
-            // `Display` carries the parity assertions that panicked the UCI driver thread in
-            // TASK-54, so formatting each value is the check.
+            // `Display` carries the parity assertions that once panicked the UCI driver thread,
+            // so formatting each value is the check.
             let display = format!("{score}");
             assert!(
                 display.starts_with("cp ") || display.starts_with("mate "),

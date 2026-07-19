@@ -26,7 +26,7 @@ impl Zobrist {
     /// moves keys them the other. Empty squares are therefore skipped. Iterating the board yields
     /// all 64 squares, including empty ones as `Piece::None`, and folding in a key for those made
     /// the full recomputation disagree with the incremental path by the `Piece::None` keys of every
-    /// square whose occupancy changed, splitting one position across two identities (TASK-58).
+    /// square whose occupancy changed, splitting one position across two identities.
     pub fn from_position(pos: &Position) -> Self {
         let mut zob = Zobrist::empty();
         // Piece-squares
@@ -112,7 +112,7 @@ mod tests {
 
     /// The incremental key maintained by `make_move_unchecked` and the full key computed by
     /// `from_position` must never disagree, or the same position occupies two transposition-table
-    /// identities depending on how the search reached it (TASK-58).
+    /// identities depending on how the search reached it.
     #[test]
     fn incremental_and_full_keys_agree_after_every_legal_move() {
         crate::init::init_globals();

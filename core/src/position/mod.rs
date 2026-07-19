@@ -328,9 +328,9 @@ impl Position {
 
                 // Record the en-passant square only when the capture is actually available. A
                 // target no legal move can use must not be hashed, or it splits one position
-                // across two transposition-table identities (TASK-58). The board is already
-                // updated at this point, so the predicate sees the post-push position; `self.turn`
-                // is still `us`, which is why the capturing side is passed explicitly.
+                // across two transposition-table identities. The board is already updated at this
+                // point, so the predicate sees the post-push position; `self.turn` is still `us`,
+                // which is why the capturing side is passed explicitly.
                 if self.has_legal_ep_capture(Square(poss_ep), them) {
                     self.zobrist
                         .update_ep_square(self.ep_square, Some(Square(poss_ep)));
@@ -901,8 +901,8 @@ impl Position {
     ///
     /// This is the predicate that defines the canonical en-passant identity of a position: a target
     /// that no legal move can use does not distinguish the position from the same position with no
-    /// target at all, so it must not be hashed (TASK-58). A pseudo-legal pawn-attack test is not
-    /// enough, because the sole capturer may be pinned, or the capture may expose its own king.
+    /// target at all, so it must not be hashed. A pseudo-legal pawn-attack test is not enough,
+    /// because the sole capturer may be pinned, or the capture may expose its own king.
     ///
     /// Both derivations of the en-passant square must agree, or the same position reached by
     /// playing moves and parsed from FEN would hash differently. This is therefore called from
