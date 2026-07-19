@@ -1,11 +1,11 @@
 ---
 id: TASK-64.17
 title: Replace the yielded-flag ordering buffer with partition-and-shrink selection
-status: Ready to Merge
+status: Changes Requested
 assignee:
   - '@codex'
 created_date: '2026-07-19 13:43'
-updated_date: '2026-07-19 16:33'
+updated_date: '2026-07-19 18:31'
 labels:
   - search
   - move-ordering
@@ -53,8 +53,8 @@ Sequencing. TASK-64.10 adds a phase variant and TASK-64.11 changes capture scori
 - [x] #1 Moves are selected without a per-entry yielded flag, and no entry already yielded is rescanned when selecting the next move
 - [x] #2 The capture segment is partitioned once into good, equal and bad subranges, and each capture phase sorts only its own subrange
 - [x] #3 The phase iterator borrows mutably, so a phase cannot be silently iterated twice through a shared reference
-- [x] #4 Node counts at fixed depth are identical to the pre-change commit on a representative position set, confirming the change is order-preserving
-- [x] #5 The search benchmark is recorded before and after, on an idle machine per BENCHMARKS.md discipline
+- [ ] #4 Node counts at fixed depth are identical to the pre-change commit on a representative position set, confirming the change is order-preserving
+- [ ] #5 The search benchmark is recorded before and after, on an idle machine per BENCHMARKS.md discipline
 - [x] #6 Any constraint on the score range a Loader may assign is either removed or documented and asserted
 - [x] #7 The OrderedMoves doc comment matches the implementation, including its actual size
 - [x] #8 The unsafe in segment construction is either justified by a recorded measurement or replaced with safe indexing
@@ -233,12 +233,43 @@ Verification run on 44c7b5c:
 - git diff b2790cb..44c7b5c over engine, core and src: doc comment plus tests only
 - Target immutability: 44c7b5c is an ancestor of branch tip 47fae77, and the commits after it touch only the task file
 ---
+
+author: @codex
+created: 2026-07-19 18:31
+---
+Merge attempt failed: the integrated result does not compile.
+
+Primary tip tested: c55508b3383577ed9bb62a9ebadb21fc3ecedc1f
+Approved target merged: 44c7b5c (via branch tip 2a01b3f)
+Trial merge: built on a detached HEAD; primary was never advanced and remains at c55508b.
+
+The merge itself is textually clean - git auto-merged engine/src/search.rs with no conflict - but the merged code does not build. TASK-60 (c063b0b, 'complete TT integration across main and quiescence search') landed on master after this task's base aec9992 and added transposition-table stores to the quiescence move loop. That code was written when the phase iterator still yielded &Move. This task changes the iterator to yield Move by value, so the two new call sites are type-incorrect once combined. Neither side is wrong on its own; only the combination fails, which is why review of the immutable target could not have caught it.
+
+Failing command: cargo clippy --workspace --all-targets --all-features -- -D warnings (run with a clean CARGO_TARGET_DIR so the result is not cached)
+
+    error[E0308]: mismatched types
+        --> engine/src/search.rs:1338:64
+         |
+    1338 |                     self.store_quiescence(score, Bound::Lower, mov, history_draws_on_entry);
+         |                          ----------------                      ^^^ expected `&Move`, found `Move`
+         |
+    note: method defined here
+        --> engine/src/search.rs:1443:8
+
+    error[E0614]: type `core::mov::Move` cannot be dereferenced
+        --> engine/src/search.rs:1344:33
+         |
+    1344 |                     best_move = *mov;
+         |                                 ^^^^ can't be dereferenced
+
+    error: could not compile `engine` (lib) due to 2 previous errors
+
+cargo fmt --check passed on the merge commit. cargo test --workspace was not reached, because the workspace does not build.
+
+What the rework needs. Both sites are in the quiescence move loop and both are the same mechanical adjustment this task already made to the other call sites in that loop: pass &mov where a &Move is expected, and assign mov rather than *mov. I have deliberately not made those edits - fixing them is implementation work, not merge or review work.
+
+Two things to check while reworking rather than only making it compile. First, re-run the order-preservation comparison against the new base, since TASK-60 changed what quiescence stores in the transposition table and the previous byte-identical evidence was gathered against aec9992, before that landed; identical node counts against the old base do not carry over to the new one. Second, confirm store_quiescence is still given the intended move now that the loop yields by value, rather than only that it type-checks.
+
+Scope note for whoever picks this up: rebasing the approved target is not the route. The approved SHA 44c7b5c is pinned to this approval, and this needs a real merge of current master into the task branch, with the two call sites fixed on top and a fresh review of the result.
+---
 <!-- COMMENTS:END -->
-
-## Final Summary
-
-<!-- SECTION:FINAL_SUMMARY:BEGIN -->
-Replaced the yielded-flag ordering buffer with a shrinking selection sort over segment ranges. Selection now takes the first maximum among the remaining entries and rotates it to the front, so entries already drawn are never rescanned and draining a segment costs about n^2/2 comparisons rather than n^2. The capture segment is partitioned once into good, equal and bad subranges at load time, so each capture phase sorts only its own share instead of rescanning the whole segment. The phase iterator is now produced from a mutable borrow and yields Move by value, removing the shared-borrow-that-mutates hazard. Underpromotions are expanded eagerly at promotion-load time, while the promotion segment is still in generation order, because in-place selection would otherwise make their order depend on how the promotion phase sorted. Folded in: the i16::MIN seed constraint is removed by seeding from the first remaining entry, the PhaseIter pass-through is gone, the six segment setters and accessors collapse into one close_segment helper plus safe slice indexing, the raw-pointer segment construction is replaced with safe indexing, and the doc comment now states the guarantee the type actually provides at its measured size of 1704 bytes.
-
-Verified at 44c7b5c: cargo fmt --check, cargo clippy --workspace --all-targets --all-features -- -D warnings (clean CARGO_TARGET_DIR, no warnings), and cargo test --workspace (294 tests, 0 failed, 2 pre-existing ignored), including a perft run that drains every phase. Order preservation is established both empirically (byte-identical UCI info streams against base aec9992 over 65 positions to depth 10, 312,863,482 nodes, independently reproduced over 12 positions to depth 9) and by construction: the base SelectionSort only set flags without reordering, so base underpromotions were also derived from a generation-order promotion segment, and the capture-first promotion chaining, the bad-capture remainder and the killer and quiet dedup sets are each order-equivalent to the base. Search benchmark measured round-robin against the base, -6.2% by the implementer over six paired rounds and -6.7% and -7.3% independently over four; BENCHMARKS.md is deliberately unchanged because neither run had an idle machine.
-<!-- SECTION:FINAL_SUMMARY:END -->
