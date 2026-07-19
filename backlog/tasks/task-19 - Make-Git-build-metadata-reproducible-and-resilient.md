@@ -1,11 +1,11 @@
 ---
 id: TASK-19
 title: Make Git build metadata reproducible and resilient
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-19 15:03'
+updated_date: '2026-07-19 15:12'
 labels:
   - build
   - metadata
