@@ -604,12 +604,14 @@ impl Table {
     /// Replacement is decided here, against the cluster as it is now, and never against a slot
     /// chosen at probe time. Two cases are distinguished:
     ///
-    /// * **Same-key update.** If the cluster already holds this key, that slot is the target. The
-    ///   entry is refreshed unless the existing one is strictly more valuable — deeper, stamped
-    ///   with the current age, and not being upgraded to an exact bound — because re-searching a
-    ///   position to a shallower depth is not a reason to throw away a deeper result. A store
-    ///   without a move keeps the move already recorded, which is otherwise a common way for a
-    ///   fail-low re-search to erase a usable ordering hint.
+    /// * **Same-key update.** If the cluster already holds this key, the existing and incoming
+    ///   entries are compared by the same depth, exact-bound and relative-age quality used for a
+    ///   clash. Draft no longer measures comparable effort by itself: main search and quiescence
+    ///   both write the table, and quiescence uses a reserved draft regardless of how much capture
+    ///   search produced its result. The exact bonus therefore improves a candidate's effective
+    ///   depth instead of overriding depth altogether. Ties refresh the entry. A store without a
+    ///   move keeps the move already recorded, which is otherwise a common way for a fail-low
+    ///   re-search to erase a usable ordering hint.
     /// * **Clash.** Otherwise a victim is chosen from the whole cluster by quality: shallower is
     ///   more replaceable, an exact bound is worth [`EXACT_BONUS`] plies of depth, and each step of
     ///   relative age costs [`AGE_PENALTY`] plies. Empty slots are always taken first. So a shallow
@@ -639,9 +641,8 @@ impl Table {
             if occupied && (key_xor_data ^ data) == key {
                 let existing = Snapshot::from_data(key, data);
 
-                if existing.depth > depth
-                    && existing.age == age
-                    && !(bound == Bound::Exact && existing.bound != Bound::Exact)
+                if replacement_quality(existing.depth, existing.bound, age, existing.age)
+                    > replacement_quality(depth, bound, age, age)
                 {
                     return;
                 }
@@ -656,13 +657,7 @@ impl Table {
 
             let quality = if occupied {
                 let existing = Snapshot::from_data(key_xor_data ^ data, data);
-                existing.depth as i32
-                    + if existing.bound == Bound::Exact {
-                        EXACT_BONUS
-                    } else {
-                        0
-                    }
-                    - AGE_PENALTY * relative_age(age, existing.age) as i32
+                replacement_quality(existing.depth, existing.bound, age, existing.age)
             } else {
                 i32::MIN
             };
@@ -727,6 +722,13 @@ fn pack(mov: PackedMove, score: Score, depth: u8, bound: Bound, age: u8) -> u64 
 #[inline(always)]
 fn relative_age(current: u8, entry: u8) -> u8 {
     (current.wrapping_add(AGE_MODULUS).wrapping_sub(entry)) & AGE_MASK
+}
+
+/// Rank a live entry for replacement decisions; higher-quality entries are harder to replace.
+#[inline(always)]
+fn replacement_quality(depth: u8, bound: Bound, current_age: u8, entry_age: u8) -> i32 {
+    depth as i32 + i32::from(bound == Bound::Exact) * EXACT_BONUS
+        - AGE_PENALTY * relative_age(current_age, entry_age) as i32
 }
 
 #[cfg(test)]
@@ -1092,34 +1094,107 @@ mod tests {
     }
 
     #[test]
-    fn a_shallower_same_key_store_still_lands_when_it_upgrades_the_bound() {
+    fn a_quiescence_exact_store_does_not_erase_a_deeper_main_search_bound() {
         let table = Table::new(1);
         let key = 0x89_u64;
 
-        store(&table, key, 400, 20, Bound::Upper);
-        store(&table, key, 1, 4, Bound::Exact);
+        store(&table, key, 400, 8, Bound::Lower);
+        store(&table, key, 1, 0, Bound::Exact);
 
         let snapshot = table.probe(key).unwrap();
-        assert_eq!(snapshot.depth(), 4);
-        assert_eq!(snapshot.bound(), Bound::Exact);
+        assert_eq!(snapshot.score(), Score::cp(400));
+        assert_eq!(snapshot.depth(), 8);
+        assert_eq!(snapshot.bound(), Bound::Lower);
     }
 
     #[test]
-    fn a_stale_deeper_same_key_entry_is_refreshed_by_a_new_search() {
-        let table = Table::new(1);
-        let key = 0x8a_u64;
+    fn same_key_replacement_compares_depth_bound_and_age_as_one_quality() {
+        struct Case {
+            name: &'static str,
+            old_depth: u8,
+            old_bound: Bound,
+            ages_elapsed: u8,
+            new_depth: u8,
+            new_bound: Bound,
+            new_wins: bool,
+        }
 
-        store(&table, key, 400, 20, Bound::Exact);
-        table.advance_age();
-        store(&table, key, 1, 4, Bound::Exact);
+        let cases = [
+            Case {
+                name: "equal depth exact upgrades upper",
+                old_depth: 8,
+                old_bound: Bound::Upper,
+                ages_elapsed: 0,
+                new_depth: 8,
+                new_bound: Bound::Exact,
+                new_wins: true,
+            },
+            Case {
+                name: "equal depth upper does not downgrade exact",
+                old_depth: 8,
+                old_bound: Bound::Exact,
+                ages_elapsed: 0,
+                new_depth: 8,
+                new_bound: Bound::Upper,
+                new_wins: false,
+            },
+            Case {
+                name: "exact bonus bridges four plies",
+                old_depth: 8,
+                old_bound: Bound::Upper,
+                ages_elapsed: 0,
+                new_depth: 4,
+                new_bound: Bound::Exact,
+                new_wins: true,
+            },
+            Case {
+                name: "exact bonus does not bridge five plies",
+                old_depth: 8,
+                old_bound: Bound::Lower,
+                ages_elapsed: 0,
+                new_depth: 3,
+                new_bound: Bound::Exact,
+                new_wins: false,
+            },
+            Case {
+                name: "one age offsets eight plies",
+                old_depth: 12,
+                old_bound: Bound::Upper,
+                ages_elapsed: 1,
+                new_depth: 4,
+                new_bound: Bound::Upper,
+                new_wins: true,
+            },
+            Case {
+                name: "depth can outweigh one stale age",
+                old_depth: 13,
+                old_bound: Bound::Lower,
+                ages_elapsed: 1,
+                new_depth: 4,
+                new_bound: Bound::Lower,
+                new_wins: false,
+            },
+        ];
 
-        let snapshot = table.probe(key).unwrap();
-        assert_eq!(
-            snapshot.depth(),
-            4,
-            "a stale entry blocked the current search"
-        );
-        assert_eq!(snapshot.age(), 1);
+        for (index, case) in cases.iter().enumerate() {
+            let table = Table::new(1);
+            let key = 0x8a_u64 + index as u64;
+            store(&table, key, 400, case.old_depth, case.old_bound);
+            for _ in 0..case.ages_elapsed {
+                table.advance_age();
+            }
+            store(&table, key, 1, case.new_depth, case.new_bound);
+
+            let snapshot = table.probe(key).unwrap();
+            let expected_score = if case.new_wins { 1 } else { 400 };
+            assert_eq!(snapshot.score(), Score::cp(expected_score), "{}", case.name);
+            assert_eq!(
+                snapshot.age(),
+                u8::from(case.new_wins) * case.ages_elapsed,
+                "{}",
+                case.name
+            );
+        }
     }
 
     #[test]
@@ -1131,10 +1206,10 @@ mod tests {
         let mov = Move::build(Square::G1, Square::F3, None, MoveType::QUIET);
 
         table.store(key, Score::cp(10), 5, Bound::Exact, &mov);
-        table.store(key, Score::cp(-10), 6, Bound::Upper, &Move::null());
+        table.store(key, Score::cp(-10), 10, Bound::Upper, &Move::null());
 
         let snapshot = table.probe(key).unwrap();
-        assert_eq!(snapshot.depth(), 6);
+        assert_eq!(snapshot.depth(), 10);
         assert_eq!(
             snapshot.mov(),
             Some(PackedMove::from_move(&mov)),

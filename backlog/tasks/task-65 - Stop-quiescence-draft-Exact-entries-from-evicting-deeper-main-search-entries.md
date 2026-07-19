@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-19 15:07'
-updated_date: '2026-07-19 20:42'
+updated_date: '2026-07-19 20:47'
 labels:
   - transposition-table
   - search
@@ -52,3 +52,11 @@ Note that the cross-slot victim-selection path already handles this correctly by
 3. Replace the old shallow-Exact special-case tests with a table-driven same-key policy matrix covering quiescence draft versus deeper main-search bounds, equal depths and bounds, quality boundaries, and differing ages; retain cross-slot tests unchanged.
 4. Run focused TT/search tests, capture warm-versus-cold and hash-load node-count evidence, compare the search benchmark against the pre-change baseline on this machine, then run the repository-required formatting, strict Clippy, and workspace test gates.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented one shared replacement_quality calculation for same-key and cross-slot decisions. Incoming same-key entries are current-age candidates and replace on equal or greater quality; move-less accepted updates still retain the existing move. The direct depth-8 Lower versus draft-0 Exact regression now retains the main-search entry, while the policy matrix pins equal-depth Exact preference, the four-ply Exact bonus boundary, and the eight-ply age penalty boundary.
+
+Cross-slot victim-selection control flow and constants are unchanged; it now calls the extracted calculation that is algebraically identical to the previous inline expression. Focused TT tests and the warm-versus-cold search test pass. Same-machine base/target Criterion medians were 40.055/41.643 us (+4.0%) with deadline and 40.916/40.642 us (-0.7%) without; both are within the documented 5% investigation threshold. Hash-load base/target node counts were 2,501,994/2,501,994 (startpos), 5,241,036/5,241,117 (kiwipete), 5,780,828/5,780,828 (middlegame), and 1,839,611/1,839,719 (endgame), all unchanged or under +0.01%. Repository gates pass: fmt, strict Clippy, and workspace tests (336 passed, 0 failed, 2 ignored).
+<!-- SECTION:NOTES:END -->
