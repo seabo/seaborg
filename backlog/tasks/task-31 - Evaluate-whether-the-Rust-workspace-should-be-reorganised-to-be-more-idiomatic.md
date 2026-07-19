@@ -5,10 +5,12 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 23:35'
-updated_date: '2026-07-19 21:10'
+updated_date: '2026-07-19 21:11'
 labels:
   - architecture
 dependencies: []
+modified_files:
+  - docs/workspace-layout-assessment.md
 priority: low
 type: chore
 ordinal: 34000
@@ -36,3 +38,9 @@ Review the overall layout of the Cargo workspace (crate boundaries, module organ
 3. Add a durable architecture assessment with concrete recommendations, rationale, effort estimates, and mappings to existing or new follow-up tasks.
 4. Run repository-required checks, record evidence, commit the immutable implementation, and hand the task to independent review.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Added `docs/workspace-layout-assessment.md` with the package/target inventory, dependency graph, convention analysis, effort-ranked recommendations, and justified no-change conclusion for directory and package splitting. Existing TASK-20 and TASK-21 are the separate follow-ups for every recommended change; no additional task is needed.
+<!-- SECTION:NOTES:END -->
