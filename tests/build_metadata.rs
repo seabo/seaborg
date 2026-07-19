@@ -160,6 +160,9 @@ fn reports_no_ref_for_missing_or_malformed_head() {
 
 const SYMBOLIC_HEAD: &str = "ref: refs/heads/master\n";
 
+/// What the reftable backend leaves in `HEAD`: a fixed sentinel, never the checked-out branch.
+const REFTABLE_HEAD: &str = "ref: refs/heads/.invalid\n";
+
 /// Cargo does not read a missing `rerun-if-changed` path as "unchanged": it holds the unit dirty
 /// while the path is absent, and the build script keeps re-declaring it, so the crate would
 /// recompile on every build forever. No layout may produce a path that is not there.
@@ -169,20 +172,31 @@ fn never_watches_a_path_that_does_not_exist() {
     let git = scratch.dir(".git");
 
     // Every combination of the parts that may independently be present or absent.
-    for head in [None, Some(SYMBOLIC_HEAD), Some("cafebabe\n")] {
+    for head in [
+        None,
+        Some(SYMBOLIC_HEAD),
+        Some(REFTABLE_HEAD),
+        Some("cafebabe\n"),
+    ] {
         for refs_present in [false, true] {
             for packed_present in [false, true] {
-                let _ = fs::remove_dir_all(git.join("refs"));
-                let _ = fs::remove_file(git.join("packed-refs"));
-                if refs_present {
-                    scratch.dir(".git/refs/heads");
-                }
-                if packed_present {
-                    scratch.file(".git/packed-refs");
-                }
+                for reftable_present in [false, true] {
+                    let _ = fs::remove_dir_all(git.join("refs"));
+                    let _ = fs::remove_file(git.join("packed-refs"));
+                    let _ = fs::remove_dir_all(git.join("reftable"));
+                    if refs_present {
+                        scratch.dir(".git/refs/heads");
+                    }
+                    if packed_present {
+                        scratch.file(".git/packed-refs");
+                    }
+                    if reftable_present {
+                        scratch.file(".git/reftable/tables.list");
+                    }
 
-                for path in watch_paths(&git, &git, head) {
-                    assert!(path.exists(), "declared a missing path: {}", path.display());
+                    for path in watch_paths(&git, &git, head) {
+                        assert!(path.exists(), "declared a missing path: {}", path.display());
+                    }
                 }
             }
         }
@@ -260,6 +274,51 @@ fn resolves_refs_against_the_common_directory_in_a_linked_worktree() {
     assert_watches(
         &watch_paths(&git, &common, Some(SYMBOLIC_HEAD)),
         &[&head, &heads],
+    );
+}
+
+/// Lay out a `git_dir` the way the reftable backend does: a stack of table files, `refs` reduced to
+/// a placeholder *file* naming the format, and a HEAD that never names the checked-out branch.
+fn reftable_layout(scratch: &Scratch, git_dir: &str) -> PathBuf {
+    scratch.file(&format!("{git_dir}/HEAD"));
+    scratch.file(&format!("{git_dir}/refs/heads"));
+    scratch.file(&format!("{git_dir}/reftable/tables.list"));
+    scratch.dir(&format!("{git_dir}/reftable"))
+}
+
+/// Under reftable the files-backend landmarks are all inert — `refs/heads` is a placeholder file,
+/// `packed-refs` never appears, and HEAD holds a fixed sentinel instead of the branch — so watching
+/// them observes nothing when a commit lands and the embedded revision goes silently stale. The
+/// table stack is the only thing a commit touches.
+#[test]
+fn watches_the_table_stack_under_the_reftable_backend() {
+    let scratch = Scratch::new("watch-reftable");
+    let git = scratch.dir(".git");
+    let stack = reftable_layout(&scratch, ".git");
+    let head = git.join("HEAD");
+
+    assert_watches(
+        &watch_paths(&git, &git, Some(REFTABLE_HEAD)),
+        &[&head, &stack],
+    );
+}
+
+/// A linked worktree keeps a stack of its own: the branch is a shared ref in the common stack,
+/// while per-worktree refs including HEAD live in the worktree's. Either can move the resolved
+/// revision, so both are watched — and the main checkout, where the two directories are the same,
+/// must not declare it twice.
+#[test]
+fn watches_both_table_stacks_in_a_linked_reftable_worktree() {
+    let scratch = Scratch::new("watch-reftable-worktree");
+    let common = scratch.dir(".git");
+    let shared_stack = reftable_layout(&scratch, ".git");
+    let git = scratch.dir(".git/worktrees/task");
+    let worktree_stack = reftable_layout(&scratch, ".git/worktrees/task");
+    let head = git.join("HEAD");
+
+    assert_watches(
+        &watch_paths(&git, &common, Some(REFTABLE_HEAD)),
+        &[&head, &shared_stack, &worktree_stack],
     );
 }
 

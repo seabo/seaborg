@@ -925,7 +925,7 @@ impl<'engine> Search<'engine> {
         let mut did_raise_alpha = false;
 
         'move_loop: while moves.load_next_phase(MoveLoader::from(self, tt_mov, ply)) {
-            for mov in &moves {
+            for mov in &mut moves {
                 if self.stopping() {
                     break 'move_loop;
                 }
@@ -935,10 +935,10 @@ impl<'engine> Search<'engine> {
 
                 // Start reporting which move we're considering after 3 seconds have elapsed.
                 if T::is_master() && Node::root() && self.trace.live_elapsed().as_millis() > 3000 {
-                    self.emit_current_move(depth, mov, move_count);
+                    self.emit_current_move(depth, &mov, move_count);
                 }
 
-                self.stack[ply].mov = *mov;
+                self.stack[ply].mov = mov;
 
                 // Step 16. Reductions & extensions.
                 //          TODO
@@ -948,7 +948,7 @@ impl<'engine> Search<'engine> {
 
                 // Step 18. Make the move.
                 // SAFETY: ordered moves originate from move generation for `self.pos`.
-                unsafe { self.pos.make_move_unchecked(mov) };
+                unsafe { self.pos.make_move_unchecked(&mov) };
 
                 // Step 19. Search non-PV move with null window.
                 if !Node::pv() || move_count > 1 {
@@ -998,7 +998,7 @@ impl<'engine> Search<'engine> {
                 // arbitrary first generated one. An abort during this move's subtree leaves `value`
                 // meaningless, so only a move searched without stopping may be adopted.
                 if Node::root() && value > best_value && !self.stopping() {
-                    self.root_fallback = Some(*mov);
+                    self.root_fallback = Some(mov);
                 }
 
                 // Step 22. Check for new best move.
@@ -1006,7 +1006,7 @@ impl<'engine> Search<'engine> {
                     best_value = value;
 
                     if value > alpha {
-                        best_move = *mov;
+                        best_move = mov;
 
                         if Node::pv() && value < beta {
                             // Only an exact score at a PV node establishes a variation worth
@@ -1014,7 +1014,7 @@ impl<'engine> Search<'engine> {
                             // never searched with a full window, so publishing it would splice a
                             // non-PV continuation into the reported line. The root always lands
                             // here: its beta is `INF_P` and `value` is asserted below it.
-                            self.pvt.copy_to(ply, *mov);
+                            self.pvt.copy_to(ply, mov);
 
                             alpha = value;
                             did_raise_alpha = true;
@@ -1023,7 +1023,7 @@ impl<'engine> Search<'engine> {
                             debug_assert!(value >= beta);
                             // beta-cutoff; record killer and history
                             if mov.is_quiet() {
-                                self.kt.store(*mov, ply);
+                                self.kt.store(mov, ply);
                             }
 
                             // self.history.inc(
@@ -1444,13 +1444,13 @@ impl<'engine> Search<'engine> {
         let mut best_move = Move::null();
         let mut moves = OrderedMoves::new();
         'move_loop: while moves.load_next_phase(QMoveLoader::from(self)) {
-            for mov in &moves {
+            for mov in &mut moves {
                 if self.stopping() {
                     break 'move_loop;
                 }
 
                 // SAFETY: quiescence moves originate from move generation for `self.pos`.
-                unsafe { self.pos.make_move_unchecked(mov) };
+                unsafe { self.pos.make_move_unchecked(&mov) };
                 let child =
                     self.quiesce::<T, Node>(beta.child_bound(), alpha.child_bound(), ply + 1);
                 self.pos.unmake_move();
@@ -1459,13 +1459,13 @@ impl<'engine> Search<'engine> {
                 let score = child?.neg().inc_mate();
 
                 if score >= beta {
-                    self.store_quiescence(score, Bound::Lower, mov, history_draws_on_entry);
+                    self.store_quiescence(score, Bound::Lower, &mov, history_draws_on_entry);
                     return Some(beta);
                 }
 
                 if score > alpha {
                     alpha = score;
-                    best_move = *mov;
+                    best_move = mov;
                 }
             }
         }

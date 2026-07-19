@@ -112,12 +112,17 @@ fn revision_watch_paths() -> Vec<PathBuf> {
 /// watched instead. Cargo scans a watched directory recursively, so creating, deleting, renaming,
 /// or rewriting the ref file all register — which covers a plain commit as well as both directions
 /// of the loose/packed transition that `git pack-refs` and `git gc` perform.
+///
+/// None of that applies under the reftable backend, which stores refs in a stack of table files
+/// instead of one file per ref; see [`reftable_stacks`] for what is watched there instead.
 pub fn watch_paths(git_dir: &Path, common_dir: &Path, head_contents: Option<&str>) -> Vec<PathBuf> {
     let mut paths = vec![git_dir.join("HEAD")];
 
-    // A detached HEAD holds the commit itself, so no ref backs it and there is nothing further to
-    // watch.
-    if let Some(reference) = head_ref(head_contents) {
+    if let Some(stacks) = reftable_stacks(git_dir, common_dir) {
+        paths.extend(stacks);
+    } else if let Some(reference) = head_ref(head_contents) {
+        // Reaching here means a symbolic HEAD naming a branch. A detached HEAD holds the commit
+        // itself, so no ref backs it and there is nothing beyond HEAD to watch.
         let refs_root = common_dir.join("refs");
 
         // The ref's own directory may be absent while the ref is packed, and a hierarchical name
@@ -144,6 +149,36 @@ pub fn watch_paths(git_dir: &Path, common_dir: &Path, head_contents: Option<&str
 
     paths.retain(|path| path.exists());
     paths
+}
+
+/// The reftable stacks backing this repository, or `None` if it uses the one-file-per-ref backend.
+///
+/// Under reftable every ref lives in a stack of table files under a `reftable` directory, and the
+/// familiar files-backend landmarks become inert: `refs` survives only as a placeholder *file*
+/// naming the format, `packed-refs` is absent, and `HEAD` holds the fixed sentinel
+/// `ref: refs/heads/.invalid` rather than the checked-out branch. Watching those observes nothing
+/// when a commit lands, which leaves the crate Fresh and the embedded revision silently stale.
+///
+/// The backend is detected from the layout rather than by asking Git, so this needs no subprocess
+/// and no minimum Git version — `git rev-parse --show-ref-format` only exists from 2.45.
+///
+/// A linked worktree has a stack of its own: shared refs such as the branch live in the common
+/// stack, while per-worktree refs including `HEAD` live in the worktree's. Either can move the
+/// revision, so both are watched. The stack is per-repository rather than per-ref, so unrelated ref
+/// updates — a fetch, a stash — also trigger a rebuild. That is the cost of never going stale, and
+/// it is bounded: the rebuild is of this crate alone.
+fn reftable_stacks(git_dir: &Path, common_dir: &Path) -> Option<Vec<PathBuf>> {
+    let mut stacks: Vec<PathBuf> = Vec::new();
+
+    for stack in [common_dir.join("reftable"), git_dir.join("reftable")] {
+        // A linked worktree resolves these to two distinct directories; the main checkout resolves
+        // both to the same one, which must not be declared twice.
+        if stack.is_dir() && !stacks.contains(&stack) {
+            stacks.push(stack);
+        }
+    }
+
+    (!stacks.is_empty()).then_some(stacks)
 }
 
 /// The deepest existing directory at or above `path`, or `None` if no ancestor of it exists.

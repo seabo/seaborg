@@ -1,7 +1,7 @@
 use super::info::{format_search_event, format_search_outcome};
 use super::options::EngineOpt;
 use super::search::{SearchEngine, SearchEvent, SearchHandle, SearchLimit};
-use super::time::TimingMode;
+use super::time::{self, TimingMode};
 use super::uci::{self, Command};
 use core::position::Position;
 
@@ -161,7 +161,9 @@ where
                         let move_time = tc.to_move_time(pos.move_number(), pos.turn());
                         SearchLimit::Time(Duration::from_millis(move_time))
                     }
-                    TimingMode::MoveTime(time) => SearchLimit::Time(Duration::from_millis(time)),
+                    TimingMode::MoveTime(time) => {
+                        SearchLimit::Time(Duration::from_millis(time::move_time_budget(time)))
+                    }
                 };
                 active_search = Some(search_engine.start(pos.clone(), limit));
             }
