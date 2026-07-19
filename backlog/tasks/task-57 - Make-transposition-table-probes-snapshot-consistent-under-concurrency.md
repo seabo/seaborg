@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-19 00:00'
-updated_date: '2026-07-19 12:26'
+updated_date: '2026-07-19 12:55'
 labels:
   - transposition-table
   - performance
@@ -74,3 +74,34 @@ Rewrite engine/src/tt.rs from scratch; update the search call sites to the new A
 
 10. Measurement (AC#8, #15). Add a `benches/tt.rs` Criterion harness for large-table construction, clear, single-thread probe/store throughput and a multi-worker mixed load; record results and retained lifecycle costs in BENCHMARKS.md, measured round-robin against the base commit.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+`engine/src/tt.rs` was rewritten; `Table`, `Probe`, `WritableEntry` and the packed `Entry` are gone. Call sites in `engine/src/search.rs` moved to the new API, and `Tracer::hash_clash` became `hash_miss`.
+
+Evidence per acceptance criterion (all test names are in `engine/src/tt.rs` unless noted):
+
+- AC#1 cluster layout: `Cluster` is `#[repr(C, align(64))]` over four 16-byte slots. `cluster_is_one_cache_line_and_slots_fill_it`, `clusters_are_cache_line_aligned_in_the_allocation`, `a_cluster_holds_several_distinct_keys_at_once`.
+- AC#2 snapshot identity: `probe` returns an owned `Snapshot`, not a borrow. `a_replacement_between_probe_and_consumption_cannot_change_the_snapshot` drives the adverse schedule deterministically by evicting the whole cluster and asserting the already-consumed value is unchanged.
+- AC#3 verification strength: full 64-bit key, not a signature. The module docs quantify why at a 1GB table and ~10^9 probes (a 16-bit signature admits ~10^4 wrong-position acceptances per search, and move legality does not cover move-less entries). `no_single_bit_key_variation_is_accepted`, `a_different_key_sharing_a_cluster_index_is_never_accepted`, `a_move_less_entry_is_stored_and_found`.
+- AC#4 replacement: `a_shallow_entry_does_not_evict_a_deeper_exact_one`, `an_exact_bound_outranks_an_equally_deep_inexact_one`, `an_older_entry_is_evicted_before_a_deeper_current_one`, `a_same_key_store_updates_in_place_rather_than_consuming_a_slot`, `a_shallower_same_key_store_does_not_erase_a_deeper_result`, `a_shallower_same_key_store_still_lands_when_it_upgrades_the_bound`, `a_stale_deeper_same_key_entry_is_refreshed_by_a_new_search`, `a_move_less_update_keeps_the_move_already_recorded`, `empty_slots_are_filled_before_anything_is_evicted`.
+- AC#5 lock-free, race-free: relaxed loads/stores only, no CAS or retry on probe/store. `a_replacement_between_probe_and_consumption_cannot_change_the_snapshot` and `a_different_key_sharing_a_cluster_index_is_never_accepted` are the two deterministic cases the criterion names.
+- AC#6 age and invalidation: clearing is physical and takes `&mut self`, so `Arc::get_mut` in `SearchEngine::clear_hash` makes the ownership boundary a type-system property rather than a comment. `clear_discards_every_entry_and_resets_the_age`, `age_wraps_without_invalidating_entries`, `relative_age_is_wrapping_and_never_negative`, `concurrent_age_advances_never_invalidate_entries`, and `searches_reuse_the_shared_table_until_the_owner_clears_it` in search.rs.
+- AC#7 sizing and telemetry: saturating arithmetic, cluster count rounds *down*. `sizing_rounds_down_and_never_exceeds_the_request` asserts the allocation never exceeds the request and is the largest that fits; `sizing_boundaries_degrade_to_one_cluster_and_saturate`; `hashfull_is_total_for_every_supported_capacity` (the old code panicked below 1000 entries), `hashfull_samples_the_whole_table_not_a_prefix`, `hashfull_rises_with_occupancy`.
+- AC#8/AC#15 measurement: `benches/tt.rs` plus the BENCHMARKS.md 'Transposition table' section. Nodes to depth 10 fall 2.5% (exact, reproduces identically); per-node throughput falls ~3%; time to depth is level within drift. Retained costs are documented, including the linear clear as a deliberate regression against the old constant-time generation bump.
+- AC#9 semantics: packed-field invariants are documented at the layout constants and asserted in `Snapshot::from_data`/`Slot::store`. `reserved_bits_stay_zero_and_empty_slots_are_all_zero`, `round_trips_every_packed_field`. No legacy API remains.
+- AC#10 test coverage: the 34 tests in the module.
+- AC#11 shared-reference API: `probe`, `store` and `hashfull` all take `&self`; `table_is_send_and_sync`, `every_worker_can_consume_every_other_workers_entries`.
+- AC#12 bounded lock-freedom: no mutex, no CAS, no retry on either hot-path operation. The native-atomic requirement is explicit and enforced by `compile_error!` under `cfg(not(target_has_atomic = "64"))` — there is deliberately no lock-based fallback.
+- AC#13 multi-word protocol: documented on `Slot` (write order, relaxed orderings and why they suffice, bounded retry-free reads). `a_hand_constructed_torn_pair_is_rejected` builds the hybrid by hand rather than hoping to race into one.
+- AC#14 never invent information: `concurrent_writers_and_readers_never_invent_an_entry` makes each key's score a known function of the key and asserts every accepted snapshot satisfies it, so a race may lose an entry but cannot fabricate one. `every_worker_can_consume_every_other_workers_entries` covers worker-agnostic replacement.
+- AC#16 adverse schedules: the deterministic tests above for probe-versus-replace, torn publication, and age wrap; the threaded tests for competing writers; `searches_reuse_the_shared_table_until_the_owner_clears_it` for the administrative quiescence boundary.
+
+Deliberate decisions the reviewer should weigh:
+
+1. Entry width doubled to 16 bytes to carry the full key, halving entries per megabyte. This is the central trade of the task and it is measured, not assumed: `hashfull` reports 607 against the base's 294 at depth 10 and the same hash size, yet the node count still falls 2.5%.
+2. Clearing became linear where it was constant-time. Justified in BENCHMARKS.md: the generation bump left stale entries physically present, needed a table walk on wrap anyway, and could revive an entry when the counter lapped.
+3. `Table::probe`/`store` take a raw `u64` key rather than `&Position`. Positions cannot be constructed with chosen keys, so a `&Position` API would have made the adversarial index/key tests inexpressible.
+4. `SearchEngine::clear_hash` now takes `&mut self` and panics if a search still holds the table. Both existing callers already join their worker first, so the boundary is met; the panic is deliberate, since the alternative is silently clearing under a live worker.
+<!-- SECTION:NOTES:END -->
