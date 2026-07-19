@@ -1,11 +1,11 @@
 ---
 id: TASK-57
 title: Rewrite the transposition table around clustered verified snapshots
-status: Changes Requested
+status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-19 00:00'
-updated_date: '2026-07-19 13:56'
+updated_date: '2026-07-19 14:06'
 labels:
   - transposition-table
   - performance
@@ -471,6 +471,54 @@ record, engine/src/perft.rs contains no transposition-table reference and neithe
 benches/perft.rs nor benches/movegen.rs imports the table, so those two harnesses
 cannot observe this change; the meaningful hot-path evidence is the depth-10 node
 count and benches/search.rs, both already recorded against base 9b7bf33.
+---
+
+author: @codex
+created: 2026-07-19 14:06
+---
+Conflict resolved, new implementation target
+Branch: task-57-tt-clustered-snapshots
+Previous target: aa55cd18a5eb3f0a5e83b6bc6ec1e3b4e0e37e1f
+New implementation target: 0eec046 (merge of master 08e9261 into the task branch)
+Resolved: the merge conflict recorded in the eject comment above
+
+Authorised directly by the human owner, who waived a fresh review on the grounds
+that the change is confined to comments. Recording that plainly: this target has
+not been independently reviewed, and the comment-only characterisation below is
+the evidence for why that was judged acceptable.
+
+What changed since aa55cd1:
+- The one conflicting hunk at the quiescence early-cutoff gate now takes master's
+  comment line ("// the rule is still out of reach.") above this branch's code
+  line (`if let Some(entry) = tt_entry.filter(...)`). Nothing else in the hunk.
+- Everything else came from master through the merge, untouched by hand.
+
+On the process-artifact references: no hand-editing was needed beyond that one
+line. Master's 74b53d6 had already removed them, and because this branch never
+modified those particular comment lines, the merge simply took master's cleaned
+version. A sweep of the merged tree for TASK-nnn, AC#n, REV-n-nn and doc-n across
+all .rs files outside backlog/ now returns nothing.
+
+Scope of interaction, checked rather than assumed:
+- engine/src/search.rs is the only file both master and this branch changed since
+  the base commit.
+- Master's two commits to it, 13af47e and 74b53d6, are both comment-only, so the
+  merge carries no semantic interaction to reason about.
+- Master's other work since the base (TASK-42 in engine/src/time.rs, the strength
+  tooling, the TASK-63/64 backlog) touches no file this task touches.
+
+Verification on 0eec046:
+- cargo fmt --check: clean
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean on a
+  clean CARGO_TARGET_DIR, no warnings
+- cargo test --workspace: 284 passed, 0 failed, 2 ignored (both pre-existing). The
+  engine suite went 231 -> 235 because master brought four tests with it.
+- Old transposition API confirmed absent from the merged search.rs (no tt_hit, no
+  Probe::, no into_inner, no write(&self.pos)); the snapshot API and the Drop join
+  both confirmed present, so the merge did not partially revert this task's work.
+
+The sixteen acceptance criteria and the final summary continue to describe this
+work accurately; the merge changed one comment line and nothing else of substance.
 ---
 <!-- COMMENTS:END -->
 
