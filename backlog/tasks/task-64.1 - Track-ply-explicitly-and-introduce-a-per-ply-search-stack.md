@@ -1,11 +1,11 @@
 ---
 id: TASK-64.1
 title: Track ply explicitly and introduce a per-ply search stack
-status: Changes Requested
+status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-07-19 13:30'
-updated_date: '2026-07-19 19:27'
+updated_date: '2026-07-19 19:29'
 labels:
   - search
   - architecture
@@ -57,13 +57,19 @@ This refactor should be behaviour-preserving. The search test suite in search.rs
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Add `Depth = i16` and `MAX_PLY` to search.rs; thread an explicit `ply: usize` through `search`/`search_inner`/`quiesce`/`quiesce_inner`/`quiesce_evasions`, root ply 0, child ply+1. Delete `search_depth` and the `draft = search_depth - depth` derivation.
-2. Make depth signed: `should_razor`, recursion (`depth - 1`), Step 5 becomes `depth <= 0 -> quiescence`, TT depth comparisons widen to `Depth`, TT stores clamp back into the u8 draft field.
-3. Introduce `SearchStack`/`StackEntry` (static eval, move played, excluded move) owned by `Search` and indexed by ply; razoring reads the stored eval, the move loop records the move played. Cap main-search ply at `MAX_PLY` by diverting to quiescence.
-4. Re-index `KillerTable` by ply (direct `data[ply]`, root slot unused) preserving the existing 20-ply killer reach.
-5. Rewrite `PVTable` to be ply-indexed and stored in forward order: row `ply` holds the line from that ply, `clear_at`/`copy_to` no-op above the nominal ply count so an extended node neither panics nor writes another row. Update pv_table unit tests to ply semantics and the Debug renderer.
-6. Add regression tests: a node searched deeper than its PV table's nominal depth (no panic, legal PV); killer store/probe by ply independent of depth; quiescence reached at a ply below the nominal horizon leaves no stale row.
-7. Run cargo fmt --check, clippy -D warnings, cargo test --workspace.
+Rework against new base master e67091b (TASK-64.17 landed a by-value move-loop iterator after this task's base c55508b).
+
+1. Merge master (e67091b) into task branch task-64.1-explicit-ply-search-stack.
+2. Resolve the four flagged conflicts in engine/src/search.rs, taking BOTH sides at each: keep ply (this branch) and the by-value iterator (master):
+   - Move loop header: MoveLoader::from(self, tt_mov, ply) with 'for mov in &mut moves'.
+   - PV copy: self.pvt.copy_to(ply, mov) (mov now by value, drop the deref).
+   - Killer store: self.kt.store(mov, ply).
+   - Quiescence loop: make_move_unchecked(&mov) with quiesce(..., ply + 1).
+3. Fix the auto-merged-but-broken site git does NOT flag: self.stack[ply].mov = mov; (was *mov; mov is now Move, not &Move).
+4. Grep for any other stack[ply].mov / kt.store / copy_to / MoveLoader::from sites the by-value change touched to be sure no deref-vs-value mismatch remains.
+5. Re-verify: cargo fmt --check, cargo clippy --workspace --all-targets --all-features -- -D warnings, cargo test --workspace (all incl. the seven ply/past-horizon regression tests).
+6. Re-run the behaviour-preservation probe against the NEW base e67091b (the ordering rewrite changes the searched trees, so the old byte-identical comparison vs c55508b no longer applies): depth-8 UCI searches on startpos, Kiwipete and 8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1, comparing merged branch tip vs e67091b for identical info lines.
+7. Commit the resolved merge as the new immutable target; hand off for re-review (target changes, so re-review is required).
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
