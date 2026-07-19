@@ -1,11 +1,11 @@
 ---
 id: TASK-31
 title: Evaluate whether the Rust workspace should be reorganised to be more idiomatic
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-17 23:35'
-updated_date: '2026-07-19 21:24'
+updated_date: '2026-07-19 21:40'
 labels:
   - architecture
 dependencies: []
