@@ -43,6 +43,10 @@ target, not only the latest fix. Check:
 - Negative and boundary-case tests, not merely code presence.
 - Repository-required formatting, linting, tests, and focused verification.
 - Scope discipline and accidental unrelated changes.
+- Comment quality: comments must be interpretable without external context.
+  Treat a comment citing a task ID, acceptance criterion, review finding ID, or
+  Backlog document as a finding, and check whether the underlying reason was
+  stated or merely referenced. Flag comments that restate the code.
 
 Run the repository-required checks yourself on the implementation target rather
 than trusting the handoff: `cargo fmt --check`,
