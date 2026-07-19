@@ -1,11 +1,11 @@
 ---
 id: TASK-64.2
 title: 'Activate the history heuristic with bonus, malus and aging'
-status: In Review
+status: Ready to Merge
 assignee:
   - '@george'
 created_date: '2026-07-19 13:30'
-updated_date: '2026-07-19 21:21'
+updated_date: '2026-07-19 21:31'
 labels:
   - search
   - move-ordering
@@ -36,14 +36,14 @@ Whether history should be retained across moves within a game, rather than reset
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A quiet move causing a beta cutoff receives a depth-scaled history bonus
-- [ ] #2 Quiet moves searched and failing before the cutoff move receive a malus
-- [ ] #3 History values are bounded by a documented gravity or scaling scheme and cannot overflow their storage type
-- [ ] #4 Quiet moves in the ordering Quiet phase are demonstrably ordered by history score, verified by a test asserting a known good quiet is yielded before a known poor one after training the table
-- [ ] #5 The decision on whether history persists across moves within a game is recorded with rationale
-- [ ] #6 Measured with the TASK-27 strength-regression script, with results recorded in the implementation notes
-- [ ] #7 The history value read at the ordering sites is not narrowed by a truncating cast: search.rs:1499 and search.rs:1559 currently cast a u32 table value to i16, which wraps above 32767 and orders a repeatedly successful quiet move last
-- [ ] #8 A test drives a history value past the storage boundary of the ordering score type and asserts the move is still ordered ahead of an untrained move
+- [x] #1 A quiet move causing a beta cutoff receives a depth-scaled history bonus
+- [x] #2 Quiet moves searched and failing before the cutoff move receive a malus
+- [x] #3 History values are bounded by a documented gravity or scaling scheme and cannot overflow their storage type
+- [x] #4 Quiet moves in the ordering Quiet phase are demonstrably ordered by history score, verified by a test asserting a known good quiet is yielded before a known poor one after training the table
+- [x] #5 The decision on whether history persists across moves within a game is recorded with rationale
+- [x] #6 Measured with the TASK-27 strength-regression script, with results recorded in the implementation notes
+- [x] #7 The history value read at the ordering sites is not narrowed by a truncating cast: search.rs:1499 and search.rs:1559 currently cast a u32 table value to i16, which wraps above 32767 and orders a repeatedly successful quiet move last
+- [x] #8 A test drives a history value past the storage boundary of the ordering score type and asserts the move is still ordered ahead of an untrained move
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -91,4 +91,29 @@ created: 2026-07-19 21:21
 ---
 Handoff correction: the full implementation target SHA is 88cbd082406a4442f1b78621a90116df94cc4145. The abbreviated 88cbd08 in git log was expanded incorrectly in comment #1; all other handoff fields and verification remain unchanged.
 ---
+
+author: @codex-reviewer
+created: 2026-07-19 21:31
+---
+Review attempt: 1
+Reviewed branch: task-64.2-history-heuristic
+Reviewed implementation: 88cbd082406a4442f1b78621a90116df94cc4145
+Verdict: approved
+
+All eight acceptance criteria are proven. The base-to-target diff is task-scoped; commits after the implementation target contain only handoff metadata.
+
+Verification:
+- cargo fmt --check: PASS
+- CARGO_TARGET_DIR=/tmp/seaborg-review-task64-2-clippy cargo clippy --workspace --all-targets --all-features -- -D warnings: PASS from a clean target
+- cargo test --workspace: PASS (45 core; 274 engine passed, 2 ignored; 19 build metadata; 1 doc)
+- cargo bench --bench perft --bench movegen: benchmark executables are byte-identical between base and target; no code-induced delta
+- cargo bench --bench search -- 'search startpos depth 7': base 38.888/38.315 us versus target 39.162/38.707 us for deadline/no-deadline, approximately +0.7%/+1.0%, within the 5% gate
+- TASK-27 strength smoke evidence: recorded in implementation notes, 2-0-2 with no crashes or forfeits
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Activated bounded signed butterfly history at implementation 88cbd082406a4442f1b78621a90116df94cc4145: quiet beta cutoffs receive depth-squared bonuses, failed predecessor quiets receive maluses, gravity bounds entries, and saturated ordering scores prevent i16 wraparound. Verified by focused regressions, cargo fmt, clean-target strict Clippy, workspace tests, recorded TASK-27 smoke evidence, and same-machine base/target benchmarks.
+<!-- SECTION:FINAL_SUMMARY:END -->
