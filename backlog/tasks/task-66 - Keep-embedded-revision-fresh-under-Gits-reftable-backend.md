@@ -1,9 +1,11 @@
 ---
 id: TASK-66
 title: Keep embedded revision fresh under Git's reftable backend
-status: To Do
-assignee: []
+status: Ready to Merge
+assignee:
+  - '@codex'
 created_date: '2026-07-19 15:13'
+updated_date: '2026-07-19 18:34'
 labels:
   - build
   - metadata
@@ -37,8 +39,103 @@ Existing coverage lives in tests/build_metadata.rs, which exercises the pure wat
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A commit in a repository using the reftable backend reruns the build script and embeds the new revision
-- [ ] #2 No rerun-if-changed path is emitted that does not exist, in reftable and files layouts alike, so no-op rebuilds stay Fresh in both
-- [ ] #3 watch_paths has regression coverage for a reftable layout alongside the existing loose and packed cases
-- [ ] #4 If the backend cannot be supported, the embedded revision falls back to the documented unknown value rather than a stale commit
+- [x] #1 A commit in a repository using the reftable backend reruns the build script and embeds the new revision
+- [x] #2 No rerun-if-changed path is emitted that does not exist, in reftable and files layouts alike, so no-op rebuilds stay Fresh in both
+- [x] #3 watch_paths has regression coverage for a reftable layout alongside the existing loose and packed cases
+- [x] #4 If the backend cannot be supported, the embedded revision falls back to the documented unknown value rather than a stale commit
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Detect the reftable backend structurally inside watch_paths: treat the presence of a 'reftable' directory beside the Git directory or the common directory as the signal, so no git subprocess and no minimum Git version is required.
+2. Under reftable, watch the shared stack (common_dir/reftable) and, when a linked worktree has one, its per-worktree stack (git_dir/reftable). Shared refs (the branch) live in the former, per-worktree refs (HEAD) in the latter; both can move the resolved revision. Skip the refs/packed-refs logic entirely, since .git/refs is an inert placeholder file under reftable and HEAD holds a fixed sentinel.
+3. Preserve the existing invariant that every emitted path exists at emit time, so files-backend repositories keep emitting exactly the same set and no-op rebuilds stay Fresh in both layouts.
+4. Add watch_paths regression coverage for a reftable layout (single checkout and linked worktree) alongside the existing loose and packed cases, and extend the never-watches-a-missing-path sweep to cover reftable.
+5. Verify end to end with real cargo builds in a scratch repository for each layout: commit under reftable must rebuild and embed the new revision; a no-op build must stay Fresh under both reftable and files.
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Detected the reftable backend structurally rather than by asking Git. The presence of a 'reftable' directory beside the Git directory or the common directory is the signal, so watch_paths stays a pure function of a layout, needs no subprocess, and does not require Git 2.45+ for 'git rev-parse --show-ref-format'.
+
+Under reftable both stacks are watched: the branch is a shared ref living in the common stack, while per-worktree refs including HEAD live in a linked worktree's own stack, and either can move the resolved revision. In the main checkout the two resolve to the same directory, which is deduplicated so it is never declared twice. The files-backend refs/packed-refs logic is skipped entirely under reftable, because .git/refs degrades to a placeholder *file* naming the format and HEAD holds the fixed sentinel 'ref: refs/heads/.invalid' - neither ever changes, which is precisely why the revision went stale.
+
+Tradeoff accepted: the reftable stack is per-repository rather than per-ref, so an unrelated ref update such as a fetch or a stash also triggers a rebuild. Freshness is the property that matters here and the rebuild is of this crate alone.
+
+End-to-end verification used a scratch crate embedding the real build.rs and build_metadata.rs, driven by real cargo and real git 2.50.1, rather than only the unit-level harness.
+
+reftable, single checkout: first build embedded = HEAD; no-op rebuild did not recompile; a new commit recompiled and embedded the new HEAD; the following no-op rebuild did not recompile.
+reftable, linked worktree: same four outcomes.
+files: same four outcomes, unchanged from before.
+
+Baseline confirmation that the fix is what changed the outcome: the same script run against master's build_metadata.rs under reftable reproduced the reported defect exactly - after a new commit the build did not recompile and the binary kept reporting the previous revision (embedded 900d3142d5c4, HEAD 03e8e9ebb23d).
+
+One methodology note: the first end-to-end run used 'cargo build -q', which suppresses the 'Compiling' line and made the recompile assertion vacuous. It was re-run without -q; all recompile results above come from the non-quiet run.
+
+Acceptance criterion 4 is not exercised because the backend is supported, so the unknown fallback is not reached - the revision is resolved correctly rather than degraded.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @codex
+created: 2026-07-19 16:37
+---
+Implementation handoff
+Branch: task-66-reftable-revision-freshness
+Worktree: /Users/seabo/seaborg-worktrees/task-66-reftable-revision-freshness
+Base: c55508b3383577ed9bb62a9ebadb21fc3ecedc1f
+Implementation target: b097a03
+Resolved findings: none
+Verification:
+- cargo fmt --check: pass (exit 0)
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (exit 0, no warnings)
+- cargo test --workspace: pass (exit 0; 307 passed, 2 ignored, 0 failed; tests/build_metadata.rs 19 passed)
+- end-to-end scratch-crate build under reftable, reftable linked worktree, and files: commit rebuilds and embeds the new HEAD; no-op rebuild stays Fresh in all three
+- same script against master's build_metadata.rs under reftable: reproduces the stale revision, confirming the fix is what changed the outcome
+Known failures: none
+---
+
+author: @codex
+created: 2026-07-19 18:34
+---
+Review verdict: APPROVED
+
+Implementation target: b097a03 (immutable; the only later commit, 7d4bc8a, touches the task file alone)
+Base: c55508b
+Branch/worktree: task-66-reftable-revision-freshness at /Users/seabo/seaborg-worktrees/task-66-reftable-revision-freshness
+Blocking findings: none
+
+Scope is tight: build_metadata.rs and tests/build_metadata.rs, plus the task file. No hot-path code is touched, so movegen and perft benchmarks were not required. No #[allow] is introduced; the single #[allow(dead_code)] in the test module is present at the base commit.
+
+Verification run independently on the target rather than trusting the handoff:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass, re-confirmed on a clean CARGO_TARGET_DIR so the result is not a cached one
+- cargo test --workspace: pass, 307 passed, 2 ignored, 0 failed, including 19 in tests/build_metadata.rs
+- End to end with real cargo and real git 2.50.1, using scratch crates built around the real build.rs and build_metadata.rs, non-quiet so the Compiling line is observable:
+  - reftable, single checkout: embeds HEAD; no-op rebuild stays Fresh; a new commit recompiles and embeds the new HEAD; the next no-op rebuild stays Fresh
+  - reftable, linked worktree: same four outcomes for a commit made in the worktree
+  - files backend: same four outcomes, unchanged from base
+  - base commit c55508b through the identical harness: reproduces the defect exactly, staying Fresh after a commit and reporting the stale revision, in both the single checkout and the linked worktree. This is what establishes the change as causal rather than coincidental.
+
+Acceptance criteria:
+#1 proven by the reftable single-checkout and linked-worktree runs above.
+#2 proven by every emitted path being filtered through an existence check, by the extended never-watches-a-path-that-does-not-exist sweep now covering reftable, and empirically by no-op rebuilds staying Fresh in reftable, reftable-worktree, and files layouts. A path that did not exist would hold the unit dirty and recompile forever, which is exactly what the Fresh result rules out.
+#3 proven by the two new tests. assert_watches compares the full set rather than a subset, so watches_the_table_stack_under_the_reftable_backend genuinely proves the main-checkout dedup: a duplicated stack would fail the assertion.
+#4 the reftable backend is supported, so the degraded path is not reached for it, but the documented fallback was confirmed intact: built outside any repository and in a reftable repository with no commits, both embed 'unknown' rather than a stale value, and both stay Fresh.
+
+I independently checked the reftable layout against git 2.50.1 rather than taking the described one on trust. One non-blocking note from that: the doc comment on reftable_stacks (build_metadata.rs:157) says 'refs survives only as a placeholder *file* naming the format'. In practice .git/refs remains a directory and it is .git/refs/heads that is the placeholder file, containing 'this repository uses the reftable format'. The substance of the comment - that these landmarks are inert and never move when a commit lands, which is why the revision went stale - is correct, and the test fixture reftable_layout encodes the real shape accurately, creating refs/heads as a file under a refs directory. Only the prose is imprecise, and no behavior depends on it, since the reftable branch skips the refs logic entirely. Worth tightening if the file is touched again; not a reason to withhold approval.
+
+Comments otherwise state reasons rather than restating code, and none cite a task ID, criterion, or finding ID.
+---
+<!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Detects Git's reftable backend structurally in watch_paths - a 'reftable' directory beside the Git or common directory - and watches the table stacks instead of the inert refs/packed-refs landmarks, so a commit under reftable reruns the build script and re-embeds the revision. Both stacks are watched in a linked worktree (shared refs in the common stack, per-worktree HEAD in its own) and deduplicated in the main checkout, where they resolve to one directory. Files-backend layouts emit exactly the same set as before, and the existing invariant that every emitted rerun-if-changed path exists at emit time is preserved, so no-op rebuilds stay Fresh in every layout.
+
+Verified independently at b097a03 with real cargo and git 2.50.1 against scratch crates embedding the real build.rs and build_metadata.rs: under reftable (single checkout and linked worktree) the first build embeds HEAD, a no-op rebuild does not recompile, a new commit recompiles and embeds the new HEAD, and the following no-op rebuild does not recompile; the files backend shows the same four outcomes, unchanged. The base commit c55508b run through the identical harness reproduces the reported defect exactly - after a new commit it stays Fresh and keeps reporting the previous revision - confirming this change is what fixes it. The unknown fallback still holds where the revision cannot be discovered: outside a repository and in a reftable repository with no commits, both embed 'unknown' and stay Fresh. cargo fmt --check, cargo clippy --workspace --all-targets --all-features -- -D warnings (confirmed on a clean CARGO_TARGET_DIR), and cargo test --workspace all pass, 307 passed and 2 ignored, including 19 in tests/build_metadata.rs.
+<!-- SECTION:FINAL_SUMMARY:END -->
