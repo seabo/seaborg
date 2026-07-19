@@ -348,8 +348,8 @@ mod tests {
                 "{debug} was not recognised as a score variant",
             );
 
-            // `Display` carries the parity assertions that panicked the UCI driver thread in
-            // TASK-54, so formatting each value is the check.
+            // `Display` carries the parity assertions that once panicked the UCI driver thread,
+            // so formatting each value is the check.
             let display = format!("{score}");
             assert!(
                 display.starts_with("cp ") || display.starts_with("mate "),

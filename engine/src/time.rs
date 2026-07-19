@@ -180,8 +180,8 @@ mod tests {
 
     #[test]
     fn fast_time_controls_receive_a_positive_proportional_allocation() {
-        // The 2+0.05 opening position from TASK-38: (2_000 - 30) / 39 + 50. This allotted 0ms
-        // before the fix, which is what had the engine playing its opening at depth 1.
+        // A 2+0.05 opening position: (2_000 - 30) / 39 + 50. Integer division of the residual
+        // once truncated this to 0ms, which had the engine playing its opening at depth 1.
         let two_plus_005 = TimeControl::new(2_000, 2_000, 50, 50, None);
         assert_eq!(two_plus_005.to_move_time(1, Player::WHITE), 100);
 

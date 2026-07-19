@@ -1,9 +1,17 @@
-//! TASK-39 offline quiescence-reachability explorer.
+//! Offline quiescence-reachability explorer.
 //!
 //! This is an investigation tool, not engine code. It exists to supply structural evidence about
 //! the ply-1 quiescence tree that the abort-suppressed window (`Search::min_search_complete`) must
-//! run to completion before a UCI `stop` can take effect. It deliberately lives outside
-//! `engine/src` so that TASK-39 lands no changes to search/stop/UCI-I/O production code.
+//! run to completion before a UCI `stop` can take effect. It lives in `examples/` rather than
+//! `engine/src` because it is measurement scaffolding that should not ship inside the engine.
+//!
+//! # Keeping this model honest
+//!
+//! Every figure this tool reports is meaningful only while its move selection still matches
+//! `Search::quiesce` / `Search::quiesce_evasions`. That correspondence is a maintained invariant,
+//! not an incidental resemblance: if you change what quiescence expands, update the model below to
+//! match. Nothing enforces this — the example keeps compiling and keeps printing plausible numbers
+//! once it has drifted, so a stale model is silently wrong rather than loudly broken.
 //!
 //! # What it models
 //!
@@ -32,8 +40,8 @@
 //! ```
 //!
 //! `wac` and `sweep` are the systematic adversarial search: every position is ranked by the depth
-//! and size of its reachable ply-1 q-tree and by `max_quiet_check_chain`, the consecutive
-//! quiet check-evasion run that is the deep check-extension mechanism TASK-29 describes.
+//! and size of its reachable ply-1 q-tree and by `max_quiet_check_chain`, the run of consecutive
+//! quiet check evasions that drives quiescence deepest.
 
 use core::mono_traits::{All, Captures, Legal, QueenPromotions};
 use core::mov::Move;
@@ -55,7 +63,8 @@ struct QStats {
     /// Deepest ply reached, counted from the depth-1 child.
     max_q_ply: u32,
     /// Longest run of consecutive in-check q-nodes left by a *quiet* (non-capture, non-promotion)
-    /// evasion. This is the TASK-29 deep-check-extension mechanism.
+    /// evasion. Each such evasion extends the tree by a ply without resolving the position, so
+    /// this is the mechanism by which quiescence runs deep.
     max_quiet_check_chain: u32,
     /// Whether either cap stopped exploration, making the other figures lower bounds.
     truncated: bool,
@@ -264,7 +273,7 @@ fn wac_positions() -> Vec<(String, String)> {
 /// Systematically search for adversarial positions by random play from the start position,
 /// measuring the modelled ply-1 q-tree of every position reached.
 /// Print the distribution of `max_quiet_check_chain`, the consecutive quiet check-evasion run
-/// length that a TASK-29 check-extension ply cap would bound.
+/// length that a ply cap on check extensions would bound, were one added.
 fn print_chain_histogram(chains: impl Iterator<Item = u32>) {
     let mut histogram = [0usize; (MAX_Q_PLY as usize) + 1];
     for chain in chains {

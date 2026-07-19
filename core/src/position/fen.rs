@@ -108,7 +108,7 @@ impl Position {
     /// available, but FEN input is accepted verbatim, and the notation is routinely written with
     /// the target filled in after every double push regardless. Without this, a position parsed
     /// from such a FEN and the identical position reached by playing moves hash differently,
-    /// splitting one position across two transposition-table identities (TASK-58).
+    /// splitting one position across two transposition-table identities.
     ///
     /// Both paths go through the same predicate deliberately. Canonicalizing here against a weaker
     /// test than the one `make_move_unchecked` applies would reopen the very split this closes.
@@ -658,8 +658,8 @@ mod tests {
         assert!(Position::from_fen("4k3/8/8/8/8/8/8/4K3 w - - 0 1").is_ok());
     }
 
-    /// AC#3. An en-passant target that no enemy pawn can capture onto cannot affect any legal move,
-    /// so it must not split the position into a second transposition identity (TASK-58).
+    /// An en-passant target that no enemy pawn can capture onto cannot affect any legal move, so it
+    /// must not split the position into a second transposition identity.
     #[test]
     fn an_uncapturable_en_passant_target_is_dropped() {
         init_globals();
@@ -673,7 +673,7 @@ mod tests {
         assert_eq!(pos.zobrist(), without.zobrist());
     }
 
-    /// AC#3. A target a pawn can actually capture onto changes the legal moves, so it must remain a
+    /// A target a pawn can actually capture onto changes the legal moves, so it must remain a
     /// distinguishing part of the position's identity.
     #[test]
     fn a_capturable_en_passant_target_is_retained_and_distinguishing() {
@@ -693,7 +693,7 @@ mod tests {
         );
     }
 
-    /// AC#3. The canonical identity is the one `make_move_unchecked` produces. A FEN that names the
+    /// The canonical identity is the one `make_move_unchecked` produces. A FEN that names the
     /// target after a double push must hash the same as the position reached by playing that push.
     #[test]
     fn a_parsed_position_hashes_the_same_as_the_played_one() {
@@ -742,7 +742,7 @@ mod tests {
         }
     }
 
-    /// AC#3, REV-1-02. A pawn attacking the target is not enough to make the capture available. If
+    /// A pawn attacking the target is not enough to make the capture available. If
     /// the only capturer is pinned, or the capture would expose its own king, no legal move can use
     /// the target, so it must not split the position's identity.
     #[test]
@@ -791,7 +791,7 @@ mod tests {
         }
     }
 
-    /// AC#3. FEN input can name a target with no double-pushed pawn behind it. There is nothing to
+    /// FEN input can name a target with no double-pushed pawn behind it. There is nothing to
     /// capture, so the target must be dropped rather than hashed.
     #[test]
     fn an_en_passant_target_with_no_pawn_behind_it_is_dropped() {
@@ -805,7 +805,7 @@ mod tests {
         assert_eq!(with.zobrist(), without.zobrist());
     }
 
-    /// AC#3, REV-1-02. The played and parsed derivations must apply the *same* legality test. If
+    /// The played and parsed derivations must apply the *same* legality test. If
     /// only FEN input filtered illegal targets, a position reached by playing the double push would
     /// hash differently from the identical position parsed from FEN.
     #[test]
