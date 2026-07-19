@@ -1335,13 +1335,13 @@ impl<'engine> Search<'engine> {
                 let score = child?.neg().inc_mate();
 
                 if score >= beta {
-                    self.store_quiescence(score, Bound::Lower, mov, history_draws_on_entry);
+                    self.store_quiescence(score, Bound::Lower, &mov, history_draws_on_entry);
                     return Some(beta);
                 }
 
                 if score > alpha {
                     alpha = score;
-                    best_move = *mov;
+                    best_move = mov;
                 }
             }
         }
