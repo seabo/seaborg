@@ -3,11 +3,11 @@ id: TASK-42
 title: >-
   Hold a meaningful time reserve in increment games instead of decaying to the
   increment
-status: Changes Requested
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-18 13:18'
-updated_date: '2026-07-19 13:17'
+updated_date: '2026-07-19 13:25'
 labels:
   - engine
   - time
@@ -228,6 +228,20 @@ This is not a whitespace or formatting collision and should not be resolved mech
 No implementation code conflicts. The conflict is confined to comment text, and the asserted values (100ms, 34ms, 24ms) are identical on both sides, so the approved behaviour at 96adb9a is unaffected. The strength evidence remains valid for the code as written.
 
 Note for rework: resolving this changes engine/src/time.rs and therefore invalidates the approval pinned to 96adb9a. The task needs a fresh review target, but only the comment text is in question; the allocation policy itself was reviewed and approved unchanged.
+---
+
+author: @codex
+created: 2026-07-19 13:25
+---
+Merged to primary at b137c96. The earlier conflict was resolved in favour of this branch's comment after checking the history.
+
+Before abbf022, to_move_time computed base_time / est_remaining_moves, added the increment, then saturating_sub'd a flat 150ms PER_MOVE_BUFFER_TIME. At 2+0.05 move 1 that is 2000/39 = 51, plus 50, less 150, saturating to 0. Integer division produced 51, not 0, so the flat per-move buffer is what truncated the allocation. Primary's wording attributed it to integer division of the residual, which the arithmetic does not support; abbf022's own commit message states the flat buffer as the cause.
+
+engine/src/time.rs at the merge commit is byte-identical to the approved target 96adb9a, so the approval and the strength evidence describe the landed code exactly.
+
+Integrated checks on the merge commit: cargo fmt --check pass, cargo clippy --workspace --all-targets --all-features -- -D warnings pass, cargo test --workspace pass (209 engine, 43 core, 5 build metadata, 1 integration; 3 ignored). Primary was at 8185470 before and after verification, so the fast-forward was a valid compare-and-swap.
+
+Follow-up TASK-63 tracks the movestogo and movetime allocation gaps found during review. AC5 remains unchecked and human-waived.
 ---
 <!-- COMMENTS:END -->
 
