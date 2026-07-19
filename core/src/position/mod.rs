@@ -326,11 +326,12 @@ impl Position {
                 // Double push
                 let poss_ep: u8 = (to.0 as i8 - us.pawn_push()) as u8;
 
-                // Set en passant square if the moved pawn can be captured
-                if (Bitboard(pawn_attacks_from(Square(poss_ep), us))
-                    & self.piece_bb(them, PieceType::Pawn))
-                .is_not_empty()
-                {
+                // Record the en-passant square only when the capture is actually available. A
+                // target no legal move can use must not be hashed, or it splits one position
+                // across two transposition-table identities (TASK-58). The board is already
+                // updated at this point, so the predicate sees the post-push position; `self.turn`
+                // is still `us`, which is why the capturing side is passed explicitly.
+                if self.has_legal_ep_capture(Square(poss_ep), them) {
                     self.zobrist
                         .update_ep_square(self.ep_square, Some(Square(poss_ep)));
                     self.ep_square = Some(Square(poss_ep));
@@ -894,6 +895,79 @@ impl Position {
         rooks_queens |= self.piece_bb_both_players(PieceType::Rook);
 
         (bishop_moves(occ, sq) & bishops_queens) | (rook_moves(occ, sq) & rooks_queens)
+    }
+
+    /// Reports whether `capturer` has at least one *legal* en-passant capture onto `ep`.
+    ///
+    /// This is the predicate that defines the canonical en-passant identity of a position: a target
+    /// that no legal move can use does not distinguish the position from the same position with no
+    /// target at all, so it must not be hashed (TASK-58). A pseudo-legal pawn-attack test is not
+    /// enough, because the sole capturer may be pinned, or the capture may expose its own king.
+    ///
+    /// Both derivations of the en-passant square must agree, or the same position reached by
+    /// playing moves and parsed from FEN would hash differently. This is therefore called from
+    /// `make_move_unchecked` and from `Position::canonicalize_ep_square` alike.
+    ///
+    /// It reads only the piece bitboards, never `State`, so it is callable part-way through a move
+    /// update, before `State::from_position` has run.
+    pub(crate) fn has_legal_ep_capture(&self, ep: Square, capturer: Player) -> bool {
+        let pusher = !capturer;
+
+        // The pawn that double-pushed sits one push *beyond* the target, from the capturer's point
+        // of view: the target is the square it skipped over.
+        let pushed_pawn = Square((ep.0 as i8 - capturer.pawn_push()) as u8);
+
+        // There must actually be a pawn there to take. `make_move_unchecked` has just put one
+        // there, but FEN input can name a target with nothing behind it, and the occupancy below
+        // XORs this square: without this guard a malformed FEN would conjure a phantom blocker and
+        // the answer would be arbitrary.
+        if (self.piece_bb(pusher, PieceType::Pawn) & pushed_pawn.to_bb()).is_empty() {
+            return false;
+        }
+
+        // A `capturer` pawn on square X can take onto `ep` exactly when `ep` is one of X's attacks,
+        // which is the same set as the squares a `pusher` pawn standing on `ep` would attack.
+        let capturers =
+            Bitboard(pawn_attacks_from(ep, pusher)) & self.piece_bb(capturer, PieceType::Pawn);
+
+        let ksq = self.king_sq(capturer);
+        let pushed_pawn_bb = pushed_pawn.to_bb();
+        let ep_bb = ep.to_bb();
+
+        for orig in capturers {
+            // Occupancy after the capture: the capturer leaves its origin, the double-pushed pawn
+            // comes off the board, and the capturer lands on the target.
+            let occ = (self.occupied() ^ orig.to_bb() ^ pushed_pawn_bb) | ep_bb;
+
+            if !self.sq_attacked_under_occ(ksq, pusher, occ, pushed_pawn_bb) {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Reports whether `attacker` attacks `sq` given the hypothetical occupancy `occ`, ignoring any
+    /// attacker piece standing on `removed`.
+    ///
+    /// Unlike the en-passant branch of [`Position::legal_move`], this tests every piece type rather
+    /// than sliders alone. That branch may restrict itself to discovered checks because movegen has
+    /// already filtered its input to check evasions; as a standalone predicate the same shortcut
+    /// would call an en-passant capture legal while it left a knight or pawn check unanswered.
+    fn sq_attacked_under_occ(
+        &self,
+        sq: Square,
+        attacker: Player,
+        occ: Bitboard,
+        removed: Bitboard,
+    ) -> bool {
+        let pawns = self.piece_bb(attacker, PieceType::Pawn) & !removed;
+
+        (rook_moves(occ, sq) & self.sliding_piece_bb(attacker)).is_not_empty()
+            || (bishop_moves(occ, sq) & self.diagonal_piece_bb(attacker)).is_not_empty()
+            || (knight_moves(sq) & self.piece_bb(attacker, PieceType::Knight)).is_not_empty()
+            || (Bitboard(pawn_attacks_from(sq, !attacker)) & pawns).is_not_empty()
+            || (king_moves(sq) & self.piece_bb(attacker, PieceType::King)).is_not_empty()
     }
 
     /// Returns the king square for the given player.

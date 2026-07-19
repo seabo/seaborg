@@ -19,11 +19,21 @@ impl Zobrist {
 
     /// Generates a `Zobrist` key from an otherwise fully built
     /// `Position` struct.
+    ///
+    /// This must agree exactly with the incremental updates that `make_move_unchecked` applies,
+    /// because the two derivations meet in the transposition table: a search rooted at a parsed
+    /// position keys its entries one way and a search that reached the same position by playing
+    /// moves keys them the other. Empty squares are therefore skipped. Iterating the board yields
+    /// all 64 squares, including empty ones as `Piece::None`, and folding in a key for those made
+    /// the full recomputation disagree with the incremental path by the `Piece::None` keys of every
+    /// square whose occupancy changed, splitting one position across two identities (TASK-58).
     pub fn from_position(pos: &Position) -> Self {
         let mut zob = Zobrist::empty();
         // Piece-squares
         for (sq, piece) in &pos.board {
-            zob ^= piece_square_key(piece, sq);
+            if piece != Piece::None {
+                zob ^= piece_square_key(piece, sq);
+            }
         }
         // Side-to-move
         zob ^= side_to_move_key(pos.turn());
@@ -91,5 +101,68 @@ impl fmt::UpperHex for Zobrist {
 impl fmt::Binary for Zobrist {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Binary::fmt(&self.0, f)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mono_traits::{All, Legal};
+    use crate::movelist::BasicMoveList;
+
+    /// The incremental key maintained by `make_move_unchecked` and the full key computed by
+    /// `from_position` must never disagree, or the same position occupies two transposition-table
+    /// identities depending on how the search reached it (TASK-58).
+    #[test]
+    fn incremental_and_full_keys_agree_after_every_legal_move() {
+        crate::init::init_globals();
+
+        let fens = [
+            // Quiet moves, double pushes and an available en-passant capture.
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            "4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1",
+            // Captures, castling and promotions, which move or remove more than one piece.
+            "r3k2r/pPpp1ppp/8/8/8/8/PpPP1PPP/R3K2R w KQkq - 0 1",
+        ];
+
+        for fen in fens {
+            let pos = Position::from_fen(fen).unwrap();
+            assert_eq!(
+                pos.zobrist(),
+                Zobrist::from_position(&pos),
+                "parsed position disagreed with its own recomputation: {fen}"
+            );
+
+            for mov in pos.generate::<BasicMoveList, All, Legal>().iter() {
+                let mut after = pos.clone();
+                after.make_move(mov);
+
+                assert_eq!(
+                    after.zobrist(),
+                    Zobrist::from_position(&after),
+                    "incremental and full keys disagreed after {mov} from {fen}"
+                );
+            }
+        }
+    }
+
+    /// Unmaking must restore the key exactly, so a search returns to the identity it descended from.
+    #[test]
+    fn unmaking_a_move_restores_the_key() {
+        crate::init::init_globals();
+
+        let mut pos =
+            Position::from_fen("r3k2r/pPpp1ppp/8/8/8/8/PpPP1PPP/R3K2R w KQkq - 0 1").unwrap();
+        let before = pos.zobrist();
+
+        for mov in pos.clone().generate::<BasicMoveList, All, Legal>().iter() {
+            pos.make_move(mov);
+            pos.unmake_move();
+            assert_eq!(
+                pos.zobrist(),
+                before,
+                "key not restored after unmaking {mov}"
+            );
+        }
     }
 }

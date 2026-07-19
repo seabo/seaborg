@@ -96,9 +96,33 @@ impl Position {
         };
 
         pos.set_state();
+        pos.canonicalize_ep_square();
         pos.set_zobrist();
 
         Ok(pos)
+    }
+
+    /// Drops an en-passant target that no legal move can use.
+    ///
+    /// `make_move_unchecked` only records an en-passant square when the capture is genuinely
+    /// available, but FEN input is accepted verbatim, and the notation is routinely written with
+    /// the target filled in after every double push regardless. Without this, a position parsed
+    /// from such a FEN and the identical position reached by playing moves hash differently,
+    /// splitting one position across two transposition-table identities (TASK-58).
+    ///
+    /// Both paths go through the same predicate deliberately. Canonicalizing here against a weaker
+    /// test than the one `make_move_unchecked` applies would reopen the very split this closes.
+    ///
+    /// This must run before `set_zobrist`, so that the canonical square is the one hashed.
+    fn canonicalize_ep_square(&mut self) {
+        let Some(ep) = self.ep_square else {
+            return;
+        };
+
+        // `turn` is the side that may capture; the pawn that double-pushed belongs to the other.
+        if !self.has_legal_ep_capture(ep, self.turn) {
+            self.ep_square = None;
+        }
     }
 
     pub fn start_pos() -> Self {
@@ -597,6 +621,8 @@ fn rank_file_to_idx(rank: u32, file: u8) -> u8 {
 mod tests {
     use super::*;
     use crate::init::init_globals;
+    use crate::mono_traits::{All as AllGen, Legal};
+    use crate::movelist::BasicMoveList;
 
     fn assert_invalid_fen(piece_positions: &str) {
         let fen = format!("{piece_positions} w - - 0 1");
@@ -630,5 +656,184 @@ mod tests {
         init_globals();
 
         assert!(Position::from_fen("4k3/8/8/8/8/8/8/4K3 w - - 0 1").is_ok());
+    }
+
+    /// AC#3. An en-passant target that no enemy pawn can capture onto cannot affect any legal move,
+    /// so it must not split the position into a second transposition identity (TASK-58).
+    #[test]
+    fn an_uncapturable_en_passant_target_is_dropped() {
+        init_globals();
+
+        // White's only pawn is on a2, nowhere near the d6 target, so no capture onto d6 exists.
+        let pos = Position::from_fen("4k3/8/8/3p4/8/8/P7/4K3 w - d6 0 1").unwrap();
+        assert_eq!(pos.ep_square(), None);
+
+        // The same board written without the redundant target must be the identical position.
+        let without = Position::from_fen("4k3/8/8/3p4/8/8/P7/4K3 w - - 0 1").unwrap();
+        assert_eq!(pos.zobrist(), without.zobrist());
+    }
+
+    /// AC#3. A target a pawn can actually capture onto changes the legal moves, so it must remain a
+    /// distinguishing part of the position's identity.
+    #[test]
+    fn a_capturable_en_passant_target_is_retained_and_distinguishing() {
+        init_globals();
+
+        // The white e5 pawn attacks d6, so the target is legally relevant.
+        let with = Position::from_fen("4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1").unwrap();
+        assert_eq!(with.ep_square(), Some(Square(43)));
+
+        let without = Position::from_fen("4k3/8/8/3pP3/8/8/8/4K3 w - - 0 1").unwrap();
+        assert_eq!(without.ep_square(), None);
+
+        assert_ne!(
+            with.zobrist(),
+            without.zobrist(),
+            "a usable en-passant right must remain distinguishable"
+        );
+    }
+
+    /// AC#3. The canonical identity is the one `make_move_unchecked` produces. A FEN that names the
+    /// target after a double push must hash the same as the position reached by playing that push.
+    #[test]
+    fn a_parsed_position_hashes_the_same_as_the_played_one() {
+        init_globals();
+
+        for (before, after_with_ep, ep_is_usable) in [
+            // Black has no pawn able to take on e3, so the notated target is redundant.
+            (
+                "4k3/8/8/8/8/8/4P3/4K3 w - - 0 1",
+                "4k3/8/8/8/4P3/8/8/4K3 b - e3 0 1",
+                false,
+            ),
+            // Black's d4 pawn attacks e3, so the target is a real capturing right.
+            (
+                "4k3/8/8/8/3p4/8/4P3/4K3 w - - 0 1",
+                "4k3/8/8/8/3pP3/8/8/4K3 b - e3 0 1",
+                true,
+            ),
+        ] {
+            let mut played = Position::from_fen(before).unwrap();
+            let moves = played.generate::<BasicMoveList, AllGen, Legal>();
+            let double_push = moves
+                .iter()
+                .find(|m| format!("{m}").contains("e2e4"))
+                .copied()
+                .expect("the double push must be available");
+            played.make_move(&double_push);
+
+            let parsed = Position::from_fen(after_with_ep).unwrap();
+
+            assert_eq!(
+                parsed.ep_square().is_some(),
+                ep_is_usable,
+                "canonical en-passant square wrong for {after_with_ep}"
+            );
+            assert_eq!(
+                played.ep_square(),
+                parsed.ep_square(),
+                "en-passant square disagreed for {after_with_ep}"
+            );
+            assert_eq!(
+                played.zobrist(),
+                parsed.zobrist(),
+                "played and parsed positions hashed differently for {after_with_ep}"
+            );
+        }
+    }
+
+    /// AC#3, REV-1-02. A pawn attacking the target is not enough to make the capture available. If
+    /// the only capturer is pinned, or the capture would expose its own king, no legal move can use
+    /// the target, so it must not split the position's identity.
+    #[test]
+    fn an_en_passant_target_no_legal_move_can_use_is_dropped() {
+        init_globals();
+
+        for (with_ep, without_ep, why) in [
+            // The e5 pawn attacks d6, but taking clears the e-file and the e8 rook checks Ke1.
+            (
+                "k3r3/8/8/3pP3/8/8/8/4K3 w - d6 0 1",
+                "k3r3/8/8/3pP3/8/8/8/4K3 w - - 0 1",
+                "capturing exposes the king along the e-file",
+            ),
+            // The d5 pawn attacks e6, but it is pinned against Kd1 by the d8 rook.
+            (
+                "k2r4/8/8/3Pp3/8/8/8/3K4 w - e6 0 1",
+                "k2r4/8/8/3Pp3/8/8/8/3K4 w - - 0 1",
+                "the only capturer is pinned on the d-file",
+            ),
+        ] {
+            let with = Position::from_fen(with_ep).unwrap();
+            let without = Position::from_fen(without_ep).unwrap();
+
+            assert_eq!(
+                with.ep_square(),
+                None,
+                "target should have been dropped because {why}"
+            );
+            assert_eq!(
+                with.zobrist(),
+                without.zobrist(),
+                "a target no legal move can use must not split identity ({why})"
+            );
+
+            // The predicate must agree with the moves actually generated, or the canonical identity
+            // would disagree with the position's real capturing rights.
+            let ep_moves = without
+                .generate::<BasicMoveList, AllGen, Legal>()
+                .iter()
+                .filter(|m| m.is_en_passant())
+                .count();
+            assert_eq!(
+                ep_moves, 0,
+                "no legal en-passant capture should exist ({why})"
+            );
+        }
+    }
+
+    /// AC#3. FEN input can name a target with no double-pushed pawn behind it. There is nothing to
+    /// capture, so the target must be dropped rather than hashed.
+    #[test]
+    fn an_en_passant_target_with_no_pawn_behind_it_is_dropped() {
+        init_globals();
+
+        // e5 attacks d6, but d5 is empty, so the named target describes a capture of nothing.
+        let with = Position::from_fen("4k3/8/8/4P3/8/8/8/4K3 w - d6 0 1").unwrap();
+        let without = Position::from_fen("4k3/8/8/4P3/8/8/8/4K3 w - - 0 1").unwrap();
+
+        assert_eq!(with.ep_square(), None);
+        assert_eq!(with.zobrist(), without.zobrist());
+    }
+
+    /// AC#3, REV-1-02. The played and parsed derivations must apply the *same* legality test. If
+    /// only FEN input filtered illegal targets, a position reached by playing the double push would
+    /// hash differently from the identical position parsed from FEN.
+    #[test]
+    fn a_played_double_push_drops_an_unusable_target_too() {
+        init_globals();
+
+        // Black plays d7d5. White's e5 pawn attacks d6, but exd6 would expose Ke1 to the e8 rook,
+        // so the double push confers no en-passant right and must record no target.
+        let mut played = Position::from_fen("k3r3/3p4/8/4P3/8/8/8/4K3 b - - 0 1").unwrap();
+        let moves = played.generate::<BasicMoveList, AllGen, Legal>();
+        let double_push = moves
+            .iter()
+            .find(|m| format!("{m}").contains("d7d5"))
+            .copied()
+            .expect("the double push must be available");
+        played.make_move(&double_push);
+
+        assert_eq!(
+            played.ep_square(),
+            None,
+            "make_move recorded a target that no legal capture can use"
+        );
+
+        let parsed = Position::from_fen("k3r3/8/8/3pP3/8/8/8/4K3 w - d6 0 1").unwrap();
+        assert_eq!(
+            played.zobrist(),
+            parsed.zobrist(),
+            "played and parsed positions hashed differently"
+        );
     }
 }
