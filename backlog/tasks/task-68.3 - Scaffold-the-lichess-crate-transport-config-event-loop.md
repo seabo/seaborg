@@ -1,9 +1,11 @@
 ---
 id: TASK-68.3
 title: 'Scaffold the lichess crate: transport, config, event loop'
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@george'
 created_date: '2026-07-19 22:33'
+updated_date: '2026-07-19 23:15'
 labels: []
 dependencies:
   - TASK-68.1
@@ -42,3 +44,13 @@ Out of scope: playing moves in a game (TASK-68.4) and reconnect/backoff hardenin
 - [ ] #6 The HTTP transport is abstracted so event handling is unit-tested against NDJSON fixtures without network access
 - [ ] #7 cargo fmt --check, clippy (workspace, all-targets, all-features, -D warnings), and cargo test --workspace all pass
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Add lichess crate to workspace members; lichess/Cargo.toml depends on core+engine (path) plus ureq=3 (rustls) and toml=1; serde/serde_json inherited from workspace. Add lichess path dep to root seaborg binary.
+2. lichess modules: error (Error enum + Result), config (Config/ChallengePolicy/EngineSettings with serde defaults + Config::load with default path and --config override), transport (Transport trait + ureq HttpTransport with bearer token + NDJSON streaming), event (serde tagged Event/Challenge/TimeControl types + NDJSON line parsing tolerating keepalive blanks), policy (evaluate challenge vs policy + games cap -> Accept/Decline{reason}), account (Account + is_bot + game count), client (LichessClient<T: Transport> typed methods: account/accept/decline/upgrade/event_stream), game (documented future game-runner handoff genuinely using engine options + core Position), run (load_token from LICHESS_BOT_TOKEN, run(), upgrade() with confirmation closure, event loop respecting max-games cap and non-bot detection).
+3. Wire seaborg lichess and seaborg lichess upgrade into cmdline dispatch (clap subcommand with --config and upgrade subcommand; upgrade prompts stdin confirmation).
+4. Unit tests: event dispatch vs inline NDJSON fixtures via a FakeTransport recording accept/decline (no network), policy matrix, config defaults+parse, account bot detection, engine_options mapping.
+5. Run cargo fmt --check, clippy -D warnings, cargo test --workspace.
+<!-- SECTION:PLAN:END -->
