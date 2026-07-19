@@ -1,11 +1,11 @@
 ---
 id: TASK-61
 title: Add benchmark-backed transposition-table hot-path enhancements
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-19 00:01'
-updated_date: '2026-07-19 19:55'
+updated_date: '2026-07-19 20:08'
 labels:
   - transposition-table
   - performance
@@ -29,11 +29,11 @@ After the identity policy, clean transposition-table rewrite, and search integra
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Representative fixed-depth positions and a reproducible benchmark establish baseline nodes, elapsed time, and probe behavior before hot-path changes
-- [ ] #2 The value and validity conditions for a stored static evaluation are specified, including interaction with rule-sensitive evaluation from TASK-58; it is implemented only if measurements or imminent pruning consumers justify its entry-space cost
-- [ ] #3 Child-bucket prefetching is evaluated on supported targets and retained only if it produces a repeatable benefit without harming portability or safety
-- [ ] #4 Accepted enhancements include regression and benchmark coverage; rejected candidates have their measurements and decision recorded so the experiment is not repeatedly rediscovered
-- [ ] #5 The final entry layout remains compact and its memory footprint and cache-line organization are asserted or tested
+- [x] #1 Representative fixed-depth positions and a reproducible benchmark establish baseline nodes, elapsed time, and probe behavior before hot-path changes
+- [x] #2 The value and validity conditions for a stored static evaluation are specified, including interaction with rule-sensitive evaluation from TASK-58; it is implemented only if measurements or imminent pruning consumers justify its entry-space cost
+- [x] #3 Child-bucket prefetching is evaluated on supported targets and retained only if it produces a repeatable benefit without harming portability or safety
+- [x] #4 Accepted enhancements include regression and benchmark coverage; rejected candidates have their measurements and decision recorded so the experiment is not repeatedly rediscovered
+- [x] #5 The final entry layout remains compact and its memory footprint and cache-line organization are asserted or tested
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -97,4 +97,36 @@ Known failures: none
 
 Reviewer note: AC#3's repeatable-benefit measurement could not be obtained on this machine; it carried sustained load (avg 4-6) from concurrent worktree benchmarks for the whole session, and a prefetch benchmark is the worst case for that. The prefetch is retained on mechanism and risk (node-count-neutral by construction, hint never wasted, standard technique, contained unsafe cost), a call confirmed with the user this session. The inconclusive figures and full rationale are in BENCHMARKS.md. If a genuinely idle machine is available, a clean round-robin of 'search hash load' base vs target would let the decision be promoted from mechanism-based to measurement-based.
 ---
+
+author: @claude
+created: 2026-07-19 20:08
+---
+Review attempt: 1
+Reviewed branch: task-61-tt-hot-path-enhancements
+Reviewed implementation: b76a0c234169623d7e5d519b1f34bc7c052fb74c
+Verdict: approved
+
+Independent review of the full base-to-target diff (c55508b..b76a0c2). Target immutability confirmed: target descends from base, the sole post-target commit (954bd82) touches only the task file, and the code diff target..tip is empty.
+
+Acceptance criteria:
+- AC#1 (baseline harness): PROVEN. benches/search.rs 'search hash load' group over four fixed-depth positions with the table cleared outside the timed region, plus report_hash_load_telemetry printing exact nodes/probes/hits/hashfull. Documented in BENCHMARKS.md.
+- AC#2 (static eval specified + gated): PROVEN. Value/validity conditions specified; rejected on measured 2.8 ns material_eval (3.6% ceiling of a ~78 ns node, unreachable given 20-48% hit rates) and on entry space (15 spare reserved bits vs 16 for an i16); TASK-58 interaction addressed (position-intrinsic); revisit condition recorded.
+- AC#3 (prefetch evaluated + conditionally retained): ACCEPTED on mechanism grounds. No repeatable speedup could be measured; the machine carried sustained load (avg ~6, worst case for a latency-hiding benchmark) and a clean base-vs-target round-robin was unobtainable. The reviewer independently confirmed the same load condition. Retention is justified by proven node-count neutrality (a hint changes no observable state; pinned by prefetch_moves_no_observable_state) and proven portability/safety no-harm (empty body on unsupported targets; contained, justified unsafe per architecture). The task owner accepted mechanism-based retention in lieu of a measured benefit during this review session. The benefit remains explicitly unquantified; BENCHMARKS.md records the revisit-on-idle-hardware condition.
+- AC#4 (coverage + recorded rejection): PROVEN. Rejected candidate's measurements and decision are in BENCHMARKS.md; retained candidate has the node-neutrality regression test and the benchmark harness.
+- AC#5 (compact layout asserted): PROVEN. Layout unchanged; cluster_is_one_cache_line_and_slots_fill_it and clusters_are_cache_line_aligned_in_the_allocation pass.
+
+Comment quality, SAFETY justifications, and #[allow] usage checked: comments are self-contained; no #[allow] introduced; no scope creep.
+
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean (fresh CARGO_TARGET_DIR)
+- cargo test --workspace: pass (43 + 245 + 17 + 1; 2 ignored pre-existing perft suites)
+- Hot-path benchmark round-robin: not run to a verdict; sustained machine load (avg ~6.1) precludes a clean measurement, and the change is node-count-neutral by construction so it carries no search-quality regression risk.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Evaluated two TT hot-path candidates against a new reproducible hash-loading search benchmark: retained child-cluster prefetching, rejected storing the static eval. Reviewed target b76a0c2. Verified: cargo fmt --check (pass); cargo clippy --workspace --all-targets --all-features -- -D warnings (clean, fresh CARGO_TARGET_DIR); cargo test --workspace (43+245+17+1 pass, 2 pre-existing ignored perft suites), including prefetch_moves_no_observable_state and cluster_is_one_cache_line_and_slots_fill_it. AC#3's repeatable-benefit measurement was unobtainable under sustained machine load (avg 6.1, worst case for a latency-hiding benchmark); prefetch retained on mechanism grounds (proven node-count-neutral and portability/safety no-harm, standard technique), accepted by the task owner this review session in lieu of a measured benefit.
+<!-- SECTION:FINAL_SUMMARY:END -->
