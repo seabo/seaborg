@@ -5,12 +5,13 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 23:35'
-updated_date: '2026-07-19 21:17'
+updated_date: '2026-07-19 21:19'
 labels:
   - architecture
 dependencies: []
 modified_files:
   - docs/workspace-layout-assessment.md
+  - backlog/tasks/task-67 - Centralize-Cargo-workspace-manifest-policy.md
 priority: low
 type: chore
 ordinal: 34000
@@ -44,6 +45,10 @@ Review the overall layout of the Cargo workspace (crate boundaries, module organ
 Added `docs/workspace-layout-assessment.md` with the package/target inventory, dependency graph, convention analysis, effort-ranked recommendations, and justified no-change conclusion for directory and package splitting. Existing TASK-20 and TASK-21 are the separate follow-ups for every recommended change; no additional task is needed.
 
 Verification passed on implementation target `bb4e08154a2bdf5753a54d5f9ebf9c88357b5a9f`: `cargo fmt --check`; `cargo clippy --workspace --all-targets --all-features -- -D warnings`; `cargo test --workspace`.
+
+Rework resolved REV-1-01 by creating TASK-67 for explicit resolver selection and workspace manifest inheritance, then mapping manifest policy to TASK-67 while retaining dependency modernization under TASK-21.
+
+Resolved REV-1-02 by distinguishing metadata repeated by all three packages from the selectively shared dependency declarations and path dependencies present only in the root and engine manifests.
 <!-- SECTION:NOTES:END -->
 
 ## Comments

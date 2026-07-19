@@ -70,10 +70,13 @@ from its crate root.
    This makes routine internal reorganisation look like a workspace-wide API
    migration.
 3. **Workspace-wide manifest policy is repeated rather than centralized.** All
-   packages repeat edition, version, license, path relationships, and common
-   dependency declarations. Versions of shared dependencies can drift, and
-   direct dependencies already include different `rand` generations. Cargo's
-   workspace package and dependency inheritance are intended for this case.
+   three packages repeat their edition, version, and license. The root and
+   `engine` manifests each spell out their internal path dependencies, while
+   dependency declarations overlap only selectively: for example, `log` and
+   `separator` are shared, while the workspace uses different `rand`
+   generations. Cargo's workspace package and dependency inheritance can
+   centralize the genuinely shared declarations without pretending that every
+   member has the same dependency set.
 
 These are maintainability issues, but they do not show that the three current
 responsibility boundaries are wrong.
@@ -104,9 +107,11 @@ duplicate direct dependency generations instead of mechanically upgrading the
 lockfile.
 
 Rationale: a single declaration prevents member manifests from silently
-diverging and makes dependency ownership easier to audit. This is **small to
-medium effort**, with most risk in dependency API migrations rather than the
-manifest restructuring itself. It is tracked by **TASK-21, “Modernize and
+diverging and makes dependency ownership easier to audit. The manifest-policy
+change is **small effort** and is tracked by **TASK-67, “Centralize Cargo
+workspace manifest policy.”** Dependency removal, upgrades, and reconciliation
+are a separate **small to medium effort** change, with most risk in dependency
+API migrations; that work remains tracked by **TASK-21, “Modernize and
 deduplicate the dependency graph.”**
 
 ### Keep the present directories and package boundaries
@@ -129,6 +134,6 @@ right boundary rather than directory aesthetics.
 
 The workspace is structurally idiomatic: it uses standard Cargo target
 locations, has understandable package responsibilities, and maintains an
-acyclic layering. Complete TASK-20 and TASK-21 to address the two substantive
-families of deviation. No broader workspace reorganisation is justified by the
-current repository.
+acyclic layering. Complete TASK-20, TASK-21, and TASK-67 to address the
+substantive deviations. No broader workspace reorganisation is justified by
+the current repository.
