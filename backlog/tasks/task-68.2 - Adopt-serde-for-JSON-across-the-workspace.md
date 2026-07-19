@@ -1,11 +1,11 @@
 ---
 id: TASK-68.2
 title: Adopt serde for JSON across the workspace
-status: In Progress
+status: In Review
 assignee:
   - '@george'
 created_date: '2026-07-19 22:33'
-updated_date: '2026-07-19 22:48'
+updated_date: '2026-07-19 22:57'
 labels: []
 dependencies: []
 parent_task_id: TASK-68
@@ -45,3 +45,36 @@ Note: npx tsc silently no-ops in this repo, so do not rely on a TypeScript compi
 5. Delete engine/src/ui/json.rs and drop the mod json; its strict parsing/escaping is now serde_json's job.
 6. Update wire.rs tests to parse with serde_json::Value; add golden exact-byte assertions per wire sub-type and a Value round-trip, plus an inbound-body parse test. Verify fmt, clippy -D warnings, cargo test --workspace.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Adopted serde/serde_json for all engine/src/ui JSON handling.
+
+- Dependencies: added serde (derive) + serde_json to [workspace.dependencies] in the root Cargo.toml and inherited both in engine/Cargo.toml via .workspace = true. core is untouched. Cargo.lock now records serde 1.0.229 / serde_json 1.0.150. Per the task description this centralizes the JSON stack ahead of the Lichess work; only engine consumes it today.
+- Outbound (wire.rs): replaced the hand-written String builders with borrowing Serialize DTOs. engineLimit/gameStatus/score/engineStatus are internally 'kind'-tagged enums; snapshot/progress/moveRecord use rename_all=camelCase. From impls carry over the exact conversions (mate-in-N moves math, INF_P/INF_N taken before is_mate, score cp raw i16). snapshot_to_json now returns serde_json::to_string(&SnapshotDto::from(snapshot)).
+- Byte-compatibility: serde emits fields in declaration order, so the DTO field order reproduces the previous output exactly. A new golden test (snapshot_serializes_to_the_exact_wire_bytes) pins the full byte string for a representative thinking snapshot; the frontend (which JSON.parses, order-independent) needs no changes.
+- Inbound (server.rs): request bodies are parsed with serde_json::from_str::<Value>; the object check and the per-field error codes (missing_uci, missing_revision, missing_human_side, invalid_human_side, missing_engine_limit) are preserved via Value::get/as_str/as_u64. Value::as_u64 matches the old strict as_u64 for the integer revisions the frontend sends; it additionally rejects exponent-form integers (e.g. 1e3) that the old parser accepted — the frontend never emits those, so this is a safe tightening for hand-crafted inputs only.
+- Errors (http.rs): write_error now builds the {"error":code} body with serde_json::json!.
+- Removed engine/src/ui/json.rs entirely (AC#2). session.rs and tests.rs migrated from the custom Json/parse to serde_json::Value; wire.rs tests re-expressed against serde_json::Value plus golden-byte assertions for each tagged sub-type (AC#4).
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @george
+created: 2026-07-19 22:57
+---
+Implementation handoff
+Branch: task-68.2-serde-json
+Worktree: /Users/seabo/seaborg-worktrees/task-68.2-serde-json
+Base: 064f883e63cb04883cc3c764d15dd520f7e59441
+Implementation target: e78daa1bbdf576300f55073a86bb877ac8c178c1
+Resolved findings: none
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass
+- cargo test --workspace: pass (all binaries; engine lib 269 passed/2 ignored, ui 77 of them; integration + doc suites green)
+Known failures: none
+---
+<!-- COMMENTS:END -->
