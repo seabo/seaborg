@@ -7,7 +7,7 @@ status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-18 13:18'
-updated_date: '2026-07-19 12:51'
+updated_date: '2026-07-19 12:54'
 labels:
   - engine
   - time
@@ -150,5 +150,25 @@ reserve rather than a defect in this implementation, and that the depth-1 clause
 measurable against the current base build. The human was shown this evidence and directed landing
 the change on that basis; AC5 needs amending by a human rather than ticking. AC1-AC4 are supported
 by unit tests in engine/src/time.rs and by the untouched TASK-7/32/38 fixtures.
+---
+
+author: @codex
+created: 2026-07-19 12:54
+---
+Handoff correction: implementation target is now 96adb9a, not 2cc4d1c.
+
+Master advanced to 74b53d6 while the strength match was running, adding a convention that code
+comments must stand alone without task context. The time.rs comments cited task IDs, so 96adb9a
+rewrites them to state the underlying reason. It is comments-only: `git diff 2cc4d1c..HEAD --
+engine/src/time.rs` changes 0 non-comment lines, so the strength evidence gathered at 2cc4d1c
+describes this target's behavior unchanged.
+
+Re-verified at 96adb9a:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass
+- cargo test --workspace: pass (209 engine, 43 core, 5 build metadata, 1 integration; 3 ignored)
+
+This branch is based on 9b7bf33 and does not contain master's newer commits. Diff against that
+base is confined to engine/src/time.rs and the task file.
 ---
 <!-- COMMENTS:END -->
