@@ -3,6 +3,7 @@ use bitflags::bitflags;
 use std::fmt;
 
 bitflags! {
+    #[derive(Copy, Clone, Debug, Eq, PartialEq)]
     pub struct CastlingRights: u8 {
         const WHITE_QUEENSIDE = 0b0001;
         const WHITE_KINGSIDE  = 0b0010;

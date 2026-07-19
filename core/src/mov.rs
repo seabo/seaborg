@@ -3,6 +3,7 @@ use bitflags::bitflags;
 use std::fmt;
 
 bitflags! {
+    #[derive(Copy, Clone, Debug, Eq, PartialEq)]
     pub struct MoveType: u8 {
         const PROMOTION  = 0b00000001;
         const EN_PASSANT = 0b00000010;

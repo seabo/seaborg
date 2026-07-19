@@ -1,5 +1,6 @@
-use core::position::Square;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use chess_core::position::Square;
+use criterion::{criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
 
 fn criterion_benchmark(c: &mut Criterion) {
     // This previously benchmarked `Square(34)`, constructing a square straight

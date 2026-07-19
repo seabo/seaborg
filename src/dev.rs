@@ -1,5 +1,5 @@
-use core::init::init_globals;
-use core::position::Position;
+use chess_core::init::init_globals;
+use chess_core::position::Position;
 
 pub fn dev() {
     init_globals();
