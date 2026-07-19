@@ -546,8 +546,14 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
             }
 
             if let Some(ep_square) = self.position.ep_square() {
-                // TODO: add an `assert_eq` to check that the rank of ep_square is 6th
-                // rank from the moving player's perspective
+                // The target of an en passant capture sits behind the pawn that just
+                // double-pushed, so it is always on the 6th rank from the moving player's
+                // perspective. `relative_rank(5)` is that rank as an absolute index.
+                debug_assert_eq!(
+                    ep_square.rank_idx_of_sq(),
+                    PL::player().relative_rank(5),
+                    "en passant square must be on the 6th rank from the moving player's perspective"
+                );
 
                 let ep_cap =
                     pawns_not_rank_7 & Bitboard(pawn_attacks_from(ep_square, PL::opp_player()));
@@ -641,8 +647,14 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
             }
 
             if let Some(ep_square) = self.position.ep_square() {
-                // TODO: add an `assert_eq` to check that the rank of ep_square is 6th
-                // rank from the moving player's perspective
+                // The target of an en passant capture sits behind the pawn that just
+                // double-pushed, so it is always on the 6th rank from the moving player's
+                // perspective. `relative_rank(5)` is that rank as an absolute index.
+                debug_assert_eq!(
+                    ep_square.rank_idx_of_sq(),
+                    PL::player().relative_rank(5),
+                    "en passant square must be on the 6th rank from the moving player's perspective"
+                );
 
                 if (ep_square.to_bb() & target).is_empty() {
                     return false;
@@ -714,7 +726,9 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
         debug_assert!(sq.is_okay());
         debug_assert_ne!(P::kind(), PieceType::Pawn);
         match P::kind() {
-            PieceType::None => panic!(), // TODO
+            // No `PieceTrait` type maps to `PieceType::None`, so this arm cannot be
+            // instantiated. It exists only to make the match exhaustive over `PieceType`.
+            PieceType::None => unreachable!("moves_bb is never instantiated with PieceType::None"),
             PieceType::Pawn => panic!(),
             PieceType::Knight => knight_moves(sq),
             PieceType::Bishop => bishop_moves(self.occ, sq),
