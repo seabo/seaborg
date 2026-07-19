@@ -1,11 +1,11 @@
 ---
 id: TASK-57
 title: Rewrite the transposition table around clustered verified snapshots
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-19 00:00'
-updated_date: '2026-07-19 14:06'
+updated_date: '2026-07-19 14:10'
 labels:
   - transposition-table
   - performance
@@ -519,6 +519,53 @@ Verification on 0eec046:
 
 The sixteen acceptance criteria and the final summary continue to describe this
 work accurately; the merge changed one comment line and nothing else of substance.
+---
+
+author: @codex
+created: 2026-07-19 14:10
+---
+Merged
+Primary tip before merge: 08e9261b9e44a98c06342806a41178e8259ae9e4
+Merge commit: fec9f5f
+Approved target: 0eec046
+Result: landed, primary advanced by fast-forward to the verified merge commit
+
+The merge commit was built on a detached HEAD and primary was fast-forwarded to it
+only after the integrated checks passed and the tip was re-read and confirmed
+unchanged, so primary never pointed at an unverified commit.
+
+Integrated verification on fec9f5f:
+- cargo fmt --check: clean
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean on a
+  clean CARGO_TARGET_DIR, exit 0. Run this way deliberately: Cargo caches lint
+  results across the trial merges of a retry loop, so a fast pass can reflect a
+  previous tip rather than this one.
+- cargo test --workspace: 284 passed, 0 failed, 2 ignored (both pre-existing)
+- cargo bench --bench perft --bench movegen: generate moves 186.41 ns against the
+  BENCHMARKS.md 193.83 ns threshold; perft 5 22.266 ms against the 22.472 ms
+  threshold. Both inside the documented limits, and both about 0.4% from the stored
+  criterion baseline, which is flat. The roughly 4% absolute gap from the recorded
+  figures applies equally to both benchmarks, which is the signature of machine
+  conditions rather than a code change: the run was taken under UI load on a machine
+  that was not idle. Neither harness can observe this task in any case — engine/src/
+  perft.rs contains no transposition-table reference and neither bench imports the
+  table. The hot-path evidence that does bear on this change is the depth-10 node
+  count, reproduced round-robin earlier: 4,883,269 -> 4,762,311, bit-identical
+  across rounds, with identical score and principal variation.
+
+Overlap with recently landed work, checked rather than assumed:
+- engine/src/search.rs is the only file this task and post-base master both changed.
+  Master's two commits to it, 13af47e (remove a misleading mate-distance pruning
+  claim) and 74b53d6 (remove process-artifact references), are both comment-only.
+- TASK-42 landed in the same window and touched engine/src/time.rs, which this task
+  does not touch. No other overlap exists.
+
+Recorded for the history: approval authority for this task was the human owner, not
+an independent agent review. The reviewer authored both the REV-1-01..03 comment
+fixes and the merge conflict resolution, and the owner waived a fresh review on the
+grounds that those changes were confined to comments. The independence the lifecycle
+normally provides was not present here, and the verification evidence above is what
+stands in its place.
 ---
 <!-- COMMENTS:END -->
 
