@@ -1,7 +1,7 @@
 ---
 id: TASK-63
 title: Make movestogo and movetime allocation a deliberate policy
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-19 13:17'
@@ -86,3 +86,33 @@ movetime: added move_time_budget() in time.rs rather than inlining the subtracti
 
 Tests whose asserted constants encoded the old periodic arithmetic were updated; see the handoff comment for the exact list and why each changed.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @codex
+created: 2026-07-19 16:41
+---
+Implementation handoff
+Branch: task-63-movestogo-movetime-policy
+Worktree: /Users/seabo/seaborg-worktrees/task-63-movestogo-movetime-policy
+Base: c55508b3383577ed9bb62a9ebadb21fc3ecedc1f
+Implementation target: bf811bf
+Resolved findings: none
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass, no warnings
+- cargo test --workspace: pass, 249 engine + 43 core + 17 others, 0 failed, 2 ignored
+Known failures: none
+
+Reviewer note on AC#6 ('existing regression tests passing unmodified'). The TASK-42 reserve tests, the TASK-38 proportional-opening test and the TASK-32 zero-budget tests all pass unmodified — they exercise sudden-death and increment controls, whose code path is untouched. Four tests that assert periodic (movestogo) constants necessarily changed value, since changing the periodic policy is the task. Each was updated to the new arithmetic with its original purpose intact:
+
+- allocation_preserves_values_above_u32_max (TASK-7 overflow): movestogo 20, divisor 20 -> 21. The u32-narrowing assertion is unchanged and still passes.
+- parses_large_timed_control_values_without_narrowing (TASK-7 overflow, engine/src/uci.rs): same, and the magic number was replaced with the arithmetic so the intent is legible.
+- increment_contributes_to_allocation: movestogo 20, 698/898 -> 655/836.
+- explicit_moves_to_go_controls_allocation_and_zero_is_safe: split. The periodic half became explicit_moves_to_go_divides_the_period_budget; the movestogo-0 half became moves_to_go_of_zero_falls_back_to_the_game_length_heuristic, which AC#1 requires to change (it asserted the 7478ms share-cap maximum the task identifies as the defect).
+- huge_increment_cannot_allocate_more_than_the_clock_holds: kept, but its cap-binding case moved from movestogo 1 to movestogo 2. At movestogo 1 the cap can no longer bind for any increment, which is the point of AC#4, so the old case no longer demonstrated the backstop.
+
+Worth a reviewer's judgement: the share cap is still reachable by a periodic control if the increment exceeds roughly three quarters of the usable clock (e.g. a 1000ms clock with a 5000ms increment and movestogo 2). I read AC#4's 'well-formed' as excluding that, and the sweep test asserts the cap is slack across real controls from 90+30 classical down to 3+2 blitz, plus a synthetic sweep bounded at inc <= usable/2. If you read 'well-formed' more broadly, that is a finding.
+---
+<!-- COMMENTS:END -->
