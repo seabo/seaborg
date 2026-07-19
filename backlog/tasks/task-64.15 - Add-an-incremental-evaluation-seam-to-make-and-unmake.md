@@ -1,9 +1,11 @@
 ---
 id: TASK-64.15
 title: Add an incremental evaluation seam to make and unmake
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-19 13:34'
+updated_date: '2026-07-19 21:55'
 labels:
   - evaluation
   - nnue
@@ -47,3 +49,15 @@ This task delivers the seam and the hand-crafted evaluation's use of it. It does
 - [ ] #6 A benchmark records the change in nodes per second against the from-scratch baseline
 - [ ] #7 The design is documented sufficiently that an NNUE accumulator can be added as a further consumer without reworking the seam
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Add a piece-delta seam to core: a `PieceDeltaSink` trait (add/remove piece at square) and `Position::replay_last_move_deltas`, which replays the board changes of the most recently made move onto a sink using core's existing move geometry (capture, en passant, castling, promotion). This keeps evaluation weights out of core and gives the future NNUE accumulator the same entry point.
+2. Add `EvalState` to engine::eval: a White-relative { mg, eg, phase } accumulator with add_piece/remove_piece primitives (sharing the exact PST arithmetic), `from_position` (from-scratch reference), and `score()` (tapered interpolation). Implement `PieceDeltaSink` for it. Refactor `tapered_evaluation` to `EvalState::from_position(pos).score()` so there is one source of truth.
+3. Wire the seam into Search: hold `eval_state: EvalState` (rebuilt from the position in `build`, so a cloned start position is correct by construction) plus an `eval_stack` for O(1) restore. Add make/unmake wrappers that update the accumulator incrementally on make and restore it from the stack on unmake, and replace the raw pos.make/unmake call sites. `evaluate()` reads `eval_state.score()`.
+4. Correctness: a debug assertion after every make compares the incremental accumulator to a full from-scratch recomputation (fires at every node, not only in unit tests); `evaluate()` asserts the consumed score equals the from-scratch score.
+5. Null moves: none exist yet (TASK-50). Document that a null move moves no piece, so the White-relative accumulator is unchanged across it and must simply be saved/restored; record this constraint for TASK-50.
+6. Tests: deep move-sequence make/unmake round-trip equivalence, cloned-position correctness, and per-node incremental==from-scratch over a real search.
+7. Benchmark: round-robin master vs branch on the search benches; record the NPS change and attribution.
+<!-- SECTION:PLAN:END -->
