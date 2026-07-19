@@ -1,11 +1,11 @@
 ---
 id: TASK-19
 title: Make Git build metadata reproducible and resilient
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-19 14:54'
+updated_date: '2026-07-19 15:03'
 labels:
   - build
   - metadata
@@ -26,11 +26,11 @@ Duplicated build scripts assume Git is installed and the source is a checkout, u
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Building from a source archive or environment without Git succeeds
-- [ ] #2 The embedded revision is trimmed and has a documented fallback value
-- [ ] #3 Cargo reruns metadata generation when the relevant revision state changes
-- [ ] #4 Duplicate build-script logic is removed or shared from one authoritative location
-- [ ] #5 Package, workspace, and engine builds expose consistent version metadata
+- [x] #1 Building from a source archive or environment without Git succeeds
+- [x] #2 The embedded revision is trimmed and has a documented fallback value
+- [x] #3 Cargo reruns metadata generation when the relevant revision state changes
+- [x] #4 Duplicate build-script logic is removed or shared from one authoritative location
+- [x] #5 Package, workspace, and engine builds expose consistent version metadata
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -227,4 +227,94 @@ Known failures: none
 
 Note for the reviewer: the two non-blocking observations from review attempt 1 were left alone as out of scope. 'cargo package' still fails at base and target on the pre-existing 'dependency core does not specify a version', and the 'Acceptance #3/#4/#5' comments at engine/src/engine.rs:413 and :527 predate this branch.
 ---
+
+author: @claude
+created: 2026-07-19 15:03
+---
+Review attempt: 2
+Reviewed branch: task-19-git-build-metadata
+Reviewed implementation: a85e60451ce0fd7eaddbe9dfbcab56c6d339f1c1
+Base: 74494612f016a6f44e2bd23bd73661e99a96dc3a
+Verdict: approved
+
+Both attempt-1 findings are resolved, and I reproduced the fixes rather than reading them.
+
+REV-1-01 resolved. The invariant now holds that every emitted rerun-if-changed path exists at emit
+time, achieved by watching the ref's nearest surviving ancestor directory (floored at refs/) instead
+of the loose ref file, plus packed-refs when it exists. I re-ran both original triggers on a85e6045:
+  (b) packed clone, branch feature/deep/work, 'git pack-refs --all' so no loose ref file exists:
+      builds 2 and 3 report 'Fresh seaborg'. Previously this reported
+      'Dirty ...: the file .git/refs/heads/<branch> is missing' on every invocation.
+  (a) 'git init' repo with no packed-refs file: builds 2 and 3 report 'Fresh seaborg'.
+The positive half still works, and the climb is load-bearing rather than theoretical — the packed
+hierarchical name resolved to the surviving .git/refs/heads:
+  empty commit  -> 'Dirty ...: the file .git/refs/heads has changed' -> Compiling -> Fresh, and the
+                   banner then reports the new HEAD (c69e5b699f06 == git rev-parse HEAD).
+  git pack-refs --all in a loose clone -> Dirty on .git/refs/heads -> Compiling -> Fresh, Fresh.
+So both directions of the loose/packed transition are observed and every layout settles.
+
+REV-1-02 resolved. README now names the startup banner and states that stdout carries only name and
+version. Confirmed by channel separation rather than a merged stream:
+  stdout only (2>/dev/null): 'id name seaborg 0.1.0' — no commit.
+  stderr only (2>&1 1>/dev/null): 'seaborg 0.1.0 by George Seabridge (commit 500fc70e3386)'.
+
+Acceptance criteria, all proven by execution:
+#1 Source archive extracted outside any repository builds, banner reports 'commit unknown', and the
+   rebuild stays Fresh. A git shim exiting 127 on PATH inside the repo also builds with 'unknown'.
+#2 SEABORG_GIT_HASH='  pinned-1.2.3  ' embeds 'pinned-1.2.3'; SEABORG_GIT_HASH='   ' falls through
+   to discovery and embeds the real hash; unset outside a repository yields the documented
+   'unknown'. The fallback is documented in README and in the UNKNOWN_GIT_HASH doc comment.
+#3 Proven in four layouts as above: no-op rebuilds Fresh, genuine revision changes rerun.
+#4 engine/build.rs is deleted; build_metadata.rs is the sole implementation and build.rs is a
+   one-line emit() call.
+#5 Proven by a differential self-containment build rather than by inspection. Copying only core/ and
+   engine/ into a standalone two-member workspace: at base 7449461 'cargo build -p engine' fails
+   ('could not compile engine (build script)') because engine/build.rs reaches outside its own
+   package via '#[path = "../build_metadata.rs"]'; at a85e6045 the same isolated tree compiles
+   cleanly. env!("GIT_HASH") now has exactly one consumer, src/cmdline.rs:52, which passes it to
+   EngineInfo, so workspace, isolated-package, and archive builds cannot diverge.
+
+Comment quality: the new comments state their reasoning without external references. No task ID,
+acceptance criterion, review finding ID, or Backlog document is cited in build_metadata.rs,
+tests/build_metadata.rs, build.rs, or README.md, and none merely restate the code — the watch_paths
+and emit() doc comments explain why a missing path is a correctness problem and why the refs floor
+exists. The pre-existing 'Acceptance #3/#4/#5' comments at engine/src/engine.rs:413 and :527 predate
+this branch and are untouched.
+
+No #[allow] is introduced by this diff; the #[allow(dead_code)] in tests/build_metadata.rs is present
+at the base commit.
+
+Verification, all run by the reviewer on the target rather than taken from the handoff:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass, no warnings, confirmed
+  with a clean CARGO_TARGET_DIR
+- cargo test --workspace: pass, 43 + 235 + 17 + 1, 0 failed, 2 ignored (pre-existing)
+- Benchmarks not run: the diff touches build-time metadata emission only, with no move generation or
+  search code in scope.
+
+Non-blocking observations, no action required on this task:
+- Under Git's opt-in reftable backend ('git init --ref-format=reftable', non-default in git 2.50.1)
+  the embedded hash goes stale silently: refs live in .git/reftable/ while .git/refs exists but stays
+  empty, so a commit leaves the crate Fresh and the banner keeps reporting the old commit (observed
+  4eb1d02abddd after HEAD moved to 024fd020). This is strictly better than the base commit, which
+  emitted no watch directives at all and so went stale in every layout, and the repository does not
+  use that backend. Recording it as a latent gap for a human to decide on, not as a blocker.
+- Watching the containing directory means unrelated branch churn under refs/heads (a fetch, or
+  creating another branch) reruns the build script. That is over-triggering rather than incorrect
+  output, and it is the necessary cost of never declaring an absent path.
+- 'cargo package -p seaborg' still fails identically at base and target on the pre-existing
+  "dependency 'core' does not specify a version", so packaging cannot be proven through that
+  command either before or after this change; AC #5 was proven by the isolated build above instead.
+
+The approved code target is a85e60451ce0fd7eaddbe9dfbcab56c6d339f1c1. This approval commit changes
+only the task file.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Consolidated Git revision metadata into a single build_metadata.rs behind emit(), deleted engine/build.rs and its cross-package '#[path = "../build_metadata.rs"]' escape, added a SEABORG_GIT_HASH override with trimming and blank-value fallthrough, and gave Cargo correct rebuild triggers by watching only paths that exist: worktree-local HEAD, the nearest surviving ancestor directory of the branch ref under the shared refs/ tree, and packed-refs when present.
+
+Verified on a85e6045 by the reviewer: cargo fmt --check, cargo clippy --workspace --all-targets --all-features -- -D warnings (clean CARGO_TARGET_DIR, no warnings), cargo test --workspace (43+235+17+1 pass, 2 pre-existing ignored). Empirically: no-op rebuilds stay Fresh in packed, loose, hierarchical-packed and git-init layouts while a commit or 'git pack-refs --all' reruns the script and embeds the new hash; a repo-less source archive and a git-absent PATH both build with commit 'unknown'; SEABORG_GIT_HASH pins verbatim after trimming and a whitespace-only value falls through; the engine package now builds standalone where it failed to at the base commit.
+<!-- SECTION:FINAL_SUMMARY:END -->
