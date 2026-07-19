@@ -1,3 +1,6 @@
+use std::io::Write;
+use std::path::PathBuf;
+
 use crate::dev::dev;
 use crate::perft::{perft, PerftArgs};
 use clap::{Parser, Subcommand};
@@ -30,7 +33,26 @@ enum Commands {
     Dev,
     /// Print the notices for third-party material embedded in this executable
     Licenses,
-    // A `lichess` subcommand for online play is expected here; it dispatches like the peers above.
+    /// Play on Lichess as a bot, or upgrade the account to a bot
+    Lichess(LichessArgs),
+}
+
+/// Arguments for Lichess bot play.
+#[derive(Debug, clap::Args)]
+pub struct LichessArgs {
+    /// Load bot configuration from this TOML file instead of the default path
+    #[clap(long, value_name = "PATH")]
+    config: Option<PathBuf>,
+
+    #[clap(subcommand)]
+    command: Option<LichessCommand>,
+}
+
+/// Subcommands under `seaborg lichess`.
+#[derive(Debug, Subcommand)]
+enum LichessCommand {
+    /// Upgrade the authenticated account to a BOT account (irreversible)
+    Upgrade,
 }
 
 /// Arguments for the browser UI mode.
@@ -66,7 +88,57 @@ pub fn cmdline() {
             // itself.
             print!("{}", ui::PIECE_ARTWORK_LICENSE);
         }
+        Commands::Lichess(lichess_args) => run_lichess(&lichess_args),
     }
+}
+
+/// Dispatch the `lichess` subcommand, exiting non-zero on any failure so the
+/// shell and any supervising process see the error.
+fn run_lichess(args: &LichessArgs) {
+    let result = match args.command {
+        None => lichess::run::run(args.config.as_deref()),
+        Some(LichessCommand::Upgrade) => {
+            lichess::run::upgrade(confirm_upgrade).map(|outcome| match outcome {
+                lichess::run::UpgradeOutcome::Upgraded => {
+                    println!("Account upgraded to a BOT account.");
+                }
+                lichess::run::UpgradeOutcome::AlreadyBot => {
+                    println!("Account is already a BOT account; nothing to do.");
+                }
+                lichess::run::UpgradeOutcome::Cancelled => {
+                    println!("Upgrade cancelled.");
+                }
+            })
+        }
+    };
+
+    if let Err(error) = result {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
+}
+
+/// Prompt on the terminal for confirmation before the irreversible bot upgrade.
+///
+/// Returns whether the operator typed an affirmative answer; any other input, or
+/// a failure to read the terminal, is treated as a refusal so the account is
+/// never upgraded by accident.
+fn confirm_upgrade(account: &lichess::account::Account) -> bool {
+    println!(
+        "This will irreversibly convert account '{}' into a BOT account.",
+        account.username
+    );
+    println!("A BOT account can only play through the Bot API and cannot be reverted.");
+    print!("Type 'yes' to continue: ");
+    if std::io::stdout().flush().is_err() {
+        return false;
+    }
+
+    let mut answer = String::new();
+    if std::io::stdin().read_line(&mut answer).is_err() {
+        return false;
+    }
+    answer.trim().eq_ignore_ascii_case("yes")
 }
 
 /// Serve the browser UI until the process is interrupted.
