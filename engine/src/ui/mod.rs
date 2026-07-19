@@ -16,4 +16,5 @@ mod tests;
 
 pub use server::{
     bind, open_browser, UiConfig, UiError, UiHandle, UiServer, MAX_CONNECTIONS, MAX_REQUEST_BODY,
+    PIECE_ARTWORK_LICENSE,
 };

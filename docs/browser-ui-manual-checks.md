@@ -39,6 +39,12 @@ In the Network panel, reload with the cache disabled and confirm every request i
 `pieces.svg`, `/api/state`, and `/api/events` — and nothing else. There must be no font
 service, CDN, analytics, or source-map fetch.
 
+The piece artwork is third-party work embedded in the executable, so this check is also what
+proves it is served locally rather than hot-linked. Follow the **Notice** link in the page
+footer: it must serve the attribution from the same origin, name Colin M.L. Burnett, and
+reproduce the BSD 3-clause conditions and disclaimer. `seaborg --licenses` prints the same text
+for someone who never opens the UI.
+
 ## 2. Desktop layout, both colours
 
 At roughly 1440×1000:
