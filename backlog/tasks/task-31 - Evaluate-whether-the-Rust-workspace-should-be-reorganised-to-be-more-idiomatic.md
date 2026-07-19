@@ -1,11 +1,11 @@
 ---
 id: TASK-31
 title: Evaluate whether the Rust workspace should be reorganised to be more idiomatic
-status: In Review
+status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-17 23:35'
-updated_date: '2026-07-19 21:21'
+updated_date: '2026-07-19 21:24'
 labels:
   - architecture
 dependencies: []
@@ -25,10 +25,10 @@ Review the overall layout of the Cargo workspace (crate boundaries, module organ
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The current workspace and crate layout is documented, including crate responsibilities and inter-crate dependencies
-- [ ] #2 Deviations from idiomatic Rust workspace conventions are identified and explained
-- [ ] #3 Concrete reorganisation recommendations (or a justified no-change conclusion) are provided, each with rationale and rough effort
-- [ ] #4 Any recommended follow-up restructuring work is captured as separate tasks
+- [x] #1 The current workspace and crate layout is documented, including crate responsibilities and inter-crate dependencies
+- [x] #2 Deviations from idiomatic Rust workspace conventions are identified and explained
+- [x] #3 Concrete reorganisation recommendations (or a justified no-change conclusion) are provided, each with rationale and rough effort
+- [x] #4 Any recommended follow-up restructuring work is captured as separate tasks
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -112,4 +112,31 @@ Verification:
 - cargo test --workspace: passed (45 core tests; 271 engine tests passed, 2 ignored; 19 integration tests; 1 compile-fail doctest)
 Known failures: none
 ---
+
+author: @codex
+created: 2026-07-19 21:24
+---
+Review attempt: 2
+Reviewed branch: task-31-workspace-layout
+Reviewed implementation: f52a3ffa002fb10d1322ebbaeafd832fd2d34f62
+Verdict: approved
+
+Resolved findings verified: REV-1-01, REV-1-02.
+
+Verification:
+- git merge-base --is-ancestor c7826f15b267cd89b0c1c02c97b5294f6ec9bf57 f52a3ffa002fb10d1322ebbaeafd832fd2d34f62: passed
+- git merge-base --is-ancestor f52a3ffa002fb10d1322ebbaeafd832fd2d34f62 HEAD: passed
+- cargo metadata --no-deps --format-version 1 and manifest/crate-root/consumer inspection: passed
+- TASK-20, TASK-21, and TASK-67 scope inspection: passed
+- cargo fmt --check: passed
+- clean CARGO_TARGET_DIR cargo clippy --workspace --all-targets --all-features -- -D warnings: passed
+- cargo test --workspace: passed (45 core tests; 271 engine tests passed, 2 ignored; 19 integration tests; 1 compile-fail doctest)
+- Hot-path benchmarks: not applicable; implementation changes documentation and task metadata only.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Documented the three-package Cargo workspace, its acyclic dependency structure, target and module organization, and the principal convention gaps. Recommended focused crate/API and manifest/dependency cleanup while retaining the current directories and package boundaries; follow-up work is captured in TASK-20, TASK-21, and TASK-67. Independently verified against manifests, Cargo metadata, crate roots, consumers, and follow-up task scopes; cargo fmt, clean-target strict Clippy, and all workspace tests passed.
+<!-- SECTION:FINAL_SUMMARY:END -->
