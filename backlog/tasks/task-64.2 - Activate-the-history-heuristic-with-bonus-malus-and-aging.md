@@ -5,7 +5,7 @@ status: In Review
 assignee:
   - '@george'
 created_date: '2026-07-19 13:30'
-updated_date: '2026-07-19 21:20'
+updated_date: '2026-07-19 21:21'
 labels:
   - search
   - move-ordering
@@ -84,5 +84,11 @@ Verification:
 - cargo test --workspace: PASS (45 core, 274 engine passed / 2 ignored, 19 build metadata, 1 doc)
 - python3 tools/strength/strength_test.py (smoke, 4 games, depth=4): INCONCLUSIVE, 2-0-2, LLR 0.0, no crashes or forfeits
 Known failures: none
+---
+
+author: @george
+created: 2026-07-19 21:21
+---
+Handoff correction: the full implementation target SHA is 88cbd082406a4442f1b78621a90116df94cc4145. The abbreviated 88cbd08 in git log was expanded incorrectly in comment #1; all other handoff fields and verification remain unchanged.
 ---
 <!-- COMMENTS:END -->
