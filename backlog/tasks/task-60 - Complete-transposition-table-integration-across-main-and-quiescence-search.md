@@ -1,11 +1,11 @@
 ---
 id: TASK-60
 title: Complete transposition-table integration across main and quiescence search
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-19 00:01'
-updated_date: '2026-07-19 14:53'
+updated_date: '2026-07-19 15:03'
 labels:
   - transposition-table
   - search
