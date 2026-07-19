@@ -25,11 +25,73 @@ use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 
 const MAX_DEPTH: u8 = 255;
 
+/// Remaining search depth at a node.
+///
+/// Signed, and allowed to fall to or below zero, at which point the node hands over to quiescence.
+/// An unsigned depth makes every reduction an underflow hazard: `depth - 1 - r` has no
+/// representation once `r` exceeds the remaining depth, so each reduction would need its own
+/// saturating guard, and one missed guard wraps to a near-infinite depth rather than failing
+/// loudly. Letting depth go negative removes the hazard at the type level.
+pub type Depth = i16;
+
+/// The greatest ply from the root that per-ply state is kept for.
+///
+/// Ply is bounded so that the search stack, the killer table and the recursion itself have a
+/// static limit. The main search hands over to quiescence on reaching it, which bounds the main
+/// tree; quiescence has no cap of its own yet, and capping it is separate work.
+pub const MAX_PLY: usize = 256;
+
+/// Size of the killer table, which covers plies `0..KILLER_PLIES` from the root.
+///
+/// Index 0 is the root, which never records a killer, so the effective reach is plies 1 through
+/// 20. Refutations found deeper than that are dropped rather than growing the table; only the
+/// deepest iterations reach those plies at all.
+const KILLER_PLIES: usize = 21;
+
 /// A node either completed with a usable score or aborted before establishing one.
 type NodeResult = Option<Score>;
 
-fn should_razor(depth: u8, eval: Score, alpha: Score) -> bool {
-    depth <= 6 && alpha.is_cp() && eval + Score::cp(426 + 252 * depth as i16 * depth as i16) < alpha
+fn should_razor(depth: Depth, eval: Score, alpha: Score) -> bool {
+    depth <= 6 && alpha.is_cp() && eval + Score::cp(426 + 252 * depth * depth) < alpha
+}
+
+/// Per-ply state for the node currently occupying that ply of the search path.
+///
+/// Search features routinely need to know something about an ancestor, or need somewhere to record
+/// a decision that only makes sense for one node on the current path. Threading each such value
+/// through the recursion separately does not scale and does not let a node inspect its parent at
+/// all, so they live here, indexed by ply.
+///
+/// A slot holds whatever the node at that ply last wrote. Entries are not cleared between visits:
+/// every field is written before it is read within a single node's lifetime, and a stale value
+/// from a previously searched sibling is meaningless rather than dangerous.
+#[derive(Clone, Copy, Debug)]
+pub struct StackEntry {
+    /// The static evaluation of the position at this ply, where one was computed. `None` at a node
+    /// that returned before evaluating — a transposition cutoff, an immediate draw, or a node that
+    /// went straight to quiescence.
+    pub eval: Option<Score>,
+    /// The move this node is currently searching, i.e. the move played to reach the child at
+    /// `ply + 1`. Null before the move loop starts.
+    pub mov: Move,
+    /// A move this node must not search.
+    ///
+    /// Singular extensions establish that a move is the only good one by re-searching the node
+    /// with that move excluded and checking that everything else fails low. Nothing sets this yet.
+    /// A future user must also keep the excluded re-search out of the transposition table: its
+    /// value describes a restricted move list, not the position, so publishing it under the
+    /// position's key would hand a wrong value to every ordinary visit.
+    pub excluded: Option<Move>,
+}
+
+impl Default for StackEntry {
+    fn default() -> Self {
+        Self {
+            eval: None,
+            mov: Move::null(),
+            excluded: None,
+        }
+    }
 }
 
 /// A limit controlling how long a search may run.
@@ -499,7 +561,11 @@ pub struct Search<'engine> {
     abort_after_nodes: Option<usize>,
     /// Destination for typed search progress events.
     events: Option<Sender<SearchEvent>>,
-    search_depth: u8,
+    /// Per-ply state for the nodes on the current search path, indexed by ply from the root.
+    ///
+    /// Boxed because it is far too large to sit in a stack frame, and allocated once per `Search`
+    /// rather than per node.
+    stack: Box<[StackEntry; MAX_PLY]>,
     depth_reached: u8,
 }
 
@@ -533,7 +599,7 @@ impl<'engine> Search<'engine> {
         Self {
             pos,
             tt,
-            kt: KillerTable::new(20),
+            kt: KillerTable::new(KILLER_PLIES),
             history: HistoryTable::new(),
             pvt: PVTable::new(8),
             trace: Tracer::new(),
@@ -542,7 +608,7 @@ impl<'engine> Search<'engine> {
             stop_time,
             last_deadline_check_nodes: None,
             events,
-            search_depth: 0,
+            stack: Box::new([StackEntry::default(); MAX_PLY]),
             depth_reached: 0,
             min_search_complete: false,
             root_fallback_ready: false,
@@ -562,7 +628,6 @@ impl<'engine> Search<'engine> {
         let start_zob = self.pos.zobrist();
 
         self.trace.commence_search();
-        self.search_depth = d;
         self.min_search_complete = false;
         self.root_fallback_ready = false;
         self.root_fallback = None;
@@ -592,8 +657,8 @@ impl<'engine> Search<'engine> {
             }
 
             let completed_pvt = std::mem::replace(&mut self.pvt, PVTable::new(d));
-            self.search_depth = d;
-            let Some(value) = self.search::<T, Root>(Score::INF_N, Score::INF_P, d) else {
+            let Some(value) = self.search::<T, Root>(Score::INF_N, Score::INF_P, Depth::from(d), 0)
+            else {
                 self.pvt = completed_pvt;
                 break;
             };
@@ -648,15 +713,16 @@ impl<'engine> Search<'engine> {
         &mut self,
         alpha: Score,
         beta: Score,
-        depth: u8,
+        depth: Depth,
+        ply: usize,
     ) -> NodeResult {
-        let result = self.search_inner::<T, Node>(alpha, beta, depth);
+        let result = self.search_inner::<T, Node>(alpha, beta, depth, ply);
 
         if let Some(score) = result {
             debug_assert!(
                 score.is_node_score(),
                 "search returned {score:?} outside the node score band \
-                 (window {alpha:?}..{beta:?}, depth {depth})",
+                 (window {alpha:?}..{beta:?}, depth {depth}, ply {ply})",
             );
         }
 
@@ -667,16 +733,27 @@ impl<'engine> Search<'engine> {
         &mut self,
         mut alpha: Score,
         mut beta: Score,
-        depth: u8,
+        depth: Depth,
+        ply: usize,
     ) -> NodeResult {
         self.trace.visit_node();
 
-        let draft = self.search_depth - depth;
+        debug_assert!(!Node::root() || ply == 0);
+
+        // Per-ply state and the recursion itself are bounded by `MAX_PLY`. A node with no room left
+        // for a child hands over to quiescence rather than extending the path further. This is what
+        // lets everything below index the stack unconditionally: any node that reaches the move
+        // loop has both `ply` and `ply + 1` in range, so no extension can drive the main search
+        // past the end of its own state.
+        if ply + 1 >= MAX_PLY {
+            return self.quiesce::<T, Node>(alpha, beta, ply);
+        }
 
         // The PV row for this ply is rebuilt from scratch on every visit, so clear it before any
         // early return can leave a previously searched sibling's line in place for this node's
         // parent to splice into its own PV. See `PVTable::clear_at`.
-        self.pvt.clear_at(depth);
+        self.pvt.clear_at(ply);
+        self.stack[ply].eval = None;
 
         debug_assert!(Score::INF_N <= alpha);
         debug_assert!(alpha < beta);
@@ -703,8 +780,8 @@ impl<'engine> Search<'engine> {
         if !Node::root() {
             // This is deliberately not mate-distance pruning. Mate scores are position-relative,
             // so the root ply does not tighten a descendant's attainable mate range: every node
-            // can still be checkmated now or mate on its next ply. The old root-relative `draft`
-            // bounds were therefore unsound, and no equivalent pruning remains.
+            // can still be checkmated now or mate on its next ply. Bounds derived from the node's
+            // distance from the root were therefore unsound, and no equivalent pruning remains.
             //
             // The clamp is still required as representation hygiene. `child_bound` is exact, so a
             // window at the very bottom of the band arrives here as
@@ -767,9 +844,9 @@ impl<'engine> Search<'engine> {
 
         // Step 4. Check for early cutoff.
         if !Node::pv() {
-            if let Some(entry) =
-                tt_entry.filter(|e| e.depth() >= depth && self.clock_permits_tt_reuse(e.depth()))
-            {
+            if let Some(entry) = tt_entry.filter(|e| {
+                Depth::from(e.depth()) >= depth && self.clock_permits_tt_reuse(e.depth())
+            }) {
                 match entry.bound() {
                     Bound::Exact => {
                         return Some(entry.score());
@@ -797,18 +874,23 @@ impl<'engine> Search<'engine> {
         }
 
         // Step 5. Straight to quiescence search if depth <= 0.
-        if depth == 0 {
-            return self.quiesce::<T, Node>(alpha, beta);
+        //
+        // The test is `<= 0` rather than `== 0` because a reduction may take depth past zero in one
+        // step. Quiescence still receives this node's ply, so its subtree is positioned on the path
+        // rather than starting again from nothing.
+        if depth <= 0 {
+            return self.quiesce::<T, Node>(alpha, beta, ply);
         }
 
         // Step 6. Static evaluation.
         let eval = self.evaluate();
+        self.stack[ply].eval = Some(eval);
 
         // Step 7. Razoring.
         // When eval is very low, check with quiescence whether it has any hope of raising alpha. If
         // not, return a fail low.
         if should_razor(depth, eval, alpha) {
-            let value = self.quiesce::<Master, NonPv>(alpha - Score::cp(1), alpha)?;
+            let value = self.quiesce::<Master, NonPv>(alpha - Score::cp(1), alpha, ply)?;
             if value < alpha {
                 return Some(value);
             }
@@ -842,7 +924,7 @@ impl<'engine> Search<'engine> {
         let mut move_count = 0;
         let mut did_raise_alpha = false;
 
-        'move_loop: while moves.load_next_phase(MoveLoader::from(self, tt_mov, draft)) {
+        'move_loop: while moves.load_next_phase(MoveLoader::from(self, tt_mov, ply)) {
             for mov in &mut moves {
                 if self.stopping() {
                     break 'move_loop;
@@ -855,6 +937,8 @@ impl<'engine> Search<'engine> {
                 if T::is_master() && Node::root() && self.trace.live_elapsed().as_millis() > 3000 {
                     self.emit_current_move(depth, &mov, move_count);
                 }
+
+                self.stack[ply].mov = mov;
 
                 // Step 16. Reductions & extensions.
                 //          TODO
@@ -872,6 +956,7 @@ impl<'engine> Search<'engine> {
                         alpha.inc_one().child_bound(),
                         alpha.child_bound(),
                         depth - 1,
+                        ply + 1,
                     );
                     let Some(child) = child else {
                         self.pos.unmake_move();
@@ -887,8 +972,12 @@ impl<'engine> Search<'engine> {
                 if Node::pv()
                     && (move_count == 1 || (value > alpha && (Node::root() || value < beta)))
                 {
-                    let child =
-                        self.search::<T, Pv>(beta.child_bound(), alpha.child_bound(), depth - 1);
+                    let child = self.search::<T, Pv>(
+                        beta.child_bound(),
+                        alpha.child_bound(),
+                        depth - 1,
+                        ply + 1,
+                    );
                     let Some(child) = child else {
                         self.pos.unmake_move();
                         return None;
@@ -925,7 +1014,7 @@ impl<'engine> Search<'engine> {
                             // never searched with a full window, so publishing it would splice a
                             // non-PV continuation into the reported line. The root always lands
                             // here: its beta is `INF_P` and `value` is asserted below it.
-                            self.pvt.copy_to(depth, mov);
+                            self.pvt.copy_to(ply, mov);
 
                             alpha = value;
                             did_raise_alpha = true;
@@ -934,7 +1023,7 @@ impl<'engine> Search<'engine> {
                             debug_assert!(value >= beta);
                             // beta-cutoff; record killer and history
                             if mov.is_quiet() {
-                                self.kt.store(mov, draft);
+                                self.kt.store(mov, ply);
                             }
 
                             // self.history.inc(
@@ -990,14 +1079,14 @@ impl<'engine> Search<'engine> {
         // returns `None` before this point, and every child search propagates that `None` upwards,
         // so no partially explored value ever reaches the table.
         //
-        // `depth` is at least one here: a depth-zero node delegated to quiescence at Step 5. That is
-        // what reserves [`Self::QUIESCENCE_DRAFT`] for quiescence alone.
-        debug_assert!(depth > Self::QUIESCENCE_DRAFT);
+        // `depth` is at least one here: a node at or below zero delegated to quiescence at Step 5.
+        // That is what reserves [`Self::QUIESCENCE_DRAFT`] for quiescence alone.
+        debug_assert!(depth > Depth::from(Self::QUIESCENCE_DRAFT));
         if self.history_draws == history_draws_on_entry {
             self.tt.store(
                 self.pos.zobrist().0,
                 best_value,
-                depth,
+                Self::tt_draft(depth),
                 if best_value >= beta {
                     debug_assert!(
                         !best_move.is_null()
@@ -1119,6 +1208,23 @@ impl<'engine> Search<'engine> {
     /// only nodes that consume a quiescence entry are the ones whose own search *is* quiescence.
     const QUIESCENCE_DRAFT: u8 = 0;
 
+    /// Narrows a searched depth to the draft the transposition table records.
+    ///
+    /// The table's draft field is a byte, while search depth is signed and, once extensions exist,
+    /// not bounded by the nominal iteration depth. Saturating is the safe direction: an entry that
+    /// understates how deeply it was searched is reused by fewer nodes than it could have been,
+    /// which costs hit rate. Overstating would let a shallow value satisfy a deeper node's depth
+    /// requirement, which is unsound.
+    ///
+    /// Callers have already established `depth >= 1`, since a node at or below zero delegated to
+    /// quiescence before reaching any store. That is what keeps [`Self::QUIESCENCE_DRAFT`]
+    /// reserved for quiescence alone.
+    #[inline(always)]
+    fn tt_draft(depth: Depth) -> u8 {
+        debug_assert!(depth >= 1);
+        depth.clamp(1, Depth::from(u8::MAX)) as u8
+    }
+
     /// Reports whether a stored result of the given depth may be reused at this node, as far as the
     /// halfmove clock is concerned.
     ///
@@ -1181,14 +1287,24 @@ impl<'engine> Search<'engine> {
     /// directly as fail-soft scores, so a window bound that escaped the encoding would become a
     /// node score, and `Debug`/`Display` would render it as nonsense or trip their parity
     /// assertions. See [`Score::is_node_score`].
-    fn quiesce<T: Thread, Node: NodeType>(&mut self, alpha: Score, beta: Score) -> NodeResult {
-        let result = self.quiesce_inner::<T, Node>(alpha, beta);
+    ///
+    /// `ply` is the distance from the root of the node quiescence was entered at, and grows with
+    /// each capture followed. Nothing bounds it yet: a quiescence tree can in principle run deeper
+    /// than the search stack covers, so the ply is carried but not used to index per-ply state.
+    /// Capping the quiescence tree is the reason the value is threaded here at all.
+    fn quiesce<T: Thread, Node: NodeType>(
+        &mut self,
+        alpha: Score,
+        beta: Score,
+        ply: usize,
+    ) -> NodeResult {
+        let result = self.quiesce_inner::<T, Node>(alpha, beta, ply);
 
         if let Some(score) = result {
             debug_assert!(
                 score.is_node_score(),
                 "quiescence returned {score:?} outside the node score band \
-                 (window {alpha:?}..{beta:?})",
+                 (window {alpha:?}..{beta:?}, ply {ply})",
             );
         }
 
@@ -1199,6 +1315,7 @@ impl<'engine> Search<'engine> {
         &mut self,
         mut alpha: Score,
         mut beta: Score,
+        ply: usize,
     ) -> NodeResult {
         self.trace.visit_q_node();
 
@@ -1314,7 +1431,13 @@ impl<'engine> Search<'engine> {
 
         if in_check {
             let moves = self.pos.generate::<BasicMoveList, AllGen, Legal>();
-            return self.quiesce_evasions::<T, Node>(alpha, beta, &moves, history_draws_on_entry);
+            return self.quiesce_evasions::<T, Node>(
+                alpha,
+                beta,
+                ply,
+                &moves,
+                history_draws_on_entry,
+            );
         }
 
         // Step 6. Loop through all the moves until no moves remain or a beta cutoff occurs.
@@ -1328,7 +1451,8 @@ impl<'engine> Search<'engine> {
 
                 // SAFETY: quiescence moves originate from move generation for `self.pos`.
                 unsafe { self.pos.make_move_unchecked(&mov) };
-                let child = self.quiesce::<T, Node>(beta.child_bound(), alpha.child_bound());
+                let child =
+                    self.quiesce::<T, Node>(beta.child_bound(), alpha.child_bound(), ply + 1);
                 self.pos.unmake_move();
                 // An aborted child leaves no usable value, and returning here without storing is
                 // what keeps a truncated subtree out of the table.
@@ -1365,6 +1489,7 @@ impl<'engine> Search<'engine> {
         &mut self,
         mut alpha: Score,
         beta: Score,
+        ply: usize,
         moves: &BasicMoveList,
         history_draws_on_entry: u64,
     ) -> NodeResult {
@@ -1393,7 +1518,7 @@ impl<'engine> Search<'engine> {
             }
 
             self.pos.make_move(mov);
-            let child = self.quiesce::<T, Node>(beta.child_bound(), alpha.child_bound());
+            let child = self.quiesce::<T, Node>(beta.child_bound(), alpha.child_bound(), ply + 1);
             self.pos.unmake_move();
             let score = child?.neg().inc_mate();
 
@@ -1470,9 +1595,12 @@ impl<'engine> Search<'engine> {
         }));
     }
 
-    fn emit_current_move(&self, depth: u8, mov: &Move, num: u8) {
+    /// The reported depth is the node's remaining depth, which at the root is the iteration depth.
+    /// UCI has no representation for a non-positive depth, and the root never has one.
+    fn emit_current_move(&self, depth: Depth, mov: &Move, num: u8) {
+        debug_assert!(depth >= 1);
         self.emit(SearchEvent::CurrentMove(CurrentMove {
-            depth,
+            depth: depth.clamp(1, Depth::from(u8::MAX)) as u8,
             current_move: *mov,
             number: num,
         }));
@@ -1565,17 +1693,18 @@ impl<'engine> Search<'engine> {
 pub struct MoveLoader<'a, 'search> {
     search: &'a mut Search<'search>,
     hash_move: Option<Move>,
-    draft: u8,
+    /// Ply from the root of the node being ordered, used to find that ply's killer moves.
+    ply: usize,
 }
 
 impl<'a, 'engine> MoveLoader<'a, 'engine> {
     /// Create a `MoveLoader` from the passed `Search`.
     #[inline(always)]
-    pub fn from(search: &'a mut Search<'engine>, hash_move: Option<Move>, draft: u8) -> Self {
+    pub fn from(search: &'a mut Search<'engine>, hash_move: Option<Move>, ply: usize) -> Self {
         MoveLoader {
             search,
             hash_move,
-            draft,
+            ply,
         }
     }
 }
@@ -1605,7 +1734,7 @@ impl<'a, 'search> Loader for MoveLoader<'a, 'search> {
     }
 
     fn load_killers(&mut self, movelist: &mut ScoredMoveList) {
-        let (km1, km2) = self.search.kt.probe(self.draft, &self.search.pos);
+        let (km1, km2) = self.search.kt.probe(self.ply, &self.search.pos);
         let mut cnt = 0;
 
         if let Some(km) = km1 {
@@ -1787,7 +1916,7 @@ mod tests {
         let table = Table::new(1);
         let mut search = Search::new(position, &flag, None, &table);
 
-        let score = search.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P);
+        let score = search.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P, 0);
 
         // Losing the rook is worth exactly its material value. This previously read -495: the
         // evasion search advanced the halfmove clock to 1, and the old clock-scaled evaluation
@@ -1806,7 +1935,7 @@ mod tests {
         let mut search = Search::new(position, &flag, None, &table);
 
         assert_eq!(
-            search.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P),
+            search.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P, 0),
             Some(Score::mate(0))
         );
     }
@@ -1828,7 +1957,7 @@ mod tests {
         search.root_fallback_ready = true;
 
         assert_eq!(
-            search.quiesce_evasions::<Master, Pv>(Score::INF_N, Score::INF_P, &moves, 0),
+            search.quiesce_evasions::<Master, Pv>(Score::INF_N, Score::INF_P, 0, &moves, 0),
             None
         );
     }
@@ -1850,7 +1979,7 @@ mod tests {
             let mut search = Search::new(position.clone(), &flag, None, &table);
 
             assert_eq!(
-                search.quiesce::<Master, NonPv>(Score::cp(-50), Score::cp(-49)),
+                search.quiesce::<Master, NonPv>(Score::cp(-50), Score::cp(-49), 0),
                 Some(expected)
             );
         }
@@ -1979,9 +2108,8 @@ mod tests {
             );
 
             let mut search = Search::new(position, &flag, None, &table);
-            search.search_depth = 4;
             search.pvt = PVTable::new(4);
-            search.search::<Master, NonPv>(Score::cp(299), Score::cp(300), 4)
+            search.search::<Master, NonPv>(Score::cp(299), Score::cp(300), 4, 0)
         };
 
         assert_eq!(
@@ -2019,7 +2147,7 @@ mod tests {
             );
 
             let mut search = Search::new(position, &flag, None, &table);
-            search.quiesce::<Master, NonPv>(Score::cp(299), Score::cp(300))
+            search.quiesce::<Master, NonPv>(Score::cp(299), Score::cp(300), 0)
         };
 
         assert_eq!(score_at(0), Some(Score::cp(300)));
@@ -2090,10 +2218,9 @@ mod tests {
         // Driven at a single fixed depth rather than through iterative deepening. Four plies are
         // needed to reach the third occurrence, so a deepening search would first store legitimate
         // history-independent results from its shallower iterations and mask the suppression.
-        search.search_depth = 4;
         search.pvt = PVTable::new(4);
         search
-            .search::<Master, Root>(Score::INF_N, Score::INF_P, 4)
+            .search::<Master, Root>(Score::INF_N, Score::INF_P, 4, 0)
             .unwrap();
 
         assert!(
@@ -2118,10 +2245,9 @@ mod tests {
         let table = Table::new(16);
         let mut search = Search::new(position.clone(), &flag, None, &table);
 
-        search.search_depth = 3;
         search.pvt = PVTable::new(3);
         search
-            .search::<Master, Root>(Score::INF_N, Score::INF_P, 3)
+            .search::<Master, Root>(Score::INF_N, Score::INF_P, 3, 0)
             .unwrap();
 
         assert!(
@@ -2195,7 +2321,8 @@ mod tests {
             let quiescence_table = Table::new(1);
             let mut quiescence = Search::new(position.clone(), &flag, None, &quiescence_table);
             assert_eq!(
-                quiescence.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P) == Some(Score::zero()),
+                quiescence.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P, 0)
+                    == Some(Score::zero()),
                 expected_draw,
                 "quiescence disagreed at halfmove clock {halfmove_clock}"
             );
@@ -2227,7 +2354,7 @@ mod tests {
         let mut search = Search::new(position, &flag, None, &table);
 
         assert_eq!(
-            search.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P),
+            search.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P, 0),
             Some(Score::zero())
         );
     }
@@ -2248,9 +2375,8 @@ mod tests {
         table.store(position.zobrist().0, seeded, depth, bound, mov);
 
         let mut search = Search::new(position, &flag, None, &table);
-        search.search_depth = 4;
         search.pvt = PVTable::new(4);
-        let score = search.search::<Master, NonPv>(Score::cp(299), Score::cp(300), 4);
+        let score = search.search::<Master, NonPv>(Score::cp(299), Score::cp(300), 4, 0);
 
         (score, search.trace.hash_collisions())
     }
@@ -2310,7 +2436,7 @@ mod tests {
         let mut search = Search::new(position.clone(), &flag, None, &table);
 
         let score = search
-            .quiesce::<Master, Pv>(Score::INF_N, Score::INF_P)
+            .quiesce::<Master, Pv>(Score::INF_N, Score::INF_P, 0)
             .unwrap();
 
         let entry = table
@@ -2333,9 +2459,8 @@ mod tests {
 
         let score_with = |table: &Table| {
             let mut search = Search::new(position.clone(), &flag, None, table);
-            search.search_depth = 1;
             search.pvt = PVTable::new(1);
-            search.search::<Master, NonPv>(Score::cp(299), Score::cp(300), 1)
+            search.search::<Master, NonPv>(Score::cp(299), Score::cp(300), 1, 0)
         };
 
         let seeded = Table::new(1);
@@ -2371,7 +2496,7 @@ mod tests {
         search.abort_after_nodes = Some(1);
 
         assert_eq!(
-            search.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P),
+            search.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P, 0),
             None,
             "the abort must actually cut the subtree short"
         );
@@ -2398,7 +2523,7 @@ mod tests {
         let mut search = Search::new(position.clone(), &flag, None, &table);
 
         search
-            .quiesce::<Master, Pv>(Score::INF_N, Score::INF_P)
+            .quiesce::<Master, Pv>(Score::INF_N, Score::INF_P, 0)
             .unwrap();
 
         assert!(
@@ -2484,7 +2609,7 @@ mod tests {
         let mut search = Search::new(position, &flag, None, &table);
 
         assert_eq!(
-            search.quiesce::<Master, NonPv>(Score::cp(-1), Score::zero()),
+            search.quiesce::<Master, NonPv>(Score::cp(-1), Score::zero(), 0),
             Some(Score::zero())
         );
     }
@@ -2746,7 +2871,7 @@ mod tests {
         assert!(!out_of_band_alpha.is_node_score());
         assert!(!out_of_band_beta.is_node_score());
 
-        for depth in [0, 1, 2] {
+        for depth in [0 as Depth, 1, 2] {
             let flag = AtomicBool::new(false);
             let table = Table::new(1);
             let (sender, _events) = unbounded();
@@ -2758,12 +2883,8 @@ mod tests {
                 sender,
             );
 
-            // Entering below the root, so `draft` is measured from this node rather than from a
-            // root that was never searched.
-            search.search_depth = depth;
-
             let value = search
-                .search::<Master, NonPv>(out_of_band_alpha, out_of_band_beta, depth)
+                .search::<Master, NonPv>(out_of_band_alpha, out_of_band_beta, depth, 0)
                 .expect("an uncancelled search must produce a score");
 
             assert!(
@@ -2794,7 +2915,7 @@ mod tests {
         );
 
         let value = search
-            .quiesce::<Master, NonPv>(Score::from_i16(20_100), Score::from_i16(20_101))
+            .quiesce::<Master, NonPv>(Score::from_i16(20_100), Score::from_i16(20_101), 0)
             .expect("an uncancelled quiescence search must produce a score");
 
         assert_eq!(value, Score::mate(1));
@@ -2902,11 +3023,10 @@ mod tests {
         // Permit the test abort immediately and fire it in the first child: the root consumes one
         // node, makes a move, and the recursive search consumes the second node before stopping.
         search.min_search_complete = true;
-        search.search_depth = 2;
         search.pvt = PVTable::new(2);
         search.abort_after_nodes = Some(2);
 
-        let result = search.search::<Master, Root>(Score::INF_N, Score::INF_P, 2);
+        let result = search.search::<Master, Root>(Score::INF_N, Score::INF_P, 2, 0);
 
         assert_eq!(result, None, "an aborted child must not yield a score");
         assert_eq!(search.trace.all_nodes_visited(), 2);
@@ -3286,6 +3406,78 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// An extended subtree runs deeper than the horizon the PV table was sized for, so it reaches
+    /// plies the table has no row for.
+    ///
+    /// While per-ply state was derived by subtracting remaining depth from the iteration depth,
+    /// this was fatal rather than merely untidy: the subtraction underflowed, and the wrapped
+    /// result indexed the PV table far out of bounds. Indexing by ply makes the deep plies simply
+    /// fall outside the table, so the search completes and reports the part of the line the table
+    /// does cover — every move of which must still be legal.
+    #[test]
+    fn a_node_searched_past_the_nominal_horizon_still_reports_a_legal_pv() {
+        core::init::init_globals();
+
+        // The horizon the PV table is sized for, and the greater depth the node is actually
+        // searched to, standing in for what an extension would produce.
+        const NOMINAL: u8 = 3;
+        const EXTENDED: Depth = 6;
+
+        for (label, root) in pv_legality_positions() {
+            let flag = AtomicBool::new(false);
+            let table = Table::new(1);
+            let mut search = Search::new(root.clone(), &flag, None, &table);
+            search.pvt = PVTable::new(NOMINAL);
+
+            search
+                .search::<Master, Root>(Score::INF_N, Score::INF_P, EXTENDED, 0)
+                .expect("an uncancelled search must produce a score");
+
+            let pv = search.pvt.pv().copied().collect::<Vec<_>>();
+            assert!(
+                pv.len() <= NOMINAL as usize,
+                "a node past the horizon wrote a row the table does not cover: \
+                 reported {} moves for `{label}`",
+                pv.len(),
+            );
+            assert_pv_is_legal(&label, &root, NOMINAL, &pv);
+        }
+    }
+
+    /// A reduction can take remaining depth past zero in a single step, so depth is signed and the
+    /// handover to quiescence triggers on "at or below zero" rather than on an exact zero. An
+    /// unsigned depth would have wrapped to a near-infinite one instead.
+    #[test]
+    fn a_depth_reduced_below_zero_hands_over_to_quiescence() {
+        core::init::init_globals();
+
+        let position = Position::from_fen(
+            "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5Q2/PPPP1PPP/RNB1K1NR w KQkq - 4 4",
+        )
+        .unwrap();
+
+        for depth in [0 as Depth, -1, -7] {
+            let flag = AtomicBool::new(false);
+            let table = Table::new(1);
+            let mut search = Search::new(position.clone(), &flag, None, &table);
+            let searched = search
+                .search::<Master, Pv>(Score::INF_N, Score::INF_P, depth, 0)
+                .expect("an uncancelled search must produce a score");
+
+            let flag = AtomicBool::new(false);
+            let table = Table::new(1);
+            let mut quiescence = Search::new(position.clone(), &flag, None, &table);
+            let expected = quiescence
+                .quiesce::<Master, Pv>(Score::INF_N, Score::INF_P, 0)
+                .expect("an uncancelled quiescence search must produce a score");
+
+            assert_eq!(
+                searched, expected,
+                "depth {depth} did not hand over to quiescence",
+            );
         }
     }
 }

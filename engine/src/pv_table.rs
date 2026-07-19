@@ -16,32 +16,64 @@
 use core::mov::Move;
 
 /// Table for storing the principal variation during search.
+///
+/// The table is a triangular array of rows indexed by *ply from the root*. Row `p` holds the
+/// variation the search intends to play starting from ply `p`, in the order the moves are played,
+/// so row 0 is the principal variation itself.
+///
+/// Rows are indexed by ply rather than by remaining depth because remaining depth is not a
+/// property of the node: two siblings at the same ply may be searched to different depths once
+/// reductions exist, and a node may be searched deeper than the nominal horizon once extensions
+/// exist. Either would make depth-derived rows collide or run off the end of the table. Ply is
+/// unambiguous, so each node writes exactly the row belonging to its own position on the path.
 pub struct PVTable {
     data: Vec<Move>,
-    depth: usize,
+    plies: usize,
 }
 
 impl PVTable {
-    pub fn new(depth: u8) -> Self {
-        let d = depth as usize;
+    /// Build a table able to report a variation `plies` moves long.
+    pub fn new(plies: u8) -> Self {
+        let p = plies as usize;
         Self {
-            data: vec![Move::null(); d * d],
-            depth: d,
+            data: vec![Move::null(); p * p],
+            plies: p,
         }
     }
 
-    /// Called when a move searched at depth `d` improves the score. Copies the current principal
-    /// variation from depth `d-1` and copies it into the depth `d` column of the table, appending
-    /// the new move to the end.
-    pub fn copy_to(&mut self, d: u8, mov: Move) {
-        match d {
-            1 => self.update_leaf(mov),
-            n => self.update_internal(n, mov),
+    /// The greatest number of moves the row for `ply` can hold: everything from `ply` down to the
+    /// last ply the table covers.
+    #[inline(always)]
+    fn row_len(&self, ply: usize) -> usize {
+        self.plies - ply
+    }
+
+    /// Records that the node at `ply` intends to play `mov`, followed by whatever line the child
+    /// at `ply + 1` established.
+    ///
+    /// The child's row is read as it stands, so this must be called after the child returned and
+    /// before any sibling overwrites it.
+    ///
+    /// A node deeper than the table can report is ignored rather than truncating some other ply's
+    /// row: a subtree extended past the nominal horizon simply does not contribute to the reported
+    /// line.
+    pub fn copy_to(&mut self, ply: usize, mov: Move) {
+        if ply >= self.plies {
+            return;
+        }
+
+        let stride = self.plies;
+        let len = self.row_len(ply);
+        let row = ply * stride;
+
+        self.data[row] = mov;
+        if len > 1 {
+            let child = row + stride;
+            self.data.copy_within(child..child + len - 1, row + 1);
         }
     }
 
-    /// Empties the row a node searching at remaining depth `d` would write, so the row no longer
-    /// describes any variation.
+    /// Empties the row belonging to `ply`, so the row no longer describes any variation.
     ///
     /// Search calls this on entry to every node. A node that returns without establishing an exact
     /// line — a transposition cutoff, an immediate draw, mate-distance pruning, razoring, an abort,
@@ -50,44 +82,32 @@ impl PVTable {
     /// would splice that unrelated sibling line into its own PV, producing a reported variation
     /// that does not chain legally.
     ///
-    /// `d == 0` is a no-op: quiescence nodes have no row of their own.
-    pub fn clear_at(&mut self, d: u8) {
-        let m = self.depth;
-        let d = d as usize;
-        let k = m - d;
-        let _ = &mut self.data[(k * m)..(k * m + d)].fill(Move::null());
-    }
+    /// A ply beyond the table's reach has no row to clear and is a no-op, on the same terms as
+    /// [`PVTable::copy_to`].
+    pub fn clear_at(&mut self, ply: usize) {
+        if ply >= self.plies {
+            return;
+        }
 
-    #[inline(always)]
-    fn update_leaf(&mut self, mov: Move) {
-        let m = self.depth;
-        self.data[m * (m - 1)] = mov;
-    }
-
-    #[inline(always)]
-    fn update_internal(&mut self, d: u8, mov: Move) {
-        let m = self.depth;
-        let d = d as usize;
-        let k = m - d;
-
-        let _ = &mut self
-            .data
-            .copy_within(((k + 1) * m)..((k + 1) * m + d - 1), k * m);
-
-        self.data[k * m + d - 1] = mov;
+        let row = ply * self.plies;
+        let len = self.row_len(ply);
+        self.data[row..row + len].fill(Move::null());
     }
 
     /// Get an iterator over the principal variation.
     pub fn pv(&self) -> PVIter<'_> {
         PVIter {
-            iter: self.data[0..self.depth].iter().rev(),
+            iter: self.data[0..self.plies].iter(),
         }
     }
 }
 
 /// An iterator over the principal variation.
+///
+/// The line ends at the first empty slot: a node that stopped short of the horizon left the rest
+/// of its row null, and the moves beyond it belong to no established variation.
 pub struct PVIter<'a> {
-    iter: std::iter::Rev<std::slice::Iter<'a, Move>>,
+    iter: std::slice::Iter<'a, Move>,
 }
 
 impl<'a> Iterator for PVIter<'a> {
@@ -100,24 +120,24 @@ impl<'a> Iterator for PVIter<'a> {
 
 impl std::fmt::Debug for PVTable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let d = self.depth;
+        let d = self.plies;
 
-        write!(f, "    │ ")?;
+        write!(f, "     │ ")?;
         for col in 0..d {
             write!(f, "{:^5} │ ", col)?;
         }
         writeln!(f)?;
 
-        write!(f, "    ├")?;
-        for _ in 0..(d - 1) {
+        write!(f, "─────┼")?;
+        for _ in 0..(d.saturating_sub(1)) {
             write!(f, "───────┼")?;
         }
         writeln!(f, "───────┤")?;
 
-        for row in 0..d {
-            write!(f, " {:>2} │ ", row)?;
+        for ply in 0..d {
+            write!(f, " {:>3} │ ", ply)?;
             for col in 0..d {
-                let mov = self.data[col * d + (d - row - 1)];
+                let mov = self.data[ply * d + col];
                 if mov.is_null() {
                     write!(f, "  *   │ ")?;
                 } else {
@@ -145,7 +165,8 @@ mod tests {
         table.pv().copied().collect()
     }
 
-    /// A PV is assembled from the leaf upwards, one row per ply.
+    /// A PV is assembled from the leaf upwards, one row per ply, and each row is spliced onto the
+    /// row belonging to the ply below it.
     #[test]
     fn copy_to_chains_each_ply_onto_the_line_below_it() {
         let a = mov(Square::E2, Square::E4);
@@ -153,9 +174,9 @@ mod tests {
         let c = mov(Square::G1, Square::F3);
 
         let mut table = PVTable::new(3);
-        table.copy_to(1, c);
-        table.copy_to(2, b);
-        table.copy_to(3, a);
+        table.copy_to(2, c);
+        table.copy_to(1, b);
+        table.copy_to(0, a);
 
         assert_eq!(pv_of(&table), vec![a, b, c]);
     }
@@ -167,8 +188,8 @@ mod tests {
         let b = mov(Square::E7, Square::E5);
 
         let mut table = PVTable::new(3);
-        table.copy_to(2, b);
-        table.copy_to(3, a);
+        table.copy_to(1, b);
+        table.copy_to(0, a);
 
         assert_eq!(pv_of(&table), vec![a, b]);
     }
@@ -183,32 +204,51 @@ mod tests {
 
         let mut table = PVTable::new(3);
 
-        // A sibling subtree searched to the horizon, leaving rows for plies 2 and 3 populated.
-        table.copy_to(1, mov(Square::G1, Square::F3));
-        table.copy_to(2, sibling_reply);
-        table.copy_to(3, sibling);
+        // A sibling subtree searched to the horizon, leaving rows for plies 1 and 2 populated.
+        table.copy_to(2, mov(Square::G1, Square::F3));
+        table.copy_to(1, sibling_reply);
+        table.copy_to(0, sibling);
         assert_eq!(pv_of(&table).len(), 3);
 
-        // The next root move's subtree returns early, so its ply-2 row is only cleared, never
+        // The next root move's subtree returns early, so its ply-1 row is only cleared, never
         // written. The root must then report just its own move.
-        table.clear_at(2);
-        table.copy_to(3, chosen);
+        table.clear_at(1);
+        table.copy_to(0, chosen);
 
         assert_eq!(pv_of(&table), vec![chosen]);
     }
 
-    /// Quiescence nodes sit below the table, so clearing at remaining depth zero does nothing.
+    /// A subtree extended past the nominal horizon reaches plies the table has no row for. Those
+    /// nodes must be ignored rather than corrupting a row that belongs to a shallower ply.
     #[test]
-    fn clear_at_zero_depth_is_a_no_op() {
+    fn plies_beyond_the_table_neither_panic_nor_disturb_the_reported_line() {
         let a = mov(Square::E2, Square::E4);
+        let b = mov(Square::E7, Square::E5);
 
         let mut table = PVTable::new(2);
-        table.copy_to(1, mov(Square::E7, Square::E5));
-        table.copy_to(2, a);
+        table.copy_to(1, b);
+        table.copy_to(0, a);
         let before = pv_of(&table);
 
-        table.clear_at(0);
+        table.clear_at(2);
+        table.clear_at(7);
+        table.copy_to(2, mov(Square::G1, Square::F3));
+        table.copy_to(7, mov(Square::B1, Square::C3));
 
         assert_eq!(pv_of(&table), before);
+    }
+
+    /// The deepest row the table covers holds a single move, so a node there reports its own move
+    /// and no continuation, without reading a child row that does not exist.
+    #[test]
+    fn the_deepest_row_holds_only_its_own_move() {
+        let a = mov(Square::E2, Square::E4);
+        let b = mov(Square::E7, Square::E5);
+
+        let mut table = PVTable::new(2);
+        table.copy_to(1, b);
+        table.copy_to(0, a);
+
+        assert_eq!(pv_of(&table), vec![a, b]);
     }
 }
