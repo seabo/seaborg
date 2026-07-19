@@ -1,11 +1,11 @@
 ---
 id: TASK-57
 title: Rewrite the transposition table around clustered verified snapshots
-status: In Review
+status: Changes Requested
 assignee:
   - '@codex'
 created_date: '2026-07-19 00:00'
-updated_date: '2026-07-19 13:12'
+updated_date: '2026-07-19 13:28'
 labels:
   - transposition-table
   - performance
@@ -172,5 +172,122 @@ AC#2 and AC#13 require that a hybrid entry can never be consumed. Whether that g
 its density is a decision for a human, and reversing it should not be smuggled into this task.
 
 Flagged rather than actioned, and no follow-up task created: the scope call is not mine to make.
+---
+
+author: @codex
+created: 2026-07-19 13:28
+---
+Review attempt: 1
+Reviewed branch: task-57-tt-clustered-snapshots
+Reviewed implementation: fe46d6d81bde8e685f0c69b174805fd629b0c82d
+Verdict: changes_requested
+
+The implementation is sound and I found no correctness, concurrency, or
+performance defect. All three blocking findings are comment defects in code that
+otherwise needs no change. Substance is not in question; see "Assessment" below.
+
+REV-1-01 [P2] Test doc comments cite acceptance criteria a reader cannot resolve
+Location: engine/src/tt.rs:1074, 1100, 1249, 1300
+Impact: Four test doc comments open with bare process artifacts — "AC#2/AC#5.",
+  "AC#13.", "AC#14.", "AC#11/AC#12." These identify why the work was scheduled,
+  not what the test proves, and become uninterpretable once the Backlog entry is
+  archived. Master commit 74b53d6 ("docs: remove process-artifact references from
+  code comments") removed exactly this pattern across nine files, and 4025c4b
+  tightened the skills to require it, stating: "Test doc comments describe the
+  behavior under test and why it matters, not which criterion demanded the test."
+  Merging these would reintroduce the pattern hours after it was purged.
+  Note in fairness: both commits landed on master AFTER this branch's base
+  (9b7bf33), and the branch's own copy of the implement skill does not contain
+  the rule. This is a standard that moved mid-flight, not a lapse.
+Reproduction: grep -n "/// AC#" engine/src/tt.rs
+Expected: Drop the leading criterion labels. The sentences that follow each
+  prefix already stand alone and state the reason, so no rewriting is needed —
+  only deletion of the four prefixes.
+
+REV-1-02 [P2] The hashfull stride comment states a false justification
+Location: engine/src/tt.rs:645-646
+Impact: The comment reads "A power-of-two stride over a power-of-two cluster
+  count visits `sampled` distinct clusters spread evenly across the table." The
+  stride is `clusters / 250`, which is not a power of two for any cluster count
+  at or above 2^14 — that is, for every table of 1MB or more, including the 16MB
+  default and every size a real session uses. It is a power of two only for
+  tables of 8 clusters to 8192 clusters. The sampling behaviour is correct and
+  well spread regardless (stride >= 1 makes the visited indices distinct, and the
+  sample reaches ~99.6% across the allocation), so this is a wrong reason
+  attached to a right result, in a module where the documented reasoning is
+  itself a deliverable.
+Reproduction: for a 1MB table, capacity_clusters() == 16384 and
+  16384 / 250 == 65, which is not a power of two. Same for every larger size:
+  2^20 / 250 == 4194, 2^24 / 250 == 67108.
+Expected: State the property the code actually relies on — that `stride >= 1`
+  makes the `sampled` visited indices distinct, and that striding rather than
+  taking a prefix is what makes the estimate representative and total down to a
+  one-cluster table. Do not claim the stride is a power of two.
+
+REV-1-03 [P3] hash_probes doc comment lost its meaning and does not parse
+Location: engine/src/trace.rs:124
+Impact: The doc became "The total number of hash probes, which every probe falls
+  into exactly one of." The relative clause has no antecedent it can attach to —
+  a probe cannot fall into a total — and the sentence no longer says what the
+  function sums. The comment it replaced ("calculated as the sum of hits,
+  collisions and clashes recorded") was correct and informative, so this is a
+  regression in clarity introduced by the rename rather than a pre-existing flaw.
+Reproduction: read engine/src/trace.rs:124 against the body on line 126.
+Expected: Say that hits and misses partition every probe, so their sum is the
+  probe count — and, worth stating explicitly here, that hash_collisions is
+  deliberately excluded because it overlaps hits rather than forming a third
+  disjoint category. That overlap is documented on the field at line 19 but is
+  exactly the non-obvious fact this accessor's reader needs.
+
+Verification (all run by the reviewer on fe46d6d, not taken from the handoff):
+- cargo fmt --check: clean
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean,
+  re-confirmed with a clean CARGO_TARGET_DIR (exit 0, no warnings), since Cargo
+  lint caching can mask a stale pass
+- cargo test --workspace: 236 passed, 0 failed, 2 ignored (both pre-existing)
+- Target immutability: fe46d6d is an ancestor of tip 5262671; the only files
+  changed after it are the task file (handoff and the key-width note). Confirmed
+  no implementation file moved after the recorded target.
+- Search effect, independently reproduced round-robin over three rounds, base
+  9b7bf33 vs target in separate worktrees, release builds, go depth 10 from
+  startpos at the default 16MB hash:
+    base   4,883,269 nodes, hashfull 294, times 831/950/1244 ms
+    target 4,762,311 nodes, hashfull 607, times 883/935/993 ms
+  Node counts are bit-identical across all rounds in both directions, and score
+  cp 0 with an identical 10-move PV. The 2.5% node reduction, the hashfull
+  294 -> 607 density figure, and "time to depth is level within drift" all
+  reproduce exactly as BENCHMARKS.md reports them. The machine carried UI load
+  (load average ~4.7) so the timings are noisy, but the node count is exact and
+  load-independent, and it is the claim that carries the argument.
+
+Assessment (not blocking, recorded so the rework stays bounded):
+- I reviewed the snapshot protocol, replacement policy, sizing, telemetry, and
+  the search integration against the full base-to-target diff and found no
+  defect. The XOR-validated pair genuinely makes a hybrid entry unconsumable, the
+  Relaxed justification is correct (validation is value-based, so reordering only
+  changes which pairing is observed and every pairing is checked), and both hot
+  paths are bounded with no CAS and no retry.
+- I specifically chased the one hazard the design introduces: clear_hash now
+  panics via Arc::get_mut if a worker still holds the table. I traced every
+  caller. SearchHandle::wait() is a real JoinHandle::join(), and the UCI
+  ucinewgame path (engine.rs:168-172) and the web UI reset path (game.rs:256-258)
+  both stop and join before calling new_game(). A "ucinewgame" during or right
+  after a search cannot panic. Worth knowing for later: Drop for SearchHandle
+  cancels without joining, so the invariant is upheld by caller discipline rather
+  than structurally — no current path drops a live handle, but a future one could.
+  That is a pre-existing shape and out of scope here; flagging it, not asking for it.
+- On the key-width question raised in comment #2: I agree with the conclusion,
+  and the corrected arithmetic is right — 32 bits buys ~25% more entries, not 2x,
+  and only after restructuring clusters into separate key and data arrays. Against
+  a measured ~1% plausible node gain on a machine whose noise floor is far wider,
+  that is not worth a re-implementation. Keep the full key. The Stockfish-style
+  10-byte/tolerated-tear tradeoff is a genuine policy question, but it inverts
+  AC#2 and AC#13 and correctly belongs to a human and a separate task, not here.
+  You were right not to action it and right not to open a follow-up unasked.
+- Acceptance criteria: I judge every one of the 16 met on the evidence above.
+  None are checked at this verdict only because approval and criterion-checking
+  belong to the same act; they will be checked at approval, and I expect no
+  further verification work beyond re-running the required checks on the new
+  target.
 ---
 <!-- COMMENTS:END -->
