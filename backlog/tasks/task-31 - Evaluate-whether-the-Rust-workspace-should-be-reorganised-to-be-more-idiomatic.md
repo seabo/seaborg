@@ -1,11 +1,11 @@
 ---
 id: TASK-31
 title: Evaluate whether the Rust workspace should be reorganised to be more idiomatic
-status: Changes Requested
+status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 23:35'
-updated_date: '2026-07-19 21:16'
+updated_date: '2026-07-19 21:17'
 labels:
   - architecture
 dependencies: []
@@ -33,10 +33,9 @@ Review the overall layout of the Cargo workspace (crate boundaries, module organ
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Inventory workspace packages, targets, module boundaries, and dependency direction from manifests and source entry points.
-2. Compare the observed layout with idiomatic Cargo workspace and Rust naming conventions, distinguishing structural issues from cosmetic preferences.
-3. Add a durable architecture assessment with concrete recommendations, rationale, effort estimates, and mappings to existing or new follow-up tasks.
-4. Run repository-required checks, record evidence, commit the immutable implementation, and hand the task to independent review.
+1. Correct the manifest duplication analysis so it distinguishes universal package-metadata repetition from selective dependency and path repetition.
+2. Create a separate follow-up task for explicit resolver selection and workspace manifest inheritance, then map the recommendation to that task accurately.
+3. Record resolutions for REV-1-01 and REV-1-02, run the repository-required checks, commit the revised assessment, and hand a new immutable target to independent review.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
