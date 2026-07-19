@@ -581,6 +581,17 @@ impl<'engine> Search<'engine> {
         result
     }
 
+    /// The statistics gathered by the most recent [`Search::run`].
+    ///
+    /// Elapsed time alone cannot explain a change in search speed. A search that finishes sooner
+    /// because it visited fewer nodes got better informed; one that finishes sooner over the same
+    /// nodes got cheaper per node. Node counts and probe outcomes separate the two, and unlike the
+    /// timings they are exact and reproduce run to run, so a measurement harness needs them
+    /// alongside the clock.
+    pub fn trace(&self) -> &Tracer {
+        &self.trace
+    }
+
     fn iterative_deepening<T: Thread>(&mut self, depth: u8) -> Option<SearchResult> {
         let mut result = None;
 
