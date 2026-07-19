@@ -1,11 +1,11 @@
 ---
 id: TASK-64.2
 title: 'Activate the history heuristic with bonus, malus and aging'
-status: In Review
+status: Ready to Merge
 assignee:
   - '@george'
 created_date: '2026-07-19 13:30'
-updated_date: '2026-07-19 21:51'
+updated_date: '2026-07-19 22:04'
 labels:
   - search
   - move-ordering
@@ -158,10 +158,36 @@ Verification:
 Known failures: none
 Note: rework is test-only. history.rs is byte-identical to approved target 88cbd082; the only search.rs change since the master merge is the correctness-suite revalidation, backed by the Syzygy KPvKP tablebase (a1b1 and a1b2 are the position's only two winning moves).
 ---
+
+author: @codex-reviewer
+created: 2026-07-19 22:03
+---
+Review attempt: 2
+Reviewed branch: task-64.2-history-heuristic
+Reviewed implementation: 5d84701744c905683508c0d129108a145f6a2643
+Verdict: approved
+
+Resolves the merge-integration finding (comment #4, @codex-merge). The rework is test-only: history.rs is byte-identical to the previously approved target 88cbd082, and the only search.rs delta since the master merge (b71dcd55) is inside the test module (git diff b71dcd5 5d84701 touches solely 'mod tests'). The base(cbec05f)-to-target diff activates the bounded signed butterfly history — depth-squared bonus on quiet cutoffs, matching malus on searched predecessors, gravity bound in [-32768, 32768] proven overflow-free (max intermediate 2^30 < i32::MAX), and a saturating i16 ordering score so a table value of 32768 stays ahead of an untrained move — and revalidates the over-specified KPvKP entry to accept both a1b1 and a1b2 (the position's only two winning moves by the Syzygy KPvKP tablebase). All eight acceptance criteria are proven. Commits after the target contain only handoff metadata.
+
+AC evidence:
+- AC#1/#2: history_bonus(depth)=min(depth^2, HISTORY_MAX) applied to the cutoff quiet; -bonus applied to every fully-searched quiet predecessor accumulated in failed_quiets (bounded by MAX_MOVES=254). Verified by history_bonus_grows_with_depth_and_gravity_applies_malus.
+- AC#3: gravity update entry += bonus - entry*|bonus|/HISTORY_MAX, clamped bonus, entry stays in [-HISTORY_MAX, HISTORY_MAX]. Verified by gravity_updates_are_bounded_and_adapt_to_opposing_evidence.
+- AC#4/#8: trained_quiets_are_ordered_without_narrowing_history_scores trains good to HISTORY_MAX (>i16::MAX) and poor to -HISTORY_MAX, asserts the raw value exceeds i16::MAX and that good is yielded before poor; the stable selection sort makes this fail under a truncating cast.
+- AC#5: per-search lifetime retained, rationale recorded in notes.
+- AC#6: TASK-27 strength smoke recorded (non-authoritative INCONCLUSIVE 2-0-2).
+- AC#7: history_ordering_score saturates to i16 (search.rs read sites), no truncating cast.
+
+Verification (on 5d84701):
+- cargo fmt --check: PASS
+- CARGO_TARGET_DIR=/tmp/seaborg-review-t642 cargo clippy --workspace --all-targets --all-features -- -D warnings: PASS from a clean target
+- cargo test --workspace: PASS (core 45; engine 276 passed, 2 ignored; build metadata 19; doc 1)
+- Focused: gravity_updates_are_bounded_and_adapt_to_opposing_evidence, history_bonus_grows_with_depth_and_gravity_applies_malus, trained_quiets_are_ordered_without_narrowing_history_scores, gives_correct_answers all PASS
+- Benchmarks: no core/ or movegen changes, so perft/movegen are structurally unaffected. Search hot-path production code is byte-identical to the approved 88cbd082, benchmarked within the 5% gate in review attempt 1 (comment #3). A fresh base-vs-target search bench was attempted but the host was not idle (load ~6, 9 users); the deadline-free variant showed no significant change (median -1.8%, CI straddling zero, p=0.27), corroborating no regression, while the deadline variant produced contention noise (CI 8.9-13.1 ms). No repeatable regression.
+---
 <!-- COMMENTS:END -->
 
 ## Final Summary
 
 <!-- SECTION:FINAL_SUMMARY:BEGIN -->
-Activated bounded signed butterfly history at implementation 88cbd082406a4442f1b78621a90116df94cc4145: quiet beta cutoffs receive depth-squared bonuses, failed predecessor quiets receive maluses, gravity bounds entries, and saturated ordering scores prevent i16 wraparound. Verified by focused regressions, cargo fmt, clean-target strict Clippy, workspace tests, recorded TASK-27 smoke evidence, and same-machine base/target benchmarks.
+Reworked and approved at implementation 5d84701744c905683508c0d129108a145f6a2643: a test-only resolution of the merge-integration finding (comment #4) atop the bounded signed butterfly history. Quiet beta cutoffs receive a depth-squared bonus, searched predecessor quiets receive the matching malus, gravity bounds every entry within [-32768, 32768] with no i32 overflow, and the ordering score saturates to i16 so a well-trained move never wraps below an untrained one. history.rs is byte-identical to the prior approved target 88cbd082; the over-specified KPvKP correctness entry now accepts both a1b1 and a1b2 (Syzygy-confirmed equally optimal). All eight acceptance criteria are proven by focused regressions, cargo fmt --check, clean-target strict Clippy, and the full workspace test suite (core 45; engine 276 passed, 2 ignored). Search hot-path production code is unchanged from the review-attempt-1 in-gate benchmark.
 <!-- SECTION:FINAL_SUMMARY:END -->
