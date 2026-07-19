@@ -7,7 +7,8 @@ inspired by the approach used in [Pleco](https://github.com/sfleischman105/Pleco
 ## Building
 
 `cargo build` is all that is required. The build embeds the current Git commit,
-reported by `seaborg --uci` in the UCI `id` response and in startup diagnostics.
+reported in the startup banner that `seaborg --uci` writes to the diagnostic
+channel. UCI traffic on stdout carries only the name and version.
 
 Git is optional. Building from a source archive, or on a machine without Git
 installed, succeeds and embeds the commit as `unknown`. To pin a known revision

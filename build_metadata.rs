@@ -6,7 +6,7 @@
 //! the binary at runtime instead of growing a second copy of this logic.
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Value embedded when the revision cannot be determined: no Git, no repository, or a checkout
@@ -37,9 +37,6 @@ pub fn emit() {
         Some(pinned) => pinned,
         None => {
             for path in revision_watch_paths() {
-                // A path that does not exist is still worth declaring: Cargo reruns the script
-                // when it appears, which is what happens when the first commit creates a loose
-                // ref.
                 println!("cargo:rerun-if-changed={}", path.display());
             }
 
@@ -80,7 +77,7 @@ pub fn head_ref(contents: Option<&str>) -> Option<String> {
         .filter(|reference| !reference.is_empty())
 }
 
-/// Files whose contents determine the revision, so Cargo knows when to regenerate it.
+/// Paths whose contents determine the revision, so Cargo knows when to regenerate it.
 ///
 /// Without these the build script declares no dependencies at all, and Cargo falls back to
 /// watching the package directory. Repository metadata lives outside the package, so the embedded
@@ -90,25 +87,70 @@ fn revision_watch_paths() -> Vec<PathBuf> {
         return Vec::new();
     };
 
-    let head = git_dir.join("HEAD");
-    let mut paths = vec![head.clone()];
-
-    // A branch checkout moves when its ref file changes, and the ref may be loose or packed. Both
-    // candidates are declared because whether a ref is currently packed is invisible from here.
-    //
     // Refs live in the *common* directory rather than the per-worktree Git directory: in a linked
     // worktree `HEAD` is worktree-local, but the branch it names is shared with the main checkout,
     // so joining the worktree directory would watch a path that never exists.
-    if let Some(reference) = head_ref(std::fs::read_to_string(&head).ok().as_deref()) {
-        let common_dir = git_line(|| run_git(["rev-parse", "--git-common-dir"]))
-            .map(PathBuf::from)
-            .unwrap_or_else(|| git_dir.clone());
+    let common_dir = git_line(|| run_git(["rev-parse", "--git-common-dir"]))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| git_dir.clone());
 
-        paths.push(common_dir.join(reference));
-        paths.push(common_dir.join("packed-refs"));
+    let head = git_dir.join("HEAD");
+    let head_contents = std::fs::read_to_string(&head).ok();
+
+    watch_paths(&git_dir, &common_dir, head_contents.as_deref())
+}
+
+/// Decide which paths to watch for a repository laid out around `git_dir` and `common_dir`.
+///
+/// Every returned path exists. This is a correctness requirement, not tidiness: Cargo does not
+/// read a missing `rerun-if-changed` path as "unchanged", it marks the unit dirty for as long as
+/// the path is absent. Since the build script re-emits the same path on every rerun, naming a file
+/// that is merely *expected* to appear recompiles the crate on every single build, forever.
+///
+/// That rules out naming the loose ref file directly, because a branch ref is stored either loose
+/// or packed and the absent form would be declared in each case. The containing directory is
+/// watched instead. Cargo scans a watched directory recursively, so creating, deleting, renaming,
+/// or rewriting the ref file all register — which covers a plain commit as well as both directions
+/// of the loose/packed transition that `git pack-refs` and `git gc` perform.
+pub fn watch_paths(git_dir: &Path, common_dir: &Path, head_contents: Option<&str>) -> Vec<PathBuf> {
+    let mut paths = vec![git_dir.join("HEAD")];
+
+    // A detached HEAD holds the commit itself, so no ref backs it and there is nothing further to
+    // watch.
+    if let Some(reference) = head_ref(head_contents) {
+        let refs_root = common_dir.join("refs");
+
+        // The ref's own directory may be absent while the ref is packed, and a hierarchical name
+        // such as `refs/heads/feature/work` can leave several levels missing. Climbing to the
+        // nearest surviving ancestor keeps a directory watched in every layout. The climb stops at
+        // `refs`, because the Git directory above it holds the object store, which is expensive to
+        // scan and churns for reasons unrelated to the revision.
+        let ref_directory = common_dir.join(&reference).parent().map(Path::to_path_buf);
+        if let Some(directory) = ref_directory
+            .as_deref()
+            .and_then(nearest_existing_ancestor)
+            .filter(|directory| directory.starts_with(&refs_root))
+        {
+            paths.push(directory);
+        }
+
+        // A packed ref changes value without touching any directory, so this is watched in
+        // addition to the tree above.
+        let packed_refs = common_dir.join("packed-refs");
+        if packed_refs.exists() {
+            paths.push(packed_refs);
+        }
     }
 
+    paths.retain(|path| path.exists());
     paths
+}
+
+/// The deepest existing directory at or above `path`, or `None` if no ancestor of it exists.
+fn nearest_existing_ancestor(path: &Path) -> Option<PathBuf> {
+    path.ancestors()
+        .find(|ancestor| ancestor.is_dir())
+        .map(Path::to_path_buf)
 }
 
 /// Run a Git command, treating an unavailable Git as a plain absence of output.

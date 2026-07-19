@@ -1,11 +1,11 @@
 ---
 id: TASK-19
 title: Make Git build metadata reproducible and resilient
-status: Changes Requested
+status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-19 14:42'
+updated_date: '2026-07-19 14:47'
 labels:
   - build
   - metadata
@@ -36,12 +36,22 @@ Duplicated build scripts assume Git is installed and the source is a checkout, u
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Make build_metadata.rs the single authoritative source: add an emit() entry point that resolves the revision and prints every cargo directive, so each build script is a one-line call.
-2. Honor a SEABORG_GIT_HASH environment override (with rerun-if-env-changed) so source archives, distro packaging, and reproducible builds can pin the revision without Git.
-3. Emit rerun-if-changed for the resolved git dir HEAD, the loose ref HEAD points at, and packed-refs, discovered via 'git rev-parse --git-dir'/'--git-path' so linked worktrees and gitdir files work. Without these, no rerun-if-changed is emitted at all today and the embedded hash goes stale after a commit.
-4. Delete engine/build.rs. Its GIT_HASH is never read by the engine crate, and its '#[path = "../build_metadata.rs"]' escape puts a file outside the engine package into its build, so 'cargo package' on engine cannot work. Removing it eliminates the duplication and leaves the binary crate as the one place that embeds revision metadata, fed into engine through EngineInfo.
-5. Keep resolve_git_hash pure and unit-tested; add tests for the env override precedence, HEAD symref/detached parsing, and the watch-path set.
-6. Run cargo fmt --check, cargo clippy --workspace --all-targets --all-features -- -D warnings, and cargo test --workspace.
+Rework for review attempt 1 (REV-1-01 P1, REV-1-02 P3).
+
+REV-1-01 - never declare a rerun-if-changed path that does not exist.
+1. Establish the invariant that every emitted watch path exists at emit time. Verified against Cargo: a declared missing path leaves the unit Dirty on every subsequent build, indefinitely, because the script re-emits the same missing path each rerun.
+2. Replace the two unconditional ref candidates (<common>/<ref> and <common>/packed-refs) with:
+   - <common>/packed-refs only when it exists;
+   - the nearest existing ancestor directory of <common>/<ref>, searched upward and bounded below by <common>/refs.
+   Watching the containing directory rather than the loose ref file keeps both pack/unpack transitions observable while never naming an absent path: verified that Cargo scans a watched directory recursively, so creating, removing, renaming, or rewriting the ref file in place all mark the unit dirty, and an unchanged repository stays Fresh.
+3. Factor a pure watch_paths(git_dir, common_dir, head_contents) so the layout rules are unit-testable against synthetic repositories rather than only the current checkout.
+4. Rewrite the build_metadata.rs comment that documented only the beneficial half of declaring absent paths.
+
+REV-1-02 - README says the commit appears in the UCI id response; it appears only in the startup banner. Correct the sentence to name the banner.
+
+Tests: regression coverage for the loose layout, the fully packed layout, a packed deep branch name whose intermediate directory is absent, a detached HEAD, and the invariant that no returned path is missing.
+
+Verification: cargo fmt --check, cargo clippy --workspace --all-targets --all-features -- -D warnings, cargo test --workspace, plus a no-op-rebuild-stays-Fresh check in both loose and packed clones.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
