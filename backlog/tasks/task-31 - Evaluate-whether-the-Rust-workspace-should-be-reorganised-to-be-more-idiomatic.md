@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-17 23:35'
-updated_date: '2026-07-19 21:19'
+updated_date: '2026-07-19 21:20'
 labels:
   - architecture
 dependencies: []
@@ -42,13 +42,11 @@ Review the overall layout of the Cargo workspace (crate boundaries, module organ
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Added `docs/workspace-layout-assessment.md` with the package/target inventory, dependency graph, convention analysis, effort-ranked recommendations, and justified no-change conclusion for directory and package splitting. Existing TASK-20 and TASK-21 are the separate follow-ups for every recommended change; no additional task is needed.
+Added `docs/workspace-layout-assessment.md` with the package/target inventory, dependency graph, convention analysis, effort-ranked recommendations, and justified no-change conclusion for directory and package splitting. TASK-20 tracks crate naming and API facades; TASK-21 tracks dependency modernization; TASK-67 tracks explicit resolver selection and workspace manifest inheritance.
 
-Verification passed on implementation target `bb4e08154a2bdf5753a54d5f9ebf9c88357b5a9f`: `cargo fmt --check`; `cargo clippy --workspace --all-targets --all-features -- -D warnings`; `cargo test --workspace`.
+Resolved REV-1-01 by creating TASK-67 and mapping manifest policy to it while retaining dependency modernization under TASK-21. Resolved REV-1-02 by distinguishing metadata repeated by all three packages from selectively shared dependency declarations and path dependencies present only in the root and engine manifests.
 
-Rework resolved REV-1-01 by creating TASK-67 for explicit resolver selection and workspace manifest inheritance, then mapping manifest policy to TASK-67 while retaining dependency modernization under TASK-21.
-
-Resolved REV-1-02 by distinguishing metadata repeated by all three packages from the selectively shared dependency declarations and path dependencies present only in the root and engine manifests.
+Verification passed: `cargo fmt --check`; `cargo clippy --workspace --all-targets --all-features -- -D warnings`; `cargo test --workspace`.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
