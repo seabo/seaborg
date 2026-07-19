@@ -1,11 +1,12 @@
 [package]
 name = "core"
-version = "0.1.0"
-edition = "2021"
-license = "MIT"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [dependencies]
 arrayvec = "0.7.8"
 bitflags = "2.13.1"
-rand = "0.10.2"
+rand.workspace = true
 unicode-segmentation = "1.13.3"

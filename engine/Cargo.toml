@@ -1,14 +1,15 @@
 [package]
 name = "engine"
-version = "0.1.0"
-edition = "2021"
-license = "MIT"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [dependencies]
 core = { path = "../core" }
 crossbeam-channel = "0.5.16"
-separator = "0.4"
+separator.workspace = true
 open = "5.4.0"
 
 [dev-dependencies]
-rand = "0.10.2"
+rand.workspace = true
