@@ -1,11 +1,11 @@
 ---
 id: TASK-23
 title: Enforce Rust workspace quality gates in CI
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-17 17:15'
-updated_date: '2026-07-19 14:35'
+updated_date: '2026-07-19 14:48'
 labels:
   - ci
   - quality
