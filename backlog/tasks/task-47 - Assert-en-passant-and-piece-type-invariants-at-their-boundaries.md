@@ -1,11 +1,11 @@
 ---
 id: TASK-47
 title: Assert en passant and piece-type invariants at their boundaries
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-18 18:30'
-updated_date: '2026-07-19 20:09'
+updated_date: '2026-07-19 20:14'
 labels: []
 dependencies: []
 references:
@@ -47,3 +47,34 @@ Assertions on hot paths must be debug-only so release move generation is unaffec
 4. Add fen tests: at least one rejected inconsistent-ep FEN and one accepted valid one.
 5. Run fmt/clippy/test; confirm no release movegen/perft regression (assertions are debug-only).
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implementation decisions:
+- Movegen ep-rank invariant expressed with debug_assert_eq! comparing ep_square.rank_idx_of_sq() to PL::player().relative_rank(5) (the 6th rank from the mover's perspective, absolute index). Debug-only, so release movegen codegen is unchanged.
+- FEN: parse_ep_square now takes the parsed turn. It parses the square first, then rejects (FenError::EnPassantSquareInvalid) any square whose rank != turn.relative_rank(5) — 6th rank for White to move, 3rd for Black. The unreachable-target canonicalization (canonicalize_ep_square) still runs afterwards for legal-but-uncapturable targets; this new check only rejects the structurally-impossible rank/side mismatch.
+- moves_bb PieceType::None arm: replaced bare panic!()+TODO with unreachable!("...") plus a comment noting no PieceTrait maps to None, so the arm is statically dead and exists only for match exhaustiveness. Release behaviour unchanged (arm was already unreachable dead code).
+- Surveyed all FEN literals in the workspace: none are white-to-move-with-3rd-rank or black-to-move-with-6th-rank, so no existing test/perft FEN is invalidated.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @claude
+created: 2026-07-19 20:14
+---
+Implementation handoff
+Branch: task-47-assert-ep-piece-invariants
+Worktree: /Users/seabo/seaborg-worktrees/task-47-assert-ep-piece-invariants
+Base: aa915d85d32d03d829d0636c6af3e71b40a6632f
+Implementation target: 9f07b54ba6d9f35e1512ccd718ade766c5de9c28
+Resolved findings: none
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean)
+- cargo test --workspace: pass (core 264 passed / 2 ignored; new fen tests included; all other suites green)
+Note on AC #5: the added hot-path assertions are debug_assert_eq! (compiled out in release), and the moves_bb None arm was already statically-dead, so release movegen/perft codegen is unchanged by construction; no benchmark regression is possible from these edits.
+Known failures: none
+---
+<!-- COMMENTS:END -->
