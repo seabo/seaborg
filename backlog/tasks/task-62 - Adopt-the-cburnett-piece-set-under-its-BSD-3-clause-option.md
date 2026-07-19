@@ -1,11 +1,11 @@
 ---
 id: TASK-62
 title: Adopt the cburnett piece set under its BSD 3-clause option
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-19 01:27'
-updated_date: '2026-07-19 14:51'
+updated_date: '2026-07-19 14:54'
 labels: []
 dependencies: []
 references:
