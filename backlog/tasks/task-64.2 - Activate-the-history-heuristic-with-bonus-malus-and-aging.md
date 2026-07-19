@@ -1,11 +1,11 @@
 ---
 id: TASK-64.2
 title: 'Activate the history heuristic with bonus, malus and aging'
-status: Changes Requested
+status: In Progress
 assignee:
   - '@george'
 created_date: '2026-07-19 13:30'
-updated_date: '2026-07-19 21:35'
+updated_date: '2026-07-19 21:38'
 labels:
   - search
   - move-ordering
