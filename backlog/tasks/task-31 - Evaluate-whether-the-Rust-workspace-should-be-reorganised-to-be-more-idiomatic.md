@@ -1,11 +1,11 @@
 ---
 id: TASK-31
 title: Evaluate whether the Rust workspace should be reorganised to be more idiomatic
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-17 23:35'
-updated_date: '2026-07-19 21:20'
+updated_date: '2026-07-19 21:21'
 labels:
   - architecture
 dependencies: []
@@ -95,5 +95,21 @@ Verification:
 - CARGO_TARGET_DIR=/tmp/seaborg-task31-review-clippy cargo clippy --workspace --all-targets --all-features -- -D warnings: passed
 - cargo test --workspace: passed (45 core tests, 271 engine tests with 2 ignored, 19 integration tests, 1 compile-fail doctest)
 - Manifest, crate-root, benchmark, integration-test, example, TASK-20, and TASK-21 inspection: completed
+---
+
+author: @codex
+created: 2026-07-19 21:21
+---
+Implementation handoff
+Branch: task-31-workspace-layout
+Worktree: /Users/seabo/seaborg-worktrees/task-31-workspace-layout
+Base: c7826f15b267cd89b0c1c02c97b5294f6ec9bf57
+Implementation target: f52a3ffa002fb10d1322ebbaeafd832fd2d34f62
+Resolved findings: REV-1-01, REV-1-02
+Verification:
+- cargo fmt --check: passed
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: passed
+- cargo test --workspace: passed (45 core tests; 271 engine tests passed, 2 ignored; 19 integration tests; 1 compile-fail doctest)
+Known failures: none
 ---
 <!-- COMMENTS:END -->
