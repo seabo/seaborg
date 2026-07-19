@@ -630,10 +630,11 @@ mod tests {
             panic!("expected a timed go command");
         };
 
-        // (85899345900 - 30) / 20 + 4294967296, well clear of the share cap. The point is that
-        // neither the clock nor the increment narrows to u32 on the way through.
+        // The period's budget is the usable clock plus the nineteen increments it can still spend,
+        // divided over its twenty moves and a cushion, and is well clear of the share cap. The
+        // point is that neither the clock nor the increment narrows to u32 on the way through.
         let move_time = control.to_move_time(1, Player::WHITE);
-        assert_eq!(move_time, 8_589_934_589);
+        assert_eq!(move_time, ((85_899_345_900 - 30) + 4_294_967_296 * 19) / 21);
         assert!(move_time > u64::from(u32::MAX));
     }
 }
