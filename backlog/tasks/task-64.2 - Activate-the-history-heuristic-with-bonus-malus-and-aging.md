@@ -1,11 +1,11 @@
 ---
 id: TASK-64.2
 title: 'Activate the history heuristic with bonus, malus and aging'
-status: In Progress
+status: In Review
 assignee:
   - '@george'
 created_date: '2026-07-19 13:30'
-updated_date: '2026-07-19 21:38'
+updated_date: '2026-07-19 21:51'
 labels:
   - search
   - move-ordering
@@ -49,11 +49,13 @@ Whether history should be retained across moves within a game, rather than reset
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Replace the unsigned accumulating history entry with a signed, bounded gravity update and depth-squared bonus/malus helpers, retaining per-search lifetime so iterative-deepening evidence carries forward without leaking between unrelated UCI searches.
-2. Track previously searched quiet moves at each main-search node; on a quiet beta cutoff reward the cutoff move and penalize those failed quiet predecessors.
-3. Convert history values to compact ordering scores with explicit saturation, preserving ordering beyond the i16 boundary without a wrapping cast or increasing the per-ply move-ordering footprint.
-4. Add focused history and staged-ordering regressions covering bounded updates, bonus/malus behavior, trained quiet ordering, and values beyond the i16 boundary.
-5. Run focused tests, the TASK-27 strength-regression smoke comparison, and all repository-required formatting, strict Clippy, and workspace tests; record evidence and hand off an immutable commit for review.
+Rework driven by merge finding REV (codex-merge, comment #4): the approved history behavior, once integrated with TASK-64.14 tapered eval on master, makes gives_correct_answers pick a1b2 where it pinned a1b1 for KPvKP pawn-race FEN 8/6pk/8/8/8/8/P7/K7 w - - 0 1.
+
+1. Merge pinned master tip cbec05f into the task branch to reproduce the combined state (done; failure reproduced).
+2. Establish ground truth with the Syzygy KPvKP tablebase: a1b1 and a1b2 are both WIN (the only two winning moves); a2a4 DRAW, a2a3 LOSS. The suite pinned a single arbitrary optimal move, so it is over-specified and rejects an equally-optimal winning move that history/tapered-eval ordering legitimately surfaced.
+3. Resolve by revalidating the expectation (sanctioned by the merge finding): change the suite best-move field from one &str to a slice of acceptable optimal moves and assert membership. The pawn-race entry accepts both a1b1 and a1b2 with a comment citing the tablebase result; every other entry keeps a single-element slice.
+4. Preserve the approved history/search production behavior unchanged; no history.rs/search production changes in this rework.
+5. Run cargo fmt --check, strict clippy, cargo test --workspace; record verification and hand off the integrated commit.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
@@ -64,6 +66,20 @@ Implemented signed butterfly history with depth-squared evidence and bounded gra
 Persistence decision: retain the existing per-search lifetime. Evidence is shared across iterative-deepening iterations within one Search::run, then reset when that run finishes; it does not persist across moves within a game. Search objects and their positions are request-specific today, so carrying this table across moves would require a new game-owned heuristic boundary and reset semantics. Keeping it local avoids leaking stale evidence across unrelated searches while still adapting throughout the tree where the gathered evidence is relevant.
 
 TASK-27 strength smoke: baseline c7826f15b267cd89b0c1c02c97b5294f6ec9bf57 versus candidate working tree, optimized cargo build --release --bin seaborg, FastChess alpha 1.5.0, 4 paired-colour games at depth=4, concurrency=2, Hash=64, Threads=1. Result: non-authoritative INCONCLUSIVE, 2 wins / 0 draws / 2 losses, LLR 0.0 within [-2.94, 2.94], 0 forfeits, 0 crashes, runner exit 0. This smoke run establishes successful match integration but is too small to claim a strength result.
+
+Rework (resolving merge finding, comment #4 @codex-merge).
+
+Proximate failure: with the approved history heuristic integrated onto master (which had gained TASK-64.14 tapered evaluation), search::tests::gives_correct_answers picked a1b2 for the KPvKP pawn-race FEN 8/6pk/8/8/8/8/P7/K7 w - - 0 1 where the suite pinned a1b1. Reproduced on this branch after merging pinned master tip cbec05f.
+
+Ground truth: probed the Syzygy KPvKP tablebase. From the root (White to move) a1b1 = WIN and a1b2 = WIN are the position's only two winning moves; a2a4 = DRAW and a2a3 = LOSS. The king must step aside before pushing, and the two king moves are equally optimal. The suite's single-move pin was therefore over-specified: it rejected an equally-optimal answer whenever quiet-move ordering surfaced the other king move. History ordering (now non-trivial) plus tapered eval legitimately flipped which of the two the depth-22 search returns first.
+
+Resolution (test-only; no engine/production change): changed the correctness suite's best-move field from a single &str to a slice of acceptable optimal moves and assert membership; the pawn-race entry now accepts both a1b1 and a1b2 with a comment recording the tablebase result, and every other entry keeps its single optimum. history.rs is byte-identical to the approved target 88cbd082; the only search.rs delta since the master merge is inside the test module.
+
+Persistence decision (AC#5) unchanged from the approved implementation: history retains per-search lifetime (reset per Search::run, shared across iterative-deepening iterations, not across game moves).
+
+Integration strength smoke (TASK-27 script, on the combined code): baseline = master engine (code cbec05f, built at 18a4fa2) sha256 1db198cd...; candidate = integrated target 5d84701 sha256 23ed3d56...; FastChess alpha 1.5.0, smoke mode, 4 paired-colour games at depth=4, concurrency=2, Hash=64, Threads=1. Result: NON-AUTHORITATIVE INCONCLUSIVE, 2-0-2, LLR 0.0 within [-2.94, 2.94], 0 crashes, 0 forfeits, runner exit 0. Confirms clean match integration of the combined code; too small for a strength claim.
+
+Master moved from cbec05f to 18a4fa2 during rework; the cbec05f..18a4fa2 delta is documentation and backlog files only (no Rust or Cargo changes), so it does not affect this integration. Base pinned at cbec05f per the recorded merge target.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -123,6 +139,24 @@ Failing command: cargo test --workspace
 Evidence: search::tests::gives_correct_answers failed for FEN 8/6pk/8/8/8/8/P7/K7 w - - 0 1 at engine/src/search.rs:2852; integrated search selected a1b2 while the test expects a1b1. Result: 275 passed, 1 failed, 2 ignored. cargo fmt --check and clean-target strict Clippy passed before the test failure.
 
 The detached trial was ejected and primary was not advanced. Rework must preserve the approved history behavior while resolving or deliberately revalidating this TASK-64.14 search expectation on the combined code.
+---
+
+author: @george
+created: 2026-07-19 21:51
+---
+Implementation handoff (rework)
+Branch: task-64.2-history-heuristic
+Worktree: /Users/seabo/seaborg-worktrees/task-64.2-history-heuristic
+Base: cbec05f7527e820b688462930b5a889a368ceb2f (pinned master tip merged at b71dcd55; current master 18a4fa2 differs only by docs/backlog files)
+Implementation target: 5d84701744c905683508c0d129108a145f6a2643
+Resolved findings: merge-integration finding (comment #4, @codex-merge) — gives_correct_answers a1b1/a1b2 expectation on the combined code
+Verification:
+- cargo fmt --check: PASS
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: PASS (clean target CARGO_TARGET_DIR=/tmp/seaborg-task642-clippy)
+- cargo test --workspace: PASS (core 45; engine 276 passed, 2 ignored; build metadata 19; doc 1)
+- TASK-27 strength smoke on integrated code: NON-AUTHORITATIVE INCONCLUSIVE, 2-0-2, LLR 0.0 in [-2.94,2.94], 0 crashes, 0 forfeits, runner exit 0
+Known failures: none
+Note: rework is test-only. history.rs is byte-identical to approved target 88cbd082; the only search.rs change since the master merge is the correctness-suite revalidation, backed by the Syzygy KPvKP tablebase (a1b1 and a1b2 are the position's only two winning moves).
 ---
 <!-- COMMENTS:END -->
 
