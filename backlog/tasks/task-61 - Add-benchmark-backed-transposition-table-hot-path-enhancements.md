@@ -1,11 +1,11 @@
 ---
 id: TASK-61
 title: Add benchmark-backed transposition-table hot-path enhancements
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-19 00:01'
-updated_date: '2026-07-19 20:14'
+updated_date: '2026-07-19 20:18'
 labels:
   - transposition-table
   - performance
@@ -74,6 +74,20 @@ Evaluated two TT hot-path candidates against a new hash-loading benchmark; retai
 
 ### Entry layout (AC#5)
 - Layout is unchanged (only a method was added), so the existing cluster_is_one_cache_line_and_slots_fill_it test still asserts the final layout: Cluster 64 bytes / align 64, Slot 16 bytes, 4 slots per cache line. clusters_are_cache_line_aligned_in_the_allocation covers alignment in the allocation.
+
+## Re-integration (stale-base rework)
+
+The approved target b76a0c2 could not be merged: after its base c55508b, TASK-64.1 (explicit-ply search stack) landed on primary, changing make_move_unchecked to take &mov and giving quiesce an explicit ply argument, which conflicted with the two prefetch insertions. No review defect; a stale-base integration conflict.
+
+Resolved by merging current primary (aa915d8) into the task branch. The only conflict was the quiescence hunk in engine/src/search.rs; resolved by keeping primary's new signatures and placing self.tt.prefetch(self.pos.zobrist().0) between the make_move_unchecked(&mov) and the ply-carrying quiesce recursion. The main-search prefetch hunk auto-merged onto the new &mov signature. tt.rs (prefetch method + test), benches/search.rs, and BENCHMARKS.md merged without conflict and are unchanged from the approved target.
+
+New immutable target: c6bf762 (base aa915d8). Code diff base..target is exactly the four task files (BENCHMARKS.md, benches/search.rs, engine/src/search.rs +20, engine/src/tt.rs +70).
+
+Verification after re-integration:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean
+- cargo test --workspace: pass (43 + 265 + 19 + 1; 2 ignored pre-existing perft suites), incl. prefetch_moves_no_observable_state and cluster_is_one_cache_line_and_slots_fill_it
+- cargo bench --bench search 'hash load/startpos': runs against the new APIs; baseline telemetry reproduces exactly (startpos 2,501,994 nodes / 45.6% hit / hashfull 648), confirming the re-integrated prefetch stays node-count-neutral. Criterion's reported timing 'change' is against a stale saved sample under concurrent machine load, not a node change.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -142,6 +156,25 @@ Rework: reattach this branch's worktree, merge current primary (or rebase the tw
 
 Verification:
 - git checkout --detach aa915d8 && git merge --no-ff 641b7f5: CONFLICT (content) in engine/src/search.rs; merge aborted, primary not advanced.
+---
+
+author: @claude
+created: 2026-07-19 20:18
+---
+Implementation handoff
+Branch: task-61-tt-hot-path-enhancements
+Worktree: /Users/seabo/seaborg-worktrees/task-61-tt-hot-path-enhancements
+Base: aa915d85d32d03d829d0636c6af3e71b40a6632f
+Implementation target: c6bf7622fd657932389b59b68fe9940edde898d1
+Resolved findings: none (stale-base re-integration of previously-approved b76a0c2; no review defect was raised)
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean
+- cargo test --workspace: pass (43 + 265 + 19 + 1; 2 ignored pre-existing perft suites)
+- cargo bench --bench search -- 'hash load': runs against current APIs; baseline telemetry reproduces exactly (node counts unchanged), confirming prefetch node-neutrality after re-integration
+Known failures: none
+
+Reviewer note: this is a fresh immutable target created solely to re-integrate the approved b76a0c2 work onto current primary after a merge eject. The code delta from that prior-approved target is limited to the two prefetch call sites now sitting after make_move_unchecked(&mov) and before the ply-carrying quiesce recursion (TASK-64.1 signatures); tt.rs, benches/search.rs and BENCHMARKS.md are unchanged from the approved target. AC#3's benefit remains mechanism-based and explicitly unquantified as before (documented in BENCHMARKS.md); the machine still carries concurrent load, so a clean round-robin was not obtainable.
 ---
 <!-- COMMENTS:END -->
 
