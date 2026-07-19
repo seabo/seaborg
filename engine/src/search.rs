@@ -129,15 +129,21 @@ impl SearchEngine {
 
     /// Invalidate the shared hash at an explicit administrative boundary.
     ///
-    /// Callers own this operation and must ensure no active searches need the current generation.
-    pub fn clear_hash(&self) {
-        self.table.clear();
+    /// The ownership boundary is enforced rather than merely documented. [`Table::clear`] needs an
+    /// exclusive reference, and `Arc::get_mut` only yields one once no worker holds a clone of the
+    /// table — that is, once every search that could still be relying on its contents has finished.
+    /// A caller that has not stopped its searches gets a panic here rather than silently pulling the
+    /// table out from under a running worker.
+    pub fn clear_hash(&mut self) {
+        Arc::get_mut(&mut self.table)
+            .expect("the hash cannot be cleared while a search still holds the table")
+            .clear();
     }
 
-    /// Begin a new game with a fresh transposition-table generation.
+    /// Begin a new game with an empty transposition table.
     ///
-    /// Normal searches reuse the current generation; only the session owner starts a new one.
-    pub fn new_game(&self) {
+    /// Normal searches reuse the existing contents; only the session owner discards them.
+    pub fn new_game(&mut self) {
         self.clear_hash();
     }
 
@@ -163,6 +169,10 @@ impl SearchEngine {
 
         let cancellation = CancellationToken::new();
         let thread_cancellation = cancellation.clone();
+        // Stamp entries written from now on with a fresh age, so that when this search competes for
+        // a slot with results left by earlier ones, the earlier ones are the cheaper thing to give
+        // up. Ages never invalidate: everything already in the table stays readable.
+        self.table.advance_age();
         let table = Arc::clone(&self.table);
         let (events, receiver) = unbounded();
         let events_probe = events.clone();
@@ -695,55 +705,51 @@ impl<'engine> Search<'engine> {
         }
 
         // Step 3. Load transposition table entry.
-        let (tt_entry, tt_mov) = {
-            use super::tt::Probe::*;
-            match self.tt.probe(&self.pos) {
-                Hit(entry) => {
-                    let e = entry.read();
-                    if e.mov.is_null() {
-                        (entry, None)
+        //
+        // The probe returns an owned snapshot, so everything below reads one atomic state of one
+        // slot. A concurrent worker replacing that slot between here and Step 24 cannot change what
+        // this node consumes.
+        let tt_entry = self.tt.probe(self.pos.zobrist().0);
+        let mut tt_mov = None;
+        match tt_entry.as_ref() {
+            Some(entry) => {
+                self.trace.hash_hit();
+                if let Some(packed) = entry.mov() {
+                    let mov = packed.to_move(&self.pos);
+                    if self.pos.valid_move(&mov) {
+                        tt_move = true;
+                        tt_mov = Some(mov);
                     } else {
-                        let mov = e.mov.to_move(&self.pos);
-                        if self.pos.valid_move(&mov) {
-                            self.trace.hash_hit();
-                            tt_move = true;
-                            (entry, Some(mov))
-                        } else {
-                            self.trace.hash_collision();
-                            (entry, None)
-                        }
+                        // The full key matched but its move is not legal here, so this is a genuine
+                        // Zobrist collision rather than a truncated-signature accident.
+                        self.trace.hash_collision();
                     }
                 }
-                Clash(entry) => {
-                    self.trace.hash_clash();
-                    (entry, None)
-                }
-                Empty(entry) => (entry, None),
             }
-        };
+            None => self.trace.hash_miss(),
+        }
 
         // Step 4. Check for early cutoff.
         if !Node::pv() && tt_move {
-            let entry = tt_entry.read();
+            let entry = tt_entry.expect("a tt move can only come from a verified snapshot");
 
-            if !entry.is_empty() && entry.depth >= depth && self.clock_permits_tt_reuse(entry.depth)
-            {
+            if entry.depth() >= depth && self.clock_permits_tt_reuse(entry.depth()) {
                 match entry.bound() {
                     Bound::Exact => {
-                        return Some(entry.score);
+                        return Some(entry.score());
                     }
                     Bound::Lower => {
-                        if entry.score > beta {
-                            return Some(entry.score);
-                        } else if entry.score > alpha {
-                            alpha = entry.score
+                        if entry.score() > beta {
+                            return Some(entry.score());
+                        } else if entry.score() > alpha {
+                            alpha = entry.score()
                         }
                     }
                     Bound::Upper => {
-                        if entry.score < alpha {
-                            return Some(entry.score);
-                        } else if entry.score < beta {
-                            beta = entry.score
+                        if entry.score() < alpha {
+                            return Some(entry.score());
+                        } else if entry.score() < beta {
+                            beta = entry.score()
                         }
                     }
                 }
@@ -943,8 +949,8 @@ impl<'engine> Search<'engine> {
         // `Upper` bound is unsound in an incompatible history too. The entry is therefore left
         // unwritten and the position is re-searched when it is next reached (TASK-58).
         if self.history_draws == history_draws_on_entry {
-            tt_entry.write(
-                &self.pos,
+            self.tt.store(
+                self.pos.zobrist().0,
                 best_value,
                 depth,
                 if best_value >= beta {
@@ -1167,25 +1173,14 @@ impl<'engine> Search<'engine> {
         }
 
         // Step 3. Load transposition table entry.
-        let (tt_entry, tt_hit) = {
-            use super::tt::Probe::*;
-            match self.tt.probe(&self.pos) {
-                Hit(entry) => {
-                    self.trace.hash_hit();
-                    (entry, true)
-                }
-                Clash(entry) => {
-                    self.trace.hash_clash();
-                    (entry, false)
-                }
-                Empty(entry) => (entry, false),
-            }
-        };
+        let tt_entry = self.tt.probe(self.pos.zobrist().0);
+        match tt_entry {
+            Some(_) => self.trace.hash_hit(),
+            None => self.trace.hash_miss(),
+        }
 
         // Step 4. Check for early TT cutoff.
         if !Node::pv() {
-            let entry = tt_entry.read();
-
             // A quiescence node has depth zero, so results from quiescence or any deeper main
             // search are sufficiently deep. The stored score remains an alpha-beta bound; it is
             // never a replacement for the position's static evaluation.
@@ -1193,23 +1188,23 @@ impl<'engine> Search<'engine> {
             // The clock gate applies here for the same reason it applies in the main search: a
             // stored value never accounts for the fifty-move rule, so it may only be reused where
             // the rule is still out of reach (TASK-58).
-            if tt_hit && !entry.is_empty() && self.clock_permits_tt_reuse(entry.depth) {
+            if let Some(entry) = tt_entry.filter(|e| self.clock_permits_tt_reuse(e.depth())) {
                 match entry.bound() {
                     Bound::Exact => {
-                        return Some(entry.score);
+                        return Some(entry.score());
                     }
                     Bound::Lower => {
-                        if entry.score >= beta {
-                            return Some(entry.score);
-                        } else if entry.score > alpha {
-                            alpha = entry.score
+                        if entry.score() >= beta {
+                            return Some(entry.score());
+                        } else if entry.score() > alpha {
+                            alpha = entry.score()
                         }
                     }
                     Bound::Upper => {
-                        if entry.score <= alpha {
-                            return Some(entry.score);
-                        } else if entry.score < beta {
-                            beta = entry.score
+                        if entry.score() <= alpha {
+                            return Some(entry.score());
+                        } else if entry.score() < beta {
+                            beta = entry.score()
                         }
                     }
                 }
@@ -1381,9 +1376,9 @@ impl<'engine> Search<'engine> {
                 self.trace.hash_collisions() as f64 / self.trace.hash_probes() as f64 * 100.
             );
             println!(
-                " clashes:    {:>8} ({:.1}%)",
-                self.trace.hash_clashes().separated_string(),
-                self.trace.hash_clashes() as f64 / self.trace.hash_probes() as f64 * 100.
+                " misses:     {:>8} ({:.1}%)",
+                self.trace.hash_misses().separated_string(),
+                self.trace.hash_misses() as f64 / self.trace.hash_probes() as f64 * 100.
             );
             println!(" hashfull: {:.2}%", self.tt.hashfull() as f64 / 10.);
             println!("-------------------------");
@@ -1690,10 +1685,7 @@ mod tests {
             (Bound::Upper, Score::cp(-70), Score::cp(-70)),
         ] {
             let table = Table::new(1);
-            table
-                .probe(&position)
-                .into_inner()
-                .write(&position, stored, 0, bound, &Move::null());
+            table.store(position.zobrist().0, stored, 0, bound, &Move::null());
             let mut search = Search::new(position.clone(), &flag, None, &table);
 
             assert_eq!(
@@ -1818,8 +1810,8 @@ mod tests {
                 .iter()
                 .find(|m| format!("{m}").contains("a1b2"))
                 .expect("the king move must be legal");
-            table.probe(&position).into_inner().write(
-                &position,
+            table.store(
+                position.zobrist().0,
                 seeded_score,
                 seeded_depth,
                 Bound::Exact,
@@ -1858,8 +1850,8 @@ mod tests {
             let position = Position::from_fen(&fen).unwrap();
             let flag = AtomicBool::new(false);
             let table = Table::new(1);
-            table.probe(&position).into_inner().write(
-                &position,
+            table.store(
+                position.zobrist().0,
                 Score::cp(300),
                 8,
                 Bound::Exact,
@@ -1949,7 +1941,7 @@ mod tests {
             "the test position must actually exercise a repetition claim"
         );
         assert!(
-            table.probe(&position).into_inner().read().is_empty(),
+            table.probe(position.zobrist().0).is_none(),
             "a repetition-contaminated value must not be written to the table"
         );
     }
@@ -1977,7 +1969,7 @@ mod tests {
             "the test position must actually cross the fifty-move boundary"
         );
         assert!(
-            table.probe(&position).into_inner().read().is_empty(),
+            table.probe(position.zobrist().0).is_none(),
             "a clock-contaminated value must not be written to the table"
         );
     }
@@ -2002,7 +1994,7 @@ mod tests {
             "this position must not claim a history-sensitive draw"
         );
         assert!(
-            !table.probe(&position).into_inner().read().is_empty(),
+            !table.probe(position.zobrist().0).is_none(),
             "a history-independent value must still be stored"
         );
     }
@@ -2037,8 +2029,8 @@ mod tests {
         let position = Position::from_fen("7k/8/8/8/8/8/8/K7 w - - 0 1").unwrap();
         let flag = AtomicBool::new(false);
         let table = Table::new(1);
-        table.probe(&position).into_inner().write(
-            &position,
+        table.store(
+            position.zobrist().0,
             Score::cp(300),
             8,
             Bound::Exact,
@@ -2059,19 +2051,23 @@ mod tests {
         let position = Position::from_fen("7k/8/8/8/8/8/8/K7 w - - 0 1").unwrap();
         let clashing_position = Position::from_fen("7k/8/8/8/8/8/8/K7 b - - 0 1").unwrap();
         let flag = AtomicBool::new(false);
+        // The smallest table is a single cluster, so both positions necessarily share it.
         let table = Table::new(0);
-        assert_eq!(table.capacity_entries(), 1);
-        table.probe(&clashing_position).into_inner().write(
-            &clashing_position,
+        assert_eq!(
+            table.cluster_index(position.zobrist().0),
+            table.cluster_index(clashing_position.zobrist().0)
+        );
+        table.store(
+            clashing_position.zobrist().0,
             Score::cp(300),
             8,
             Bound::Exact,
             &Move::null(),
         );
-        assert!(matches!(
-            table.probe(&position),
-            super::super::tt::Probe::Clash(_)
-        ));
+        assert!(
+            table.probe(position.zobrist().0).is_none(),
+            "another position's entry in the same cluster must not verify"
+        );
         let mut search = Search::new(position, &flag, None, &table);
 
         assert_eq!(
@@ -2118,14 +2114,16 @@ mod tests {
     fn searches_reuse_the_shared_table_until_the_owner_clears_it() {
         core::init::init_globals();
 
-        let engine = SearchEngine::new(1);
+        let mut engine = SearchEngine::new(1);
         let marker = Position::from_fen("7k/8/8/8/8/8/8/K7 w - - 0 1").unwrap();
         assert_ne!(
-            engine.table.idx(marker.zobrist().0),
-            engine.table.idx(Position::start_pos().zobrist().0)
+            engine.table.cluster_index(marker.zobrist().0),
+            engine
+                .table
+                .cluster_index(Position::start_pos().zobrist().0)
         );
-        engine.table.probe(&marker).into_inner().write(
-            &marker,
+        engine.table.store(
+            marker.zobrist().0,
             Score::cp(17),
             1,
             Bound::Exact,
@@ -2138,10 +2136,12 @@ mod tests {
         engine
             .start(Position::start_pos(), SearchLimit::Depth(1))
             .wait();
-        assert!(engine.table.probe(&marker).is_hit());
+        assert!(engine.table.probe(marker.zobrist().0).is_some());
 
+        // `clear_hash` needs an exclusive reference to the table, which is only obtainable once
+        // every search has finished — the boundary that keeps a clear from racing a live worker.
         engine.clear_hash();
-        assert!(!engine.table.probe(&marker).is_hit());
+        assert!(engine.table.probe(marker.zobrist().0).is_none());
     }
 
     #[test]
@@ -2150,8 +2150,8 @@ mod tests {
 
         let engine = SearchEngine::new(1);
         let marker = Position::from_fen("7k/8/8/8/8/8/8/K7 w - - 0 1").unwrap();
-        engine.table.probe(&marker).into_inner().write(
-            &marker,
+        engine.table.store(
+            marker.zobrist().0,
             Score::cp(17),
             1,
             Bound::Exact,
@@ -2163,7 +2163,7 @@ mod tests {
         first.wait();
         second.wait();
 
-        assert!(engine.table.probe(&marker).is_hit());
+        assert!(engine.table.probe(marker.zobrist().0).is_some());
     }
 
     #[test]
@@ -2447,10 +2447,15 @@ mod tests {
         assert_eq!(search.pvt.pv().copied().collect::<Vec<_>>(), expected_pv);
 
         // The aborted depth-two root must not replace the completed depth-one root entry.
-        let root_entry = table.probe(&position).into_inner().read();
-        assert_eq!(root_entry.depth, 1);
+        let root_entry = table
+            .probe(position.zobrist().0)
+            .expect("the completed depth-one root must still be in the table");
+        assert_eq!(root_entry.depth(), 1);
         assert_eq!(
-            root_entry.mov.to_move(&position),
+            root_entry
+                .mov()
+                .expect("the root entry carries its best move")
+                .to_move(&position),
             expected.best_move.unwrap()
         );
     }
@@ -2482,7 +2487,7 @@ mod tests {
             "an aborted child must not become the principal move"
         );
         assert!(
-            table.probe(&position).into_inner().read().is_empty(),
+            table.probe(position.zobrist().0).is_none(),
             "an ancestor whose child aborted must not write a TT entry"
         );
     }

@@ -14,12 +14,16 @@ pub struct Tracer {
     q_nodes_visited: usize,
     /// The number of nodes we skip due to a failed SEE check.
     see_skipped_nodes: usize,
-    /// The number of times we had a hash hit which was useable to return immediately.
+    /// The number of probes that returned a verified entry.
     hash_hits: usize,
-    /// The number of times we had a hash collision.
+    /// The number of verified entries whose stored move was not legal in the probed position.
+    ///
+    /// The table verifies the full Zobrist key, so this counts genuine key collisions rather than
+    /// the truncated-signature accidents a shorter signature would also admit. It overlaps
+    /// `hash_hits`: a collision is a hit whose move could not be used.
     hash_collisions: usize,
-    /// The number of times we had a hash clash (same table slot, different position).
-    hash_clashes: usize,
+    /// The number of probes that found no entry for the position.
+    hash_misses: usize,
     /// Records the duration between start and end of search. Only populated with `Some(duration)`
     /// when `end_search` is called.
     elapsed: Option<Duration>,
@@ -44,7 +48,7 @@ impl Tracer {
             see_skipped_nodes: 0,
             hash_hits: 0,
             hash_collisions: 0,
-            hash_clashes: 0,
+            hash_misses: 0,
             elapsed: None,
             killers_per_node: Averager::new(0),
             hash_found: Averager::new(0),
@@ -85,16 +89,16 @@ impl Tracer {
         self.hash_hits += 1;
     }
 
-    /// Record a hash collisions.
+    /// Record a hash collision.
     #[inline(always)]
     pub fn hash_collision(&mut self) {
         self.hash_collisions += 1;
     }
 
-    /// Record a hash clash.
+    /// Record a probe that found nothing.
     #[inline(always)]
-    pub fn hash_clash(&mut self) {
-        self.hash_clashes += 1;
+    pub fn hash_miss(&mut self) {
+        self.hash_misses += 1;
     }
 
     /// The number of nodes skipped due to SEE check failures during search.
@@ -112,15 +116,14 @@ impl Tracer {
         self.hash_collisions
     }
 
-    /// The number of hash clashes recorded during search.
-    pub fn hash_clashes(&self) -> usize {
-        self.hash_clashes
+    /// The number of hash misses recorded during search.
+    pub fn hash_misses(&self) -> usize {
+        self.hash_misses
     }
 
-    /// The total number of hash probes, calculated as the sum of hits, collisions and clashes
-    /// recorded.
+    /// The total number of hash probes, which every probe falls into exactly one of.
     pub fn hash_probes(&self) -> usize {
-        self.hash_hits + self.hash_collisions + self.hash_clashes
+        self.hash_hits + self.hash_misses
     }
 
     /// The number of nodes visited during main search.
