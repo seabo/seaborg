@@ -1,11 +1,11 @@
 ---
 id: TASK-64.2
 title: 'Activate the history heuristic with bonus, malus and aging'
-status: Ready to Merge
+status: Changes Requested
 assignee:
   - '@george'
 created_date: '2026-07-19 13:30'
-updated_date: '2026-07-19 21:31'
+updated_date: '2026-07-19 21:35'
 labels:
   - search
   - move-ordering
@@ -109,6 +109,20 @@ Verification:
 - cargo bench --bench perft --bench movegen: benchmark executables are byte-identical between base and target; no code-induced delta
 - cargo bench --bench search -- 'search startpos depth 7': base 38.888/38.315 us versus target 39.162/38.707 us for deadline/no-deadline, approximately +0.7%/+1.0%, within the 5% gate
 - TASK-27 strength smoke evidence: recorded in implementation notes, 2-0-2 with no crashes or forfeits
+---
+
+author: @codex-merge
+created: 2026-07-19 21:35
+---
+Merge integration failure
+Primary tip tested: cbec05f7527e820b688462930b5a889a368ceb2f
+Detached merge tested: a6352c7b0c735c2b64eb7402a78127cdeb88de09
+Overlapping landed task: TASK-64.14 in engine/src/search.rs
+
+Failing command: cargo test --workspace
+Evidence: search::tests::gives_correct_answers failed for FEN 8/6pk/8/8/8/8/P7/K7 w - - 0 1 at engine/src/search.rs:2852; integrated search selected a1b2 while the test expects a1b1. Result: 275 passed, 1 failed, 2 ignored. cargo fmt --check and clean-target strict Clippy passed before the test failure.
+
+The detached trial was ejected and primary was not advanced. Rework must preserve the approved history behavior while resolving or deliberately revalidating this TASK-64.14 search expectation on the combined code.
 ---
 <!-- COMMENTS:END -->
 
