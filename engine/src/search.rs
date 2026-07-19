@@ -25,6 +25,9 @@ use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 
 const MAX_DEPTH: u8 = 255;
 
+/// A node either completed with a usable score or aborted before establishing one.
+type NodeResult = Option<Score>;
+
 fn should_razor(depth: u8, eval: Score, alpha: Score) -> bool {
     depth <= 6 && alpha.is_cp() && eval + Score::cp(426 + 252 * depth as i16 * depth as i16) < alpha
 }
@@ -410,14 +413,23 @@ pub struct Search<'engine> {
     /// Time to at which to end search.
     stop_time: Option<Instant>,
     /// Node count at the most recent deadline sample. `usize::MAX` means that a sampled deadline
-    /// expired and remains latched while the search unwinds. Cancellation is deliberately checked
-    /// on every call; only the comparatively expensive clock read is throttled.
+    /// expired and remains latched while the search unwinds. Only the comparatively expensive
+    /// clock read is throttled; the cancellation flag is still read on every call.
     last_deadline_check_nodes: Option<usize>,
-    /// Whether the guaranteed-minimum search (one full ply) has completed. Both abort signals (the
-    /// cancellation flag and the time deadline) are suppressed until this is set, so a search
-    /// always returns a completed legal root move whenever one exists, even when the allotted
-    /// budget is zero or already elapsed or an immediate stop arrives.
+    /// Whether the guaranteed-minimum search (one full ply) has completed. The time deadline is
+    /// suppressed until this is set, so a search always returns a completed legal root move even
+    /// when the allotted budget is zero or already elapsed.
     min_search_complete: bool,
+    /// Whether a legal root fallback has been established. The explicit cancellation flag is
+    /// suppressed until this is set, and from then on it aborts immediately: the fallback
+    /// guarantees a legal bestmove without waiting for the (unbounded) depth-1 quiescence tree.
+    root_fallback_ready: bool,
+    /// The move to report if cancellation ends the search before any iteration completes. It starts
+    /// as the first generated legal root move and is upgraded to the best fully searched root move
+    /// as the first ply progresses. `None` only for a terminal root position.
+    root_fallback: Option<Move>,
+    #[cfg(test)]
+    abort_after_nodes: Option<usize>,
     /// Destination for typed search progress events.
     events: Option<Sender<SearchEvent>>,
     search_depth: u8,
@@ -465,6 +477,10 @@ impl<'engine> Search<'engine> {
             search_depth: 0,
             depth_reached: 0,
             min_search_complete: false,
+            root_fallback_ready: false,
+            root_fallback: None,
+            #[cfg(test)]
+            abort_after_nodes: None,
         }
     }
 
@@ -480,6 +496,8 @@ impl<'engine> Search<'engine> {
         self.trace.commence_search();
         self.search_depth = d;
         self.min_search_complete = false;
+        self.root_fallback_ready = false;
+        self.root_fallback = None;
 
         let result = self.iterative_deepening::<T>(d);
         self.trace.end_search();
@@ -498,33 +516,60 @@ impl<'engine> Search<'engine> {
     fn iterative_deepening<T: Thread>(&mut self, depth: u8) -> Option<SearchResult> {
         let mut result = None;
 
+        self.establish_root_fallback();
+
         for d in 1..=depth {
             if self.stopping() {
                 break;
             }
 
-            self.pvt = PVTable::new(d);
+            let completed_pvt = std::mem::replace(&mut self.pvt, PVTable::new(d));
             self.search_depth = d;
-            let value = self.search::<T, Root>(Score::INF_N, Score::INF_P, d);
+            let Some(value) = self.search::<T, Root>(Score::INF_N, Score::INF_P, d) else {
+                self.pvt = completed_pvt;
+                break;
+            };
 
-            if !self.stopping() {
-                self.depth_reached = d;
-                result = Some(SearchResult {
-                    score: value,
-                    best_move: self.pvt.pv().next().copied(),
-                    depth: d,
-                });
-                if T::is_master() {
-                    self.emit_progress(d, value);
-                }
+            self.depth_reached = d;
+            result = Some(SearchResult {
+                score: value,
+                best_move: self.pvt.pv().next().copied(),
+                depth: d,
+            });
+            if T::is_master() {
+                self.emit_progress(d, value);
             }
 
-            // The first full ply is guaranteed to run to completion; from here on the time-based
+            // The first full ply is guaranteed to run against the clock; from here on the time-based
             // deadline is honored so deeper iterations respect the allotted clock.
             self.min_search_complete = true;
         }
 
-        result
+        // Cancellation can end the search before any iteration completes. Report the fallback so
+        // the position's legal move is still played; a terminal root has none, which UCI renders as
+        // `bestmove 0000`. The score is not a search result and the depth records that no iteration
+        // finished, so neither is reported as one.
+        result.or_else(|| {
+            self.root_fallback.map(|best_move| SearchResult {
+                score: Score::zero(),
+                best_move: Some(best_move),
+                depth: 0,
+            })
+        })
+    }
+
+    /// Record a legal bestmove for the root position before any node is searched.
+    ///
+    /// Explicit cancellation is honored only once this has run. Root move generation is finite and
+    /// cheap, so the window in which cancellation is ignored is bounded by move generation rather
+    /// than by the depth-1 quiescence tree, which has no practically small bound (TASK-39).
+    fn establish_root_fallback(&mut self) {
+        self.root_fallback = self
+            .pos
+            .generate::<BasicMoveList, AllGen, Legal>()
+            .first()
+            .copied();
+        self.root_fallback_ready = true;
     }
 
     pub fn search<T: Thread, Node: NodeType>(
@@ -532,7 +577,7 @@ impl<'engine> Search<'engine> {
         mut alpha: Score,
         mut beta: Score,
         depth: u8,
-    ) -> Score {
+    ) -> NodeResult {
         self.trace.visit_node();
 
         let draft = self.search_depth - depth;
@@ -550,23 +595,24 @@ impl<'engine> Search<'engine> {
 
         // Step 1. Check for aborted search and immediate draw.
         if self.stopping() {
-            return Score::zero();
+            return None;
         }
 
         // Step 2. check for immediate draw.
         if self.pos.in_threefold() || self.pos.fifty_move_rule_reached() {
-            return Score::zero();
+            return Some(Score::zero());
         }
 
         // Step 2. Mate distance pruning.
         if !Node::root() {
-            // If we mate at the next move, the value at the root would be Mate(draft). If we
-            // already have alpha greater than this, then we had a quicker mate elsewhere in the
-            // tree. So we can prune here.
-            alpha = std::cmp::max(Score::mate(draft as i8).neg(), alpha);
-            beta = std::cmp::min(Score::mate(draft as i8 + 1), beta);
+            // Scores are position-relative: at every node, being checkmated now and mating on the
+            // next ply are the worst and best possible mate values. Using `draft` here treats the
+            // bounds as root-relative; those wrong-parity bounds can escape a cutoff and masquerade
+            // as an exact root result.
+            alpha = std::cmp::max(Score::mate(0), alpha);
+            beta = std::cmp::min(Score::mate(1), beta);
             if alpha >= beta {
-                return alpha;
+                return Some(alpha);
             }
         }
 
@@ -605,18 +651,18 @@ impl<'engine> Search<'engine> {
             if !entry.is_empty() && entry.depth >= depth {
                 match entry.bound() {
                     Bound::Exact => {
-                        return entry.score;
+                        return Some(entry.score);
                     }
                     Bound::Lower => {
                         if entry.score > beta {
-                            return entry.score;
+                            return Some(entry.score);
                         } else if entry.score > alpha {
                             alpha = entry.score
                         }
                     }
                     Bound::Upper => {
                         if entry.score < alpha {
-                            return entry.score;
+                            return Some(entry.score);
                         } else if entry.score < beta {
                             beta = entry.score
                         }
@@ -625,7 +671,7 @@ impl<'engine> Search<'engine> {
             }
 
             if alpha == beta {
-                return alpha;
+                return Some(alpha);
             }
         }
 
@@ -641,9 +687,9 @@ impl<'engine> Search<'engine> {
         // When eval is very low, check with quiescence whether it has any hope of raising alpha. If
         // not, return a fail low.
         if should_razor(depth, eval, alpha) {
-            let value = self.quiesce::<Master, NonPv>(alpha - Score::cp(1), alpha);
+            let value = self.quiesce::<Master, NonPv>(alpha - Score::cp(1), alpha)?;
             if value < alpha {
-                return value;
+                return Some(value);
             }
         }
 
@@ -701,10 +747,16 @@ impl<'engine> Search<'engine> {
 
                 // Step 19. Search non-PV move with null window.
                 if !Node::pv() || move_count > 1 {
-                    value = self
-                        .search::<T, NonPv>(-alpha.inc_one(), -alpha, depth - 1)
-                        .neg()
-                        .inc_mate();
+                    let child = self.search::<T, NonPv>(
+                        alpha.inc_one().child_bound(),
+                        alpha.child_bound(),
+                        depth - 1,
+                    );
+                    let Some(child) = child else {
+                        self.pos.unmake_move();
+                        return None;
+                    };
+                    value = child.neg().inc_mate();
                 }
 
                 // Step 20. Search PV move, or perform re-search if null window search failed high.
@@ -714,10 +766,13 @@ impl<'engine> Search<'engine> {
                 if Node::pv()
                     && (move_count == 1 || (value > alpha && (Node::root() || value < beta)))
                 {
-                    value = self
-                        .search::<T, Pv>(-beta, -alpha, depth - 1)
-                        .neg()
-                        .inc_mate();
+                    let child =
+                        self.search::<T, Pv>(beta.child_bound(), alpha.child_bound(), depth - 1);
+                    let Some(child) = child else {
+                        self.pos.unmake_move();
+                        return None;
+                    };
+                    value = child.neg().inc_mate();
                 }
 
                 debug_assert!(Node::pv() || !(value > alpha && (Node::root() || value < beta)));
@@ -727,6 +782,14 @@ impl<'engine> Search<'engine> {
 
                 debug_assert!(value > Score::INF_N);
                 debug_assert!(value < Score::INF_P);
+
+                // Upgrade the cancellation fallback to the best fully searched root move, so a
+                // cancellation during the first ply reports a searched move rather than the
+                // arbitrary first generated one. An abort during this move's subtree leaves `value`
+                // meaningless, so only a move searched without stopping may be adopted.
+                if Node::root() && value > best_value && !self.stopping() {
+                    self.root_fallback = Some(*mov);
+                }
 
                 // Step 22. Check for new best move.
                 if value > best_value {
@@ -768,7 +831,7 @@ impl<'engine> Search<'engine> {
         }
 
         if self.stopping() {
-            return Score::zero();
+            return None;
         }
 
         debug_assert!(
@@ -814,34 +877,53 @@ impl<'engine> Search<'engine> {
         );
 
         // Step 25. Return best value.
-        best_value
+        Some(best_value)
     }
 
     #[inline(always)]
     fn stopping(&mut self) -> bool {
-        // The guaranteed-minimum search (the first full ply) always runs to completion so a legal
-        // root move is available to return. Until it completes, neither the cancellation flag nor
-        // the time deadline may abort the search; this prevents `bestmove 0000` forfeits at
-        // zero/near-zero budgets and on an immediate `stop`. The first ply is finite, so this can
-        // never hang.
-        if !self.min_search_complete {
-            return false;
+        #[cfg(test)]
+        if self
+            .abort_after_nodes
+            .is_some_and(|limit| self.trace.all_nodes_visited() >= limit)
+        {
+            return true;
         }
 
+        // The two abort signals are gated separately.
+        //
+        // Explicit cancellation (`stop`, `quit`, stdin EOF, or a command replacing the active
+        // search) aborts as soon as the root fallback exists, which is before the first node is
+        // searched. A legal bestmove is therefore always available without waiting for the depth-1
+        // quiescence tree, whose size has no practically small bound (TASK-39). This check reads an
+        // atomic bool, which is cheap enough to run on every call and must stay unthrottled so that
+        // cancellation responsiveness is unaffected.
+        //
+        // The time deadline is still suppressed until the guaranteed-minimum search (the first full
+        // ply) completes, so a zero or already-elapsed budget returns a searched move rather than
+        // the unsearched fallback. The first ply is finite, so this can never hang.
         if self.stopping.load(Ordering::Relaxed) {
-            return true;
+            return self.root_fallback_ready;
+        }
+
+        if !self.min_search_complete {
+            return false;
         }
 
         let Some(stop_time) = self.stop_time else {
             return false;
         };
 
-        // Optimized searches sample every eight nodes. Debug builds search orders of magnitude
-        // more slowly, so sample each node there to keep wall-clock tests and developer runs
-        // responsive while still avoiding repeated reads within the same node.
+        // Unlike the cancellation flag, the deadline needs a clock read, which is expensive enough
+        // relative to a node to matter in the innermost loops. Optimized searches therefore sample
+        // every eight nodes. Debug builds search orders of magnitude more slowly, so sample each
+        // node there to keep wall-clock tests and developer runs responsive while still avoiding
+        // repeated reads within the same node.
         const DEADLINE_CHECK_INTERVAL_NODES: usize = if cfg!(debug_assertions) { 1 } else { 8 };
         let nodes = self.trace.all_nodes_visited();
         if let Some(last) = self.last_deadline_check_nodes {
+            // An expired deadline stays latched: the many stopping checks made while the search
+            // unwinds must all agree, rather than the throttle letting search resume mid-unwind.
             if last == usize::MAX {
                 return true;
             }
@@ -882,7 +964,11 @@ impl<'engine> Search<'engine> {
     }
 
     /// The quiescence search.
-    fn quiesce<T: Thread, Node: NodeType>(&mut self, mut alpha: Score, mut beta: Score) -> Score {
+    fn quiesce<T: Thread, Node: NodeType>(
+        &mut self,
+        mut alpha: Score,
+        mut beta: Score,
+    ) -> NodeResult {
         self.trace.visit_q_node();
 
         debug_assert!(!Node::root());
@@ -892,14 +978,13 @@ impl<'engine> Search<'engine> {
         debug_assert!(Node::pv() || alpha.inc_one() == beta);
 
         if self.stopping() {
-            // TODO: is this robust?
-            return Score::zero();
+            return None;
         }
 
         // Step 1. Check for an immediate draw. Quiet check evasions can repeat positions, so this
         // must happen before following another evasion.
         if self.pos.in_threefold() || self.pos.half_move_clock() >= 50 {
-            return Score::zero();
+            return Some(Score::zero());
         }
 
         // Step 2. Load transposition table entry.
@@ -928,18 +1013,18 @@ impl<'engine> Search<'engine> {
             if tt_hit && !entry.is_empty() {
                 match entry.bound() {
                     Bound::Exact => {
-                        return entry.score;
+                        return Some(entry.score);
                     }
                     Bound::Lower => {
                         if entry.score >= beta {
-                            return entry.score;
+                            return Some(entry.score);
                         } else if entry.score > alpha {
                             alpha = entry.score
                         }
                     }
                     Bound::Upper => {
                         if entry.score <= alpha {
-                            return entry.score;
+                            return Some(entry.score);
                         } else if entry.score < beta {
                             beta = entry.score
                         }
@@ -948,7 +1033,7 @@ impl<'engine> Search<'engine> {
             }
 
             if alpha >= beta {
-                return alpha;
+                return Some(alpha);
             }
         }
 
@@ -959,7 +1044,7 @@ impl<'engine> Search<'engine> {
             let stand_pat = self.evaluate();
 
             if stand_pat >= beta {
-                return beta;
+                return Some(beta);
             }
 
             if alpha < stand_pat {
@@ -983,11 +1068,12 @@ impl<'engine> Search<'engine> {
 
                 // SAFETY: quiescence moves originate from move generation for `self.pos`.
                 unsafe { self.pos.make_move_unchecked(mov) };
-                score = self.quiesce::<T, Node>(-beta, -alpha).neg().inc_mate();
+                let child = self.quiesce::<T, Node>(beta.child_bound(), alpha.child_bound());
                 self.pos.unmake_move();
+                score = child?.neg().inc_mate();
 
                 if score >= beta {
-                    return beta;
+                    return Some(beta);
                 }
 
                 if score > alpha {
@@ -996,7 +1082,11 @@ impl<'engine> Search<'engine> {
             }
         }
 
-        alpha
+        if self.stopping() {
+            None
+        } else {
+            Some(alpha)
+        }
     }
 
     fn quiesce_evasions<T: Thread, Node: NodeType>(
@@ -1004,22 +1094,23 @@ impl<'engine> Search<'engine> {
         mut alpha: Score,
         beta: Score,
         moves: &BasicMoveList,
-    ) -> Score {
+    ) -> NodeResult {
         if moves.is_empty() {
-            return Score::mate(0);
+            return Some(Score::mate(0));
         }
 
         for mov in moves {
             if self.stopping() {
-                break;
+                return None;
             }
 
             self.pos.make_move(mov);
-            let score = self.quiesce::<T, Node>(-beta, -alpha).neg().inc_mate();
+            let child = self.quiesce::<T, Node>(beta.child_bound(), alpha.child_bound());
             self.pos.unmake_move();
+            let score = child?.neg().inc_mate();
 
             if score >= beta {
-                return beta;
+                return Some(beta);
             }
 
             if score > alpha {
@@ -1027,7 +1118,7 @@ impl<'engine> Search<'engine> {
             }
         }
 
-        alpha
+        Some(alpha)
     }
 
     fn emit_progress(&self, depth: u8, score: Score) {
@@ -1359,7 +1450,7 @@ mod tests {
 
         let score = search.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P);
 
-        assert_eq!(score, Score::cp(-495));
+        assert_eq!(score, Some(Score::cp(-495)));
         assert!(search.trace.q_nodes_visited() > 1);
     }
 
@@ -1374,7 +1465,7 @@ mod tests {
 
         assert_eq!(
             search.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P),
-            Score::mate(0)
+            Some(Score::mate(0))
         );
     }
 
@@ -1389,14 +1480,14 @@ mod tests {
         let flag = AtomicBool::new(true);
         let table = Table::new(1);
         let mut search = Search::new(position, &flag, None, &table);
-        // Aborts are only honored once the guaranteed first ply has completed, which is the only
-        // state in which an in-flight `quiesce_evasions` can be interrupted at runtime. Emulate
-        // that armed state so the cancellation flag actually stops the search.
-        search.min_search_complete = true;
+        // Cancellation is only honored once a legal root fallback exists, which `run` establishes
+        // before any node is searched. Emulate that armed state so the flag actually stops the
+        // search.
+        search.root_fallback_ready = true;
 
         assert_eq!(
             search.quiesce_evasions::<Master, Pv>(Score::INF_N, Score::INF_P, &moves),
-            Score::INF_N
+            None
         );
     }
 
@@ -1421,7 +1512,7 @@ mod tests {
 
             assert_eq!(
                 search.quiesce::<Master, NonPv>(Score::cp(-50), Score::cp(-49)),
-                expected
+                Some(expected)
             );
         }
     }
@@ -1454,7 +1545,7 @@ mod tests {
 
         assert_eq!(
             search.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P),
-            Score::zero()
+            Some(Score::zero())
         );
     }
 
@@ -1482,7 +1573,7 @@ mod tests {
 
         assert_eq!(
             search.quiesce::<Master, NonPv>(Score::cp(-1), Score::zero()),
-            Score::zero()
+            Some(Score::zero())
         );
     }
 
@@ -1598,6 +1689,38 @@ mod tests {
             .all(|event| !event.principal_variation.is_empty()));
     }
 
+    /// FastChess reached this WAC-derived position after a long forcing line. At depth five the
+    /// old search passed position-relative mate bounds to child nodes by negating them without
+    /// first removing one ply. A cutoff value then leaked back as `Score::mate(34)`: positive with
+    /// an impossible even ply count, and formatting the progress event tripped Score's parity
+    /// assertion on the UCI driver thread.
+    #[test]
+    fn child_mate_windows_preserve_distance_parity() {
+        core::init::init_globals();
+
+        let position =
+            Position::from_fen("2k5/8/b1p5/Pq2r1p1/8/5PpP/3p2P1/Q2R2K1 b - - 1 61").unwrap();
+        let engine = SearchEngine::new(1);
+        let search = engine.start(position, SearchLimit::Depth(5));
+        let events = search.events().clone();
+        let outcome = search.wait();
+        let progress = events
+            .try_iter()
+            .filter_map(|event| match event {
+                SearchEvent::Progress(progress) if progress.depth == 5 => Some(progress),
+                _ => None,
+            })
+            .next()
+            .expect("depth-five progress must be emitted");
+
+        assert!(matches!(outcome, SearchOutcome::Completed(Some(_))));
+        assert_eq!(progress.score, Score::mate(7));
+        assert!(
+            crate::info::format_search_event(&SearchEvent::Progress(progress))
+                .contains("score mate 4")
+        );
+    }
+
     #[test]
     fn search_emits_typed_current_move_events() {
         core::init::init_globals();
@@ -1647,6 +1770,73 @@ mod tests {
     }
 
     #[test]
+    fn mid_subtree_abort_keeps_the_last_completed_iteration() {
+        core::init::init_globals();
+
+        let position = Position::start_pos();
+        let flag = AtomicBool::new(false);
+
+        // Measure the deterministic depth-one work, then stop a fresh search in the first child
+        // of the candidate depth-two root. The root itself is the first new node and its child is
+        // the second, so this threshold proves that a move was made and a subtree was entered.
+        let baseline_table = Table::new(16);
+        let mut baseline = Search::new(position.clone(), &flag, None, &baseline_table);
+        let expected = baseline.run::<Master>(1).unwrap();
+        let expected_pv = baseline.pvt.pv().copied().collect::<Vec<_>>();
+        let completed_iteration_nodes = baseline.trace.all_nodes_visited();
+        let abort_after = completed_iteration_nodes + 2;
+
+        let table = Table::new(16);
+        let mut search = Search::new(position.clone(), &flag, None, &table);
+        search.abort_after_nodes = Some(abort_after);
+        let result = search.run::<Master>(3).unwrap();
+
+        assert_eq!(result, expected);
+        assert!(search.trace.all_nodes_visited() >= abort_after);
+        assert_eq!(search.pvt.pv().copied().collect::<Vec<_>>(), expected_pv);
+
+        // The aborted depth-two root must not replace the completed depth-one root entry.
+        let root_entry = table.probe(&position).into_inner().read();
+        assert_eq!(root_entry.depth, 1);
+        assert_eq!(
+            root_entry.mov.to_move(&position),
+            expected.best_move.unwrap()
+        );
+    }
+
+    #[test]
+    fn aborted_child_cannot_score_or_write_its_parent() {
+        core::init::init_globals();
+
+        let position = Position::start_pos();
+        let start_zob = position.zobrist();
+        let flag = AtomicBool::new(false);
+        let table = Table::new(16);
+        let mut search = Search::new(position.clone(), &flag, None, &table);
+
+        // Permit the test abort immediately and fire it in the first child: the root consumes one
+        // node, makes a move, and the recursive search consumes the second node before stopping.
+        search.min_search_complete = true;
+        search.search_depth = 2;
+        search.pvt = PVTable::new(2);
+        search.abort_after_nodes = Some(2);
+
+        let result = search.search::<Master, Root>(Score::INF_N, Score::INF_P, 2);
+
+        assert_eq!(result, None, "an aborted child must not yield a score");
+        assert_eq!(search.trace.all_nodes_visited(), 2);
+        assert_eq!(search.pos.zobrist(), start_zob, "the root move is restored");
+        assert!(
+            search.pvt.pv().next().is_none(),
+            "an aborted child must not become the principal move"
+        );
+        assert!(
+            table.probe(&position).into_inner().read().is_empty(),
+            "an ancestor whose child aborted must not write a TT entry"
+        );
+    }
+
+    #[test]
     fn zero_time_limit_still_returns_a_legal_move() {
         core::init::init_globals();
 
@@ -1684,22 +1874,41 @@ mod tests {
     }
 
     #[test]
-    fn aborts_are_suppressed_only_until_the_first_ply_completes() {
+    fn the_time_deadline_is_suppressed_until_the_first_ply_completes() {
         core::init::init_globals();
 
         let position = Position::start_pos();
-        // Both abort sources are active from the outset: the cancellation flag is set and the time
-        // deadline has already elapsed.
-        let flag = AtomicBool::new(true);
+        let flag = AtomicBool::new(false);
         let table = Table::new(1);
+        // The deadline has already elapsed, and the root fallback is established, but only the
+        // completed first ply may release the time-based abort.
         let mut search = Search::new(position, &flag, Some(Instant::now()), &table);
+        search.root_fallback_ready = true;
 
-        // Before the guaranteed ply completes, neither an elapsed deadline nor a set cancellation
-        // flag may abort the search, so a legal root move is always produced.
         assert!(!search.stopping());
 
-        // Once the guaranteed ply is complete the same signals are honored.
         search.min_search_complete = true;
+        assert!(search.stopping());
+    }
+
+    #[test]
+    fn cancellation_is_suppressed_only_until_the_root_fallback_exists() {
+        core::init::init_globals();
+
+        let position = Position::start_pos();
+        let flag = AtomicBool::new(true);
+        let table = Table::new(1);
+        let mut search = Search::new(position, &flag, None, &table);
+
+        // Nothing legal has been recorded yet, so cancellation cannot abort: doing so would forfeit
+        // with `bestmove 0000`.
+        assert!(!search.stopping());
+
+        // The fallback alone releases the cancellation flag. Unlike the time deadline, it does not
+        // wait for the first ply, so no unbounded quiescence tree stands between `stop` and the
+        // abort.
+        search.establish_root_fallback();
+        assert!(!search.min_search_complete);
         assert!(search.stopping());
     }
 
@@ -1715,8 +1924,11 @@ mod tests {
             Some(Instant::now() + Duration::from_secs(60)),
             &table,
         );
+        search.establish_root_fallback();
         search.min_search_complete = true;
 
+        // The deadline sample taken here throttles subsequent clock reads, but it must not defer
+        // the cancellation flag: the very next check at the same node has to observe the stop.
         assert!(!search.stopping());
         flag.store(true, Ordering::Relaxed);
         assert!(
@@ -1767,18 +1979,98 @@ mod tests {
     }
 
     #[test]
-    fn immediate_cancellation_returns_an_explicit_optional_result() {
+    fn immediate_cancellation_returns_a_legal_move() {
         core::init::init_globals();
 
+        let position = Position::start_pos();
         let engine = SearchEngine::new(1);
-        let search = engine.start(Position::start_pos(), SearchLimit::Infinite);
+        let search = engine.start(position.clone(), SearchLimit::Infinite);
         search.cancel();
         let outcome = search.wait();
 
+        // Cancellation may win the race before any root move is searched. The fallback means the
+        // result is nonetheless a legal move rather than the `bestmove 0000` forfeit.
         assert!(outcome.was_cancelled());
+        let best_move = outcome
+            .result()
+            .expect("a cancelled search must still report the root fallback")
+            .best_move
+            .expect("non-terminal position has a legal move");
+        assert!(position.valid_move(&best_move));
+    }
+
+    /// A position whose depth-1 quiescence tree is large enough that searching it is plainly
+    /// distinguishable from not searching it.
+    const QUIESCENCE_HEAVY_FEN: &str =
+        "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1";
+
+    #[test]
+    fn cancellation_stops_the_first_iteration_without_searching_it() {
+        core::init::init_globals();
+
+        let position = Position::from_fen(QUIESCENCE_HEAVY_FEN).unwrap();
+        let table = Table::new(1);
+
+        // The same first iteration, uncancelled, is the baseline this is measured against.
+        let running = AtomicBool::new(false);
+        let mut baseline = Search::new(position.clone(), &running, None, &table);
+        let searched = baseline.run::<Master>(1).expect("first ply completes");
+        let searched_nodes = baseline.trace.all_nodes_visited();
+        assert!(searched_nodes > 1_000, "baseline must be a real search");
+
+        // With cancellation already set, the search returns without visiting a single node: it
+        // never enters the depth-1 quiescence tree that TASK-39 showed has no small bound. This is
+        // the deterministic form of "an explicit stop is honored promptly".
+        let cancelled = AtomicBool::new(true);
+        let mut search = Search::new(position.clone(), &cancelled, None, &table);
+        let result = search
+            .run::<Master>(1)
+            .expect("cancellation must still yield the root fallback");
+
+        assert_eq!(search.trace.all_nodes_visited(), 0);
+        assert_eq!(result.depth, 0, "no iteration completed");
+        let best_move = result.best_move.expect("root has legal moves");
+        assert!(
+            position.valid_move(&best_move),
+            "fallback move must be legal"
+        );
+        assert!(searched.best_move.is_some());
+    }
+
+    #[test]
+    fn the_root_fallback_tracks_the_best_searched_root_move() {
+        core::init::init_globals();
+
+        let position = Position::from_fen(QUIESCENCE_HEAVY_FEN).unwrap();
+        let flag = AtomicBool::new(false);
+        let table = Table::new(1);
+        let mut search = Search::new(position, &flag, None, &table);
+
+        let result = search.run::<Master>(2).expect("search completes");
+
+        // Cancelling mid-ply reports this move, not the arbitrary first generated one: the fallback
+        // is upgraded as each root move is fully searched.
+        assert_eq!(search.root_fallback, result.best_move);
+    }
+
+    #[test]
+    fn cancelled_terminal_root_reports_no_move() {
+        core::init::init_globals();
+
+        // Checkmate: there is no legal move to fall back to, so cancellation must not invent one.
+        let position = Position::from_fen("7k/6Q1/6K1/8/8/8/8/8 b - - 0 1").unwrap();
+        let engine = SearchEngine::new(1);
+        let search = engine.start(position, SearchLimit::Infinite);
+        search.cancel();
+        let outcome = search.wait();
+
         assert!(outcome
             .result()
-            .is_none_or(|result| result.best_move.is_some()));
+            .is_none_or(|result| result.best_move.is_none()));
+        assert_eq!(
+            crate::info::format_search_outcome(&outcome),
+            "bestmove 0000"
+        );
     }
 
     #[test]
