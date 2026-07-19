@@ -34,6 +34,12 @@ static MAX_CLOCK_SHARE_DIVISOR: u64 = 4;
 /// deliberately expressed in increments rather than milliseconds: a flat reserve would be the same
 /// mistake as the flat per-move buffer that starved fast controls before, and it would penalise a
 /// sudden-death control, where spending the clock down to nothing is the correct policy.
+///
+/// The reserve caps how fast we may drain, rather than being deducted from the pool we divide.
+/// Deducting it up front also works, but it pays for the reserve in the opening and midgame,
+/// where the clock is nowhere near it and the time buys real strength; a 1711-game self-play
+/// match measured that at -7.9 Elo. Capping the drain leaves every allocation above the reserve
+/// exactly as it was and only binds on the approach.
 static RESERVE_INCREMENT_MOVES: u64 = 10;
 
 #[derive(Clone, Debug)]
@@ -107,12 +113,17 @@ impl TimeControl {
         let reserve = inc.saturating_mul(RESERVE_INCREMENT_MOVES);
 
         let allocation = match usable_time.checked_sub(reserve) {
-            // Above the reserve: the increment we will earn back by playing this move, plus a
-            // share of the surplus only. Both terms scale with the time control, so the
-            // allocation degrades proportionally as the clock shrinks rather than collapsing at
-            // a fixed threshold, and the surplus is spent down deliberately instead of the whole
-            // clock decaying geometrically towards the increment.
-            Some(surplus) => inc.saturating_add(surplus / est_remaining_moves),
+            // Above the reserve: the increment we will earn back by playing this move, plus our
+            // share of the clock. Both terms scale with the time control, so the allocation
+            // degrades proportionally as the clock shrinks rather than collapsing at a fixed
+            // threshold.
+            //
+            // Spending `inc + x` and earning `inc` back drains the clock by exactly `x`, so
+            // holding `x` to the headroom above the reserve is precisely the statement that this
+            // move will not take us below it. Far from the reserve this never binds and the
+            // allocation is unchanged; on the approach it is what arrests the decay, leaving the
+            // clock at the reserve instead of asymptoting onto the bare increment.
+            Some(headroom) => inc.saturating_add((usable_time / est_remaining_moves).min(headroom)),
             // Below the reserve, because the opponent's play or our own overshoot took us there.
             // Spend a tenth of what we hold, which is strictly less than the increment down here
             // (`usable_time < reserve` means `usable_time / RESERVE_INCREMENT_MOVES < inc`), so
@@ -150,10 +161,10 @@ mod tests {
         // divided and the increment is what distinguishes the two colours.
         let control = TimeControl::new(10_000, 10_000, 200, 400, Some(20));
 
-        // The side's increment, plus its share of whatever sits above its own reserve:
-        // (10_000 - 30 - 200 * 10) / 20 for white, (10_000 - 30 - 400 * 10) / 20 for black.
-        assert_eq!(control.to_move_time(1, Player::WHITE), 598);
-        assert_eq!(control.to_move_time(1, Player::BLACK), 698);
+        // (10_000 - 30) / 20, plus the side's increment. The reserve is not close enough to bind
+        // on either side, so the increment is the whole of the difference.
+        assert_eq!(control.to_move_time(1, Player::WHITE), 698);
+        assert_eq!(control.to_move_time(1, Player::BLACK), 898);
     }
 
     #[test]
@@ -220,17 +231,16 @@ mod tests {
 
     #[test]
     fn fast_time_controls_receive_a_positive_proportional_allocation() {
-        // The 2+0.05 opening position from TASK-38: 50 + (2_000 - 30 - 50 * 10) / 39. This
-        // allotted 0ms before that fix, which is what had the engine playing its opening at
-        // depth 1. TASK-42 holds a reserve back from the surplus, so this is now 87ms rather
-        // than 100ms; the point of the test is that it stays a large multiple of a depth-1
-        // search rather than any particular number.
+        // The 2+0.05 opening position from TASK-38: (2_000 - 30) / 39 + 50. This allotted 0ms
+        // before the fix, which is what had the engine playing its opening at depth 1. The
+        // TASK-42 reserve caps the drain rather than shrinking the pool, and an opening clock is
+        // nowhere near the reserve, so these are untouched by it.
         let two_plus_005 = TimeControl::new(2_000, 2_000, 50, 50, None);
-        assert_eq!(two_plus_005.to_move_time(1, Player::WHITE), 87);
+        assert_eq!(two_plus_005.to_move_time(1, Player::WHITE), 100);
 
         // 1+0.01, faster still, and a bare 1-second control with no increment at all.
         let one_plus_001 = TimeControl::new(1_000, 1_000, 10, 10, None);
-        assert_eq!(one_plus_001.to_move_time(1, Player::WHITE), 32);
+        assert_eq!(one_plus_001.to_move_time(1, Player::WHITE), 34);
 
         let one_second = TimeControl::new(1_000, 1_000, 0, 0, None);
         assert_eq!(one_second.to_move_time(1, Player::WHITE), 24);
@@ -330,8 +340,8 @@ mod tests {
         let control = TimeControl::new(2_000, 2_000, 10, 10, None);
         let allotted = control.to_move_time(100, Player::WHITE);
 
-        // 10 + (2_000 - 30 - 100) / 20.
-        assert_eq!(allotted, 103);
+        // 10 + (2_000 - 30) / 20; the reserve is far away, so it does not bind here.
+        assert_eq!(allotted, 108);
         assert!(allotted > 10 * 10);
     }
 
