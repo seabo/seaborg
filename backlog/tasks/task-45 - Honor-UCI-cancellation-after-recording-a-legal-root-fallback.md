@@ -1,11 +1,11 @@
 ---
 id: TASK-45
 title: Honor UCI cancellation after recording a legal root fallback
-status: Changes Requested
+status: In Progress
 assignee:
-  - '@claude'
+  - '@codex'
 created_date: '2026-07-18 18:28'
-updated_date: '2026-07-19 00:27'
+updated_date: '2026-07-19 00:28'
 labels:
   - engine
   - search
@@ -44,26 +44,11 @@ Change cancellation semantics without weakening the TASK-32/EOF invariant: estab
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Split the single `min_search_complete` abort gate into two independent gates in `Search`:
-   - `root_fallback_ready` / `root_fallback: Option<Move>` gates the explicit cancellation flag.
-   - `min_search_complete` continues to gate the time deadline only (TASK-32 policy unchanged).
-2. Establish the root fallback in `iterative_deepening` before the first iteration: generate legal
-   root moves and record the first one (`None` for a terminal root), then set `root_fallback_ready`.
-   Generation is finite and runs before any node is searched, so a legal bestmove exists before
-   cancellation can ever be honored.
-3. Upgrade the fallback at the root move loop: when a root move's search returns while not stopping
-   and improves `best_value`, record it as the fallback, so a cancellation mid-first-ply returns the
-   best fully searched root move rather than an arbitrary generated one.
-4. Rewrite `stopping()`: cancellation flag aborts as soon as `root_fallback_ready`; the time
-   deadline is still suppressed until `min_search_complete`.
-5. `iterative_deepening` returns the fallback `SearchResult` (depth 0, zero score) when no
-   iteration completed, so an early-cancelled search still yields a legal bestmove; terminal roots
-   still yield `None` -> `bestmove 0000`.
-6. Tests: deterministic node-count proof that a pre-set cancellation flag aborts depth 1 without
-   searching the quiescence tree; fallback legality with cancellation winning the race; fallback
-   tracks the best completed root move; terminal root still returns no move; update the two existing
-   tests that emulated the armed state via `min_search_complete`; keep time-deadline tests intact.
-7. Run cargo fmt --check, strict clippy, and cargo test --workspace.
+1. Rebase the rework context by merging the current primary tip into the persistent TASK-45 branch, preserving immutable prior history.
+2. Resolve all three TASK-46 overlaps in engine/src/search.rs: retain abort_after_nodes fields/initialization and combine its deterministic node-stop hook with TASK-45 explicit-cancellation gating on root_fallback_ready and deadline gating on min_search_complete.
+3. Inspect the integrated search and cancellation tests; add or adjust regression coverage if the combined semantics are not already pinned.
+4. Record resolution of the merge-gate finding, run focused cancellation/time-limit tests, then cargo fmt --check, strict workspace Clippy, and cargo test --workspace.
+5. Commit the integrated implementation, record a new immutable target and handoff, and return TASK-45 to In Review.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
