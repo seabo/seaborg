@@ -1,11 +1,11 @@
 ---
 id: TASK-63
 title: Make movestogo and movetime allocation a deliberate policy
-status: In Review
+status: Changes Requested
 assignee:
   - '@codex'
 created_date: '2026-07-19 13:17'
-updated_date: '2026-07-19 16:41'
+updated_date: '2026-07-19 18:32'
 labels:
   - engine
   - time
@@ -114,5 +114,51 @@ Reviewer note on AC#6 ('existing regression tests passing unmodified'). The TASK
 - huge_increment_cannot_allocate_more_than_the_clock_holds: kept, but its cap-binding case moved from movestogo 1 to movestogo 2. At movestogo 1 the cap can no longer bind for any increment, which is the point of AC#4, so the old case no longer demonstrated the backstop.
 
 Worth a reviewer's judgement: the share cap is still reachable by a periodic control if the increment exceeds roughly three quarters of the usable clock (e.g. a 1000ms clock with a 5000ms increment and movestogo 2). I read AC#4's 'well-formed' as excluding that, and the sweep test asserts the cap is slack across real controls from 90+30 classical down to 3+2 blitz, plus a synthetic sweep bounded at inc <= usable/2. If you read 'well-formed' more broadly, that is a finding.
+---
+
+author: @codex
+created: 2026-07-19 18:32
+---
+Review attempt: 1
+Reviewed branch: task-63-movestogo-movetime-policy
+Reviewed implementation: bf811bf
+Verdict: changes_requested
+
+REV-1-01 [P1] Periodic branch panics on a large movestogo, regressing TASK-7 overflow safety
+Location: engine/src/time.rs:158
+Impact: Blocks AC#6. `moves_to_go` is parsed straight into a `u64` with no clamping (engine/src/uci.rs:196, :366), so `movestogo 18446744073709551615` reaches the new periodic branch and evaluates `n + BOUNDARY_CUSHION_MOVES`. That addition overflows: debug panics with "attempt to add with overflow", release wraps the divisor to 0 and panics with "attempt to divide by zero". Either way a well-formed UCI `go` line kills the engine process mid-game. The base commit handled the same input safely, so this is patch-introduced, not pre-existing. The task text explicitly requires that TASK-7 overflow safety not regress, and the periodic branch is the one place in the new code where an untrusted protocol value is used in non-saturating arithmetic — `usable_time.saturating_add(...)` and `inc.saturating_mul(n - 1)` on the neighbouring line are both hardened, so the omission looks like an oversight rather than a decision.
+
+Reproduction: against bf811bf, parse and evaluate the command exactly as engine/src/engine.rs:161 does:
+
+    let line = "go wtime 10000 btime 10000 winc 100 binc 100 movestogo 18446744073709551615";
+    let Ok(Command::Go(TimingMode::Timed(tc))) = Parser::parse(line) else { unreachable!() };
+    tc.to_move_time(1, Player::WHITE);
+
+  - target bf811bf, debug:   panicked at engine/src/time.rs:158:33: attempt to add with overflow
+  - target bf811bf, release: panicked at engine/src/time.rs:158:17: attempt to divide by zero
+  - base c55508b, release:   returns 100
+
+Expected: A large or absurd `movestogo` yields a finite allotment rather than a panic, consistent with how the clock and increment are already treated on the adjacent lines. Saturating the divisor, or clamping the horizon to something bounded before it is used, would both do it. The existing TASK-7 test does not cover this because `allocation_preserves_values_above_u32_max` varies the clock and increment while holding `movestogo` at 20; the regression test for this finding needs to vary `movestogo` itself.
+
+Non-blocking observations, recorded for the record and not requiring action:
+
+- AC#4 "well-formed": I accept the implementer's reading. The share cap can still bind when the increment exceeds roughly three quarters of the usable clock, but the task itself describes MAX_CLOCK_SHARE_DIVISOR as "a backstop against pathological input", and a 1000ms clock with a 5000ms increment is pathological by any reading. The sweep test covers real controls from 90+30 down to 3+2, where 3+2 already carries an increment two thirds the size of its clock and leaves the cap slack. That is sufficient evidence for the criterion as written.
+- Comment quality is good throughout: the new doc comments on BOUNDARY_CUSHION_MOVES and move_time_budget, and the inline comments in the periodic branch, state the underlying reasoning rather than citing task IDs, and none of them restate the code. No task ID, acceptance criterion, or finding ID appears in any source comment. The diff adds no `#[allow]`.
+- The four updated tests were each checked against their original purpose and all retain it; the split of explicit_moves_to_go_controls_allocation_and_zero_is_safe into two tests is a genuine improvement in intent.
+- Benchmarks were not run: to_move_time is called once per `go` and is not on a movegen or search hot path.
+
+Acceptance criteria status against bf811bf:
+- AC#1 proven: moves_to_go_of_zero_falls_back_to_the_game_length_heuristic asserts 498ms and equality with the None control at moves 1/20/41/80, not the 7478ms share-cap maximum.
+- AC#2 proven: the_increment_reserve_does_not_bind_as_a_boundary_approaches shows the allotment growing monotonically towards the boundary and exceeding the below-reserve share throughout.
+- AC#3 proven: a_period_arrives_at_its_boundary_with_time_still_on_the_clock simulates five representative controls, asserting flat allocation and non-empty arrival.
+- AC#4 proven, subject to the reading above.
+- AC#5 proven: movetime_holds_back_the_same_overhead_as_the_clock covers the saturation to zero, and engine/src/engine.rs:164 routes MoveTime through the helper.
+- AC#6 not met: see REV-1-01.
+
+Verification (all run by the reviewer on bf811bf, not taken from the handoff):
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass, no warnings, re-confirmed with a clean CARGO_TARGET_DIR since the first run was cached
+- cargo test --workspace: pass, 0 failed
+- Target immutability: bf811bf is an ancestor of tip 25e18ac, and the only file changed between them is the task file
 ---
 <!-- COMMENTS:END -->
