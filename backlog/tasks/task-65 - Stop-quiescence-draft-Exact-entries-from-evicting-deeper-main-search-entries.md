@@ -1,10 +1,11 @@
 ---
 id: TASK-65
 title: Stop quiescence-draft Exact entries from evicting deeper main-search entries
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-19 15:07'
-updated_date: '2026-07-19 15:07'
+updated_date: '2026-07-19 20:42'
 labels:
   - transposition-table
   - search
@@ -42,3 +43,12 @@ Note that the cross-slot victim-selection path already handles this correctly by
 - [ ] #4 Warm-versus-cold node counts and the search benchmark show no regression against the pre-change measurement on the same machine
 - [ ] #5 Cross-slot victim selection is confirmed unchanged, or any change to it is measured and justified
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Extract the existing depth/bound/age replacement-quality calculation and use it consistently for both same-key updates and cross-slot victim selection. Replace a same-key entry when the incoming current-age candidate has equal or greater quality, preserving an existing move when the new entry is move-less.
+2. Document at Table::store that draft is writer-specific rather than a comparable effort measure, and that same-key candidates are compared by the shared depth, Exact-bound, and relative-age quality metric.
+3. Replace the old shallow-Exact special-case tests with a table-driven same-key policy matrix covering quiescence draft versus deeper main-search bounds, equal depths and bounds, quality boundaries, and differing ages; retain cross-slot tests unchanged.
+4. Run focused TT/search tests, capture warm-versus-cold and hash-load node-count evidence, compare the search benchmark against the pre-change baseline on this machine, then run the repository-required formatting, strict Clippy, and workspace test gates.
+<!-- SECTION:PLAN:END -->
