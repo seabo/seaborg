@@ -1,11 +1,11 @@
 ---
 id: TASK-56
 title: Keep Score bound transformations inside the documented mate encoding
-status: In Review
+status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-18 23:43'
-updated_date: '2026-07-19 02:47'
+updated_date: '2026-07-19 03:15'
 labels:
   - engine
   - search
@@ -29,11 +29,11 @@ Either make the representation total over the values search actually produces, o
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Bound values produced by child_bound stay within a documented, representable range, or the Score doc comment is corrected to state the range bound values may occupy and why
-- [ ] #2 A test covers the mate(0) and mate(1) boundary inputs to child_bound; the existing child_bounds_invert_parent_mate_distance_conversion only covers in-range values
-- [ ] #3 Quiescence no longer returns scores outside the documented range, demonstrated by an assertion or test that fails on the current code
-- [ ] #4 Debug and Display produce sensible output for every value search can now generate
-- [ ] #5 The TASK-54 regression child_mate_windows_preserve_distance_parity still passes and a debug WAC sweep still formats root scores without panicking
+- [x] #1 Bound values produced by child_bound stay within a documented, representable range, or the Score doc comment is corrected to state the range bound values may occupy and why
+- [x] #2 A test covers the mate(0) and mate(1) boundary inputs to child_bound; the existing child_bounds_invert_parent_mate_distance_conversion only covers in-range values
+- [x] #3 Quiescence no longer returns scores outside the documented range, demonstrated by an assertion or test that fails on the current code
+- [x] #4 Debug and Display produce sensible output for every value search can now generate
+- [x] #5 The TASK-54 regression child_mate_windows_preserve_distance_parity still passes and a debug WAC sweep still formats root scores without panicking
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -91,4 +91,41 @@ Reproduction evidence for AC #3. Each of the three tests below was confirmed to 
 
 Reviewer note. The change is wider than the task's description in one respect, and deliberately so: 'search' had the same defect as quiescence, not merely the clamp that protects against it. See the second paragraph of the implementation notes. Worth confirming independently that clamping a bound outwards is sound, since that is the step the correctness of the fix rests on.
 ---
+
+author: @codex
+created: 2026-07-19 03:15
+---
+Review verdict: APPROVED
+
+Implementation target: 39cbbb3 (immutable; ancestor of branch tip 2b4fea0, which changes only the task file)
+Base: 3fc1644
+Reviewed diff: 3fc1644..39cbbb3 — engine/src/score.rs, engine/src/search.rs, task file only. No unrelated changes, no #[allow] added.
+
+Verification run independently in the task worktree at 39cbbb3:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass, zero warnings, re-confirmed with a clean CARGO_TARGET_DIR so the result is not cached (core, engine and seaborg all linted)
+- cargo test --workspace: pass
+- The eight tests bearing on this change all pass, including the TASK-54 regression child_mate_windows_preserve_distance_parity (AC #5)
+- cargo test -p engine -- --ignored wac_root_scores_format_without_panicking: pass in 354s, debug build, 900 searches (AC #5)
+- cargo bench --bench search, release, 3 alternating base/target rounds on this machine with no competing build or test processes. Deadline medians base 40.634 / 40.183 / 40.509 us vs target 40.132 / 40.569 / 40.266 us; no-deadline base 39.975 / 39.956 / 40.507 us vs target 40.355 / 39.834 / 39.789 us. Intervals overlap in every round and all figures sit well under the BENCHMARKS.md regression thresholds of 42.26 / 41.72 us. No regression; agree that BENCHMARKS.md should not move.
+
+AC #3 negative control verified independently rather than taken from the handoff. In a throwaway worktree at 39cbbb3 with the two clamps reverted to their pre-change form, all three tests fail with exactly the described out-of-band values: quiescence returned Score(-20101) (window Score(-20102)..Score(-20101)), search returned Score(20100) rendered Mate(0) (window Mate(0)..Score(20101)), and the TASK-54 regression panics the search thread on quiescence returned Score(20101). Restored, all three pass. The worktree was removed and the review worktree left clean.
+
+On the reviewer note — clamping a bound outwards is sound, confirmed by working the case through. Take the parent null window at the bottom of the band: alpha = mate(0), so the child receives (child_bound(alpha.inc_one()), child_bound(alpha)) = (Score(20100), Score(20101)), entirely above the band. Both ends clamp to mate(1), alpha >= beta fires, and the child returns mate(1). That is a valid fail-low upper bound unconditionally, since no node scores above mate(1). The parent computes neg().inc_mate() = Score(-20098) = mate(-2), an even-ply negative mate, so Display's parity assertion holds; and mate(-2) is a true lower bound on the parent because a parent with a legal move cannot be mated in zero. Under the old one-sided clamp the same path returned Score(20100), which the parent mapped to Score(-20099) — an odd-ply negative mate, precisely the wrong-parity value that panics Display. The widening of scope to search as well as quiescence is justified and correctly described in the notes.
+
+Also confirmed the null-window invariant survives the clamp: for an incoming (a, a+1), either both ends stay in band unchanged, or they collapse to the same clamped value and the alpha >= beta early return fires first, so debug_assert!(Node::pv() || alpha.inc_one() == beta) still holds for every child window. In-band windows are bit-identical to the old behaviour, which is consistent with the flat benchmark and the unchanged test results.
+
+Non-blocking observations, no action required for this task:
+- The Implementation Plan still describes step 2 as saturating child_bound to the infinities. That approach was tried, found to break null-window preservation, and backed out; the Implementation Notes record this clearly, but the plan text was not updated to match the final solution.
+- Display was deliberately not made total: Score(20101) would still trip its parity assertion. That is consistent with AC #4, which scopes to values search can generate, and the new band assertions are what keep such values from reaching it.
+- Debug renders Score(20100) as Mate(0), inside the documented encoding band but outside the node score band, distinguished from mate(0) only by the sign in Mate(-0). Legible but subtle when reading assertion output.
+
+All five acceptance criteria are checked on objective evidence. Approving 39cbbb3 and moving to Ready to Merge.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Clamps both alpha and beta into the node score band `mate(0)..=mate(1)` on entry to both `search` and `quiesce`, so the exact-but-out-of-band values `Score::child_bound` produces are consumed rather than returned. `child_bound` itself is left exact, preserving null-window mapping. `search` and `quiesce` are wrapped with a `debug_assert` on `Score::is_node_score`, `Debug` now renders unencodable values in raw `Score(n)` form instead of a plausible-looking variant, and the `Score` doc comment separates node scores from window bounds. Verified at 39cbbb3 with cargo fmt --check, a clean-CARGO_TARGET_DIR clippy (zero warnings), cargo test --workspace, the ignored WAC sweep (900 debug searches, 354s), and a 3-round alternating base/target `cargo bench --bench search` showing no regression.
+<!-- SECTION:FINAL_SUMMARY:END -->
