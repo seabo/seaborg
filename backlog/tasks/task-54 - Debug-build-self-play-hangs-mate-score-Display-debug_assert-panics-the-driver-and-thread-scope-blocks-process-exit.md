@@ -3,11 +3,11 @@ id: TASK-54
 title: >-
   Debug-build self-play hangs: mate-score Display debug_assert panics the driver
   and thread::scope blocks process exit
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-18 20:11'
-updated_date: '2026-07-18 23:31'
+updated_date: '2026-07-18 23:42'
 labels:
   - engine
   - search

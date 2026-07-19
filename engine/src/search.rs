@@ -25,6 +25,9 @@ use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 
 const MAX_DEPTH: u8 = 255;
 
+/// A node either completed with a usable score or aborted before establishing one.
+type NodeResult = Option<Score>;
+
 fn should_razor(depth: u8, eval: Score, alpha: Score) -> bool {
     depth <= 6 && alpha.is_cp() && eval + Score::cp(426 + 252 * depth as i16 * depth as i16) < alpha
 }
@@ -421,6 +424,8 @@ pub struct Search<'engine> {
     /// as the first generated legal root move and is upgraded to the best fully searched root move
     /// as the first ply progresses. `None` only for a terminal root position.
     root_fallback: Option<Move>,
+    #[cfg(test)]
+    abort_after_nodes: Option<usize>,
     /// Destination for typed search progress events.
     events: Option<Sender<SearchEvent>>,
     search_depth: u8,
@@ -469,6 +474,8 @@ impl<'engine> Search<'engine> {
             min_search_complete: false,
             root_fallback_ready: false,
             root_fallback: None,
+            #[cfg(test)]
+            abort_after_nodes: None,
         }
     }
 
@@ -510,20 +517,21 @@ impl<'engine> Search<'engine> {
                 break;
             }
 
-            self.pvt = PVTable::new(d);
+            let completed_pvt = std::mem::replace(&mut self.pvt, PVTable::new(d));
             self.search_depth = d;
-            let value = self.search::<T, Root>(Score::INF_N, Score::INF_P, d);
+            let Some(value) = self.search::<T, Root>(Score::INF_N, Score::INF_P, d) else {
+                self.pvt = completed_pvt;
+                break;
+            };
 
-            if !self.stopping() {
-                self.depth_reached = d;
-                result = Some(SearchResult {
-                    score: value,
-                    best_move: self.pvt.pv().next().copied(),
-                    depth: d,
-                });
-                if T::is_master() {
-                    self.emit_progress(d, value);
-                }
+            self.depth_reached = d;
+            result = Some(SearchResult {
+                score: value,
+                best_move: self.pvt.pv().next().copied(),
+                depth: d,
+            });
+            if T::is_master() {
+                self.emit_progress(d, value);
             }
 
             // The first full ply is guaranteed to run against the clock; from here on the time-based
@@ -563,7 +571,7 @@ impl<'engine> Search<'engine> {
         mut alpha: Score,
         mut beta: Score,
         depth: u8,
-    ) -> Score {
+    ) -> NodeResult {
         self.trace.visit_node();
 
         let draft = self.search_depth - depth;
@@ -581,12 +589,12 @@ impl<'engine> Search<'engine> {
 
         // Step 1. Check for aborted search and immediate draw.
         if self.stopping() {
-            return Score::zero();
+            return None;
         }
 
         // Step 2. check for immediate draw.
         if self.pos.in_threefold() || self.pos.fifty_move_rule_reached() {
-            return Score::zero();
+            return Some(Score::zero());
         }
 
         // Step 2. Mate distance pruning.
@@ -598,7 +606,7 @@ impl<'engine> Search<'engine> {
             alpha = std::cmp::max(Score::mate(0), alpha);
             beta = std::cmp::min(Score::mate(1), beta);
             if alpha >= beta {
-                return alpha;
+                return Some(alpha);
             }
         }
 
@@ -637,18 +645,18 @@ impl<'engine> Search<'engine> {
             if !entry.is_empty() && entry.depth >= depth {
                 match entry.bound() {
                     Bound::Exact => {
-                        return entry.score;
+                        return Some(entry.score);
                     }
                     Bound::Lower => {
                         if entry.score > beta {
-                            return entry.score;
+                            return Some(entry.score);
                         } else if entry.score > alpha {
                             alpha = entry.score
                         }
                     }
                     Bound::Upper => {
                         if entry.score < alpha {
-                            return entry.score;
+                            return Some(entry.score);
                         } else if entry.score < beta {
                             beta = entry.score
                         }
@@ -657,7 +665,7 @@ impl<'engine> Search<'engine> {
             }
 
             if alpha == beta {
-                return alpha;
+                return Some(alpha);
             }
         }
 
@@ -673,9 +681,9 @@ impl<'engine> Search<'engine> {
         // When eval is very low, check with quiescence whether it has any hope of raising alpha. If
         // not, return a fail low.
         if should_razor(depth, eval, alpha) {
-            let value = self.quiesce::<Master, NonPv>(alpha - Score::cp(1), alpha);
+            let value = self.quiesce::<Master, NonPv>(alpha - Score::cp(1), alpha)?;
             if value < alpha {
-                return value;
+                return Some(value);
             }
         }
 
@@ -733,14 +741,16 @@ impl<'engine> Search<'engine> {
 
                 // Step 19. Search non-PV move with null window.
                 if !Node::pv() || move_count > 1 {
-                    value = self
-                        .search::<T, NonPv>(
-                            alpha.inc_one().child_bound(),
-                            alpha.child_bound(),
-                            depth - 1,
-                        )
-                        .neg()
-                        .inc_mate();
+                    let child = self.search::<T, NonPv>(
+                        alpha.inc_one().child_bound(),
+                        alpha.child_bound(),
+                        depth - 1,
+                    );
+                    let Some(child) = child else {
+                        self.pos.unmake_move();
+                        return None;
+                    };
+                    value = child.neg().inc_mate();
                 }
 
                 // Step 20. Search PV move, or perform re-search if null window search failed high.
@@ -750,10 +760,13 @@ impl<'engine> Search<'engine> {
                 if Node::pv()
                     && (move_count == 1 || (value > alpha && (Node::root() || value < beta)))
                 {
-                    value = self
-                        .search::<T, Pv>(beta.child_bound(), alpha.child_bound(), depth - 1)
-                        .neg()
-                        .inc_mate();
+                    let child =
+                        self.search::<T, Pv>(beta.child_bound(), alpha.child_bound(), depth - 1);
+                    let Some(child) = child else {
+                        self.pos.unmake_move();
+                        return None;
+                    };
+                    value = child.neg().inc_mate();
                 }
 
                 debug_assert!(Node::pv() || !(value > alpha && (Node::root() || value < beta)));
@@ -812,7 +825,7 @@ impl<'engine> Search<'engine> {
         }
 
         if self.stopping() {
-            return Score::zero();
+            return None;
         }
 
         debug_assert!(
@@ -858,11 +871,19 @@ impl<'engine> Search<'engine> {
         );
 
         // Step 25. Return best value.
-        best_value
+        Some(best_value)
     }
 
     #[inline(always)]
     fn stopping(&self) -> bool {
+        #[cfg(test)]
+        if self
+            .abort_after_nodes
+            .is_some_and(|limit| self.trace.all_nodes_visited() >= limit)
+        {
+            return true;
+        }
+
         // The two abort signals are gated separately.
         //
         // Explicit cancellation (`stop`, `quit`, stdin EOF, or a command replacing the active
@@ -907,7 +928,11 @@ impl<'engine> Search<'engine> {
     }
 
     /// The quiescence search.
-    fn quiesce<T: Thread, Node: NodeType>(&mut self, mut alpha: Score, mut beta: Score) -> Score {
+    fn quiesce<T: Thread, Node: NodeType>(
+        &mut self,
+        mut alpha: Score,
+        mut beta: Score,
+    ) -> NodeResult {
         self.trace.visit_q_node();
 
         debug_assert!(!Node::root());
@@ -917,14 +942,13 @@ impl<'engine> Search<'engine> {
         debug_assert!(Node::pv() || alpha.inc_one() == beta);
 
         if self.stopping() {
-            // TODO: is this robust?
-            return Score::zero();
+            return None;
         }
 
         // Step 1. Check for an immediate draw. Quiet check evasions can repeat positions, so this
         // must happen before following another evasion.
         if self.pos.in_threefold() || self.pos.half_move_clock() >= 50 {
-            return Score::zero();
+            return Some(Score::zero());
         }
 
         // Step 2. Load transposition table entry.
@@ -953,18 +977,18 @@ impl<'engine> Search<'engine> {
             if tt_hit && !entry.is_empty() {
                 match entry.bound() {
                     Bound::Exact => {
-                        return entry.score;
+                        return Some(entry.score);
                     }
                     Bound::Lower => {
                         if entry.score >= beta {
-                            return entry.score;
+                            return Some(entry.score);
                         } else if entry.score > alpha {
                             alpha = entry.score
                         }
                     }
                     Bound::Upper => {
                         if entry.score <= alpha {
-                            return entry.score;
+                            return Some(entry.score);
                         } else if entry.score < beta {
                             beta = entry.score
                         }
@@ -973,7 +997,7 @@ impl<'engine> Search<'engine> {
             }
 
             if alpha >= beta {
-                return alpha;
+                return Some(alpha);
             }
         }
 
@@ -984,7 +1008,7 @@ impl<'engine> Search<'engine> {
             let stand_pat = self.evaluate();
 
             if stand_pat >= beta {
-                return beta;
+                return Some(beta);
             }
 
             if alpha < stand_pat {
@@ -1008,14 +1032,12 @@ impl<'engine> Search<'engine> {
 
                 // SAFETY: quiescence moves originate from move generation for `self.pos`.
                 unsafe { self.pos.make_move_unchecked(mov) };
-                score = self
-                    .quiesce::<T, Node>(beta.child_bound(), alpha.child_bound())
-                    .neg()
-                    .inc_mate();
+                let child = self.quiesce::<T, Node>(beta.child_bound(), alpha.child_bound());
                 self.pos.unmake_move();
+                score = child?.neg().inc_mate();
 
                 if score >= beta {
-                    return beta;
+                    return Some(beta);
                 }
 
                 if score > alpha {
@@ -1024,7 +1046,11 @@ impl<'engine> Search<'engine> {
             }
         }
 
-        alpha
+        if self.stopping() {
+            None
+        } else {
+            Some(alpha)
+        }
     }
 
     fn quiesce_evasions<T: Thread, Node: NodeType>(
@@ -1032,25 +1058,23 @@ impl<'engine> Search<'engine> {
         mut alpha: Score,
         beta: Score,
         moves: &BasicMoveList,
-    ) -> Score {
+    ) -> NodeResult {
         if moves.is_empty() {
-            return Score::mate(0);
+            return Some(Score::mate(0));
         }
 
         for mov in moves {
             if self.stopping() {
-                break;
+                return None;
             }
 
             self.pos.make_move(mov);
-            let score = self
-                .quiesce::<T, Node>(beta.child_bound(), alpha.child_bound())
-                .neg()
-                .inc_mate();
+            let child = self.quiesce::<T, Node>(beta.child_bound(), alpha.child_bound());
             self.pos.unmake_move();
+            let score = child?.neg().inc_mate();
 
             if score >= beta {
-                return beta;
+                return Some(beta);
             }
 
             if score > alpha {
@@ -1058,7 +1082,7 @@ impl<'engine> Search<'engine> {
             }
         }
 
-        alpha
+        Some(alpha)
     }
 
     fn emit_progress(&self, depth: u8, score: Score) {
@@ -1390,7 +1414,7 @@ mod tests {
 
         let score = search.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P);
 
-        assert_eq!(score, Score::cp(-495));
+        assert_eq!(score, Some(Score::cp(-495)));
         assert!(search.trace.q_nodes_visited() > 1);
     }
 
@@ -1405,7 +1429,7 @@ mod tests {
 
         assert_eq!(
             search.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P),
-            Score::mate(0)
+            Some(Score::mate(0))
         );
     }
 
@@ -1427,7 +1451,7 @@ mod tests {
 
         assert_eq!(
             search.quiesce_evasions::<Master, Pv>(Score::INF_N, Score::INF_P, &moves),
-            Score::INF_N
+            None
         );
     }
 
@@ -1452,7 +1476,7 @@ mod tests {
 
             assert_eq!(
                 search.quiesce::<Master, NonPv>(Score::cp(-50), Score::cp(-49)),
-                expected
+                Some(expected)
             );
         }
     }
@@ -1485,7 +1509,7 @@ mod tests {
 
         assert_eq!(
             search.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P),
-            Score::zero()
+            Some(Score::zero())
         );
     }
 
@@ -1513,7 +1537,7 @@ mod tests {
 
         assert_eq!(
             search.quiesce::<Master, NonPv>(Score::cp(-1), Score::zero()),
-            Score::zero()
+            Some(Score::zero())
         );
     }
 
@@ -1707,6 +1731,73 @@ mod tests {
             }
             SearchEvent::CurrentMove(_) => true,
         }));
+    }
+
+    #[test]
+    fn mid_subtree_abort_keeps_the_last_completed_iteration() {
+        core::init::init_globals();
+
+        let position = Position::start_pos();
+        let flag = AtomicBool::new(false);
+
+        // Measure the deterministic depth-one work, then stop a fresh search in the first child
+        // of the candidate depth-two root. The root itself is the first new node and its child is
+        // the second, so this threshold proves that a move was made and a subtree was entered.
+        let baseline_table = Table::new(16);
+        let mut baseline = Search::new(position.clone(), &flag, None, &baseline_table);
+        let expected = baseline.run::<Master>(1).unwrap();
+        let expected_pv = baseline.pvt.pv().copied().collect::<Vec<_>>();
+        let completed_iteration_nodes = baseline.trace.all_nodes_visited();
+        let abort_after = completed_iteration_nodes + 2;
+
+        let table = Table::new(16);
+        let mut search = Search::new(position.clone(), &flag, None, &table);
+        search.abort_after_nodes = Some(abort_after);
+        let result = search.run::<Master>(3).unwrap();
+
+        assert_eq!(result, expected);
+        assert!(search.trace.all_nodes_visited() >= abort_after);
+        assert_eq!(search.pvt.pv().copied().collect::<Vec<_>>(), expected_pv);
+
+        // The aborted depth-two root must not replace the completed depth-one root entry.
+        let root_entry = table.probe(&position).into_inner().read();
+        assert_eq!(root_entry.depth, 1);
+        assert_eq!(
+            root_entry.mov.to_move(&position),
+            expected.best_move.unwrap()
+        );
+    }
+
+    #[test]
+    fn aborted_child_cannot_score_or_write_its_parent() {
+        core::init::init_globals();
+
+        let position = Position::start_pos();
+        let start_zob = position.zobrist();
+        let flag = AtomicBool::new(false);
+        let table = Table::new(16);
+        let mut search = Search::new(position.clone(), &flag, None, &table);
+
+        // Permit the test abort immediately and fire it in the first child: the root consumes one
+        // node, makes a move, and the recursive search consumes the second node before stopping.
+        search.min_search_complete = true;
+        search.search_depth = 2;
+        search.pvt = PVTable::new(2);
+        search.abort_after_nodes = Some(2);
+
+        let result = search.search::<Master, Root>(Score::INF_N, Score::INF_P, 2);
+
+        assert_eq!(result, None, "an aborted child must not yield a score");
+        assert_eq!(search.trace.all_nodes_visited(), 2);
+        assert_eq!(search.pos.zobrist(), start_zob, "the root move is restored");
+        assert!(
+            search.pvt.pv().next().is_none(),
+            "an aborted child must not become the principal move"
+        );
+        assert!(
+            table.probe(&position).into_inner().read().is_empty(),
+            "an ancestor whose child aborted must not write a TT entry"
+        );
     }
 
     #[test]

@@ -16,13 +16,20 @@ branch correct even if two invocations overlap.
 
 ## Preconditions
 
-1. Run `backlog instructions overview` and read the task and its approval
+1. Locate the task branch and worktree first (`git worktree list`,
+   `git branch --list '*<task>*'`), and read all task state from the task
+   worktree. The primary branch's copy of a task file is stale by design:
+   lifecycle edits live on the task branch until merge, so a status read from
+   the primary worktree shows the pre-claim status. Never refuse a merge on the
+   basis of a status read outside the task worktree, and never report a task as
+   unimplemented without checking for its branch and worktree.
+2. Run `backlog instructions overview` and read the task and its approval
    comment. Read the recorded task branch, base, and approved implementation
    target (the reviewed SHA).
-2. Require the task to be `Ready to Merge`. Refuse anything else.
-3. Require every dependency to be `Done`. Never land a task ahead of an
+3. Require the task to be `Ready to Merge`. Refuse anything else.
+4. Require every dependency to be `Done`. Never land a task ahead of an
    unlanded dependency.
-4. Confirm the approval is intact: the approved implementation SHA is the code
+5. Confirm the approval is intact: the approved implementation SHA is the code
    target, later commits contain only approval metadata, and no implementation
    file changed after approval. If approval cannot be established, stop and
    record the blocker; do not merge.
@@ -62,6 +69,14 @@ primary. Textual cleanliness plus passing tests is the bar; a semantically
 wrong merge that still passes tests can land, so treat test-suite depth as the
 primary automated net and surface any overlap for human judgment (below).
 
+Merge only when you are confident the integrated result is correct. If a
+specific doubt survives the checks, resolve it before landing: read the merged
+code at the sites in question and find the test or argument that settles it. A
+doubt that cannot be resolved is grounds to eject, not to land with a caveat
+attached. Do not annotate a merge with speculative concern in place of that
+verification — a hedge that was never investigated reads as diligence while
+transferring unexamined uncertainty to the human.
+
 ## Land
 
 When the integrated result is clean and green and the compare-and-swap
@@ -74,8 +89,10 @@ succeeded:
    and cleanup, not pushing to a remote.
 
 Before landing, note whether the merge touched files or modules that a
-recently-landed task changed. Surface that overlap for the human to eyeball;
-automated overlap re-review is a future enhancement, not part of this skill.
+recently-landed task changed. Report that overlap as a fact — which tasks, which
+files — not as unresolved doubt; if the overlap raises a specific correctness
+question, settle it per the confidence rule above before landing. Automated
+overlap re-review is a future enhancement, not part of this skill.
 
 ## Eject
 
