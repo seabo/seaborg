@@ -1,11 +1,11 @@
 ---
 id: TASK-64.14
 title: Replace material-only evaluation with a tapered hand-crafted evaluation
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-19 13:33'
-updated_date: '2026-07-19 21:20'
+updated_date: '2026-07-19 21:25'
 labels:
   - evaluation
   - strength
@@ -95,6 +95,8 @@ Integration rework after merge-gate failure:
 - Updated benches/search.rs from material_eval() to static_eval() and revised the benchmark rationale so it remains valid for any future evaluation-term change.
 - Focused Criterion verification: cargo bench --bench search -- "static evaluation" --sample-size 10 passed; tapered evaluation measured approximately 23.1-23.5 ns (startpos), 23.8-25.3 ns (kiwipete), 24.5-27.3 ns (middlegame), and 9.7-14.9 ns (endgame).
 - Resolved the recorded merge integration failure: strict Clippy now compiles the benchmark against the renamed evaluator.
+
+Merge verification on integrated commit 823ab39: cargo fmt --check passed; clean-target cargo clippy --workspace --all-targets --all-features -- -D warnings passed; cargo test --workspace passed (45 core, 273 engine passed/2 ignored, 19 integration, 1 doc test). Same-machine benchmark comparison against recorded base c7826f1: generate moves 196.14 ns vs 192.26 ns (~2.0% slower); perft 5 23.46 ms vs 23.20 ms (~1.1% slower), both within the 5% threshold.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
