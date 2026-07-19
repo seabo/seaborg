@@ -1,9 +1,11 @@
 ---
 id: TASK-63
 title: Make movestogo and movetime allocation a deliberate policy
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-19 13:17'
+updated_date: '2026-07-19 16:32'
 labels:
   - engine
   - time
@@ -54,3 +56,15 @@ Do not regress TASK-7 overflow safety, TASK-32 guaranteed legal move under a zer
 - [ ] #5 TimingMode::MoveTime deducts MOVE_OVERHEAD consistently with the Timed path, with a test covering a movetime smaller than the overhead that still yields a non-negative searchable budget
 - [ ] #6 TASK-7 overflow safety, TASK-32 guaranteed-legal-move behavior, TASK-38 proportional opening allocation and the TASK-42 increment reserve all still hold, evidenced by their existing regression tests passing unmodified
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Treat `movestogo 0` as an unknown horizon: fold Some(0) into the None branch so it uses the AVERAGE_GAME_LENGTH / MINIMUM_REMAINING_MOVES heuristic and the sudden-death reserve path.
+2. Give periodic (movestogo n >= 1) controls their own allocation branch: budget the whole period as the usable clock plus the n increments still to be earned, divided by n plus a boundary cushion constant. This exempts periodic controls from RESERVE_INCREMENT_MOVES, whose dimensional premise (the increment funds the steady state) does not hold when a grant funds it, and removes the inverted behaviour near a boundary.
+3. Set the cushion to 1 move. With a constant allocation of budget/(n+1) per move the period arrives at the boundary holding exactly one move's worth, and the resulting allocation is at most half the usable clock, so MAX_CLOCK_SHARE_DIVISOR (three quarters) is never the binding constraint for well-formed periodic input.
+4. Use saturating arithmetic for the period budget so large clocks and increments cannot overflow.
+5. Deduct MOVE_OVERHEAD from TimingMode::MoveTime: add a movetime budget helper in engine/src/time.rs that keeps the constant encapsulated, and call it from engine/src/engine.rs. A movetime at or below the overhead saturates to a zero budget, which the search already handles by guaranteeing a legal move.
+6. Update the tests whose asserted constants encode the old periodic arithmetic, and add tests for: movestogo 0 falling back rather than committing the share cap; a small clock near a boundary governed by moves remaining rather than the increment reserve; a simulated period arriving at the boundary with time left; a movestogo sweep showing the share cap never binds; and the movetime overhead deduction including a movetime below the overhead.
+7. Run cargo fmt --check, cargo clippy --workspace --all-targets --all-features -- -D warnings, and cargo test --workspace.
+<!-- SECTION:PLAN:END -->
