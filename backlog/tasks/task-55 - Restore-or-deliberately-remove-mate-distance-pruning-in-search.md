@@ -1,9 +1,11 @@
 ---
 id: TASK-55
 title: Restore or deliberately remove mate-distance pruning in search
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-18 23:42'
+updated_date: '2026-07-19 03:42'
 labels:
   - engine
   - search
@@ -33,3 +35,12 @@ Decide deliberately between reinstating correct position-relative mate-distance 
 - [ ] #4 Search behaviour on mate-rich positions is unchanged or improved, evidenced by the existing mate regression tests plus a debug self-play run over suites/wac.epd with no panic or hang
 - [ ] #5 cargo bench --bench search shows no repeatable regression against the pre-change commit on the same machine
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Deliberately remove mate-distance pruning because position-relative mate scores have no root-distance bound to tighten; retain only node-score window normalization required for exact child-bound and infinity inputs.
+2. Remove the degenerate alpha >= beta early returns and rewrite search, quiescence, and Score documentation so the clamp is described solely as bound normalization.
+3. Add focused regression coverage proving out-of-band child windows are searched without returning invalid scores, then run mate-rich regressions and the debug wac.epd self-play test.
+4. Compare cargo bench --bench search against the base commit, run all repository-required checks, commit the implementation, and record the immutable review handoff.
+<!-- SECTION:PLAN:END -->
