@@ -1,11 +1,11 @@
 ---
 id: TASK-21
 title: Modernize and deduplicate the dependency graph
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-19 21:20'
+updated_date: '2026-07-19 21:29'
 labels:
   - dependencies
   - maintenance
@@ -87,6 +87,22 @@ Verification:
 - cargo test --workspace: passed (335 passed, 2 ignored)
 - cargo bench --workspace -- --test: passed; every benchmark target reported Success
 - cargo tree --workspace --duplicates: reviewed; only transitive syn 2/3 remain
+---
+
+author: @codex-merge
+created: 2026-07-19 21:29
+---
+Merge completed
+Integrated merge: ec634e24318fb5f5057421733ac81540cc00612b
+Primary base: ddf871fdbe313ae04a195745b019e50f0e0b2d59
+
+Verification on integrated result:
+- cargo fmt --check: passed
+- CARGO_TARGET_DIR=/tmp/seaborg-task21-merge-clippy-ec634e2 cargo clippy --workspace --all-targets --all-features -- -D warnings: passed from a fresh target directory
+- cargo test --workspace: passed (337 passed, 2 ignored)
+- cargo bench --workspace -- --test: passed; every benchmark target reported Success
+
+Overlap: TASK-64.14 also changed benches/search.rs; the clean merge preserves its static_eval benchmark update alongside TASK-21's Criterion and crate-import migrations.
 ---
 <!-- COMMENTS:END -->
 
