@@ -1,11 +1,11 @@
 ---
 id: TASK-56
 title: Keep Score bound transformations inside the documented mate encoding
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-18 23:43'
-updated_date: '2026-07-19 03:15'
+updated_date: '2026-07-19 03:29'
 labels:
   - engine
   - search
