@@ -1,11 +1,11 @@
 ---
 id: TASK-1.5
 title: Complete the browser game experience and integration hardening
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-17 15:40'
-updated_date: '2026-07-19 01:59'
+updated_date: '2026-07-19 02:04'
 labels: []
 dependencies:
   - TASK-1.4
