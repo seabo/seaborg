@@ -32,6 +32,10 @@ pub struct Args {
     #[clap(long, requires = "ui")]
     no_open: bool,
 
+    /// Print the notices for third-party material embedded in this executable
+    #[clap(long, group = "mode")]
+    licenses: bool,
+
     #[clap(subcommand)]
     command: Option<Commands>,
 }
@@ -44,7 +48,12 @@ enum Commands {
 pub fn cmdline() {
     let args = Args::parse();
 
-    if args.uci {
+    if args.licenses {
+        // The embedded piece artwork is permissively licensed on the one condition that its notice
+        // reaches whoever receives the binary. Someone who only ever runs the executable never sees
+        // the source tree, so the notice has to be printable from the executable itself.
+        print!("{}", ui::PIECE_ARTWORK_LICENSE);
+    } else if args.uci {
         engine::launch(engine::EngineInfo {
             name: "seaborg",
             version: env!("CARGO_PKG_VERSION"),

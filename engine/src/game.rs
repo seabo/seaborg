@@ -203,7 +203,6 @@ impl GameController {
             return changed;
         }
 
-        let id = active.id;
         let revision = active.revision;
         let outcome = active.handle.wait();
         changed = true;
@@ -215,7 +214,6 @@ impl GameController {
                 && self.position.turn() != self.human_side
                 && self.status == GameStatus::Ongoing
                 && find_uci_move(&self.position, &best_move.to_uci_string()) == Some(best_move)
-                && id < self.next_search_id
             {
                 self.apply_move(best_move);
             }

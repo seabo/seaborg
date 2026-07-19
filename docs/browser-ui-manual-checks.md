@@ -37,7 +37,13 @@ passes if the console reports an error**.
 In the Network panel, reload with the cache disabled and confirm every request is to
 `127.0.0.1` on the printed port — the page, `app.js`, `board.js`, `format.js`, `style.css`,
 `pieces.svg`, `/api/state`, and `/api/events` — and nothing else. There must be no font
-service, CDN, analytics, or source-map fetch. Covers AC #5.
+service, CDN, analytics, or source-map fetch.
+
+The piece artwork is third-party work embedded in the executable, so this check is also what
+proves it is served locally rather than hot-linked. Follow the **Notice** link in the page
+footer: it must serve the attribution from the same origin, name Colin M.L. Burnett, and
+reproduce the BSD 3-clause conditions and disclaimer. `seaborg --licenses` prints the same text
+for someone who never opens the UI.
 
 ## 2. Desktop layout, both colours
 
@@ -49,8 +55,6 @@ At roughly 1440×1000:
 - The companion panel shows move history in SAN, whose turn it is, the engine state, evaluation,
   depth, nodes, NPS, hash, and a principal variation — without crowding the board off screen.
 
-Covers AC #1, #2.
-
 ## 3. Narrow layout
 
 At 390×844 (a phone viewport, with touch emulation on):
@@ -58,8 +62,6 @@ At 390×844 (a phone viewport, with touch emulation on):
 - The board stays square and fully visible, and the panel stacks beneath it.
 - A move can be played by touch drag and by tap-tap.
 - The move list scrolls internally rather than stretching the page.
-
-Covers AC #1, #2, #6.
 
 ## 4. Special moves
 
@@ -71,8 +73,6 @@ playing on until they arise:
 - **Promotion**: the chooser opens, offers queen, rook, bishop, and knight, is reachable by
   keyboard alone, and Cancel leaves the pawn where it was.
 
-Covers AC #6.
-
 ## 5. Rejected input and error feedback
 
 - Drag a piece to an illegal square. It snaps back and the board message explains why.
@@ -81,8 +81,6 @@ Covers AC #6.
 - Stop the server with Ctrl-C while the page is open. The connection indicator changes to
   `Reconnecting…` and the board message says the connection was lost. Restart the server on the
   same fixed port and confirm the page recovers on its own and clears the warning.
-
-Covers AC #4.
 
 ## 6. Occupied fixed port
 
@@ -93,7 +91,7 @@ cargo run --release -- --ui --ui-port 7777    # in two terminals
 ```
 
 The second must exit non-zero with a message naming the port and suggesting `--ui-port`. It must
-not start a half-working server. Covers AC #4.
+not start a half-working server.
 
 ## 7. Reload during a search
 
@@ -104,7 +102,7 @@ Set the thinking time to 10s, play a move, and while Seaborg is thinking:
 - Open a second tab. Both tabs show the same search and update together.
 
 `reloading_during_a_search_reconstructs_the_game_without_duplicating_it` asserts this over the
-protocol; this check confirms the page rebuilds from it correctly. Covers AC #3.
+protocol; this check confirms the page rebuilds from it correctly.
 
 ## 8. Engine limit and controls
 
@@ -117,8 +115,6 @@ protocol; this check confirms the page rebuilds from it correctly. Covers AC #3.
 - **Flip board** reverses the orientation, and the arrow keys then follow what is on screen.
   Starting a new game returns the board to the side being played.
 
-Covers AC #1, #2.
-
 ## 9. Terminal states
 
 Play a game through to **checkmate** — the quickest reliable route is to set the thinking time
@@ -128,26 +124,25 @@ to 0.25s and play the Scholar's-mate try, or to walk your own king into a mate. 
 - The board locks and further moves are refused with a readable message.
 - Undo still works, so the game can be continued from before the mate.
 
-Repeat for a draw if one arises (stalemate, threefold, or the fifty-move rule). Covers AC #5.
+Repeat for a draw if one arises (stalemate, threefold, or the fifty-move rule).
 
 ## 10. Keyboard and assistive technology
 
 Using only the keyboard: tab to the board, move with the arrow keys, select and play a move with
 Enter, and clear a selection with Escape. Every control in the panel is reachable by Tab and has
 a visible focus ring. With a screen reader running, squares announce their coordinate and
-occupant. Covers AC #1, #6.
+occupant.
 
 ## 11. Reduced motion
 
 Turn on the operating system's reduce-motion setting (macOS: System Settings → Accessibility →
 Display → Reduce motion) and reload. Moves, castling, and snapback resolve instantly rather than
-sliding, and nothing is left mid-animation. Covers AC #6.
+sliding, and nothing is left mid-animation.
 
 ## 12. Quit
 
 Press **Quit Seaborg**. The page reports that Seaborg has stopped and stops trying to reconnect,
 and the terminal prints `Seaborg UI stopped.` and returns to the shell with exit status 0.
-Covers AC #1.
 
 ## 13. Refused quit
 
@@ -165,4 +160,4 @@ has not printed `Seaborg UI stopped.`). Reloading the page then makes Quit work 
 
 `quit_needs_the_session_token` asserts the server half of this, and
 `only an accepted or unanswered quit stops the session, never a refused one` asserts the rule the
-page decides by; this check confirms the two meet correctly in a real browser. Covers AC #4.
+page decides by; this check confirms the two meet correctly in a real browser.

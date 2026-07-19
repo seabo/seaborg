@@ -4,6 +4,21 @@ Seaborg is a chess engine written from scratch in Rust. It isn't based
 on any existing engine, although the move generation scheme is heavily
 inspired by the approach used in [Pleco](https://github.com/sfleischman105/Pleco).
 
+## Building
+
+`cargo build` is all that is required. The build embeds the current Git commit,
+reported in the startup banner that `seaborg --uci` writes to the diagnostic
+channel. UCI traffic on stdout carries only the name and version.
+
+Git is optional. Building from a source archive, or on a machine without Git
+installed, succeeds and embeds the commit as `unknown`. To pin a known revision
+in that situation — for a release tarball or a distribution package — set
+`SEABORG_GIT_HASH` at build time:
+
+```sh
+SEABORG_GIT_HASH=$(cat REVISION) cargo build --release
+```
+
 ## Past and future development
 
 Seaborg currently has minimal built-in understanding of chess strategy -
@@ -64,3 +79,28 @@ The main future development direction is to improve static evaluation at
 leaf nodes using a neural net approach.
 
 - [Efficiently-updatable neural network](https://www.chessprogramming.org/NNUE)
+
+## Development
+
+Run these three commands before proposing a change:
+
+```sh
+cargo fmt --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace
+```
+
+CI runs exactly these, so a change that fails any of them locally will fail
+there too. Clippy is a gate rather than advice — `-D warnings` turns any
+warning into a build failure. Fix warnings at the source; reach for a local
+`#[allow]` only where the warned construct is genuinely required, and say why
+in a comment.
+
+Tests run in the debug profile. The engine leans on `debug_assert!` to catch
+invalid board states, and those assertions disappear from a release build, so
+`--release` is not a substitute.
+
+CI pins the Rust toolchain in `.github/workflows/ci.yml`. Local runs use
+whatever toolchain you have installed, so an unusually old or new one can
+disagree with CI about formatting or lints; the pinned version there is the
+reference.

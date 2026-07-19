@@ -366,6 +366,11 @@ fn serves_the_embedded_assets_with_their_content_types() {
         ),
         ("/style.css", "text/css; charset=utf-8", "body"),
         ("/pieces.svg", "image/svg+xml", "white-king"),
+        (
+            "/licenses",
+            "text/plain; charset=utf-8",
+            "Colin M.L. Burnett",
+        ),
     ] {
         let response = get(&server, path);
         assert_eq!(response.status, 200, "{path}");
@@ -380,6 +385,46 @@ fn serves_the_embedded_assets_with_their_content_types() {
             response.body
         );
     }
+}
+
+/// The frontend addresses piece artwork as `/pieces.svg#<colour>-<kind>` and gets no error when
+/// the fragment is missing — the square simply renders empty. A sprite whose symbol ids drifted
+/// from that pattern would therefore fail silently and only in a browser.
+#[test]
+fn the_sprite_defines_a_symbol_for_every_piece_the_frontend_can_ask_for() {
+    let server = TestServer::start();
+    let sprite = get(&server, "/pieces.svg").body;
+    for colour in ["white", "black"] {
+        for kind in ["pawn", "knight", "bishop", "rook", "queen", "king"] {
+            let symbol = format!("<symbol id=\"{colour}-{kind}\"");
+            assert!(
+                sprite.contains(&symbol),
+                "sprite is missing {colour}-{kind}"
+            );
+        }
+    }
+}
+
+/// The piece artwork is third-party work taken under a license whose sole condition is that its
+/// notice reach whoever receives the binary. Serving the notice from the running executable is how
+/// that condition is met for someone who never reads the source tree, so an unreachable or
+/// incomplete notice is a licensing defect, not a cosmetic one.
+#[test]
+fn the_served_artwork_notice_carries_the_terms_it_has_to_convey() {
+    let server = TestServer::start();
+    let notice = get(&server, "/licenses").body;
+    for required in [
+        "Colin M.L. Burnett",
+        "BSD 3-clause",
+        "Redistributions in binary form must reproduce the above copyright notice",
+        "THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS \"AS IS\"",
+    ] {
+        assert!(notice.contains(required), "the notice omits {required:?}");
+    }
+    assert!(
+        get(&server, "/").body.contains("href=\"/licenses\""),
+        "the page should link the notice, since the artwork it covers is what the page renders"
+    );
 }
 
 #[test]
@@ -414,6 +459,7 @@ fn every_response_sets_the_security_and_caching_headers() {
         "/board.js",
         "/style.css",
         "/pieces.svg",
+        "/licenses",
         "/api/state",
     ] {
         let response = get(&server, path);
@@ -761,6 +807,7 @@ fn known_routes_reject_the_wrong_method() {
         ("POST", "/app.js"),
         ("POST", "/board.js"),
         ("POST", "/pieces.svg"),
+        ("POST", "/licenses"),
         ("POST", "/api/state"),
         ("DELETE", "/api/events"),
         ("GET", "/api/move"),
