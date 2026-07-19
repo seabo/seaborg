@@ -77,7 +77,7 @@ impl Position {
         let (bbs, player_occ, board) = Self::parse_piece_position_string(piece_positions)?;
         let turn = Self::parse_side_to_move(side_to_move)?;
         let castling_rights = Self::parse_castling_rights(castling_rights)?;
-        let ep_square = Self::parse_ep_square(ep_square)?;
+        let ep_square = Self::parse_ep_square(ep_square, turn)?;
         let half_move_clock = Self::parse_half_move_clock(half_move_clock)?;
         let move_number = Self::parse_move_number(move_number)?;
 
@@ -457,7 +457,7 @@ impl Position {
         ))
     }
 
-    fn parse_ep_square(ep_square: &str) -> Result<Option<Square>, FenError> {
+    fn parse_ep_square(ep_square: &str, turn: Player) -> Result<Option<Square>, FenError> {
         if ep_square == "-" {
             return Ok(None);
         }
@@ -472,31 +472,52 @@ impl Position {
             });
         }
 
-        // TODO: can also run a check to ensure that the en passant square reconciles with the
-        // side to move
+        let square = match ep_square {
+            "a3" => Square(16),
+            "b3" => Square(17),
+            "c3" => Square(18),
+            "d3" => Square(19),
+            "e3" => Square(20),
+            "f3" => Square(21),
+            "g3" => Square(22),
+            "h3" => Square(23),
+            "a6" => Square(40),
+            "b6" => Square(41),
+            "c6" => Square(42),
+            "d6" => Square(43),
+            "e6" => Square(44),
+            "f6" => Square(45),
+            "g6" => Square(46),
+            "h6" => Square(47),
+            _ => {
+                return Err(FenError {
+                    ty: FenErrorType::EnPassantSquareInvalid,
+                    msg: format!("invalid en passant square `{}`; must be a valid algebraic notation square on the 3rd or 6th rank", ep_square),
+                })
+            }
+        };
 
-        match ep_square {
-            "a3" => Ok(Some(Square(16))),
-            "b3" => Ok(Some(Square(17))),
-            "c3" => Ok(Some(Square(18))),
-            "d3" => Ok(Some(Square(19))),
-            "e3" => Ok(Some(Square(20))),
-            "f3" => Ok(Some(Square(21))),
-            "g3" => Ok(Some(Square(22))),
-            "h3" => Ok(Some(Square(23))),
-            "a6" => Ok(Some(Square(40))),
-            "b6" => Ok(Some(Square(41))),
-            "c6" => Ok(Some(Square(42))),
-            "d6" => Ok(Some(Square(43))),
-            "e6" => Ok(Some(Square(44))),
-            "f6" => Ok(Some(Square(45))),
-            "g6" => Ok(Some(Square(46))),
-            "h6" => Ok(Some(Square(47))),
-            _ => Err(FenError {
+        // The en passant target names the square a pawn skipped on its double push, so it
+        // must sit behind that pawn: on the 6th rank when White is to move (Black just
+        // pushed) and on the 3rd rank when Black is to move. `relative_rank(5)` is that rank
+        // as an absolute index for the side to move. A square on the other rank describes a
+        // position no legal game can reach, so reject it rather than accept a contradiction.
+        if square.rank_idx_of_sq() != turn.relative_rank(5) {
+            return Err(FenError {
                 ty: FenErrorType::EnPassantSquareInvalid,
-                msg: format!("invalid en passant square `{}`; must be a valid algebraic notation square on the 3rd or 6th rank", ep_square),
-            })
+                msg: format!(
+                    "en passant square `{}` is inconsistent with the side to move ({})",
+                    ep_square,
+                    if turn == Player::WHITE {
+                        "white"
+                    } else {
+                        "black"
+                    }
+                ),
+            });
         }
+
+        Ok(Some(square))
     }
 
     fn parse_half_move_clock(hmc: &str) -> Result<u32, FenError> {
@@ -835,5 +856,52 @@ mod tests {
             parsed.zobrist(),
             "played and parsed positions hashed differently"
         );
+    }
+
+    /// An en-passant target only arises from the opponent's last double push, so it must lie on
+    /// the 6th rank when White is to move and the 3rd rank when Black is to move. A target on the
+    /// wrong rank names a position no legal game reaches, and parsing must reject it as an error
+    /// rather than accept the contradiction (or panic).
+    #[test]
+    fn rejects_en_passant_square_inconsistent_with_side_to_move() {
+        init_globals();
+
+        // White to move but the target is on the 3rd rank (behind a White pawn).
+        let white = Position::from_fen("4k3/8/8/8/4P3/8/8/4K3 w - e3 0 1");
+        assert!(
+            matches!(
+                white,
+                Err(FenError {
+                    ty: FenErrorType::EnPassantSquareInvalid,
+                    ..
+                })
+            ),
+            "3rd-rank target with White to move should be rejected, got {white:?}"
+        );
+
+        // Black to move but the target is on the 6th rank (behind a Black pawn).
+        let black = Position::from_fen("4k3/8/8/3p4/8/8/8/4K3 b - d6 0 1");
+        assert!(
+            matches!(
+                black,
+                Err(FenError {
+                    ty: FenErrorType::EnPassantSquareInvalid,
+                    ..
+                })
+            ),
+            "6th-rank target with Black to move should be rejected, got {black:?}"
+        );
+    }
+
+    /// A target on the rank consistent with the side to move is accepted. Here a real capture onto
+    /// the target exists, so it also survives canonicalization and is retained.
+    #[test]
+    fn accepts_en_passant_square_consistent_with_side_to_move() {
+        init_globals();
+
+        // White to move, target on the 6th rank, with e5 able to capture onto d6.
+        let pos = Position::from_fen("4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1")
+            .expect("a 6th-rank target with White to move is legal");
+        assert_eq!(pos.ep_square(), Some(Square(43)));
     }
 }
