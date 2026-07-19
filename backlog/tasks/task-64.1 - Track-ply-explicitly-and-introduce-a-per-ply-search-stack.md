@@ -1,11 +1,11 @@
 ---
 id: TASK-64.1
 title: Track ply explicitly and introduce a per-ply search stack
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-19 13:30'
-updated_date: '2026-07-19 19:29'
+updated_date: '2026-07-19 19:42'
 labels:
   - search
   - architecture
@@ -90,6 +90,21 @@ Quiescence receives a ply but does not index per-ply state with it, because noth
 Behaviour preservation was measured, not assumed: fixed-depth UCI searches (`go depth 8`) on startpos, Kiwipete and `8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1` produce byte-identical `info` lines — node counts, scores and PVs at every iteration — against the base commit c55508b. No search test assertion was modified; only call sites gained the ply argument and the deleted `search_depth` setup lines were dropped.
 
 Observed but not changed, as it is outside this task: `KillerTable::store` compares slot hit counts with `<`, so with both counters at zero it always writes slot B. Slot A is only reached after a probe has incremented B's counter. Pre-existing on master and unaffected by the re-indexing.
+
+Rework against current master a34da39 (pinned; master advanced during this session as TASK-63 and TASK-66 also merged — the original c55508b base and the interim e67091b are both superseded). This is an integration-conflict rework from TASK-64.17's by-value move-loop iterator, not a REV-N-NN correctness finding.
+
+Merged the pinned master a34da39 into the task branch; the only conflicts are in engine/src/search.rs, all four resolved by taking BOTH sides — this task's explicit ply and TASK-64.17's by-value mov:
+- Main move-loop header: MoveLoader::from(self, tt_mov, ply) with 'for mov in &mut moves'.
+- self.stack[ply].mov = mov; (dropped the deref; mov is Move by value, and git did NOT flag this line — a marker-only resolution would not compile).
+- self.pvt.copy_to(ply, mov);
+- self.kt.store(mov, ply);
+- Quiescence loop: make_move_unchecked(&mov) with quiesce(..., ply + 1).
+
+quiesce_evasions needed no change: it iterates &BasicMoveList (mov: &Move), untouched by TASK-64.17, and already threads ply. No 'draft' local or 'search_depth' field survives in search.rs (grep shows only the tt_draft narrowing helper and comment/test text). git diff master..HEAD is confined to this task's own files (killer.rs, pv_table.rs, search.rs, the task file); no other task's code is carried on the branch.
+
+Re-verified on the merged target a538c5c: cargo fmt --check pass; cargo clippy --workspace --all-targets --all-features -- -D warnings exit 0, zero warnings, no new #[allow]; cargo test --workspace pass (264 engine / 2 ignored; 43 core; TASK-66's reftable tests included; the seven ply/past-horizon regression tests all run and pass).
+
+Behaviour preservation re-measured against the pinned new base a34da39: depth-8 UCI searches on startpos, Kiwipete and 8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1 produce info lines (depth, seldepth, score, nodes, pv, hashfull) identical at every iteration; only time and nps differ.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -176,6 +191,24 @@ Also worth attention because git did NOT flag it: `self.stack[ply].mov = *mov;` 
 Nothing is wrong with the reviewed work in isolation: the approval of ea17ad7 was based on verification against base c55508b and remains accurate for that base. This is an integration conflict created by TASK-64.17 landing in between, not a defect found in this implementation. Rework is a merge of master into the task branch and a resolution of the five sites above, followed by re-verification. The behaviour-preservation probe should be re-run against the new base, since the ordering rewrite changes the trees searched and the previous byte-identical comparison against c55508b no longer applies.
 
 Re-review will be required after rework, because the implementation target changes.
+---
+
+author: @claude
+created: 2026-07-19 19:42
+---
+Implementation handoff (rework re-review)
+Branch: task-64.1-explicit-ply-search-stack
+Worktree: /Users/seabo/seaborg-worktrees/task-64.1-explicit-ply-search-stack
+Base: a34da39d433e50adbcd4d9c94d74e6782d237e95 (pinned current master; prior bases c55508b and e67091b superseded as TASK-63/TASK-64.17/TASK-66 landed)
+Implementation target: a538c5c (merge commit; net contribution is 'git diff a34da39..a538c5c', confined to killer.rs, pv_table.rs, search.rs and the task file)
+Resolved findings: none (integration conflict from TASK-64.17, not a REV-N-NN finding)
+Verification (run on target a538c5c):
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: exit 0, zero warnings, no new #[allow]
+- cargo test --workspace: pass, 264 engine / 0 failed / 2 ignored; 43 core; all other targets green; seven ply/past-horizon regression tests all green
+- behaviour-preservation probe vs pinned base a34da39: depth-8 UCI info lines identical (depth/seldepth/score/nodes/pv/hashfull) on startpos, Kiwipete and 8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1; only time/nps differ
+Known failures: none
+Note for reviewer: master moved during this session; a34da39 was pinned at merge time. If master has advanced again, re-merge is trivial (later commits are TASK-63/TASK-66 which do not touch the search move loops). Prior approval of ea17ad7 against c55508b is invalidated: base and target both changed.
 ---
 <!-- COMMENTS:END -->
 
