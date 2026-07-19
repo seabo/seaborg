@@ -1,11 +1,11 @@
 ---
 id: TASK-63
 title: Make movestogo and movetime allocation a deliberate policy
-status: In Progress
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-19 13:17'
-updated_date: '2026-07-19 18:40'
+updated_date: '2026-07-19 19:30'
 labels:
   - engine
   - time
