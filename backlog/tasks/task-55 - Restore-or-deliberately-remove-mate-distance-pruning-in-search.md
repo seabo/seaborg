@@ -1,11 +1,11 @@
 ---
 id: TASK-55
 title: Restore or deliberately remove mate-distance pruning in search
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-18 23:42'
-updated_date: '2026-07-19 03:44'
+updated_date: '2026-07-19 03:53'
 labels:
   - engine
   - search
@@ -44,3 +44,33 @@ Decide deliberately between reinstating correct position-relative mate-distance 
 3. Retain focused regression coverage proving out-of-band child windows return valid in-band scores, then run mate-rich regressions and the debug wac.epd self-play test.
 4. Compare cargo bench --bench search against the base commit, run all repository-required checks, commit the implementation, and record the immutable review handoff.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Deliberately removed mate-distance pruning as a claimed optimisation: with position-relative mate scores, ply-from-root cannot tighten a node's attainable mate range, so reinstating the old root-relative bounds would be unsound. Retained the clamp and collapsed-window return solely as required node-score/INF/child-bound sanitation from TASK-56; production behavior is unchanged.
+
+Verification evidence: focused out-of-band search and quiescence tests passed; gives_correct_answers passed; the ignored debug wac_root_scores_format_without_panicking sweep passed all 900 searches in 315.76s. Criterion target/base comparison at startpos depth 7 was target [40.457, 40.539, 40.639] us versus base [40.594, 40.663, 40.745] us; no-deadline target [40.314, 41.673, 43.458] us versus base [40.154, 40.227, 40.310] us, reported as no performance change. Required fmt, strict Clippy, and workspace tests all passed.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @codex
+created: 2026-07-19 03:53
+---
+Implementation handoff
+Branch: task-55-mate-distance-pruning
+Worktree: /Users/seabo/seaborg-worktrees/task-55-mate-distance-pruning
+Base: 79d82f018eb0b838cd9839e9d41d0aa0b7a2fd48
+Implementation target: 13af47e7aa653810fae3d4556854f76cc07dc29c
+Resolved findings: none
+Verification:
+- cargo fmt --check: passed
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: passed
+- cargo test --workspace: passed (43 core, 205 engine, 5 build-metadata, 1 doc; 0 failed)
+- cargo test -p engine -- --ignored wac_root_scores_format_without_panicking --nocapture: passed (900 searches, 315.76s)
+- cargo bench --bench search (target/base): no repeatable regression
+Known failures: none
+---
+<!-- COMMENTS:END -->
