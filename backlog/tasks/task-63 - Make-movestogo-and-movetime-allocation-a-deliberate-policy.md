@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-19 13:17'
-updated_date: '2026-07-19 16:32'
+updated_date: '2026-07-19 16:41'
 labels:
   - engine
   - time
@@ -68,3 +68,21 @@ Do not regress TASK-7 overflow safety, TASK-32 guaranteed legal move under a zer
 6. Update the tests whose asserted constants encode the old periodic arithmetic, and add tests for: movestogo 0 falling back rather than committing the share cap; a small clock near a boundary governed by moves remaining rather than the increment reserve; a simulated period arriving at the boundary with time left; a movestogo sweep showing the share cap never binds; and the movetime overhead deduction including a movetime below the overhead.
 7. Run cargo fmt --check, cargo clippy --workspace --all-targets --all-features -- -D warnings, and cargo test --workspace.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Periodic controls now have their own allocation branch in engine/src/time.rs, separate from the sudden-death/increment path that TASK-38 and TASK-42 shaped.
+
+Policy: a period's spendable budget is the usable clock plus the increments its remaining moves can still spend. That is n-1 increments, not n: the increment for the final move of a period is credited after that move is played, so it carries across the boundary rather than funding anything before it. Counting all n made the policy plan to spend time it did not hold, and on the boundary move that pushed the ask past the share cap (2000ms clock, 1000ms increment, movestogo 1 asked 1485ms against a 1478ms cap). Dropping the last increment also makes the boundary-move ask exactly half the usable clock for any increment, which is what takes the cap out of the policy entirely.
+
+Cushion: dividing by n+1 rather than n. The recurrence is self-similar — spending budget/(n+1) and re-dividing the remainder over n-1 moves yields the same figure — so allocation is flat across the period and the clock arrives at the boundary holding exactly one move's worth. Since unspent time carries across the boundary, that cushion is not wasted.
+
+The increment reserve (RESERVE_INCREMENT_MOVES) is not applied to periodic controls at all, rather than being scaled by boundary distance. Its premise is that the increment funds the steady state, which is false when a grant does.
+
+movestogo 0 is folded into the None branch via Option::filter, so it is byte-identical to no periodic control at every move number rather than being special-cased.
+
+movetime: added move_time_budget() in time.rs rather than inlining the subtraction in engine.rs, so MOVE_OVERHEAD stays private to the time module and the deduction is unit-testable.
+
+Tests whose asserted constants encoded the old periodic arithmetic were updated; see the handoff comment for the exact list and why each changed.
+<!-- SECTION:NOTES:END -->
