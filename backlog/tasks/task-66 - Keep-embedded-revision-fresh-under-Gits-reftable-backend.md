@@ -1,9 +1,11 @@
 ---
 id: TASK-66
 title: Keep embedded revision fresh under Git's reftable backend
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-19 15:13'
+updated_date: '2026-07-19 16:32'
 labels:
   - build
   - metadata
@@ -42,3 +44,13 @@ Existing coverage lives in tests/build_metadata.rs, which exercises the pure wat
 - [ ] #3 watch_paths has regression coverage for a reftable layout alongside the existing loose and packed cases
 - [ ] #4 If the backend cannot be supported, the embedded revision falls back to the documented unknown value rather than a stale commit
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Detect the reftable backend structurally inside watch_paths: treat the presence of a 'reftable' directory beside the Git directory or the common directory as the signal, so no git subprocess and no minimum Git version is required.
+2. Under reftable, watch the shared stack (common_dir/reftable) and, when a linked worktree has one, its per-worktree stack (git_dir/reftable). Shared refs (the branch) live in the former, per-worktree refs (HEAD) in the latter; both can move the resolved revision. Skip the refs/packed-refs logic entirely, since .git/refs is an inert placeholder file under reftable and HEAD holds a fixed sentinel.
+3. Preserve the existing invariant that every emitted path exists at emit time, so files-backend repositories keep emitting exactly the same set and no-op rebuilds stay Fresh in both layouts.
+4. Add watch_paths regression coverage for a reftable layout (single checkout and linked worktree) alongside the existing loose and packed cases, and extend the never-watches-a-missing-path sweep to cover reftable.
+5. Verify end to end with real cargo builds in a scratch repository for each layout: commit under reftable must rebuild and embed the new revision; a no-op build must stay Fresh under both reftable and files.
+<!-- SECTION:PLAN:END -->
