@@ -44,22 +44,72 @@
           <p id="board-message" class="board-message" role="alert"></p>
         </section>
 
-        <aside class="side-panel" aria-label="Game controls and move history">
+        <aside class="side-panel" aria-label="Game controls, engine information, and move history">
           <section aria-labelledby="game-heading">
             <p class="eyebrow">Game</p>
             <h2 id="game-heading">At the board</h2>
             <div class="control-stack">
               <button id="new-white" type="button">New game as White</button>
               <button id="new-black" type="button">New game as Black</button>
-              <button id="undo" class="quiet" type="button">Undo full turn</button>
+              <div class="control-row">
+                <button id="restart" class="quiet" type="button">Restart</button>
+                <button id="undo" class="quiet" type="button">Undo full turn</button>
+              </div>
+              <button id="flip" class="quiet" type="button">Flip board</button>
+              <p class="field">
+                <label for="engine-limit">Seaborg thinks for</label>
+                <select id="engine-limit">
+                  <optgroup label="Thinking time">
+                    <option value="time:250">0.25s</option>
+                    <option value="time:500">0.5s</option>
+                    <option value="time:1000">1s</option>
+                    <option value="time:3000">3s</option>
+                    <option value="time:10000">10s</option>
+                    <option value="time:30000">30s</option>
+                  </optgroup>
+                  <optgroup label="Fixed depth">
+                    <option value="depth:2">depth 2</option>
+                    <option value="depth:4">depth 4</option>
+                    <option value="depth:6">depth 6</option>
+                    <option value="depth:8">depth 8</option>
+                    <option value="depth:10">depth 10</option>
+                  </optgroup>
+                </select>
+              </p>
+              <button id="quit" class="quiet danger" type="button">Quit Seaborg</button>
             </div>
           </section>
+
+          <section class="engine-section" aria-labelledby="engine-heading">
+            <div class="section-heading">
+              <h2 id="engine-heading">Engine</h2>
+              <span id="engine-state" class="engine-state" aria-live="polite">Idle</span>
+            </div>
+            <dl class="engine-stats">
+              <div><dt>Eval</dt><dd id="engine-evaluation" title="From White's point of view">—</dd></div>
+              <div><dt>Depth</dt><dd id="engine-depth">—</dd></div>
+              <div><dt>Nodes</dt><dd id="engine-nodes">—</dd></div>
+              <div><dt>NPS</dt><dd id="engine-nps">—</dd></div>
+              <div><dt>Hash</dt><dd id="engine-hash">—</dd></div>
+            </dl>
+            <p class="variation-label">Principal variation</p>
+            <p id="engine-variation" class="variation is-empty">—</p>
+          </section>
+
           <section class="history-section" aria-labelledby="history-heading">
-            <div class="history-heading">
+            <div class="section-heading">
               <h2 id="history-heading">Moves</h2>
               <span>UCI in tooltip</span>
             </div>
-            <ol id="history" class="history"></ol>
+            <div id="history-scroll" class="history-scroll" tabindex="0">
+              <table class="history">
+                <caption class="visually-hidden">Move history in standard algebraic notation</caption>
+                <thead class="visually-hidden">
+                  <tr><th scope="col">Move</th><th scope="col">White</th><th scope="col">Black</th></tr>
+                </thead>
+                <tbody id="history"></tbody>
+              </table>
+            </div>
           </section>
           <p class="interaction-note">Drag a piece or tap two squares. Pointer, touch, pen, and keyboard all use the same legal moves.</p>
         </aside>

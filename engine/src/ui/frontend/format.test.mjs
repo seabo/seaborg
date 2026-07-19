@@ -1,0 +1,113 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+
+const formatSource = await readFile(new URL("../assets/format.js", import.meta.url), "utf8");
+const {
+  describeCommandError,
+  describeEngineLimit,
+  engineLimitValue,
+  formatCount,
+  formatHashfull,
+  formatScore,
+  movePairs,
+  parseEngineLimitValue,
+} = await import(`data:text/javascript;base64,${Buffer.from(formatSource).toString("base64")}`);
+
+test("evaluations are shown from White regardless of which side the engine plays", () => {
+  // The engine scores relative to the side it searches for, which is the side the human is not
+  // playing. An advantage for the engine is an advantage for White only when the engine is White.
+  const winning = { kind: "cp", centipawns: 250 };
+  assert.equal(formatScore(winning, "black"), "+2.50", "engine is White and is winning");
+  assert.equal(formatScore(winning, "white"), "−2.50", "engine is Black and is winning");
+
+  const losing = { kind: "cp", centipawns: -75 };
+  assert.equal(formatScore(losing, "black"), "−0.75");
+  assert.equal(formatScore(losing, "white"), "+0.75");
+
+  assert.equal(formatScore({ kind: "cp", centipawns: 0 }, "white"), "+0.00");
+});
+
+test("mate and infinite scores keep the same White-relative sign convention", () => {
+  assert.equal(formatScore({ kind: "mate", moves: 3 }, "black"), "+#3", "White mates in 3");
+  assert.equal(formatScore({ kind: "mate", moves: 3 }, "white"), "−#3", "Black mates in 3");
+  assert.equal(formatScore({ kind: "mate", moves: -2 }, "black"), "−#2");
+  assert.equal(formatScore({ kind: "mate", moves: -2 }, "white"), "+#2");
+
+  assert.equal(formatScore({ kind: "inf" }, "black"), "+∞");
+  assert.equal(formatScore({ kind: "inf" }, "white"), "−∞");
+  assert.equal(formatScore({ kind: "-inf" }, "black"), "−∞");
+  assert.equal(formatScore({ kind: "-inf" }, "white"), "+∞");
+});
+
+test("counts and hash occupancy abbreviate without losing the reading", () => {
+  assert.equal(formatCount(0), "0");
+  assert.equal(formatCount(999), "999");
+  assert.equal(formatCount(1_500), "1.5k");
+  assert.equal(formatCount(42_000), "42k");
+  assert.equal(formatCount(1_250_000), "1.3M");
+  assert.equal(formatCount(84_000_000), "84M");
+  assert.equal(formatCount(2_500_000_000), "2.5B");
+  assert.equal(formatCount(Number.NaN), "—");
+
+  assert.equal(formatHashfull(0), "0.0%");
+  assert.equal(formatHashfull(55), "6%");
+  assert.equal(formatHashfull(1_000), "100%");
+});
+
+test("engine limit values round-trip through the select and the command body", () => {
+  for (const limit of [
+    { kind: "time", milliseconds: 250 },
+    { kind: "time", milliseconds: 60_000 },
+    { kind: "depth", plies: 8 },
+  ]) {
+    const value = engineLimitValue(limit);
+    const parsed = parseEngineLimitValue(value);
+    assert.equal(parsed.kind, limit.kind);
+    assert.equal(parsed.value, limit.milliseconds ?? limit.plies);
+  }
+
+  assert.equal(engineLimitValue({ kind: "infinite" }), "infinite");
+  // `infinite` carries no amount, so it is not a selectable option and must not parse into one.
+  assert.equal(parseEngineLimitValue("infinite"), null);
+  assert.equal(parseEngineLimitValue("time:"), null);
+  assert.equal(parseEngineLimitValue("time:abc"), null);
+  assert.equal(parseEngineLimitValue("time:0"), null);
+  assert.equal(parseEngineLimitValue("time:-5"), null);
+});
+
+test("engine limits are described in the words the control uses", () => {
+  assert.equal(describeEngineLimit({ kind: "time", milliseconds: 250 }), "0.25s");
+  assert.equal(describeEngineLimit({ kind: "time", milliseconds: 1_000 }), "1s");
+  assert.equal(describeEngineLimit({ kind: "time", milliseconds: 2_500 }), "2.5s");
+  assert.equal(describeEngineLimit({ kind: "depth", plies: 6 }), "depth 6");
+  assert.equal(describeEngineLimit({ kind: "infinite" }), "unlimited");
+});
+
+test("history is numbered as a scoresheet, including an unanswered White move", () => {
+  assert.deepEqual(movePairs(["e4", "e5", "Nf3", "Nc6", "Bb5"]), [
+    { number: 1, white: "e4", black: "e5" },
+    { number: 2, white: "Nf3", black: "Nc6" },
+    { number: 3, white: "Bb5", black: null },
+  ]);
+  assert.deepEqual(movePairs([]), []);
+});
+
+test("every command error the server can return reads as a sentence", () => {
+  for (const code of [
+    "stale_revision",
+    "not_human_turn",
+    "game_over",
+    "illegal_move",
+    "nothing_to_undo",
+    "invalid_engine_limit",
+    "invalid_token",
+    "too_many_connections",
+  ]) {
+    const message = describeCommandError(code);
+    assert.ok(message.length > 0, `${code} has a message`);
+    assert.ok(!message.includes("_"), `${code} is not shown as a raw code`);
+  }
+  // An unrecognised code stays visible rather than being swallowed.
+  assert.match(describeCommandError("some_new_code"), /some new code/u);
+});

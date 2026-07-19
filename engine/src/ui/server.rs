@@ -1,6 +1,6 @@
 //! The loopback HTTP server exposing the game controller to a local browser.
 //!
-//! The surface is deliberately fixed: five embedded assets, one state document, one event
+//! The surface is deliberately fixed: six embedded assets, one state document, one event
 //! stream, and five bounded commands. There is no file-path routing and no general engine
 //! command endpoint, so nothing outside this list is reachable however the request is spelled.
 
@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 const INDEX_HTML: &str = include_str!("assets/index.html");
 const APP_JS: &str = include_str!("assets/app.js");
 const BOARD_JS: &str = include_str!("assets/board.js");
+const FORMAT_JS: &str = include_str!("assets/format.js");
 const STYLE_CSS: &str = include_str!("assets/style.css");
 const PIECES_SVG: &str = include_str!("assets/pieces.svg");
 
@@ -518,6 +519,13 @@ fn route(stream: &mut TcpStream, request: &Request, state: &ServerState) -> io::
             NO_STORE,
             BOARD_JS.as_bytes(),
         ),
+        ("GET", "/format.js") => write_response(
+            stream,
+            Status::Ok,
+            "text/javascript; charset=utf-8",
+            NO_STORE,
+            FORMAT_JS.as_bytes(),
+        ),
         ("GET", "/style.css") => write_response(
             stream,
             Status::Ok,
@@ -545,6 +553,7 @@ fn route(stream: &mut TcpStream, request: &Request, state: &ServerState) -> io::
         (_, "/")
         | (_, "/app.js")
         | (_, "/board.js")
+        | (_, "/format.js")
         | (_, "/style.css")
         | (_, "/pieces.svg")
         | (_, "/api/state")

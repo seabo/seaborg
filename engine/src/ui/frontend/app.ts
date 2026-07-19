@@ -14,6 +14,18 @@ import {
   type MoveTransition,
   type Piece,
 } from "./board.js";
+import {
+  describeCommandError,
+  describeEngineLimit,
+  engineLimitValue,
+  formatCount,
+  formatHashfull,
+  formatScore,
+  movePairs,
+  parseEngineLimitValue,
+  type EngineLimit,
+  type Score,
+} from "./format.js";
 
 interface MoveRecord {
   readonly uci: string;
@@ -27,12 +39,23 @@ type GameStatus =
 
 interface SearchProgress {
   readonly depth: number;
+  readonly score: Score;
+  readonly elapsedMs: number;
   readonly nodes: number;
+  readonly nps: number;
+  readonly hashfull: number;
+  readonly principalVariation: readonly string[];
 }
 
 type EngineStatus =
   | { readonly kind: "idle" }
-  | { readonly kind: "thinking"; readonly progress: SearchProgress | null };
+  | {
+      readonly kind: "thinking";
+      readonly searchId: number;
+      readonly positionRevision: number;
+      readonly progress: SearchProgress | null;
+      readonly principalVariationSan: readonly string[];
+    };
 
 interface Snapshot {
   readonly revision: number;
@@ -45,6 +68,7 @@ interface Snapshot {
   readonly moveHistory: readonly MoveRecord[];
   readonly gameStatus: GameStatus;
   readonly engineStatus: EngineStatus;
+  readonly engineLimit: EngineLimit;
 }
 
 interface PointerGesture {
@@ -68,10 +92,22 @@ const boardElement = element<HTMLElement>("#board");
 const connectionElement = element<HTMLElement>("#connection-status");
 const turnElement = element<HTMLElement>("#turn-status");
 const boardMessage = element<HTMLElement>("#board-message");
-const historyElement = element<HTMLOListElement>("#history");
+const historyElement = element<HTMLTableSectionElement>("#history");
+const historyScroll = element<HTMLElement>("#history-scroll");
 const undoButton = element<HTMLButtonElement>("#undo");
+const restartButton = element<HTMLButtonElement>("#restart");
+const flipButton = element<HTMLButtonElement>("#flip");
+const quitButton = element<HTMLButtonElement>("#quit");
 const newWhiteButton = element<HTMLButtonElement>("#new-white");
 const newBlackButton = element<HTMLButtonElement>("#new-black");
+const limitSelect = element<HTMLSelectElement>("#engine-limit");
+const engineStateElement = element<HTMLElement>("#engine-state");
+const evaluationElement = element<HTMLElement>("#engine-evaluation");
+const depthElement = element<HTMLElement>("#engine-depth");
+const nodesElement = element<HTMLElement>("#engine-nodes");
+const npsElement = element<HTMLElement>("#engine-nps");
+const hashElement = element<HTMLElement>("#engine-hash");
+const variationElement = element<HTMLElement>("#engine-variation");
 const promotionDialog = element<HTMLDialogElement>("#promotion-dialog");
 
 let snapshot: Snapshot | null = null;
@@ -81,6 +117,14 @@ let gesture: PointerGesture | null = null;
 let commandPending = false;
 let lastAnimatedRevision = -1;
 let errorMessage = "";
+// The side shown at the bottom. Null follows the side being played; flipping pins it.
+let flippedOrientation: Color | null = null;
+// Set once the server has been told to stop, so the page stops trying to reconnect to it.
+let quitting = false;
+
+function orientationOf(state: Snapshot): Color {
+  return flippedOrientation ?? state.humanSide;
+}
 
 function createPiece(piece: Piece, className = "piece"): SVGSVGElement {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -98,6 +142,7 @@ function createPiece(piece: Piece, className = "piece"): SVGSVGElement {
 function canInteract(state: Snapshot): boolean {
   return (
     !commandPending &&
+    !quitting &&
     state.gameStatus.kind === "ongoing" &&
     state.engineStatus.kind === "idle" &&
     state.sideToMove === state.humanSide
@@ -105,15 +150,16 @@ function canInteract(state: Snapshot): boolean {
 }
 
 function describeGame(state: Snapshot): string {
-  if (state.gameStatus.kind === "checkmate") return `Checkmate — ${state.gameStatus.winner} wins`;
-  if (state.gameStatus.kind === "draw") return `Draw — ${state.gameStatus.reason.replaceAll("_", " ")}`;
-  if (commandPending) return "Sending move…";
-  if (state.engineStatus.kind === "thinking") {
-    const progress = state.engineStatus.progress;
-    return progress === null
-      ? "Seaborg is thinking…"
-      : `Seaborg is thinking — depth ${progress.depth}, ${progress.nodes.toLocaleString()} nodes`;
+  if (quitting) return "Seaborg has stopped";
+  if (state.gameStatus.kind === "checkmate") {
+    const winner = state.gameStatus.winner;
+    return `Checkmate — ${capitalize(winner)} wins (${winner === state.humanSide ? "you win" : "Seaborg wins"})`;
   }
+  if (state.gameStatus.kind === "draw") {
+    return `Draw — ${state.gameStatus.reason.replaceAll("_", " ")}`;
+  }
+  if (commandPending) return "Sending move…";
+  if (state.engineStatus.kind === "thinking") return "Seaborg is thinking…";
   if (state.inCheck) return `${capitalize(state.sideToMove)} is in check`;
   return `${capitalize(state.sideToMove)} to move`;
 }
@@ -153,7 +199,7 @@ function renderBoard(
   transitions: readonly MoveTransition[],
 ): void {
   const board = parseFen(state.fen);
-  const orientation = state.humanSide;
+  const orientation = orientationOf(state);
   const available = canInteract(state);
   const selectedMoves =
     selectedSquare === null ? [] : legalMovesFrom(state.legalMoves, selectedSquare, board);
@@ -235,19 +281,90 @@ function renderCapturedPieces(previous: Snapshot, transitions: readonly MoveTran
 
 function renderStatus(state: Snapshot): void {
   turnElement.textContent = describeGame(state);
-  turnElement.classList.toggle("thinking", state.engineStatus.kind === "thinking");
+  turnElement.classList.toggle("thinking", state.engineStatus.kind === "thinking" && !quitting);
   boardMessage.textContent = errorMessage;
-  undoButton.disabled = commandPending || state.moveHistory.length === 0;
-  newWhiteButton.disabled = commandPending;
-  newBlackButton.disabled = commandPending;
+
+  const busy = commandPending || quitting;
+  undoButton.disabled = busy || state.moveHistory.length === 0;
+  restartButton.disabled = busy;
+  newWhiteButton.disabled = busy;
+  newBlackButton.disabled = busy;
+  quitButton.disabled = busy;
+  limitSelect.disabled = busy;
+  flipButton.textContent = `Flip board (${capitalize(orientationOf(state))} at the bottom)`;
+
+  renderEngineLimit(state.engineLimit);
+  renderEnginePanel(state);
+  renderHistory(state.moveHistory);
+}
+
+/**
+ * Show the limit the server is actually using.
+ *
+ * The select is only rewritten when it disagrees with the server, so a snapshot arriving while
+ * the menu is open does not reset what the user is looking at. A limit the menu does not offer —
+ * one set from the command line — is added so the control never misreports the live setting.
+ */
+function renderEngineLimit(limit: EngineLimit): void {
+  const value = engineLimitValue(limit);
+  if (limitSelect.value === value) return;
+  if (!Array.from(limitSelect.options).some((option) => option.value === value)) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = describeEngineLimit(limit);
+    limitSelect.append(option);
+  }
+  limitSelect.value = value;
+}
+
+function renderEnginePanel(state: Snapshot): void {
+  const thinking = state.engineStatus.kind === "thinking";
+  const progress = state.engineStatus.kind === "thinking" ? state.engineStatus.progress : null;
+  engineStateElement.textContent = thinking ? "Thinking" : "Idle";
+  engineStateElement.classList.toggle("is-thinking", thinking);
+
+  // Progress is kept on screen after a search ends: the numbers that produced the move just
+  // played are more useful than a row of dashes, and the state label already says it is stale.
+  if (progress !== null) {
+    evaluationElement.textContent = formatScore(progress.score, state.humanSide);
+    depthElement.textContent = String(progress.depth);
+    nodesElement.textContent = formatCount(progress.nodes);
+    npsElement.textContent = formatCount(progress.nps);
+    hashElement.textContent = formatHashfull(progress.hashfull);
+  }
+
+  const variation = state.engineStatus.kind === "thinking" ? state.engineStatus.principalVariationSan : [];
+  if (variation.length > 0) {
+    variationElement.textContent = variation.join(" ");
+    variationElement.classList.remove("is-empty");
+  } else if (!thinking) {
+    variationElement.textContent = "—";
+    variationElement.classList.add("is-empty");
+  }
+}
+
+function renderHistory(moves: readonly MoveRecord[]): void {
   historyElement.replaceChildren(
-    ...state.moveHistory.map((record) => {
-      const item = document.createElement("li");
-      item.textContent = record.san;
-      item.title = record.uci;
-      return item;
+    ...movePairs(moves).map((pair) => {
+      const row = document.createElement("tr");
+      const number = document.createElement("th");
+      number.scope = "row";
+      number.textContent = `${pair.number}.`;
+      row.append(number, historyCell(pair.white), historyCell(pair.black));
+      return row;
     }),
   );
+  // Keep the most recent move in view without stealing focus from the board.
+  historyScroll.scrollTop = historyScroll.scrollHeight;
+}
+
+function historyCell(record: MoveRecord | null): HTMLTableCellElement {
+  const cell = document.createElement("td");
+  if (record !== null) {
+    cell.textContent = record.san;
+    cell.title = record.uci;
+  }
+  return cell;
 }
 
 function selectSquare(square: string | null): void {
@@ -305,9 +422,20 @@ async function playMove(move: MoveOption): Promise<void> {
   }
 }
 
+function reportError(message: string): void {
+  errorMessage = message;
+  boardMessage.textContent = message;
+}
+
+/**
+ * Send a command and return the snapshot the server answered with.
+ *
+ * A rejection is reported as a sentence rather than as a protocol code, and returning null lets
+ * the caller undo whatever it did optimistically — a snapback for a refused move, or repainting
+ * the last known state for a refused control.
+ */
 async function postCommand(path: string, body: object): Promise<Snapshot | null> {
-  errorMessage = "";
-  boardMessage.textContent = errorMessage;
+  reportError("");
   try {
     const response = await fetch(path, {
       method: "POST",
@@ -315,18 +443,22 @@ async function postCommand(path: string, body: object): Promise<Snapshot | null>
       body: JSON.stringify(body),
     });
     if (!response.ok) {
-      const failure = (await response.json().catch(() => ({ error: "request_failed" }))) as {
-        readonly error?: string;
-      };
-      errorMessage = capitalize((failure.error ?? "request_failed").replaceAll("_", " "));
-      boardMessage.textContent = errorMessage;
+      const failure = (await response.json().catch(() => ({}))) as { readonly error?: string };
+      // A 5xx carries no useful code, so the status is what the message is built from.
+      reportError(
+        response.status >= 500
+          ? `Seaborg hit an internal error (${response.status}). The position shown may be out of date.`
+          : describeCommandError(failure.error ?? "request_failed"),
+      );
       return null;
     }
-    errorMessage = "";
     return (await response.json()) as Snapshot;
   } catch {
-    errorMessage = "Seaborg could not be reached";
-    boardMessage.textContent = errorMessage;
+    reportError(
+      quitting
+        ? "Seaborg has stopped. You can close this tab."
+        : "Seaborg could not be reached. Check the terminal it was started from.",
+    );
     return null;
   }
 }
@@ -465,11 +597,13 @@ boardElement.addEventListener("keydown", (event) => {
   };
   const movement = delta[event.key];
   if (movement !== undefined) {
-    const visual = visualCoordinates(current, state.humanSide);
+    // Arrow keys follow what is on screen, so navigation stays correct after a flip.
+    const orientation = orientationOf(state);
+    const visual = visualCoordinates(current, orientation);
     const next = squareFromVisualCoordinates(
       visual.column + movement[0],
       visual.row + movement[1],
-      state.humanSide,
+      orientation,
     );
     if (next !== null) {
       focusedSquare = next;
@@ -494,8 +628,58 @@ boardElement.addEventListener("keydown", (event) => {
 undoButton.addEventListener("click", () => {
   if (snapshot !== null) void sendControl("/api/undo", { revision: snapshot.revision });
 });
-newWhiteButton.addEventListener("click", () => void sendControl("/api/new-game", { humanSide: "white" }));
-newBlackButton.addEventListener("click", () => void sendControl("/api/new-game", { humanSide: "black" }));
+newWhiteButton.addEventListener("click", () => void startGame("white"));
+newBlackButton.addEventListener("click", () => void startGame("black"));
+// Restarting is a new game on the side already being played, so it needs no command of its own.
+restartButton.addEventListener("click", () => {
+  if (snapshot !== null) void startGame(snapshot.humanSide);
+});
+
+flipButton.addEventListener("click", () => {
+  if (snapshot === null) return;
+  flippedOrientation = orientationOf(snapshot) === "white" ? "black" : "white";
+  render(snapshot);
+});
+
+limitSelect.addEventListener("change", () => {
+  const parsed = parseEngineLimitValue(limitSelect.value);
+  if (parsed === null) return;
+  void sendControl("/api/engine-limit", parsed);
+});
+
+quitButton.addEventListener("click", () => void quit());
+
+/**
+ * Start a new game and return the board to that side's point of view.
+ *
+ * A flip is a way of looking at the current game, so it does not outlive it.
+ */
+async function startGame(humanSide: Color): Promise<void> {
+  flippedOrientation = null;
+  await sendControl("/api/new-game", { humanSide });
+}
+
+/**
+ * Stop the Seaborg process.
+ *
+ * `quitting` is set before the request so the reply — or the connection closing under it, which
+ * is just as likely once the server begins shutting down — is reported as a successful stop
+ * rather than as a lost connection. It also stops the event stream reconnecting to a server that
+ * is deliberately gone.
+ */
+async function quit(): Promise<void> {
+  if (commandPending || quitting) return;
+  quitting = true;
+  commandPending = true;
+  if (snapshot !== null) render(snapshot);
+  await postCommand("/api/quit", {});
+  commandPending = false;
+  events.close();
+  connectionElement.textContent = "Stopped";
+  connectionElement.classList.remove("connected");
+  reportError("Seaborg has stopped. You can close this tab.");
+  if (snapshot !== null) render(snapshot);
+}
 
 async function loadInitialState(): Promise<void> {
   try {
@@ -508,16 +692,36 @@ async function loadInitialState(): Promise<void> {
 
 void loadInitialState();
 const events = new EventSource("/api/events");
-events.addEventListener("open", () => {
+
+// Whether the last thing the stream reported was a failure. The recovery message is only shown
+// for a connection that was actually lost, so an ordinary first connect stays silent.
+let connectionLost = false;
+
+function markConnected(): void {
   connectionElement.textContent = "Connected";
   connectionElement.classList.add("connected");
-});
+  if (connectionLost) {
+    connectionLost = false;
+    // The state that arrives with the reconnection is authoritative, so the warning is stale.
+    reportError("");
+  }
+}
+
+events.addEventListener("open", markConnected);
 events.addEventListener("message", (event) => {
-  connectionElement.textContent = "Connected";
-  connectionElement.classList.add("connected");
+  markConnected();
   render(JSON.parse(event.data as string) as Snapshot);
 });
 events.addEventListener("error", () => {
+  if (quitting) {
+    // The stream closing is the expected result of the quit that is already in flight.
+    events.close();
+    return;
+  }
+  connectionLost = true;
   connectionElement.textContent = "Reconnecting…";
   connectionElement.classList.remove("connected");
+  // The board still accepts moves — a command travels over its own request — but the position
+  // may be behind, so say so rather than letting the page look merely idle.
+  reportError("Lost the connection to Seaborg. Retrying…");
 });
