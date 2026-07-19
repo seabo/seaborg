@@ -1,5 +1,5 @@
 import { describeSquare, legalMovesFrom, legalMovesTo, moveTransitions, orderedSquares, parseFen, pieceAssetId, squareFromVisualCoordinates, transitionOffset, visualCoordinates, } from "./board.js";
-import { describeCommandError, describeEngineLimit, engineLimitValue, formatCount, formatHashfull, formatScore, movePairs, parseEngineLimitValue, } from "./format.js";
+import { describeCommandError, describeEngineLimit, engineLimitValue, formatCount, formatHashfull, formatScore, movePairs, parseEngineLimitValue, shouldAdopt, } from "./format.js";
 function element(selector) {
     const found = document.querySelector(selector);
     if (found === null)
@@ -39,6 +39,8 @@ let errorMessage = "";
 let flippedOrientation = null;
 // Set once the server has been told to stop, so the page stops trying to reconnect to it.
 let quitting = false;
+// Whether the keyboard is working inside the board, so a repaint can hand focus back to it.
+let boardOwnsFocus = false;
 function orientationOf(state) {
     return flippedOrientation ?? state.humanSide;
 }
@@ -86,25 +88,26 @@ function squareButton(square) {
     return boardElement.querySelector(`.square[data-square="${square}"]`);
 }
 function render(next) {
-    // POST responses and SSE updates travel independently. A fast engine can publish revision N+1
-    // before the browser receives the command response for N, so never repaint an older snapshot.
-    if (snapshot !== null && next.revision < snapshot.revision)
-        return;
+    // An older snapshot is not adopted, but the frame is still painted — see `shouldAdopt`. An
+    // early return here would strand local state that changed without the revision moving, which
+    // is how a finished command could keep reading as "Sending move…" indefinitely.
     const previous = snapshot;
-    snapshot = next;
-    if (!canInteract(next))
+    if (shouldAdopt(previous, next))
+        snapshot = next;
+    const state = snapshot ?? next;
+    if (!canInteract(state))
         selectedSquare = null;
     const shouldAnimate = previous !== null &&
-        previous.revision !== next.revision &&
-        next.revision !== lastAnimatedRevision &&
-        next.lastMove !== null;
+        previous.revision !== state.revision &&
+        state.revision !== lastAnimatedRevision &&
+        state.lastMove !== null;
     const transitions = shouldAnimate
-        ? moveTransitions(previous.fen, next.fen, next.lastMove?.uci ?? "")
+        ? moveTransitions(previous.fen, state.fen, state.lastMove?.uci ?? "")
         : [];
     if (shouldAnimate)
-        lastAnimatedRevision = next.revision;
-    renderBoard(next, previous, transitions);
-    renderStatus(next);
+        lastAnimatedRevision = state.revision;
+    renderBoard(state, previous, transitions);
+    renderStatus(state);
 }
 function renderBoard(state, previous, transitions) {
     const board = parseFen(state.fen);
@@ -121,6 +124,7 @@ function renderBoard(state, previous, transitions) {
     boardElement.setAttribute("aria-label", `Chess board, ${capitalize(orientation)} at the bottom`);
     boardElement.setAttribute("aria-busy", String(!available));
     boardElement.classList.toggle("is-locked", !available);
+    rememberBoardFocus();
     boardElement.replaceChildren();
     const squares = orderedSquares(orientation);
     for (const [index, square] of squares.entries()) {
@@ -172,6 +176,36 @@ function renderBoard(state, previous, transitions) {
     }
     if (previous !== null)
         renderCapturedPieces(previous, transitions);
+    restoreBoardFocus();
+}
+/**
+ * Note whether the board is the part of the page the keyboard is working in.
+ *
+ * Repainting replaces every square, and while the engine thinks the replacements are disabled and
+ * cannot hold focus at all. Without this, selecting a piece — or simply waiting for a reply —
+ * drops a keyboard user out onto the document and makes them tab back in before every move.
+ *
+ * Focus landing on the body is what happens when the squares are torn out from under it, so it
+ * does not count as the user leaving. Only focusing some other real control does.
+ */
+function rememberBoardFocus() {
+    const active = document.activeElement;
+    if (boardElement.contains(active)) {
+        boardOwnsFocus = true;
+    }
+    else if (active !== null && active !== document.body && active !== document.documentElement) {
+        boardOwnsFocus = false;
+    }
+}
+/** Hand focus back to the square the keyboard was on, once a square can hold it again. */
+function restoreBoardFocus() {
+    if (!boardOwnsFocus || focusedSquare === null)
+        return;
+    const target = squareButton(focusedSquare);
+    // A disabled square cannot take focus. Ownership is kept, so the next unlocking repaint
+    // returns the keyboard to the board rather than stranding it on the document.
+    if (target !== null && !target.disabled)
+        target.focus();
 }
 function renderCapturedPieces(previous, transitions) {
     const before = parseFen(previous.fen);
@@ -222,11 +256,19 @@ function renderEngineLimit(limit) {
 }
 function renderEnginePanel(state) {
     const thinking = state.engineStatus.kind === "thinking";
-    const progress = state.engineStatus.kind === "thinking" ? state.engineStatus.progress : null;
     engineStateElement.textContent = thinking ? "Thinking" : "Idle";
     engineStateElement.classList.toggle("is-thinking", thinking);
-    // Progress is kept on screen after a search ends: the numbers that produced the move just
-    // played are more useful than a row of dashes, and the state label already says it is stale.
+    // A new game has nothing to report yet, and last game's figures would be read as this game's.
+    if (state.moveHistory.length === 0)
+        clearEnginePanel();
+    if (state.engineStatus.kind !== "thinking")
+        return;
+    // Everything below is kept on screen after the search ends rather than blanked. The figures
+    // that produced the move just played are worth reading, and the state chip already says the
+    // engine is idle, so they cannot be mistaken for a search still in progress. Stats and the
+    // variation persist together: clearing one and not the other would suggest the remaining half
+    // was the newer of the two.
+    const progress = state.engineStatus.progress;
     if (progress !== null) {
         evaluationElement.textContent = formatScore(progress.score, state.humanSide);
         depthElement.textContent = String(progress.depth);
@@ -234,15 +276,18 @@ function renderEnginePanel(state) {
         npsElement.textContent = formatCount(progress.nps);
         hashElement.textContent = formatHashfull(progress.hashfull);
     }
-    const variation = state.engineStatus.kind === "thinking" ? state.engineStatus.principalVariationSan : [];
+    const variation = state.engineStatus.principalVariationSan;
     if (variation.length > 0) {
         variationElement.textContent = variation.join(" ");
         variationElement.classList.remove("is-empty");
     }
-    else if (!thinking) {
-        variationElement.textContent = "—";
-        variationElement.classList.add("is-empty");
+}
+function clearEnginePanel() {
+    for (const stat of [evaluationElement, depthElement, nodesElement, npsElement, hashElement]) {
+        stat.textContent = "—";
     }
+    variationElement.textContent = "—";
+    variationElement.classList.add("is-empty");
 }
 function renderHistory(moves) {
     historyElement.replaceChildren(...movePairs(moves).map((pair) => {

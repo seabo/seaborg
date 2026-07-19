@@ -4,6 +4,19 @@
  * Nothing here touches the DOM or the network, so every rule the panel reads by can be unit
  * tested directly against the shapes the server publishes.
  */
+/**
+ * Decide whether an arriving snapshot replaces the one on screen.
+ *
+ * Command responses and the event stream travel independently, so a fast engine can publish
+ * revision N+1 before the browser has read the response for N. The older snapshot must not be
+ * adopted — but the arrival still has to be painted, because local state that is not part of any
+ * snapshot (a command in flight, the board flip, an error message) changes without the revision
+ * moving. Returning "do not paint" here would strand that change on screen: a finished command
+ * would keep reading as still sending until some unrelated event happened to repaint.
+ */
+export function shouldAdopt(current, incoming) {
+    return current === null || incoming.revision >= current.revision;
+}
 /** The value a limit `<option>` carries, so the select and the command agree on one spelling. */
 export function engineLimitValue(limit) {
     if (limit.kind === "time")

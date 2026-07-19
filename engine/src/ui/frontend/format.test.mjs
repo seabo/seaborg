@@ -12,7 +12,22 @@ const {
   formatScore,
   movePairs,
   parseEngineLimitValue,
+  shouldAdopt,
 } = await import(`data:text/javascript;base64,${Buffer.from(formatSource).toString("base64")}`);
+
+// Regression: `render` used to return early when a newer snapshot had already arrived, which
+// skipped the whole frame rather than just the stale state. A command response landing after the
+// event-stream update therefore left `Sending move…` and the disabled controls painted on screen
+// until some unrelated event repainted them — reproduced in a real browser, where the UI sat
+// frozen while the server was idle.
+test("a stale snapshot is not adopted, but the caller is still told to paint", () => {
+  assert.equal(shouldAdopt(null, { revision: 0 }), true, "the first snapshot is always adopted");
+  assert.equal(shouldAdopt({ revision: 4 }, { revision: 5 }), true, "newer wins");
+  assert.equal(shouldAdopt({ revision: 5 }, { revision: 3 }), false, "older is not adopted");
+  // Equal revisions must still be adopted: a re-render of the current state is how a change to
+  // local-only state, such as a command finishing, reaches the screen at all.
+  assert.equal(shouldAdopt({ revision: 5 }, { revision: 5 }), true, "same revision repaints");
+});
 
 test("evaluations are shown from White regardless of which side the engine plays", () => {
   // The engine scores relative to the side it searches for, which is the side the human is not
