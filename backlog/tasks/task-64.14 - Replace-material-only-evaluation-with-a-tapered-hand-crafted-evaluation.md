@@ -1,11 +1,11 @@
 ---
 id: TASK-64.14
 title: Replace material-only evaluation with a tapered hand-crafted evaluation
-status: Changes Requested
+status: In Progress
 assignee:
-  - '@claude'
+  - '@codex'
 created_date: '2026-07-19 13:33'
-updated_date: '2026-07-19 20:47'
+updated_date: '2026-07-19 20:53'
 labels:
   - evaluation
   - strength
@@ -52,14 +52,11 @@ Scope beyond piece-square tables and tapering, such as mobility, king safety and
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-Decisions (recorded per AC#4/#5): (a) scope = material + PST only, tapered MG/EG; (b) parameters = adopt published Texel-tuned PeSTO (rofChade) MG/EG piece values + PSTs, cited; (c) strength = fixed-depth smoke SPRT via tools/strength (non-authoritative, directional).
-
-1. Rewrite engine/src/eval.rs: add PeSTO MG/EG piece-value arrays (knight != bishop) + MG/EG piece-square tables (published a8=0 orientation) + per-piece game-phase increments. Implement tapered_eval: sum White-Black of (material+PST) for MG and EG, interpolate by game phase (0..24), return White-relative i16. Keep PIECE_VALUES/piece_value unchanged for SEE (deliberately separate exchange values; documented). Rename trait method to a static-eval name.
-2. Update Search::evaluate (search.rs:1268) to call the new method; keep the position-intrinsic contract (no halfmove-clock read).
-3. Tests: rewrite the halfmove-clock invariance test to assert clock-invariance without pinning the material-only 900 (AC#3); add a colour-mirror symmetry test (mirrored position evaluates to the negation; startpos==0) to catch PST orientation errors; add a phase-interpolation test (a MG-heavy vs EG position taper correctly). Fix search tests that hardcode material-only scores (e.g. quiescence check-evasion expected value).
-4. Verify: cargo fmt --check, clippy -D warnings, cargo test --workspace.
-5. Strength: build baseline (master) + candidate release binaries, run tools/strength/strength_test.py in fixed-depth smoke mode, record report path + W/D/L/Elo in implementation notes (AC#6). AC#7: only razoring margin is landed; re-measure/record whether the razoring constant needs revision under the new eval, else record no revision.
-6. Record AC#2 values, AC#4 term set + rationale, AC#5 tuning method in implementation notes.
+Rework plan for REV-1-01:
+1. Preserve the reviewed tapered evaluator and create a task-scoped candidate variant that disables razoring while leaving the evaluator and all other search behavior unchanged.
+2. Build release binaries for the current-margin implementation and the razoring-disabled comparator, then use the TASK-27 strength harness at equal fixed depth to produce an attributable paired result under the tapered evaluator.
+3. Use the result to decide whether the current razoring margin remains warranted; restore the intended source configuration and record the artifact, W/D/L, Elo/LLR, decision, and Resolved REV-1-01 evidence.
+4. Run cargo fmt --check, strict workspace Clippy, and workspace tests; commit the rework target and a task-only In Review handoff.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
