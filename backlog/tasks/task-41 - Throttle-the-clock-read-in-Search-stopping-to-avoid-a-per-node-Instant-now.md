@@ -3,11 +3,11 @@ id: TASK-41
 title: >-
   Throttle the clock read in Search::stopping() to avoid a per-node
   Instant::now()
-status: In Review
+status: Changes Requested
 assignee:
   - '@codex'
 created_date: '2026-07-18 12:17'
-updated_date: '2026-07-19 01:40'
+updated_date: '2026-07-19 01:59'
 labels:
   - engine
   - search
@@ -248,5 +248,47 @@ Known failures: none
 Reviewer note 1: the earlier recorded figures in this task (70.467 us baseline, 41.2% time / 70.0% NPS, 50.1 ns per node) are wrong and are explicitly corrected in the implementation notes. Do not verify against them. The correct figures are above.
 
 Reviewer note 2: this target contains a scope addition the user requested during the session. benches/search.rs now measures a no-deadline variant alongside the deadline-bearing one, and BENCHMARKS.md gains a search baseline section with the attribution table and methodology. AC #5 only required a before/after benchmark; the split bench and the document are additional. Please judge whether they belong in this task or should be split out.
+---
+
+author: @codex
+created: 2026-07-19 01:59
+---
+Review attempt: 3
+Reviewed branch: task-41-clock-read-throttle
+Reviewed implementation: 946091b6c48c66b54735ceff1e792caf0da2139a
+Verdict: changes_requested
+
+The throttle implementation itself is correct and the performance claim is independently corroborated. One blocking finding, confined to BENCHMARKS.md.
+
+REV-3-01 [P3] Search baseline in BENCHMARKS.md cites a commit that cannot reproduce it
+Location: BENCHMARKS.md, "Search baseline" section
+Impact: The section is a regression gate that other agents consult. As written, following it produces a false comparison, which is the exact failure mode this section was added to prevent.
+Reproduction: The section states "The search baseline is commit `e1370e6`" and directs the reader to `cargo bench --bench search`. `git show e1370e6:benches/search.rs` contains exactly one bench function, `search startpos depth 7`, and no `no deadline` variant. The two-configuration harness the section documents was introduced in the implementation target 946091b itself. Running the documented command at the cited commit therefore yields one figure, not the two-row table, and cannot reproduce the 39.73 us `no deadline` baseline or its 41.72 us threshold.
+Expected: Name the commit that actually contains the two-configuration harness (946091b, or the eventual merge commit), and record hardware and toolchain as the move-generation section does and as the document's own closing paragraph requires ("record the commit, hardware, and toolchain used"). The measured figures themselves are sound and need no change.
+Note: engine/src/search.rs is byte-identical between e1370e6 and 946091b, so this is an attribution error only; no measurement is invalidated.
+
+Correctness review (no findings):
+- Cancellation stays unthrottled: the atomic load precedes all throttle state and returns `root_fallback_ready` before any clock logic is reached.
+- TASK-32 is preserved: the `min_search_complete` gate returns false before the throttle touches its state, so the guaranteed first ply is unchanged.
+- The REV-1-01 latch holds: `Some(usize::MAX)` short-circuits to true on every subsequent call, and `run()` resets both the latch and the node counter together, so the sentinel cannot leak across searches.
+- Worst-case overshoot is 8 nodes (about 0.6 us at the measured NPS), far inside the documented 100 ms tolerance.
+- `stopping(&mut self)` required no call-site contortions; scope is otherwise clean.
+- Scope addition (split bench + BENCHMARKS.md section) was user-requested and directly serves AC #5's durability. It belongs in this task; no split needed.
+
+Verification:
+- `cargo fmt --check`: passed
+- clean-target (`CARGO_TARGET_DIR=/tmp/t41-clean-review`) `cargo clippy --workspace --all-targets --all-features -- -D warnings`: passed, no warnings. The diff adds no `#[allow]`.
+- `cargo test --workspace`: passed (216 passed, 2 ignored)
+- `cargo test --release -p engine search`: passed (41 passed) in 1.35 s, including the 20 ms wall-time budget regression, the expired-deadline latch regression, the cancellation/root-fallback regressions and the TASK-32 zero/near-zero budget guarantees
+- Independent controlled benchmark, base 22a2512 vs target 946091b. The base commit's own harness passes `None` for the deadline and so never exercises the clock read, making a naive base/target comparison invalid; I copied the target's harness onto a detached base worktree so both sides measure the same two configurations. Round-robin, 3 rounds, minimum per configuration:
+
+  | commit | no deadline | with deadline | deadline cost |
+  | 22a2512 base | 39.712 us | 48.556 us | 8.84 us |
+  | 946091b target | 39.495 us | 40.368 us | 0.87 us |
+
+  That is a 16.9% time reduction and a 20.3% NPS increase on the deadline-bearing search, with the no-deadline column flat (no regression on the non-deadline path). Unthrottled deadline checking cost about 15.3 ns per visited node. This corroborates the recorded -18.8% / +23.2% and 16-18 ns per node; the small shortfall is within the ~3% drift the notes themselves declare. Caveat: load average was about 6.2 during my run, which is why I used round-robin with minimum-per-configuration rather than absolute figures.
+- `cargo bench --bench perft --bench movegen`: not run, and not required. Neither bench references `Search`, so `stopping()` is not on those paths.
+
+Acceptance criteria: all five are proven by the evidence above and remain checked. REV-3-01 is a documentation-accuracy defect in a scope addition, not an acceptance-criterion failure.
 ---
 <!-- COMMENTS:END -->
