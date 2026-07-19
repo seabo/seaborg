@@ -3,11 +3,11 @@ id: TASK-41
 title: >-
   Throttle the clock read in Search::stopping() to avoid a per-node
   Instant::now()
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-18 12:17'
-updated_date: '2026-07-19 02:16'
+updated_date: '2026-07-19 02:20'
 labels:
   - engine
   - search
