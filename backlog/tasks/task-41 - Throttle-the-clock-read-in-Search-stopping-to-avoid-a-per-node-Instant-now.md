@@ -3,11 +3,11 @@ id: TASK-41
 title: >-
   Throttle the clock read in Search::stopping() to avoid a per-node
   Instant::now()
-status: In Review
+status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-18 12:17'
-updated_date: '2026-07-19 01:22'
+updated_date: '2026-07-19 01:38'
 labels:
   - engine
   - search
@@ -65,6 +65,27 @@ Integration rework (merge attempt 1 conflict). Merged master 22a2512 into the ta
 Regressions from both sides were retained: master's `cancellation_is_suppressed_only_until_the_root_fallback_exists` and `the_time_deadline_is_suppressed_until_the_first_ply_completes`, plus TASK-41's `cancellation_is_not_throttled_with_the_deadline_clock` (updated to establish the root fallback first, as master's semantics now require) and `expired_deadline_stays_latched_at_the_same_node`.
 
 Re-measured on the integrated result rather than reusing the pre-merge figures, since master's own changes moved the baseline. Release Criterion `search startpos depth 7`, 3 s warm-up, 10 s measurement, 50 samples, deadline set 24 h out so the clock read is actually exercised; the benchmark visits 579 nodes per iteration on both sides (measured directly), and the throttle cannot alter the tree because the deadline never expires. Baseline (current master's search.rs, same bench harness) median 49.620 us = 11.67M NPS; integrated target median 40.865 us = 14.17M NPS. That is a 17.6% median time reduction and a 21.4% NPS increase; Criterion's paired change estimate was -19.833% to -17.900% (p < 0.05), point estimate -18.8%. The absolute gain is smaller than the 41.2% recorded pre-merge only because master's intervening work lowered the baseline from 70.467 us to 49.620 us; the removed clock-read work is about 8.76 us per search, or 15.1 ns per visited node.
+
+CORRECTION to the measurements recorded above (both the original 2026-07-19 measurement and the integration-rework measurement). Two earlier claims in these notes are wrong and are superseded by a controlled re-measurement; they are left in place above rather than deleted so the record shows what was believed and when.
+
+Wrong claim 1: 'Baseline median was 70.467 us ... Throttling reduced the median to 41.449 us ... a 41.2% time reduction / 70.0% NPS increase ... about 50.1 ns per visited node.' The 70.467 us baseline is not reproducible. The same base commit ebf4289, measured under controlled conditions with the same harness, is 49.45 us. The original figure was taken with different Criterion settings on a machine that was not idle, and it inflated the apparent gain by more than a factor of two.
+
+Wrong claim 2: 'The absolute gain is smaller than the 41.2% recorded pre-merge only because master's intervening work lowered the baseline from 70.467 us to 49.620 us.' This was an inference stated as a measurement and it is false. Master's TASK-45/46 work did not change search speed at all.
+
+Controlled re-measurement. Three worktrees (base ebf4289, master 22a2512, this branch), benchmarked round-robin over three rounds with both a deadline-bearing and a no-deadline harness in a single binary, taking the minimum per configuration. All three commits search an identical 579-node tree, verified directly, so the microsecond figures are directly comparable as NPS. Run-to-run drift on this machine is about 3%, which exceeds several of the differences involved, so single runs are not trustworthy at this resolution.
+
+| commit | no deadline | with deadline | deadline cost |
+| ebf4289 base | 39.25 us | 49.45 us | 10.20 us |
+| 22a2512 master | 40.43 us | 49.59 us | 9.16 us |
+| this branch | 39.73 us | 40.25 us | 0.52 us |
+
+Corrected AC #1 figure: unthrottled deadline checking costs about 9-10 us per search over 579 nodes, i.e. roughly 16-18 ns per visited node (not 50.1 ns). Still clearly material, so the throttle remains warranted.
+
+Corrected AC #5 figure: master 49.59 us to branch 40.25 us, a 18.8% time reduction and a 23.2% NPS increase (11.68M to 14.39M NPS). The throttle removes about 95% of the deadline-check cost; the residual 0.52 us gap is the every-8-nodes sampling.
+
+The no-deadline column moves by about 1 us across all three commits, inside the drift band, which is what establishes that TASK-45/46 did not affect search speed.
+
+Scope addition requested by the user during this session: benches/search.rs now measures both configurations rather than only the deadline-bearing one, and BENCHMARKS.md gains a documented search baseline with this attribution table and the methodology. The gap between the two benchmarks is the deadline-check cost, so a future regression in it is attributable rather than mysterious.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
