@@ -3,11 +3,11 @@ id: TASK-42
 title: >-
   Hold a meaningful time reserve in increment games instead of decaying to the
   increment
-status: Ready to Merge
+status: Changes Requested
 assignee:
   - '@codex'
 created_date: '2026-07-18 13:18'
-updated_date: '2026-07-19 13:06'
+updated_date: '2026-07-19 13:17'
 labels:
   - engine
   - time
@@ -201,6 +201,33 @@ Acceptance criteria:
 Non-blocking observations, recorded for the human rather than as findings:
 - The below-reserve branch ignores est_remaining_moves, so it also changes movestogo controls: at clock 1000, inc 100, movestogo 1 the allotment falls from 728ms to 97ms. This is conservative rather than unsafe, since unspent time carries over at a tournament control boundary and the sweep test rules out a forfeit, but it is a behaviour change outside the increment-game scope the task targets.
 - The implementer found that tools/strength/strength_test.py writes FastChess's nElo into report.json's elo field, overstating this run's headline regression by about 1.8x. They correctly did not open a follow-up task; that remains the human's call.
+---
+
+author: @codex
+created: 2026-07-19 13:17
+---
+Merge failed: textual conflict against primary tip 74b53d6. Primary was not advanced and remains at 74b53d6; the trial merge was built on a detached HEAD and abandoned.
+
+Command: git merge --no-ff 0728561 (from a detached HEAD at 74b53d6)
+Result: CONFLICT (content): Merge conflict in engine/src/time.rs
+
+Both sides rewrote the same comment in fast_time_controls_receive_a_positive_proportional_allocation, in response to the same new convention that code comments must stand alone without task context. Master reached it in 74b53d6; this branch reached it in 96adb9a.
+
+Primary (74b53d6):
+    // A 2+0.05 opening position: (2_000 - 30) / 39 + 50. Integer division of the residual
+    // once truncated this to 0ms, which had the engine playing its opening at depth 1.
+
+This branch (96adb9a):
+    // The 2+0.05 opening: (2_000 - 30) / 39 + 50. A flat per-move buffer once made this 0ms,
+    // which had the engine playing its whole opening at depth 1. The reserve caps how fast the
+    // clock may drain rather than shrinking the pool being divided, and an opening clock is
+    // nowhere near the reserve, so these allocations are untouched by it.
+
+This is not a whitespace or formatting collision and should not be resolved mechanically. The two comments give different causes for the same historical defect: primary attributes the 0ms allocation to integer division truncating the residual, this branch attributes it to a flat per-move buffer. Rework must decide which is historically accurate, or state both if the 0ms allocation had both causes in sequence, and then re-express the reserve sentence this branch adds on top of whichever account is correct.
+
+No implementation code conflicts. The conflict is confined to comment text, and the asserted values (100ms, 34ms, 24ms) are identical on both sides, so the approved behaviour at 96adb9a is unaffected. The strength evidence remains valid for the code as written.
+
+Note for rework: resolving this changes engine/src/time.rs and therefore invalidates the approval pinned to 96adb9a. The task needs a fresh review target, but only the comment text is in question; the allocation policy itself was reviewed and approved unchanged.
 ---
 <!-- COMMENTS:END -->
 
