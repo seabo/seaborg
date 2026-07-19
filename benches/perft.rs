@@ -1,7 +1,8 @@
-use core::init::init_globals;
-use core::position::Position;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use chess_core::init::init_globals;
+use chess_core::position::Position;
+use criterion::{criterion_group, criterion_main, Criterion};
 use engine::perft::Perft;
+use std::hint::black_box;
 
 fn run_perft(pos: &mut Position) {
     let _res = Perft::perft(pos, 5, false, false, false);
