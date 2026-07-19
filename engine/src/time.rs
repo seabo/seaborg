@@ -231,10 +231,10 @@ mod tests {
 
     #[test]
     fn fast_time_controls_receive_a_positive_proportional_allocation() {
-        // The 2+0.05 opening position from TASK-38: (2_000 - 30) / 39 + 50. This allotted 0ms
-        // before the fix, which is what had the engine playing its opening at depth 1. The
-        // TASK-42 reserve caps the drain rather than shrinking the pool, and an opening clock is
-        // nowhere near the reserve, so these are untouched by it.
+        // The 2+0.05 opening: (2_000 - 30) / 39 + 50. A flat per-move buffer once made this 0ms,
+        // which had the engine playing its whole opening at depth 1. The reserve caps how fast the
+        // clock may drain rather than shrinking the pool being divided, and an opening clock is
+        // nowhere near the reserve, so these allocations are untouched by it.
         let two_plus_005 = TimeControl::new(2_000, 2_000, 50, 50, None);
         assert_eq!(two_plus_005.to_move_time(1, Player::WHITE), 100);
 
@@ -276,7 +276,7 @@ mod tests {
     /// allotted and earning the increment back, and report the clock after each move number.
     ///
     /// Nothing here models search overshoot or transport delay; the question is whether the
-    /// policy itself drains the clock, which it did before TASK-42.
+    /// policy itself drains the clock, which it once did all the way down to the increment.
     fn simulate_game(base: u64, inc: u64, moves: u32) -> Vec<(u32, u64, u64)> {
         let mut clock = base;
         let mut history = Vec::new();
@@ -299,7 +299,7 @@ mod tests {
 
     #[test]
     fn an_increment_game_settles_on_the_reserve_rather_than_the_increment() {
-        // Before TASK-42 these clocks converged to 49ms, 96ms and 163ms respectively: a reserve
+        // Dividing the whole clock every move converged these to 49ms, 96ms and 163ms: a reserve
         // of tens of milliseconds above the fixed overhead, whatever the time control. The
         // converged clock is now the reserve the policy asks for, plus the overhead it holds
         // back once.
@@ -334,9 +334,9 @@ mod tests {
 
     #[test]
     fn a_late_game_move_can_still_be_allotted_far_more_than_the_increment() {
-        // Move 100 of a 1+0.01 game, holding a clock that the pre-TASK-42 policy would never
-        // have reached: the surplus above the reserve is still spendable, so a critical late
-        // position gets a real think rather than the bare increment.
+        // Move 100 of a 1+0.01 game, holding a clock that a policy decaying onto the increment
+        // would never still have: whatever sits above the reserve stays spendable, so a critical
+        // late position gets a real think rather than the bare increment.
         let control = TimeControl::new(2_000, 2_000, 10, 10, None);
         let allotted = control.to_move_time(100, Player::WHITE);
 
@@ -375,7 +375,8 @@ mod tests {
     fn sudden_death_holds_no_reserve() {
         // Without an increment there is no steady state to protect, so the reserve is zero and
         // the clock is spent down as before. This is what keeps the reserve from behaving like
-        // the flat per-move buffer TASK-38 removed.
+        // a flat per-move buffer, which starved fast controls by taking a share that grew
+        // without bound as the time control shortened.
         let history = simulate_game(60_000, 0, 100);
         let (_, _, final_clock) = history[99];
 
