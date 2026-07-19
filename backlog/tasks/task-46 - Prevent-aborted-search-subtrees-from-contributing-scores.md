@@ -1,11 +1,11 @@
 ---
 id: TASK-46
 title: Prevent aborted search subtrees from contributing scores
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-18 18:29'
-updated_date: '2026-07-19 00:03'
+updated_date: '2026-07-19 00:14'
 labels: []
 dependencies: []
 references:
