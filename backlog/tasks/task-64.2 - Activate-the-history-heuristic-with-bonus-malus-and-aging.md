@@ -1,7 +1,7 @@
 ---
 id: TASK-64.2
 title: 'Activate the history heuristic with bonus, malus and aging'
-status: In Progress
+status: In Review
 assignee:
   - '@george'
 created_date: '2026-07-19 13:30'
@@ -65,3 +65,24 @@ Persistence decision: retain the existing per-search lifetime. Evidence is share
 
 TASK-27 strength smoke: baseline c7826f15b267cd89b0c1c02c97b5294f6ec9bf57 versus candidate working tree, optimized cargo build --release --bin seaborg, FastChess alpha 1.5.0, 4 paired-colour games at depth=4, concurrency=2, Hash=64, Threads=1. Result: non-authoritative INCONCLUSIVE, 2 wins / 0 draws / 2 losses, LLR 0.0 within [-2.94, 2.94], 0 forfeits, 0 crashes, runner exit 0. This smoke run establishes successful match integration but is too small to claim a strength result.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @george
+created: 2026-07-19 21:20
+---
+Implementation handoff
+Branch: task-64.2-history-heuristic
+Worktree: /Users/seabo/seaborg-worktrees/task-64.2-history-heuristic
+Base: c7826f15b267cd89b0c1c02c97b5294f6ec9bf57
+Implementation target: 88cbd086fa88c56cbd7d908588685397178d52c3
+Resolved findings: none
+Verification:
+- cargo fmt --check: PASS
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: PASS
+- cargo test --workspace: PASS (45 core, 274 engine passed / 2 ignored, 19 build metadata, 1 doc)
+- python3 tools/strength/strength_test.py (smoke, 4 games, depth=4): INCONCLUSIVE, 2-0-2, LLR 0.0, no crashes or forfeits
+Known failures: none
+---
+<!-- COMMENTS:END -->
