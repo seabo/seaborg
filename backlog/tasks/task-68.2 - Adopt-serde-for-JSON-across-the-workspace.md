@@ -1,11 +1,11 @@
 ---
 id: TASK-68.2
 title: Adopt serde for JSON across the workspace
-status: Ready to Merge
+status: Done
 assignee:
   - '@george'
 created_date: '2026-07-19 22:33'
-updated_date: '2026-07-19 23:04'
+updated_date: '2026-07-19 23:09'
 labels: []
 dependencies: []
 parent_task_id: TASK-68
