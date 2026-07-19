@@ -3,11 +3,11 @@ id: TASK-58
 title: >-
   Make transposition-table identity safe for rule- and history-sensitive
   positions
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-19 00:00'
-updated_date: '2026-07-19 02:21'
+updated_date: '2026-07-19 02:36'
 labels:
   - transposition-table
   - zobrist
@@ -53,3 +53,46 @@ The Zobrist key identifies board state, side to move, castling rights, and en-pa
 
 6. Run cargo fmt --check, cargo clippy --workspace --all-targets --all-features -- -D warnings, cargo test --workspace.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Made the static evaluation position-intrinsic (engine/src/search.rs). The previous halfmove-clock scaling made every propagated score a function of state the Zobrist key does not cover, which is the direct cause of AC#1: a warm table could return a score computed under a materially different clock. Removing the scaling makes the invariant hold by construction. The alternative considered was storing a clock in the packed 64-bit TT Entry and gating reuse; Entry has no free bits, and a strict equality gate would reject most reuse while a tolerance band has no clean correctness story. Approach confirmed with the user before implementing.
+
+Suppressed the TT write for any node whose subtree claimed a history-sensitive draw (search.rs Step 24), tracked by a monotone history_draws counter incremented in the new is_history_draw helper. Downgrading Exact to a bound is insufficient and the comment at the write site records why: a draw score can raise a value to a beta cutoff as easily as it can cap it, so Lower and Upper are unsound in an incompatible history too. Verified the policy is not a blanket suppression: a_history_independent_value_is_still_stored_in_the_table asserts ordinary values still reach the table.
+
+Canonicalised the en-passant target on FEN input (core/src/position/fen.rs, canonicalize_ep_square), applying the same enemy-pawn-attacks predicate make_move_unchecked already uses, and running it before set_zobrist so the canonical square is the one hashed. This closes the pre-existing TODO at fen.rs. Note AC#3 was narrower than the task assumed: make_move_unchecked already declined to set an unusable target, so the real gap was FEN input. Full legality filtering (pinned capturer, ep-discovered-check) is deliberately out of scope, as it requires legality checks inside make_move on the hot path; scope confirmed with the user.
+
+Found and fixed two defects while establishing the above.
+
+First, Zobrist::from_position folded a Piece::None key into every empty square, because iterating Board yields all 64 squares including empty ones, while the incremental updates in make_move_unchecked only ever toggle real pieces. The two derivations disagreed by the Piece::None keys of every square whose occupancy changed. Confirmed the divergence reproduces at the base commit on unmodified master, and confirmed the delta numerically equals piece_square_key(None, orig) xor piece_square_key(None, dest). This was a blocking prerequisite for AC#3 rather than opportunistic scope: the en-passant identity guarantee is asserted across exactly the parsed-versus-played boundary that this bug split, so AC#3 is untestable without it. Added incremental_and_full_keys_agree_after_every_legal_move and unmaking_a_move_restores_the_key over quiet moves, captures, castling, promotions and en-passant.
+
+Second, quiescence compared the halfmove clock against 50 while the main search used the correct 100-ply boundary, so quiescence reported a draw at 25 moves. Both now route through is_history_draw.
+
+Behavioral note for review: removing the eval scaling changes engine playing behavior in drawish endings, which is intended but strength-relevant. The existing quiescence_searches_quiet_check_evasions expectation moved from -495 to -500; the -495 was the clock smear (the evasion search advanced the clock to 1 and shaded a -500 rook by one percent), so -500 is the corrected value. No benchmark was run: the ACs do not require one and I did not want to record an uncontrolled measurement, so nps attribution is left to the merge-time gate.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @codex
+created: 2026-07-19 02:36
+---
+Implementation handoff
+Branch: task-58-tt-identity-rule-sensitive
+Worktree: /Users/seabo/seaborg-worktrees/task-58-tt-identity-rule-sensitive
+Base: 5ce2782948b96d070404dc73b0a91c89330a3709
+Implementation target: 99e9b4f
+Resolved findings: none (first review)
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass, no warnings
+- cargo test --workspace: pass, 40 core + 193 engine + 5 build_metadata + 1 doc test, 0 failed, 2 ignored (pre-existing)
+Known failures: none
+
+Reviewer notes:
+- Two design decisions were confirmed with the user before implementing: satisfy AC#1 by removing the halfmove-clock scaling from evaluate() rather than gating TT reuse on a stored clock, and scope AC#3 to FEN reconciliation rather than full en-passant legality filtering. Both rationales are in the implementation notes.
+- The change to Zobrist::from_position alters every Zobrist key in the engine. It is a fix for a real divergence between the full and incremental key derivations that reproduces on unmodified master, and is a prerequisite for AC#3 rather than opportunistic scope. Worth independent confirmation that it is correctly in scope for this task.
+- Removing the eval scaling is a strength-relevant behavior change in drawish endings. No benchmark was run; nps and strength attribution is left to the merge-time gate.
+---
+<!-- COMMENTS:END -->
