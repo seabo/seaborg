@@ -1,11 +1,11 @@
 ---
 id: TASK-46
 title: Prevent aborted search subtrees from contributing scores
-status: In Review
+status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-18 18:29'
-updated_date: '2026-07-18 23:49'
+updated_date: '2026-07-19 00:03'
 labels: []
 dependencies: []
 references:
@@ -591,4 +591,28 @@ Verification:
 - cargo test --workspace: passed (204 passed, 2 ignored)
 Known failures: none
 ---
+
+author: @codex
+created: 2026-07-19 00:03
+---
+Review attempt: 5\nReviewed branch: task-46-aborted-search-subtrees\nReviewed implementation: 35b4994b5753d41d447e90de023b019775b5377b\nBase: f476d4c8cfcbfd630235ad81067763b37af2e656\nVerdict: approved\n\nThe merge-conflict rework correctly combines TASK-46 abort propagation with TASK-54 mate-aware child windows at all four overlapping recursion sites. Aborted children remain unusable Option outcomes, moves are restored before unwinding, the candidate PV is discarded, and no ancestor TT entry is written. The child search windows use child_bound() at main-search, quiescence, and evasion boundaries, preserving mate-distance parity.\n\nAcceptance evidence:\n- AC#1/#2: aborted_child_cannot_score_or_write_its_parent passes and directly asserts None, restored position, no PV move, and no root TT entry.\n- AC#3/#4: mid_subtree_abort_keeps_the_last_completed_iteration passes and preserves the completed depth-one result and full PV after aborting in the first depth-two child.\n- AC#5: the obsolete robustness TODO is absent.\n- Integration: both child_mate_windows_preserve_distance_parity and child_bounds_invert_parent_mate_distance_conversion pass.\n\nVerification:\n- cargo fmt --check: passed\n- clean CARGO_TARGET_DIR cargo clippy --workspace --all-targets --all-features -- -D warnings: passed\n- cargo test --workspace: passed (core 35, engine 169 passed/2 ignored, integration 5, doc test 1)\n- focused TASK-46 and TASK-54 regressions: all passed\n- git diff --check base..target: passed\n\nScope and immutability: base-to-target code changes are confined to engine/src/search.rs; the only commit after the implementation target changes the TASK-46 handoff file. No #[allow] was added. No new benchmark run was needed: relative to the previously approved TASK-46 production change, this rework only carries primary's already-reviewed child_bound() arguments into the same Option unwind structure; focused mate-parity regressions and the full suite cover the integration.\n\nApproved implementation SHA: 35b4994b5753d41d447e90de023b019775b5377b
+---
+
+author: @codex
+created: 2026-07-19 00:03
+---
+Review attempt: 5 (formatting correction)
+Reviewed implementation: 35b4994b5753d41d447e90de023b019775b5377b
+Verdict: approved
+
+Comment #15 contains escaped newline markers from CLI argument formatting. Its substance is unchanged. Verification passed: cargo fmt --check; uncached strict workspace Clippy; cargo test --workspace; focused TASK-46 abort/PV tests; and TASK-54 mate-parity tests. The base-to-target code diff is confined to engine/src/search.rs, and only task metadata follows the immutable implementation target.
+
+Approved implementation SHA: 35b4994b5753d41d447e90de023b019775b5377b
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Integrated TASK-46's explicit aborted-node propagation with TASK-54's mate-aware child bounds. Verified cancellation cannot update alpha, best move, PV, or TT state using focused mid-subtree regressions; formatting, uncached strict Clippy, the full workspace suite, and mate-parity regressions all pass on 35b4994b5753d41d447e90de023b019775b5377b.
+<!-- SECTION:FINAL_SUMMARY:END -->
