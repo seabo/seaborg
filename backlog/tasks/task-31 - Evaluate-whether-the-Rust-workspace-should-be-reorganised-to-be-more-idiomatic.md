@@ -1,11 +1,11 @@
 ---
 id: TASK-31
 title: Evaluate whether the Rust workspace should be reorganised to be more idiomatic
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-17 23:35'
-updated_date: '2026-07-19 21:11'
+updated_date: '2026-07-19 21:13'
 labels:
   - architecture
 dependencies: []
@@ -43,4 +43,26 @@ Review the overall layout of the Cargo workspace (crate boundaries, module organ
 
 <!-- SECTION:NOTES:BEGIN -->
 Added `docs/workspace-layout-assessment.md` with the package/target inventory, dependency graph, convention analysis, effort-ranked recommendations, and justified no-change conclusion for directory and package splitting. Existing TASK-20 and TASK-21 are the separate follow-ups for every recommended change; no additional task is needed.
+
+Verification passed on implementation target `bb4e08154a2bdf5753a54d5f9ebf9c88357b5a9f`: `cargo fmt --check`; `cargo clippy --workspace --all-targets --all-features -- -D warnings`; `cargo test --workspace`.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @codex
+created: 2026-07-19 21:13
+---
+Implementation handoff
+Branch: task-31-workspace-layout
+Worktree: /Users/seabo/seaborg-worktrees/task-31-workspace-layout
+Base: c7826f15b267cd89b0c1c02c97b5294f6ec9bf57
+Implementation target: bb4e08154a2bdf5753a54d5f9ebf9c88357b5a9f
+Resolved findings: none
+Verification:
+- cargo fmt --check: passed
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: passed
+- cargo test --workspace: passed
+Known failures: none
+---
+<!-- COMMENTS:END -->
