@@ -1,11 +1,11 @@
 ---
 id: TASK-64.6
 title: Add a node-count search limit
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-19 13:31'
-updated_date: '2026-07-19 20:09'
+updated_date: '2026-07-19 20:37'
 labels:
   - search
   - uci
