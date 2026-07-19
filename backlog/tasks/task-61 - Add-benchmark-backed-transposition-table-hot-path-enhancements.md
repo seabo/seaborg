@@ -1,11 +1,11 @@
 ---
 id: TASK-61
 title: Add benchmark-backed transposition-table hot-path enhancements
-status: Changes Requested
+status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-07-19 00:01'
-updated_date: '2026-07-19 20:12'
+updated_date: '2026-07-19 20:14'
 labels:
   - transposition-table
   - performance
@@ -39,12 +39,12 @@ After the identity policy, clean transposition-table rewrite, and search integra
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Add a reproducible hash-loading search benchmark. The existing `search startpos depth 7` tree is 579 nodes and barely touches the table, so it cannot measure a TT hot-path change. Add a criterion group over representative fixed-depth positions whose trees are large enough to miss cache, and record baseline nodes, elapsed time and probe/hit/miss telemetry in BENCHMARKS.md.
-2. Specify the value and validity conditions for a stored static evaluation before writing any code: what makes it reusable, how it interacts with the rule-sensitive evaluation policy, and what it costs in entry space given the data word has only 15 spare bits against the 16 an i16 eval needs.
-3. Measure the static-eval candidate against the baseline (nodes, time, entry-space cost) and against the imminent pruning consumers in TASK-50/51/52. Implement only if the measurement or a concrete consumer justifies it; otherwise record the measurement and the decision.
-4. Evaluate child-bucket prefetching: add a portable prefetch hint on the supported targets, issue it after make_move so the child cluster is in flight during the descent, and measure round-robin against the baseline. Retain only on a repeatable benefit with no portability or safety cost.
-5. Add regression and benchmark coverage for whatever is accepted; write the measurements and rejection rationale for whatever is not into BENCHMARKS.md so the experiment is not rediscovered.
-6. Assert the final entry layout: size, alignment, cluster-per-cache-line organisation and the reserved-bit invariant.
+Rework: re-integrate the approved b76a0c2 work onto current primary after a stale-base merge eject (TASK-64.1 changed make_move_unchecked to take &mov and gave quiesce an explicit ply arg).
+1. Merge current primary (master) into the task branch.
+2. Resolve the engine/src/search.rs conflict: place both prefetch(self.pos.zobrist().0) hints immediately after the new make_move_unchecked(&mov) in the main search and quiescence, before the ply-carrying quiesce recursion. Reconcile any benches/search.rs and Search::trace() drift too.
+3. Keep the tt.rs prefetch method, the prefetch/layout tests, the hash-load benchmark, and BENCHMARKS.md unchanged (additive, no defect found in review).
+4. Re-run required checks (fmt, clippy -D warnings, test --workspace) and the hash-load benchmark smoke.
+5. Hand off a fresh immutable target for a new independent review.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
