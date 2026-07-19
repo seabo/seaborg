@@ -3,11 +3,11 @@ id: TASK-58
 title: >-
   Make transposition-table identity safe for rule- and history-sensitive
   positions
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-19 00:00'
-updated_date: '2026-07-19 03:38'
+updated_date: '2026-07-19 03:44'
 labels:
   - transposition-table
   - zobrist
@@ -232,6 +232,23 @@ Verification:
 - base-to-target git diff --check: pass
 - implementation target ancestry and task-only post-target commits: pass
 - interleaved benchmarks recorded by implementation: perft about +0.8%, depth-7 search about +1.9%, within the 5% investigation threshold
+---
+
+author: @codex
+created: 2026-07-19 03:44
+---
+Merge completed
+Primary base: 494dad5cafc66259d4460b1c4a01e561fd8f1141
+Integrated merge: 79d82f018eb0b838cd9839e9d41d0aa0b7a2fd48
+Approved implementation: a76792d
+
+Merge-time verification:
+- cargo fmt --check: pass
+- clean CARGO_TARGET_DIR cargo clippy --workspace --all-targets --all-features -- -D warnings: pass
+- cargo test --workspace: pass (43 core, 205 engine, 5 build_metadata, 1 doc; 3 ignored)
+- cargo bench --bench movegen --bench perft repeat integration run: generate moves 185.75 ns, perft 5 22.181 ms; both below repository thresholds
+- TASK-56 overlap in engine/src/search.rs: clean textual integration and combined score-bound plus TT regression suites pass
+- compare-and-swap: master remained at the tested primary base and fast-forwarded to the verified merge
 ---
 <!-- COMMENTS:END -->
 
