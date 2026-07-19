@@ -1,11 +1,11 @@
 ---
 id: TASK-64.14
 title: Replace material-only evaluation with a tapered hand-crafted evaluation
-status: In Review
+status: Changes Requested
 assignee:
   - '@claude'
 created_date: '2026-07-19 13:33'
-updated_date: '2026-07-19 20:43'
+updated_date: '2026-07-19 20:47'
 labels:
   - evaluation
   - strength
@@ -108,5 +108,29 @@ Verification:
 - cargo test --workspace: pass (0 failed)
 - fixed-depth smoke SPRT (depth=4, 20 games), candidate 88b78c0 vs baseline aa915d8: 19W-0D-1L, Elo est +511.5, verdict INCONCLUSIVE (smoke is non-authoritative and capped at 20 games); report at /tmp/seaborg-strength-64_14/artifacts-smoke/report.json
 Known failures: none. Note: base is the branch point aa915d8; master has since advanced to df6f373, so the merge gate should re-integrate onto the live tip.
+---
+
+author: @codex
+created: 2026-07-19 20:47
+---
+Review attempt: 1
+Reviewed branch: task-64.14-tapered-eval
+Reviewed implementation: 88b78c0
+Verdict: changes_requested
+
+REV-1-01 [P1] The landed razoring margin was not re-measured
+Location: TASK-64.14 AC #7 and implementation notes
+Impact: AC #7 explicitly requires already-landed margin-based pruning to be re-measured against the new evaluation and any margin revision to be recorded. The only strength run compares the complete tapered evaluator at 88b78c0 with the material-only base aa915d8 while razoring is enabled in both. That result measures the evaluator as a whole; it does not isolate the razoring margin or show whether the margin remains appropriate under the new score distribution. The statement that the scale remains centipawns and the run showed no misbehaviour is reasoning, not a margin measurement.
+Reproduction: Inspect /tmp/seaborg-strength-64_14/artifacts-smoke/report.json and the recorded command. It has only candidate 88b78c0 versus baseline aa915d8 and contains no razoring-disabled engine, alternate margin, trigger-rate telemetry, or paired comparison capable of attributing an outcome to the margin.
+Expected: Re-measure the landed razoring configuration under the new evaluator with an attributable comparison (for example current margin versus razoring disabled or a justified alternate margin using the TASK-27 harness), record the result and whether the margin changes, then provide the resulting artifact/evidence. If the repository deliberately intends TASK-64.4 to own this measurement instead, that is a scope/acceptance-criterion change requiring human direction rather than checking AC #7 from the current smoke run.
+
+Verification:
+- git merge-base --is-ancestor aa915d85d32d03d829d0636c6af3e71b40a6632f 88b78c0: pass
+- git diff --stat 88b78c0..d9278bd: task metadata only
+- cargo fmt --check: pass
+- clean-CARGO_TARGET_DIR cargo clippy --workspace --all-targets --all-features -- -D warnings: pass
+- cargo test --workspace: pass (43 core; 266 engine passed, 2 ignored; 19 integration; 1 doc test)
+- archived fixed-depth smoke report: present and matches 19W-0D-1L, but does not isolate razoring
+- hot-path benchmark: not used for the verdict because another task's cargo test/engine process was active, so the machine did not meet the required idle condition
 ---
 <!-- COMMENTS:END -->
