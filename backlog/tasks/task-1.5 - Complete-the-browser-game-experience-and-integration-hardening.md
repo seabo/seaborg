@@ -1,11 +1,11 @@
 ---
 id: TASK-1.5
 title: Complete the browser game experience and integration hardening
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-17 15:40'
-updated_date: '2026-07-19 01:40'
+updated_date: '2026-07-19 01:59'
 labels: []
 dependencies:
   - TASK-1.4
@@ -26,12 +26,12 @@ Finish the application around the chessboard, integrate game and engine informat
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The responsive application lets the user start a game as White or Black, select the supported engine limit, undo or restart, flip the board, and quit the UI process
-- [ ] #2 The companion panel presents SAN move history, whose turn it is, game result, engine thinking state, evaluation, depth, nodes, NPS, and principal variation without overwhelming the board
-- [ ] #3 Reloading or reconnecting reconstructs the current authoritative game without duplicating a move or search
-- [ ] #4 The UI gives clear recoverable feedback for rejected moves, lost connections, server errors, and occupied fixed ports
-- [ ] #5 A complete game can be played through checkmate from `seaborg --ui` without console errors or an external network request
-- [ ] #6 Automated and documented manual checks cover desktop and narrow layouts, both player colours, promotion, castling, en passant, terminal states, reload during search, and reduced-motion behavior
+- [x] #1 The responsive application lets the user start a game as White or Black, select the supported engine limit, undo or restart, flip the board, and quit the UI process
+- [x] #2 The companion panel presents SAN move history, whose turn it is, game result, engine thinking state, evaluation, depth, nodes, NPS, and principal variation without overwhelming the board
+- [x] #3 Reloading or reconnecting reconstructs the current authoritative game without duplicating a move or search
+- [x] #4 The UI gives clear recoverable feedback for rejected moves, lost connections, server errors, and occupied fixed ports
+- [x] #5 A complete game can be played through checkmate from `seaborg --ui` without console errors or an external network request
+- [x] #6 Automated and documented manual checks cover desktop and narrow layouts, both player colours, promotion, castling, en passant, terminal states, reload during search, and reduced-motion behavior
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -259,4 +259,84 @@ Two notes for the reviewer.
 
 2. REV-1-02 changes .gitignore, which is repository-wide and outside this task's strict surface. The manual check document existed during attempt 1 and was silently swallowed by the '/docs' ignore rule, which is why no document appeared in the diff. I put the option to the human rather than deciding it, and the decision was to un-ignore docs/ rather than force-add the single file, so the trap does not catch the next writer. docs/strength-testing.md was already tracked via an earlier force-add and is unaffected; no worktree had any other content under docs/.
 ---
+
+author: @claude
+created: 2026-07-19 01:59
+---
+Review attempt: 2
+Reviewed branch: task-1.5-browser-game-experience
+Reviewed implementation: 758cf9737e0a2b4be3e34c3ffc0e1c2f7fc35c5f
+Verdict: approved
+
+Both attempt-1 blocking findings are resolved, and I confirmed each independently rather than
+from the handoff.
+
+REV-1-01 resolved. sendCommand now reports ok/rejected/unreachable and quit consults
+quitEndsTheSession, so the terminal stopped state is entered only on acceptance or on a request
+that never returned. A refusal rolls 'quitting' back to false, repaints, and returns before the
+event stream is closed, so the controls stay live and the message sendCommand wrote survives.
+I reproduced the exact scenario the finding named against the release binary on 127.0.0.1:39412:
+an untokened POST /api/quit answered 403 {"error":"invalid_token"}, GET /api/state still
+answered 200, and the terminal had not printed 'Seaborg UI stopped.'. The accepted path is
+unregressed: a tokened quit answered 200 {"quitting":true}, the port closed, and the terminal
+printed 'Seaborg UI stopped.'. The rule is unit tested for all three outcomes.
+
+REV-1-02 resolved. docs/browser-ui-manual-checks.md is now tracked and covers every item
+acceptance criterion #6 names — desktop and narrow layouts, both colours, promotion, castling,
+en passant, terminal states, reload during search, and reduced motion — plus keyboard and
+assistive technology and a thirteenth check for the refused quit above, naming for each what to
+do, what a pass looks like, and which items automated tests cover instead. The root cause was
+the root-anchored '/docs' ignore rule, removed here. I checked that change is safe: '/docs' never
+matched backlog/docs, nothing in the repository generates into docs/, and the only other entry is
+the already-tracked docs/strength-testing.md.
+
+The three non-blocking notes from attempt 1 were all addressed. The engine panel now clears once
+per search keyed on searchId rather than on progress being null; the principal_variation_san doc
+comment now states the ordering the code actually has (undo unmakes before it cancels, and the
+invariant holds because the search thread reads an independent clone under the session mutex);
+and formatCount chooses its unit from what the value rounds to, so 999,999 reads as 1.0M and
+999,999,999 as 1.0B, which I verified by hand against the implementation.
+
+Acceptance criteria evidence:
+- #1 index.html carries new-white, new-black, engine-limit, undo, restart, flip, and quit; the
+  limit endpoint is covered by four server tests and quit was driven live.
+- #2 the panel carries history, turn-status, engine-state, evaluation, depth, nodes, nps, hash,
+  and variation; SAN history and the SAN variation are asserted server-side.
+- #3 reloading_during_a_search_reconstructs_the_game_without_duplicating_it holds revision 1, the
+  same searchId, and history length 1 across three reloads, then a single reply.
+- #4 describeCommandError covers every code the server returns, 5xx is distinguished from a
+  refusal, and I confirmed live that a second instance on an occupied fixed port exits 1 naming
+  the port and suggesting --ui-port.
+- #5 I drove a complete game over the command surface myself: checkmate, winner black, 48 plies,
+  0 legal moves, and a further move refused 409 game_over. Every asset reference is a same-origin
+  relative path (/app.js, /style.css, /api/state, /api/events), so no external request is possible.
+- #6 the manual check document above, alongside the automated coverage it names.
+
+Verification (all run by me on the target, not taken from the handoff):
+- cargo fmt --check: pass, exit 0
+- cargo clippy --workspace --all-targets --all-features -- -D warnings with a fresh
+  CARGO_TARGET_DIR: exit 0, zero occurrences of 'warning' in the log
+- cargo test --workspace: exit 0, 225 passed / 0 failed / 2 ignored (driver_panic_process_probe
+  and tt::tests::make_tt, both pre-existing)
+- tsc 5.9.3 -p engine/src/ui/frontend/tsconfig.json then git diff --exit-code engine/src/ui/assets:
+  both exit 0, so the committed JS is byte-identical to a real recompile of the TypeScript
+- node --test board.test.mjs format.test.mjs: 16/16
+- No #[allow] is added anywhere in the diff
+- The diff touches no search, movegen, position, or evaluation file, so the hot-path benchmarks
+  were not required
+- 758cf973 is an ancestor of the branch tip and git diff --stat 758cf973..HEAD touches only
+  backlog/tasks/task-1.5, so the target is immutable
+
+One note carried forward for the merge, not a blocking finding. The REV-1-02 fix edits .gitignore,
+which is repository-wide and wider than this task's surface. The implementation notes record that a
+human chose to un-ignore docs/ rather than force-add the single file; I can see that decision
+recorded but cannot verify it independently, so I am surfacing it rather than treating it as
+settled. The change itself is benign on the evidence above.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Completed the browser game experience: a companion panel (SAN scoresheet, turn, result, engine state, White-relative evaluation, depth, nodes, NPS, hash, SAN principal variation), controls for new game as either colour, restart, undo, flip, a bounded thinking limit, and quit, plus recoverable feedback for rejected moves, lost connections, server errors, and occupied ports. Server gained /api/engine-limit and /api/quit, and UiHandle and the quit route now share one ShutdownSignal. Verified on 758cf973 by cargo fmt --check, cargo clippy --workspace --all-targets --all-features -- -D warnings on a clean CARGO_TARGET_DIR (zero warnings), cargo test --workspace (225 passed / 0 failed / 2 pre-existing ignored), tsc 5.9.3 with the regenerated JS byte-identical to the committed assets, node --test (16/16), and live runs against the release binary covering a refused quit that leaves the server running, an accepted quit that shuts it down cleanly, an occupied fixed port, and a complete game driven to checkmate in 48 plies with a further move refused 409 game_over.
+<!-- SECTION:FINAL_SUMMARY:END -->
