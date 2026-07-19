@@ -3,11 +3,11 @@ id: TASK-41
 title: >-
   Throttle the clock read in Search::stopping() to avoid a per-node
   Instant::now()
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-18 12:17'
-updated_date: '2026-07-19 02:01'
+updated_date: '2026-07-19 02:04'
 labels:
   - engine
   - search
@@ -86,6 +86,16 @@ Corrected AC #5 figure: master 49.59 us to branch 40.25 us, a 18.8% time reducti
 The no-deadline column moves by about 1 us across all three commits, inside the drift band, which is what establishes that TASK-45/46 did not affect search speed.
 
 Scope addition requested by the user during this session: benches/search.rs now measures both configurations rather than only the deadline-bearing one, and BENCHMARKS.md gains a documented search baseline with this attribution table and the methodology. The gap between the two benchmarks is the deadline-check cost, so a future regression in it is attributable rather than mysterious.
+
+Resolved REV-3-01: the BENCHMARKS.md search baseline cited `e1370e6`, which does not contain the two-configuration bench harness its figures come from. Verified the finding directly: `git show e1370e6:benches/search.rs` defines only `search startpos depth 7`, while `946091b` defines that plus `search startpos depth 7 no deadline`; `git diff e1370e6 946091b -- engine/src/search.rs` is empty, so this was attribution only and no measurement is invalidated.
+
+Behavior changed (documentation only, no engine code touched):
+- The baseline commit is now `946091b`, named explicitly as the commit that introduced the two-configuration harness.
+- The third attribution-table row is relabelled from `e1370e6` to `946091b` for the same reason.
+- Added the hardware and toolchain record the section was missing (Apple M3 Pro, 6P/6E, rustc 1.97.1, cargo 1.97.1), which the document's own closing paragraph requires and the move-generation section already had.
+- Added a reproduction caveat the section previously left implicit: `ebf4289` and `22a2512` benchmark the search with no deadline at all, so their own harnesses never exercise the clock read. The `946091b` harness was copied onto detached worktrees of both to produce their rows. Running `cargo bench --bench search` at either commit unmodified yields one figure belonging in neither column.
+
+Verification run: confirmed `cargo bench --bench search -- --list` at this target emits exactly the two benchmark names the section documents, which is the specific reproduction step REV-3-01 showed was broken. Repository-required checks and the release search regressions re-run clean.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -290,5 +300,26 @@ Verification:
 - `cargo bench --bench perft --bench movegen`: not run, and not required. Neither bench references `Search`, so `stopping()` is not on those paths.
 
 Acceptance criteria: all five are proven by the evidence above and remain checked. REV-3-01 is a documentation-accuracy defect in a scope addition, not an acceptance-criterion failure.
+---
+
+created: 2026-07-19 02:04
+---
+Implementation handoff
+Branch: task-41-clock-read-throttle
+Worktree: /Users/seabo/seaborg-worktrees/task-41-clock-read-throttle
+Base: 22a251255fc58987ee39c7303b7e72685f66f95f (master, merged in at 61e5b1c)
+Implementation target: 2c5da03cc479e00b33aad58beacd95f97685b08a
+Resolved findings: REV-3-01
+Verification:
+- `cargo fmt --check`: passed
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`: passed, no warnings
+- `cargo test --workspace`: passed (216 passed, 2 ignored)
+- `cargo test --release -p engine search`: passed (41 passed) in 1.69 s, including the 20 ms wall-time budget regression, the expired-deadline latch regression, the cancellation/root-fallback regressions and the TASK-32 zero/near-zero budget guarantees
+- `cargo bench --bench search -- --list`: emits exactly `search startpos depth 7` and `search startpos depth 7 no deadline`, the two rows the BENCHMARKS.md section documents. This is the reproduction step REV-3-01 showed was broken at the previously cited commit.
+Known failures: none
+
+Scope of this attempt: documentation only. The diff from the previously reviewed target 946091b touches BENCHMARKS.md and the task file, nothing else. No engine or bench code changed, so the recorded measurements, the correctness properties confirmed in review attempt 3, and the independently corroborated performance figures all carry over unchanged.
+
+Reviewer note: no benchmark was re-run for this attempt and none should be needed. REV-3-01 was explicitly an attribution error over sound measurements, and this attempt changes only which commit the section names and the reproduction caveats around it. The baseline commit is now 946091b rather than this target, because 946091b is where the two-configuration harness was introduced and the figures remain reproducible there; naming this commit instead would be equally true but less stable, since it would need updating on any later docs-only edit.
 ---
 <!-- COMMENTS:END -->
