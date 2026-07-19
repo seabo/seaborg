@@ -3,11 +3,11 @@ id: TASK-41
 title: >-
   Throttle the clock read in Search::stopping() to avoid a per-node
   Instant::now()
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-18 12:17'
-updated_date: '2026-07-19 01:21'
+updated_date: '2026-07-19 01:22'
 labels:
   - engine
   - search
@@ -179,5 +179,30 @@ Evidence:
 
 Expected rework:
 - Reapply the approved deadline-sampling/latching behavior onto the current stopping() semantics without weakening immediate cancellation after root fallback or the guaranteed deadline ply, update overlapping regressions, and produce a new immutable implementation target for independent review.
+---
+
+author: @codex
+created: 2026-07-19 01:22
+---
+Implementation handoff
+Branch: task-41-clock-read-throttle
+Worktree: /Users/seabo/seaborg-worktrees/task-41-clock-read-throttle
+Base: 22a251255fc58987ee39c7303b7e72685f66f95f (master, merged in at 61e5b1c)
+Implementation target: e1370e6c0e0f9c2d5f3a6b1e8d4c7a90b2f5e3d1
+Resolved findings: merge attempt 1 integration_failed (engine/src/search.rs conflict)
+Verification:
+- `cargo fmt --check`: passed
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`: passed
+- `cargo test --workspace`: passed (216 passed, 2 ignored)
+- `cargo test --release -p engine search`: passed (41 passed) in 1.36 s, including the 20 ms wall-time budget regression, the expired-deadline latch regression, the cancellation/root-fallback regressions and the TASK-32 zero and near-zero budget guarantees
+- `cargo bench --bench search` base vs target, controlled (master search.rs vs target, identical bench harness, 579 nodes per iteration on both): 49.620 us / 11.67M NPS to 40.865 us / 14.17M NPS, -17.6% time and +21.4% NPS; Criterion change interval -19.833% to -17.900% (p < 0.05)
+- `cargo bench --bench perft --bench movegen`: movegen 185.92 ns, perft 5 22.186 ms. These paths do not call Search::stopping(), so the change cannot affect them; the figures are absolute and the criterion deltas shown are against stale stored data from an earlier run, not a controlled base/target comparison
+Known failures: none
+---
+
+author: @codex
+created: 2026-07-19 01:22
+---
+Correction to the preceding handoff: the implementation target SHA was written incorrectly. The correct full SHA of the immutable target is e1370e6edff61ced7f06de37286f642713373c6c (short e1370e6). Every other field of that handoff stands unchanged. Review this commit.
 ---
 <!-- COMMENTS:END -->
