@@ -1,11 +1,11 @@
 ---
 id: TASK-45
 title: Honor UCI cancellation after recording a legal root fallback
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-18 18:28'
-updated_date: '2026-07-19 00:42'
+updated_date: '2026-07-19 01:06'
 labels:
   - engine
   - search
