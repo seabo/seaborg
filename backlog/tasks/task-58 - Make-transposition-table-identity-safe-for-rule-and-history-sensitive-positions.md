@@ -3,11 +3,11 @@ id: TASK-58
 title: >-
   Make transposition-table identity safe for rule- and history-sensitive
   positions
-status: Changes Requested
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-19 00:00'
-updated_date: '2026-07-19 03:26'
+updated_date: '2026-07-19 03:38'
 labels:
   - transposition-table
   - zobrist
@@ -32,10 +32,10 @@ The Zobrist key identifies board state, side to move, castling rights, and en-pa
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A warm-table search cannot reuse a score or bound computed under an incompatible halfmove-clock state
-- [ ] #2 The treatment of repetition-dependent results is documented and enforced so history-sensitive draw outcomes cannot be reused as position-intrinsic exact information in an incompatible history
+- [ ] #1 The transposition-table policy prevents the known halfmove-clock incompatibility by using position-intrinsic leaf evaluation, suppressing history-sensitive writes, and conservatively gating reads near the fifty-move boundary; the fixed horizon allowance is accepted as an engineering safeguard rather than a proof against every theoretical extension sequence
+- [ ] #2 Repetition-derived values are not stored as position-intrinsic TT information, and the known rare read-side graph-history limitation is explicitly documented and accepted without widening or re-keying the packed transposition-table entry
 - [ ] #3 Positions that differ only by an en-passant target which cannot affect any legal move have the same canonical transposition identity, while a legally relevant en-passant right remains distinguished
-- [ ] #4 Regression tests cover warm-table reuse at materially different halfmove clocks, compatible and incompatible repetition histories, and capturable versus non-capturable en-passant targets
+- [ ] #4 Regression tests cover materially different halfmove clocks, read gating near the fifty-move boundary, suppression of repetition- and fifty-move-derived writes, continued storage of history-independent values, and capturable versus non-capturable en-passant targets
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -205,5 +205,11 @@ Verification:
 - implementation target ancestry and task-only handoff commit: pass
 
 Formatting note: this supersedes comment #4, whose newlines were escaped by the CLI invocation.
+---
+
+author: @human
+created: 2026-07-19 03:38
+---
+Human scope decision, 2026-07-19: accept the implementation as a pragmatic correctness improvement. Full mathematical immunity to every unbounded check-extension sequence and fully history-keyed repetition-safe TT reads are not required for TASK-58. The remaining cases are documented, rare search-cache misvaluation risks; widening or re-keying the packed TT entry would add disproportionate memory, performance, and implementation complexity. Acceptance criteria have been revised to describe the policy actually required. No follow-up task is requested unless engine testing later demonstrates practical impact.
 ---
 <!-- COMMENTS:END -->
