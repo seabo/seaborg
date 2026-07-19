@@ -4,7 +4,7 @@ title: Adopt the cburnett piece set under its BSD 3-clause option
 status: To Do
 assignee: []
 created_date: '2026-07-19 01:27'
-updated_date: '2026-07-19 01:28'
+updated_date: '2026-07-19 01:34'
 labels: []
 dependencies: []
 references:
@@ -72,9 +72,13 @@ A repo file alone is likely insufficient. Seaborg ships as an executable, and BS
 
 The recorded attribution must name the author, state that the BSD 3-clause option of the multi-license was elected, and reproduce the license text with its conditions and disclaimer.
 
-## Out of scope
+## Licensing of Seaborg itself
 
-The absence of any license for Seaborg itself is a real and separate question. It does not block electing BSD for an imported asset, and it should not be resolved by this task. Raise it rather than deciding it.
+Resolved, and no longer an open question for this task. Seaborg is MIT licensed as of commit 5d37179: a root `LICENSE` file plus `license = "MIT"` on the workspace root package and both member crates.
+
+BSD 3-clause artwork is compatible with an MIT project, since both are permissive and require only notice retention, so the import raises no conflict.
+
+Note that this does **not** discharge the attribution obligation described above. The MIT license covers Seaborg's own code; the imported artwork carries its own separate BSD 3-clause notice requirement, which still has to be recorded and still has to reach the user of the built binary.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
