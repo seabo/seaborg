@@ -672,23 +672,25 @@ impl<'engine> Search<'engine> {
         // about the position itself (TASK-58).
         let history_draws_on_entry = self.history_draws;
 
-        // Step 2. Mate distance pruning.
+        // Normalize search bounds into the range a node can return.
         if !Node::root() {
-            // Scores are position-relative: at every node, being checkmated now and mating on the
-            // next ply are the worst and best possible mate values. Using `draft` here treats the
-            // bounds as root-relative; those wrong-parity bounds can escape a cutoff and masquerade
-            // as an exact root result.
+            // This is deliberately not mate-distance pruning. Mate scores are position-relative,
+            // so the root ply does not tighten a descendant's attainable mate range: every node
+            // can still be checkmated now or mate on its next ply. The old root-relative `draft`
+            // bounds were therefore unsound, and no equivalent pruning remains (TASK-55).
             //
-            // Both bounds are clamped at both ends, not just towards the middle. `child_bound` is
-            // exact, so a window at the very bottom of the band arrives here as
+            // The clamp is still required as representation hygiene. `child_bound` is exact, so a
+            // window at the very bottom of the band arrives here as
             // `(Score(20_100), Score(20_101))`: entirely above anything a node can score. Clamping
-            // only inwards would leave `alpha` at 20_100 and return it, and the parent's
-            // `neg().inc_mate()` would turn that into an odd-ply negative mate — the wrong-parity
-            // score TASK-54 removed. Clamping outwards is free, because neither direction can
-            // discard an attainable score: `alpha` is returned as an upper bound and nothing
-            // exceeds `mate(1)`, `beta` as a lower bound and nothing falls below `mate(0)`.
+            // both ends also maps the infinity bounds used at the root into the node-score band.
+            // Neither operation discards an attainable score; it only prevents a threshold from
+            // escaping as a fail-soft return value (TASK-56).
             alpha = alpha.clamp(Score::mate(0), Score::mate(1));
             beta = beta.clamp(Score::mate(0), Score::mate(1));
+            // An exact child-bound conversion can put the whole window above or below the node
+            // band. Normalization then collapses it. Returning the in-band threshold is required
+            // before another recursive call, whose window must be non-empty; this is bound
+            // sanitation, not a mate-distance cutoff.
             if alpha >= beta {
                 return Some(alpha);
             }
@@ -1154,9 +1156,10 @@ impl<'engine> Search<'engine> {
             return Some(Score::zero());
         }
 
-        // Step 2. Mate distance pruning, on the same terms as `search`.
+        // Normalize search bounds into the range a node can return, on the same terms as `search`.
         //
-        // Quiescence had no equivalent of this, which is what let the bound excursion compound:
+        // This is not mate-distance pruning. Quiescence once had no equivalent normalization,
+        // which let the bound excursion compound:
         // `child_bound` is exact, so `Score(20_101)` became the next ply's alpha, then
         // `Score(-20_102)`, and so on. Quiescence returns `alpha` and `beta` directly as fail-soft
         // scores, so those out-of-band bounds became node scores.
@@ -2303,10 +2306,9 @@ mod tests {
     /// The window `(Score(20_100), Score(20_101))` is not contrived: it is exactly what a child
     /// receives when its parent searches the null window at the very bottom of the mate band,
     /// since `child_bound` is exact and both ends of that window sit above the top of the band.
-    /// Every score is below such an alpha, so the node fails low and returns alpha as its
-    /// fail-soft bound. Returning the raw 20_100 put a value outside the node score band into the
-    /// parent, where `neg().inc_mate()` turned it into a positive mate at an even ply count — the
-    /// wrong-parity score that panics `Display` on the UCI thread (TASK-54).
+    /// Every score is below such an alpha. The entry clamp keeps the threshold inside the node
+    /// band. A collapsed window returns that in-band threshold before recursion; this is required
+    /// bound sanitation rather than mate-distance pruning (TASK-55/TASK-56).
     #[test]
     fn out_of_band_windows_do_not_leak_into_returned_scores() {
         core::init::init_globals();
@@ -2347,7 +2349,7 @@ mod tests {
     }
 
     /// The same window, entered directly at quiescence. Quiescence is where the excursion used to
-    /// compound, because it had no mate distance pruning to absorb an out-of-band bound and it
+    /// compound, because it had no window normalization to absorb an out-of-band bound and it
     /// returns `alpha` and `beta` themselves as fail-soft scores.
     #[test]
     fn quiescence_clamps_out_of_band_windows_into_the_node_score_band() {
