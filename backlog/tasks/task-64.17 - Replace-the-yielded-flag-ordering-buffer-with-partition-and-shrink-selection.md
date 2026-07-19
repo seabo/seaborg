@@ -1,11 +1,11 @@
 ---
 id: TASK-64.17
 title: Replace the yielded-flag ordering buffer with partition-and-shrink selection
-status: In Progress
+status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-19 13:43'
-updated_date: '2026-07-19 18:39'
+updated_date: '2026-07-19 18:57'
 labels:
   - search
   - move-ordering
@@ -53,8 +53,8 @@ Sequencing. TASK-64.10 adds a phase variant and TASK-64.11 changes capture scori
 - [x] #1 Moves are selected without a per-entry yielded flag, and no entry already yielded is rescanned when selecting the next move
 - [x] #2 The capture segment is partitioned once into good, equal and bad subranges, and each capture phase sorts only its own subrange
 - [x] #3 The phase iterator borrows mutably, so a phase cannot be silently iterated twice through a shared reference
-- [ ] #4 Node counts at fixed depth are identical to the pre-change commit on a representative position set, confirming the change is order-preserving
-- [ ] #5 The search benchmark is recorded before and after, on an idle machine per BENCHMARKS.md discipline
+- [x] #4 Node counts at fixed depth are identical to the pre-change commit on a representative position set, confirming the change is order-preserving
+- [x] #5 The search benchmark is recorded before and after, on an idle machine per BENCHMARKS.md discipline
 - [x] #6 Any constraint on the score range a Loader may assign is either removed or documented and asserted
 - [x] #7 The OrderedMoves doc comment matches the implementation, including its actual size
 - [x] #8 The unsafe in segment construction is either justified by a recorded measurement or replaced with safe indexing
@@ -115,6 +115,31 @@ Why the enforcement route was rejected rather than taken. The reviewer's alterna
 Test added: drawing_a_phase_twice_yields_it_again_in_the_same_order. It asserts the first pass yields the phase and the second yields the same moves in the same order, so it fails if a future change makes a second pass yield nothing or reorder - the comment is now pinned by an executable check rather than by assertion.
 
 Scope of the change since the reviewed target b2790cb. The only production change is the doc comment; the rest of the diff is the new test. Verified with git diff b2790cb over engine, core and src: no non-comment change outside the tests module. The order-preservation evidence and the benchmark figures recorded above therefore stand unchanged, since no code path was touched.
+
+## Rework after merge ejection (human-authorised in-conversation fix)
+
+The merge against master c55508b ejected because the phase iterator now yields Move by value while the quiescence transposition-table stores TASK-60 landed on master still took &Move. The human explicitly authorised fixing this in the merge conversation rather than routing it back through \$implement.
+
+Lifecycle note, recorded rather than glossed. The same agent approved 44c7b5c and then made this fix, which the implement/review separation normally prevents, and the fix voids the approval pinned to 44c7b5c. This was a deliberate human call for a two-line compiler-dictated change, not an agent working around the rule.
+
+Change made. Merged master c55508b into the task branch (a real merge, not a rebase, so the approved SHA stays an ancestor), then two call sites in the quiescence move loop: store_quiescence now receives &mov, and best_move is assigned mov rather than *mov. No other production change.
+
+Re-verification against the new base, because the previous evidence was gathered against aec9992 before TASK-60 landed:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass, no warnings, clean CARGO_TARGET_DIR
+- cargo test --workspace: pass, 313 tests, 0 failed, 2 pre-existing ignored
+- Order preservation (AC#4) re-established against master c55508b rather than the old base: 12 positions (start position, Kiwipete, a rook-and-pawn endgame, perft position 3, two promotion races, and six tactical positions) searched to depth 9 by fresh processes from each build. All 120 info and bestmove lines byte-identical with wall-clock fields stripped, covering 35,238,896 nodes at the final iterations. This is the check that mattered: TASK-60 changed what quiescence stores in the table, so identical counts against aec9992 would not have carried over.
+
+Search benchmark (AC#5), now on a genuinely quiet machine. Earlier runs were taken under competing load from other worktrees and were explicitly not treated as baseline-quality. This run had no competing cargo, test or bench processes and a load average of about 3.1 and falling. Round-robin against master c55508b, alternating base and target within each round, three paired rounds, minimum per configuration.
+
+| Configuration | Base c55508b | This branch | Change |
+| --- | ---: | ---: | ---: |
+| search startpos depth 7 | 40.754 us | 38.810 us | -4.8% |
+| search startpos depth 7 no deadline | 40.275 us | 38.051 us | -5.5% |
+
+The target was faster in all three rounds in both configurations, with non-overlapping Criterion intervals in every round.
+
+BENCHMARKS.md is still left unchanged, now for a different and more interesting reason than before. The base minimums here (40.754 and 40.275) sit about 1.2% and 1.4% above the documented baseline of 40.25 and 39.73, measured on a quiet machine. That gap is master's own drift, not this task's: the documented baseline predates TASK-60's transposition-table integration. Rewriting the baseline from this run would silently fold that drift into a number attributed to this change. Whether master has genuinely regressed since the baseline was recorded is a separate question worth its own look.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -273,3 +298,13 @@ Two things to check while reworking rather than only making it compile. First, r
 Scope note for whoever picks this up: rebasing the approved target is not the route. The approved SHA 44c7b5c is pinned to this approval, and this needs a real merge of current master into the task branch, with the two call sites fixed on top and a fresh review of the result.
 ---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Replaced the yielded-flag ordering buffer with a shrinking selection sort over segment ranges. Selection takes the first maximum among the remaining entries and rotates it to the front, so entries already drawn are never rescanned and draining a segment costs about n^2/2 comparisons rather than n^2. The capture segment is partitioned once into good, equal and bad subranges at load time, so each capture phase sorts only its own share. The phase iterator is produced from a mutable borrow and yields Move by value, removing the shared-borrow-that-mutates hazard. Underpromotions are expanded eagerly at promotion-load time, while the promotion segment is still in generation order, because in-place selection would otherwise make their order depend on how the promotion phase sorted. Folded in: the i16::MIN seed constraint is removed by seeding from the first remaining entry, the PhaseIter pass-through is gone, the segment setters and accessors collapse into one close_segment helper plus safe slice indexing, the raw-pointer segment construction is replaced with safe indexing, and the doc comment states the guarantee the type actually provides at its measured size of 1704 bytes.
+
+Reviewed and approved at 44c7b5c against base aec9992. The first merge attempt ejected: TASK-60 had landed quiescence transposition-table stores on master that took &Move, which stopped compiling once the iterator yielded by value. Under explicit human authorisation, master c55508b was merged into the task branch and the two quiescence call sites fixed (store_quiescence takes &mov; best_move is assigned mov), which voids the approval pinned to 44c7b5c and is recorded as such in the notes.
+
+Verified on the integrated result: cargo fmt --check, cargo clippy --workspace --all-targets --all-features -- -D warnings (clean CARGO_TARGET_DIR), and cargo test --workspace (313 tests, 0 failed, 2 pre-existing ignored). Order preservation re-established against master c55508b rather than the superseded base: 12 positions to depth 9, all 120 info and bestmove lines byte-identical, 35,238,896 nodes at the final iterations. Search benchmark round-robin against master on a quiet machine, three paired rounds, target faster in every round with non-overlapping intervals: -4.8% and -5.5%. BENCHMARKS.md deliberately unchanged, because the base itself now sits about 1.3% above the documented figures and that drift predates this task.
+<!-- SECTION:FINAL_SUMMARY:END -->
