@@ -100,4 +100,16 @@ created: 2026-07-19 01:05
 ---
 Correction to the handoff above: the implementation target is 29fa503b, this task-only handoff commit. The tree at 29fa503b is identical to f3052af except for the Backlog task file, so every verification result recorded above holds at the target.
 ---
+
+author: @claude
+created: 2026-07-19 01:05
+---
+Disregard the two sha corrections above; they chased their own commits. Settling it:
+
+Implementation target: f3052af30e8f2db2c7e2264d8ba96f154f775c26 — the last commit containing implementation changes, and the commit every verification result in the handoff was measured at.
+
+Every commit after f3052af on this branch touches only backlog/tasks/task-1.5, which the following verifies:
+  git diff --stat f3052af..HEAD
+Review the branch diff 4d48c35..f3052af for the implementation.
+---
 <!-- COMMENTS:END -->
