@@ -1,11 +1,11 @@
 ---
 id: TASK-64.1
 title: Track ply explicitly and introduce a per-ply search stack
-status: Ready to Merge
+status: Changes Requested
 assignee:
   - '@claude'
 created_date: '2026-07-19 13:30'
-updated_date: '2026-07-19 18:40'
+updated_date: '2026-07-19 19:27'
 labels:
   - search
   - architecture
@@ -145,6 +145,31 @@ Non-blocking observations, not defects and deliberately not filed as follow-up t
 - `stack[ply].eval` currently has no reader; razoring still uses the local. Expected, since the slot exists for later work.
 
 Comment quality: no comment in the diff cites a task ID, acceptance criterion, review finding ID or Backlog document, and the added comments state reasons rather than restating code.
+---
+
+author: @claude
+created: 2026-07-19 19:27
+---
+Merge failed: textual conflict against the live primary tip. Not landed; primary was never advanced.
+
+Primary tip tested: e67091b (task-64.17 partition-and-shrink ordering buffer, merged after this task's base c55508b)
+Task branch tip merged: 03db1c1 (approved target ea17ad7)
+Command: git merge --no-ff 03db1c1 onto a detached e67091b
+Result: CONFLICT (content) in engine/src/search.rs, 4 conflicting hunks. Merge aborted, trial discarded, master still at e67091b and clean.
+
+Cause: TASK-64.17 changed the move loops to iterate by value (`for mov in &moves` -> `for mov in &mut moves`, so `mov` is `Move` rather than `&Move`) and rewrote the same lines this task rewrote to carry ply. Both changes are individually correct; they are not textually compatible.
+
+The four conflicts, each needing both sides rather than a choice between them:
+1. Move loop header: HEAD has `MoveLoader::from(self, tt_mov, draft)` with `for mov in &mut moves`; this branch has `MoveLoader::from(self, tt_mov, ply)` with `for mov in &moves`. Resolution needs `ply` and the by-value iterator together.
+2. `self.pvt.copy_to(depth, mov)` against `self.pvt.copy_to(ply, *mov)` -> `copy_to(ply, mov)`.
+3. `self.kt.store(mov, draft)` against `self.kt.store(*mov, ply)` -> `kt.store(mov, ply)`.
+4. Quiescence move loop: HEAD has `make_move_unchecked(&mov)` with a two-argument `quiesce`; this branch has `make_move_unchecked(mov)` with `quiesce(..., ply + 1)`. Resolution needs `&mov` and the ply argument.
+
+Also worth attention because git did NOT flag it: `self.stack[ply].mov = *mov;` (search.rs:946 in the merged file) auto-merges cleanly with no conflict marker, but is a type error under the by-value iterator, since `mov` is now `Move` and not a reference. It needs to become `self.stack[ply].mov = mov;`. A conflict-marker-driven resolution alone will not compile.
+
+Nothing is wrong with the reviewed work in isolation: the approval of ea17ad7 was based on verification against base c55508b and remains accurate for that base. This is an integration conflict created by TASK-64.17 landing in between, not a defect found in this implementation. Rework is a merge of master into the task branch and a resolution of the five sites above, followed by re-verification. The behaviour-preservation probe should be re-run against the new base, since the ordering rewrite changes the trees searched and the previous byte-identical comparison against c55508b no longer applies.
+
+Re-review will be required after rework, because the implementation target changes.
 ---
 <!-- COMMENTS:END -->
 
