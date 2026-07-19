@@ -147,20 +147,12 @@ impl GameController {
                         .progress
                         .as_ref()
                         .map(|progress| {
-                            principal_variation_san(
-                                &self.position,
-                                &progress.principal_variation,
-                            )
+                            principal_variation_san(&self.position, &progress.principal_variation)
                         })
                         .unwrap_or_default(),
                 }),
             engine_limit: self.search_limit,
         }
-    }
-
-    /// The limit the next engine turn will be searched under.
-    pub fn search_limit(&self) -> SearchLimit {
-        self.search_limit
     }
 
     /// Choose the limit for subsequent engine turns.

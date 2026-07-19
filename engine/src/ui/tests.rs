@@ -359,6 +359,11 @@ fn serves_the_embedded_assets_with_their_content_types() {
         ("/", "text/html; charset=utf-8", "<title>Seaborg</title>"),
         ("/app.js", "text/javascript; charset=utf-8", "EventSource"),
         ("/board.js", "text/javascript; charset=utf-8", "parseFen"),
+        (
+            "/format.js",
+            "text/javascript; charset=utf-8",
+            "formatScore",
+        ),
         ("/style.css", "text/css; charset=utf-8", "body"),
         ("/pieces.svg", "image/svg+xml", "white-king"),
     ] {
@@ -1121,4 +1126,326 @@ fn a_dripping_client_cannot_hold_a_thread_open_after_its_request_is_rejected() {
     // A client that keeps sending past the deadline forfeits its response to that reset, which is
     // the intended trade: the thread matters more than the courtesy. A client that stops sending
     // still gets its 413 — `oversized_requests_are_refused_before_the_body_is_buffered` covers it.
+}
+
+// -- engine limit, quit, reconnection, and complete games ---------------------------------------
+
+/// Read the engine limit the server reports it will use for the next turn.
+fn engine_limit(server: &TestServer) -> (String, u64) {
+    let state = get(server, "/api/state").json();
+    let limit = state.get("engineLimit").expect("a published engine limit");
+    let kind = limit
+        .get("kind")
+        .and_then(Json::as_str)
+        .expect("a limit kind")
+        .to_owned();
+    let amount = limit
+        .get("milliseconds")
+        .or_else(|| limit.get("plies"))
+        .and_then(Json::as_u64)
+        .unwrap_or_default();
+    (kind, amount)
+}
+
+#[test]
+fn the_snapshot_publishes_the_limit_the_next_engine_turn_will_use() {
+    let server = TestServer::start();
+    assert_eq!(engine_limit(&server), ("depth".to_owned(), 1));
+}
+
+#[test]
+fn a_new_engine_limit_is_accepted_and_published_to_every_client() {
+    let server = TestServer::start();
+    let mut stream = EventStream::open(&server, &[]);
+    let (_, first) = stream.next_event();
+    assert_eq!(
+        first
+            .get("engineLimit")
+            .and_then(|limit| limit.get("kind"))
+            .and_then(Json::as_str),
+        Some("depth")
+    );
+
+    let response = post(
+        &server,
+        "/api/engine-limit",
+        r#"{"kind":"time","value":750}"#,
+    );
+    assert_eq!(response.status, 200);
+    assert_eq!(engine_limit(&server), ("time".to_owned(), 750));
+
+    // A setting is part of the authoritative snapshot, so a second tab learns about it without
+    // being told: the change is published even though no move was made.
+    let (_, updated) = stream.next_event();
+    let limit = updated.get("engineLimit").expect("a limit on the stream");
+    assert_eq!(limit.get("kind").and_then(Json::as_str), Some("time"));
+    assert_eq!(limit.get("milliseconds").and_then(Json::as_u64), Some(750));
+
+    // The revision tracks the game, not the settings, so changing a limit must not look to the
+    // client like the position moved on and invalidate the command it is about to send.
+    assert_eq!(revision(&server), 0);
+    assert_eq!(
+        post(&server, "/api/move", r#"{"uci":"e2e4","revision":0}"#).status,
+        200
+    );
+}
+
+#[test]
+fn out_of_range_and_malformed_engine_limits_are_refused() {
+    let server = TestServer::start();
+    for body in [
+        r#"{"kind":"time","value":10}"#,
+        r#"{"kind":"time","value":600000}"#,
+        r#"{"kind":"depth","value":0}"#,
+        r#"{"kind":"depth","value":64}"#,
+        // An unlimited search would never return a move and would lock the board for good.
+        r#"{"kind":"infinite","value":1}"#,
+        r#"{"kind":"nonsense","value":1}"#,
+    ] {
+        let response = post(&server, "/api/engine-limit", body);
+        assert_eq!(response.status, 422, "{body}");
+        assert_eq!(response.error_code(), "invalid_engine_limit", "{body}");
+    }
+
+    for body in [r#"{"kind":"time"}"#, r#"{"value":100}"#, "{}"] {
+        let response = post(&server, "/api/engine-limit", body);
+        assert_eq!(response.status, 422, "{body}");
+        assert_eq!(response.error_code(), "missing_engine_limit", "{body}");
+    }
+
+    // Every rejection leaves the configured limit alone.
+    assert_eq!(engine_limit(&server), ("depth".to_owned(), 1));
+}
+
+#[test]
+fn an_engine_limit_change_needs_the_session_token() {
+    let server = TestServer::start();
+    let response = request(
+        server.addr,
+        "POST",
+        "/api/engine-limit",
+        &[("Content-Type", "application/json")],
+        Some(r#"{"kind":"time","value":750}"#),
+    );
+    assert_eq!(response.status, 403);
+    assert_eq!(response.error_code(), "invalid_token");
+    assert_eq!(engine_limit(&server), ("depth".to_owned(), 1));
+}
+
+#[test]
+fn quit_answers_before_stopping_the_server() {
+    let mut server = TestServer::start();
+
+    // The browser must learn the request was accepted. Shutting down first would close this
+    // socket with the reply still queued, which reads to the page as a lost connection.
+    let response = post(&server, "/api/quit", "{}");
+    assert_eq!(response.status, 200);
+    assert_eq!(response.json().get("quitting"), Some(&Json::Bool(true)));
+
+    // `stop` joins the serving thread, so this returning at all is the assertion: the accept loop
+    // observed the request and returned on its own, without the handle being used to wake it.
+    server.stop();
+}
+
+#[test]
+fn quit_needs_the_session_token() {
+    let server = TestServer::start();
+    let response = request(
+        server.addr,
+        "POST",
+        "/api/quit",
+        &[("Content-Type", "application/json")],
+        Some("{}"),
+    );
+    assert_eq!(response.status, 403);
+    assert_eq!(response.error_code(), "invalid_token");
+    // The server is still serving, so an unauthenticated peer cannot stop the process.
+    assert_eq!(get(&server, "/api/state").status, 200);
+}
+
+#[test]
+fn reloading_during_a_search_reconstructs_the_game_without_duplicating_it() {
+    init_globals();
+    let server = TestServer::start_with(&UiConfig {
+        // Long enough that the search is still running across the whole reload.
+        search_limit: SearchLimit::Time(Duration::from_secs(3)),
+        ..test_config()
+    })
+    .unwrap();
+
+    assert_eq!(
+        post(&server, "/api/move", r#"{"uci":"e2e4","revision":0}"#).status,
+        200
+    );
+    let thinking = wait_for_state(&server, |state| {
+        state
+            .get("engineStatus")
+            .and_then(|status| status.get("kind"))
+            .and_then(Json::as_str)
+            == Some("thinking")
+    });
+    let search_id = thinking
+        .get("engineStatus")
+        .and_then(|status| status.get("searchId"))
+        .and_then(Json::as_u64)
+        .expect("a search id");
+
+    // A reload is a fresh page: it fetches the state and opens a new stream. Neither is a command,
+    // so neither may start a second search or replay the move that is already on the board.
+    for _ in 0..3 {
+        let state = get(&server, "/api/state").json();
+        let mut stream = EventStream::open(&server, &[]);
+        let (_, streamed) = stream.next_event();
+        for reconstructed in [&state, &streamed] {
+            assert_eq!(
+                reconstructed.get("revision").and_then(Json::as_u64),
+                Some(1)
+            );
+            assert_eq!(
+                reconstructed
+                    .get("engineStatus")
+                    .and_then(|status| status.get("searchId"))
+                    .and_then(Json::as_u64),
+                Some(search_id),
+                "a reload must attach to the running search rather than start another"
+            );
+            let Some(Json::Array(history)) = reconstructed.get("moveHistory") else {
+                panic!("expected a move history");
+            };
+            assert_eq!(history.len(), 1, "the move must not be duplicated");
+            assert_eq!(
+                history[0].get("san").and_then(Json::as_str),
+                Some("e4"),
+                "history is reconstructed in SAN"
+            );
+        }
+    }
+
+    // The single search still completes into a single reply.
+    let settled = wait_for_state(&server, |state| {
+        state.get("revision").and_then(Json::as_u64) == Some(2)
+    });
+    let Some(Json::Array(history)) = settled.get("moveHistory") else {
+        panic!("expected a move history");
+    };
+    assert_eq!(history.len(), 2);
+}
+
+#[test]
+fn a_thinking_snapshot_carries_a_san_variation_the_browser_can_show() {
+    init_globals();
+    let server = TestServer::start_with(&UiConfig {
+        search_limit: SearchLimit::Time(Duration::from_secs(3)),
+        ..test_config()
+    })
+    .unwrap();
+    assert_eq!(
+        post(&server, "/api/move", r#"{"uci":"e2e4","revision":0}"#).status,
+        200
+    );
+
+    let state = wait_for_state(&server, |state| {
+        state
+            .get("engineStatus")
+            .and_then(|status| status.get("principalVariationSan"))
+            .is_some_and(|san| matches!(san, Json::Array(items) if !items.is_empty()))
+    });
+    let status = state.get("engineStatus").unwrap();
+    let Some(Json::Array(san)) = status.get("principalVariationSan") else {
+        panic!("expected a SAN variation");
+    };
+    let Some(Json::Array(uci)) = status
+        .get("progress")
+        .and_then(|progress| progress.get("principalVariation"))
+    else {
+        panic!("expected a UCI variation");
+    };
+    // The SAN line is the same line, truncated only where a reported move is not playable.
+    assert!(!san.is_empty());
+    assert!(san.len() <= uci.len());
+    for entry in san {
+        let text = entry.as_str().expect("SAN is a string");
+        assert!(!text.is_empty());
+        // SAN never spells a move as four coordinate characters; that is the UCI form.
+        assert!(
+            text.len() < 4 || text.contains(['x', '+', '#', '=', 'O']),
+            "expected SAN, got {text:?}"
+        );
+    }
+}
+
+#[test]
+fn a_complete_game_can_be_played_to_a_terminal_status_over_the_command_surface() {
+    let server = TestServer::start();
+
+    // Play the human side by always taking the first legal move the server offers. The point is
+    // not the quality of the moves but that the surface sustains a whole game: every command is
+    // accepted, the engine answers each one, and the game ends in a status the UI can report.
+    let mut plies = 0;
+    let terminal = loop {
+        let state = wait_for_state(&server, |state| {
+            state
+                .get("engineStatus")
+                .and_then(|status| status.get("kind"))
+                .and_then(Json::as_str)
+                == Some("idle")
+        });
+        let status = state
+            .get("gameStatus")
+            .and_then(|status| status.get("kind"));
+        if status.and_then(Json::as_str) != Some("ongoing") {
+            break state;
+        }
+
+        assert_eq!(
+            state.get("sideToMove").and_then(Json::as_str),
+            Some("white"),
+            "the human is on move whenever the engine is idle and the game is live"
+        );
+        let Some(Json::Array(moves)) = state.get("legalMoves") else {
+            panic!("expected legal moves");
+        };
+        let uci = moves[0].as_str().expect("a UCI move").to_owned();
+        let at = state.get("revision").and_then(Json::as_u64).unwrap();
+        let response = post(
+            &server,
+            "/api/move",
+            &format!(r#"{{"uci":"{uci}","revision":{at}}}"#),
+        );
+        assert_eq!(
+            response.status, 200,
+            "move {uci} at revision {at} was refused"
+        );
+
+        plies += 1;
+        // The fifty-move rule alone bounds this well inside the cap; it exists so a regression
+        // that stops the game advancing fails the test rather than hanging it.
+        assert!(plies < 400, "the game did not reach a terminal status");
+    };
+
+    let kind = terminal
+        .get("gameStatus")
+        .and_then(|status| status.get("kind"))
+        .and_then(Json::as_str)
+        .expect("a terminal status");
+    assert!(
+        kind == "checkmate" || kind == "draw",
+        "expected a terminal status, got {kind:?}"
+    );
+
+    // A finished game refuses further moves with a code the browser turns into a sentence, rather
+    // than silently accepting them.
+    let at = terminal.get("revision").and_then(Json::as_u64).unwrap();
+    let Some(Json::Array(moves)) = terminal.get("legalMoves") else {
+        panic!("expected a legal move list");
+    };
+    if let Some(uci) = moves.first().and_then(Json::as_str) {
+        let response = post(
+            &server,
+            "/api/move",
+            &format!(r#"{{"uci":"{uci}","revision":{at}}}"#),
+        );
+        assert_eq!(response.status, 409);
+        assert_eq!(response.error_code(), "game_over");
+    }
 }

@@ -467,7 +467,12 @@ mod tests {
         snapshot.engine_limit = SearchLimit::Infinite;
         let value = parse(&snapshot_to_json(&snapshot)).unwrap();
         assert_eq!(
-            value.get("engineLimit").unwrap().get("kind").unwrap().as_str(),
+            value
+                .get("engineLimit")
+                .unwrap()
+                .get("kind")
+                .unwrap()
+                .as_str(),
             Some("infinite")
         );
     }
@@ -526,7 +531,10 @@ mod tests {
             Some(&Json::Null)
         );
         assert_eq!(
-            value.get("engineStatus").unwrap().get("principalVariationSan"),
+            value
+                .get("engineStatus")
+                .unwrap()
+                .get("principalVariationSan"),
             Some(&Json::Array(Vec::new()))
         );
     }
