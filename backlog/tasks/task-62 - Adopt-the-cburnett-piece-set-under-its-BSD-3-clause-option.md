@@ -1,11 +1,11 @@
 ---
 id: TASK-62
 title: Adopt the cburnett piece set under its BSD 3-clause option
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-19 01:27'
-updated_date: '2026-07-19 14:42'
+updated_date: '2026-07-19 14:51'
 labels: []
 dependencies: []
 references:
@@ -84,16 +84,16 @@ Note that this does **not** discharge the attribution obligation described above
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The browser UI renders all twelve piece types in both colors using cburnett artwork, in both board orientations
-- [ ] #2 The twelve source SVGs are obtained from Wikimedia Commons originals, and the repository record makes that provenance explicit and traceable
-- [ ] #3 A third-party attribution file exists that names Colin M.L. Burnett, states that the BSD 3-clause option was elected from the multi-license, and reproduces the BSD 3-clause notice, conditions, and disclaimer
-- [ ] #4 The attribution is reachable by a user of the built executable, not only by a reader of the source tree
-- [ ] #5 Piece artwork remains embedded in the executable and served from loopback, with no runtime network request, CDN, or third-party JavaScript introduced
-- [ ] #6 A real-browser run shows no Content Security Policy violation or console error arising from the new artwork
-- [ ] #7 Board geometry is unregressed: all 64 squares remain equal and square at desktop and narrow viewports, matching the rigid-grid guarantee established by TASK-1.4 HUMAN-2
-- [ ] #8 Existing frontend model tests and the repository-required Rust checks pass, and any committed JavaScript remains byte-identical unless the task deliberately changes it
-- [ ] #9 The white and black pieces are visually distinguishable under the chosen coloring model, and the drag, arrival, capture, and snapback animations still render correctly
-- [ ] #10 Implementation notes state which coloring model was chosen and whether the promotion chooser moved off Unicode glyphs, with the reasoning for each
+- [x] #1 The browser UI renders all twelve piece types in both colors using cburnett artwork, in both board orientations
+- [x] #2 The twelve source SVGs are obtained from Wikimedia Commons originals, and the repository record makes that provenance explicit and traceable
+- [x] #3 A third-party attribution file exists that names Colin M.L. Burnett, states that the BSD 3-clause option was elected from the multi-license, and reproduces the BSD 3-clause notice, conditions, and disclaimer
+- [x] #4 The attribution is reachable by a user of the built executable, not only by a reader of the source tree
+- [x] #5 Piece artwork remains embedded in the executable and served from loopback, with no runtime network request, CDN, or third-party JavaScript introduced
+- [x] #6 A real-browser run shows no Content Security Policy violation or console error arising from the new artwork
+- [x] #7 Board geometry is unregressed: all 64 squares remain equal and square at desktop and narrow viewports, matching the rigid-grid guarantee established by TASK-1.4 HUMAN-2
+- [x] #8 Existing frontend model tests and the repository-required Rust checks pass, and any committed JavaScript remains byte-identical unless the task deliberately changes it
+- [x] #9 The white and black pieces are visually distinguishable under the chosen coloring model, and the drag, arrival, capture, and snapback animations still render correctly
+- [x] #10 Implementation notes state which coloring model was chosen and whether the promotion chooser moved off Unicode glyphs, with the reasoning for each
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -185,4 +185,77 @@ Reviewer notes:
 - Snapback is the one acceptance-criterion element not observed end-to-end: injected pointer events cannot drive a drag because setPointerCapture rejects synthetic pointer ids. The CSS and the shared createPiece path were verified instead; see the implementation notes for exactly what was and was not observed. docs/browser-ui-manual-checks.md section 5 covers it for a human.
 - The BSD election was verified against the Commons file-page wikitext for all twelve files, not the API metadata field, which reports only CC BY-SA 3.0 and cannot express a multi-license. That caveat is recorded in the attribution file.
 ---
+
+author: @claude
+created: 2026-07-19 14:50
+---
+Review verdict: APPROVED
+
+Implementation target: 950b626 (immutable; ed0c4b7 adds handoff metadata only, no implementation file changed between them)
+Base: cb9d36a
+Branch/worktree: task-62-cburnett-pieces @ /Users/seabo/seaborg-worktrees/task-62-cburnett-pieces
+
+Reviewed the full cb9d36a..950b626 diff. All ten acceptance criteria are proven by objective evidence. No blocking findings.
+
+## Independent provenance verification (AC #2, #3)
+
+I did not take the provenance record on trust. I downloaded all twelve files fresh from 'https://commons.wikimedia.org/wiki/Special:FilePath/Chess_<piece><colour>t45.svg' and:
+
+- All twelve SHA-256 checksums reproduce the values recorded in pieces.svg.LICENSE.md exactly.
+- Every path 'd' attribute in each sprite symbol is byte-for-byte the original's, confirming the 'no path data, fill, stroke, or transform was altered' claim.
+
+The BSD election was verified rather than assumed. The Commons file-page wikitext for Chess_klt45, Chess_qdt45, and Chess_ndt45 all carry '{{self|GFDL|migration=relicense|BSD|GPL}}' dated 2006-12-27, author {{U|Cburnett}}. Commons Template:BSD defaults 'version' to 3 and categorises an unversioned tag as '3-clause BSD License', so electing BSD from that tag is an election of the 3-clause variant. The implementation notes' warning about 'extmetadata.LicenseShortName' reporting only CC BY-SA 3.0 is correct and worth having recorded.
+
+## Required checks, run on the target
+
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass. Re-run with a clean CARGO_TARGET_DIR (full dependency rebuild, 12.82s) since the cached run finished in 0.52s and clippy conformance is load-bearing for a diff that adds Rust code. No warnings.
+- cargo test --workspace: pass, exit 0
+- node --test board.test.mjs format.test.mjs: 16/16
+- No '#[allow]' added anywhere in the diff.
+
+## Independent runtime verification
+
+Live loopback run on port 7962 against the target build:
+
+- 'GET /licenses' -> 200, 'text/plain; charset=utf-8', 5748 bytes, full notice present
+- 'POST /licenses' -> 405, so the method-not-allowed list entry is real
+- Security and caching headers present on /licenses; CSP byte-identical to base and not loosened
+- Page footer emits 'href="/licenses" target="_blank" rel="noopener"'
+- '/pieces.svg' serves 12 '<symbol id=' elements
+- 'seaborg --licenses' output is byte-identical to pieces.svg.LICENSE.md ('diff' clean)
+- 'seaborg --licenses --uci' is rejected by the mode ArgGroup
+
+Also confirmed: 'git diff cb9d36a 950b626' touches no file under engine/src/ui/frontend/ and no engine/src/ui/assets/*.js, so AC #8's byte-identical requirement holds by construction rather than by regeneration luck.
+
+## On the snapback gap (AC #9)
+
+The handoff is candid that snapback was not driven end-to-end, because setPointerCapture rejects synthetic pointer ids. I checked whether that leaves the criterion unproven and concluded it does not: the style.css diff adds and removes no animation-related rule at all — no @keyframes, no snapback/arrive/captured/drag selector is touched — and the removed rules were purely colour and stroke. Arrival, capture, and the drag ghost were observed live carrying the new artwork through the same createPiece path animateSnapback uses. With nothing in the diff able to reach snapback, the residual risk is negligible. docs/browser-ui-manual-checks.md §5 still covers it for a human.
+
+## Design and comment quality
+
+The coloring-model decision is the right one and is argued, not asserted: re-parameterising onto the old .body/.detail contract would repaint third-party artwork and destroy the byte-for-byte provenance the checksums record. Keeping .piece-white/.piece-black as deliberately colourless hooks is documented in style.css so the removal cannot read as an oversight. The promotion-chooser reasoning (side-agnostic dialog, colour baked into cburnett) is sound.
+
+Comments were checked against the lifecycle rule: none cite a task ID, acceptance criterion, review finding, or Backlog document, and each states its reason rather than restating the code. The style.css block explains why nothing colours the artwork; the PIECE_ARTWORK_LICENSE doc explains why a source-tree file cannot discharge the obligation; both test doc comments explain the failure mode they guard.
+
+Scope is disciplined — nothing unrelated to the artwork import appears in the diff.
+
+## Non-blocking observation (no action required for this approval)
+
+pieces.svg.LICENSE.md tells the reader to 'open the "Piece artwork" link in the browser UI', but the footer renders that phrase as plain lead-in text and labels the anchor 'Notice'. docs/browser-ui-manual-checks.md correctly says to follow the 'Notice' link. The notice is fully reachable, so AC #4 is met; this is only a wayfinding wording mismatch inside the notice itself, worth tidying if the file is next touched.
+
+Verdict: approved at 950b626. Note that this branch is based on cb9d36a and does not include master's later 7449461 game.rs refactor; integration against the live primary tip is $merge's gate, not this review's.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Replaced the hand-drawn twelve-piece sprite with the cburnett set by Colin M.L. Burnett, taken from the Wikimedia Commons originals under the BSD 3-clause option of their multi-license, and shipped the notice that election requires.
+
+The artwork's own fills and strokes stand and the CSS colouring layer was retired, because cburnett draws white and black as genuinely different geometry that no single inherited stroke colour can express. The twelve symbol ids were preserved, so no TypeScript changed and the committed JavaScript is byte-identical. The promotion chooser stays on Unicode glyphs, since it is side-agnostic and cburnett has colour baked in.
+
+Attribution reaches a binary-only recipient two ways: 'GET /licenses' served as text/plain with a footer link, and a new 'seaborg --licenses' flag in the mode ArgGroup.
+
+Verified at 950b626: all twelve recorded SHA-256 checksums reproduced against freshly downloaded Commons originals and every path 'd' attribute confirmed verbatim; the BSD election confirmed against the Commons file-page wikitext ({{self|GFDL|migration=relicense|BSD|GPL}}) and Template:BSD, which defaults to the 3-clause variant; cargo fmt --check, cargo clippy --workspace --all-targets --all-features -- -D warnings on a clean CARGO_TARGET_DIR, and cargo test --workspace all pass; node --test frontend suite 16/16; git diff confirms no .ts or .js file changed; live loopback run confirms /licenses returns 200 text/plain with the full notice, POST /licenses returns 405, the footer links it, twelve symbols are served, and the CSP is unchanged and not loosened; --licenses output is byte-identical to the attribution file and is rejected alongside --uci.
+<!-- SECTION:FINAL_SUMMARY:END -->
