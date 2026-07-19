@@ -468,10 +468,12 @@ pub struct Search<'engine> {
     /// not make it valid in every history it is *read* in. A value computed where no descendant
     /// repeated can still be reused on a path where a descendant now repeats a position played
     /// before the root, and there the true value is a draw. This is the graph-history-interaction
-    /// problem, and closing it needs entries keyed or gated by path history. [`crate::tt::Entry`] is
-    /// a fully packed `u64` with no spare bits, so that means widening the entry and reworking the
-    /// table's layout, replacement policy and sizing. That is deliberately out of scope here; the
-    /// engine accepts the resulting rare misvaluation, as mainstream engines do.
+    /// problem, and closing it needs entries keyed or gated by path history, which means reworking
+    /// the table's layout, replacement policy and sizing. That is deliberately out of scope here;
+    /// the engine accepts the resulting rare misvaluation, as mainstream engines do.
+    ///
+    /// Rule 1 applies to quiescence exactly as it does to the main search: `store_quiescence`
+    /// carries the same comparison, so no writer of this table publishes a history-sensitive value.
     history_draws: u64,
     /// Flag to indicate when the search should start unwinding due to user intervention.
     stopping: &'engine AtomicBool,
@@ -670,7 +672,6 @@ impl<'engine> Search<'engine> {
         self.trace.visit_node();
 
         let draft = self.search_depth - depth;
-        let mut tt_move = false;
 
         // The PV row for this ply is rebuilt from scratch on every visit, so clear it before any
         // early return can leave a previously searched sibling's line in place for this node's
@@ -727,6 +728,22 @@ impl<'engine> Search<'engine> {
         // The probe returns an owned snapshot, so everything below reads one atomic state of one
         // slot. A concurrent worker replacing that slot between here and Step 24 cannot change what
         // this node consumes.
+        //
+        // Two independent things are extracted from a hit, and neither implies the other:
+        //
+        // * The *score*, which is reusable whenever the entry is deep enough and the clock permits.
+        // * The *move*, which is only useful if it can actually be played here.
+        //
+        // Coupling them costs cutoffs for no safety. A checkmated or stalemated node stores its
+        // value with no move at all, and so does every fail-low node whose moves all failed to
+        // raise alpha; requiring a move before trusting the score makes exactly those entries — the
+        // cheapest and most certain ones in the table — permanently unusable.
+        //
+        // Trusting the score without a move is safe because the entry's identity is already
+        // established: `Table::probe` verifies the full 64-bit key against the same write the score
+        // was decoded from, so accepting a foreign position's entry requires a genuine Zobrist
+        // collision. Move legality is not part of that proof and never was — it filters some wrong
+        // entries by accident, but says nothing about a move-less one. See the `tt` module docs.
         let tt_entry = self.tt.probe(self.pos.zobrist().0);
         let mut tt_mov = None;
         match tt_entry.as_ref() {
@@ -735,11 +752,12 @@ impl<'engine> Search<'engine> {
                 if let Some(packed) = entry.mov() {
                     let mov = packed.to_move(&self.pos);
                     if self.pos.valid_move(&mov) {
-                        tt_move = true;
                         tt_mov = Some(mov);
                     } else {
-                        // The full key matched but its move is not legal here, so this is a genuine
-                        // Zobrist collision rather than a truncated-signature accident.
+                        // A verified entry whose move cannot be played here. Since the full key
+                        // matched, this is a genuine Zobrist collision, and the counter measures
+                        // that rather than a truncated-signature accident. The score is left alone:
+                        // an unusable ordering hint is not evidence about the score's provenance.
                         self.trace.hash_collision();
                     }
                 }
@@ -748,10 +766,10 @@ impl<'engine> Search<'engine> {
         }
 
         // Step 4. Check for early cutoff.
-        if !Node::pv() && tt_move {
-            let entry = tt_entry.expect("a tt move can only come from a verified snapshot");
-
-            if entry.depth() >= depth && self.clock_permits_tt_reuse(entry.depth()) {
+        if !Node::pv() {
+            if let Some(entry) =
+                tt_entry.filter(|e| e.depth() >= depth && self.clock_permits_tt_reuse(e.depth()))
+            {
                 match entry.bound() {
                     Bound::Exact => {
                         return Some(entry.score());
@@ -773,7 +791,7 @@ impl<'engine> Search<'engine> {
                 }
             }
 
-            if alpha == beta {
+            if alpha >= beta {
                 return Some(alpha);
             }
         }
@@ -966,6 +984,15 @@ impl<'engine> Search<'engine> {
         // the value to a beta cutoff just as easily as it can cap it, so the resulting `Lower` or
         // `Upper` bound is unsound in an incompatible history too. The entry is therefore left
         // unwritten and the position is re-searched when it is next reached.
+        //
+        // Reaching here also requires `stopping()` to have been false just above, so an entry can
+        // only be published by a node whose whole move loop ran to completion. An aborted subtree
+        // returns `None` before this point, and every child search propagates that `None` upwards,
+        // so no partially explored value ever reaches the table.
+        //
+        // `depth` is at least one here: a depth-zero node delegated to quiescence at Step 5. That is
+        // what reserves [`Self::QUIESCENCE_DRAFT`] for quiescence alone.
+        debug_assert!(depth > Self::QUIESCENCE_DRAFT);
         if self.history_draws == history_draws_on_entry {
             self.tt.store(
                 self.pos.zobrist().0,
@@ -1075,6 +1102,22 @@ impl<'engine> Search<'engine> {
     /// extensions. Used only to keep [`Self::clock_permits_tt_reuse`] on the conservative side of
     /// the fifty-move boundary.
     const HORIZON_SLACK: u32 = 16;
+
+    /// The draft recorded for a value produced by quiescence.
+    ///
+    /// Quiescence and the main search share one table, so a reader has to be able to tell a
+    /// capture-only value apart from a real depth-`d` search of the same position. The whole scheme
+    /// rests on one reserved level: quiescence writes this draft and nothing else, and the main
+    /// search never writes it, because a main-search node at depth zero delegates to quiescence
+    /// before it can reach its own store. Every main-search entry therefore has a draft of at least
+    /// one.
+    ///
+    /// That makes the ordinary `entry.depth() >= depth` test do the separation for free. A
+    /// main-search node needs at least depth one, which no quiescence entry can satisfy, so a
+    /// capture-only value can never masquerade as a searched one. A quiescence node needs nothing
+    /// beyond this draft, so it can reuse its own results and any deeper main-search result. The
+    /// only nodes that consume a quiescence entry are the ones whose own search *is* quiescence.
+    const QUIESCENCE_DRAFT: u8 = 0;
 
     /// Reports whether a stored result of the given depth may be reused at this node, as far as the
     /// halfmove clock is concerned.
@@ -1191,6 +1234,18 @@ impl<'engine> Search<'engine> {
             return Some(alpha);
         }
 
+        // The window this node was given, kept for classifying whatever value it ends up storing.
+        // Nothing below is allowed to move it, which is why the cutoff at Step 4 does not narrow the
+        // live window: a bound recorded against a window a previous search supplied would describe
+        // that search's result rather than this node's.
+        let alpha_on_entry = alpha;
+
+        // Sampled after the draw check above, on the same terms as the main search: if a
+        // history-sensitive draw is claimed anywhere below this node, its value depends on how the
+        // position was reached and must not be published as position-intrinsic. See
+        // `Search::history_draws`.
+        let history_draws_on_entry = self.history_draws;
+
         // Step 3. Load transposition table entry.
         let tt_entry = self.tt.probe(self.pos.zobrist().0);
         match tt_entry {
@@ -1200,9 +1255,16 @@ impl<'engine> Search<'engine> {
 
         // Step 4. Check for early TT cutoff.
         if !Node::pv() {
-            // A quiescence node has depth zero, so results from quiescence or any deeper main
-            // search are sufficiently deep. The stored score remains an alpha-beta bound; it is
-            // never a replacement for the position's static evaluation.
+            // A quiescence node searches to [`Self::QUIESCENCE_DRAFT`], so every entry in the table
+            // is deep enough for it: its own earlier results, and any main-search result, which is
+            // strictly better informed. The stored score remains an alpha-beta bound; it is never a
+            // replacement for the position's static evaluation.
+            //
+            // Any verified entry may be trusted, with or without a move, for the reason set out in
+            // the main search's Step 3: identity is established by the full-key check inside
+            // `Table::probe`, not by whether the stored move happens to be playable here. The two
+            // searches deliberately behave the same way, and quiescence not needing the move for
+            // ordering is why it never looks at one.
             //
             // The clock gate applies here for the same reason it applies in the main search: a
             // stored value never accounts for the fifty-move rule, so it may only be reused where
@@ -1215,22 +1277,14 @@ impl<'engine> Search<'engine> {
                     Bound::Lower => {
                         if entry.score() >= beta {
                             return Some(entry.score());
-                        } else if entry.score() > alpha {
-                            alpha = entry.score()
                         }
                     }
                     Bound::Upper => {
                         if entry.score() <= alpha {
                             return Some(entry.score());
-                        } else if entry.score() < beta {
-                            beta = entry.score()
                         }
                     }
                 }
-            }
-
-            if alpha >= beta {
-                return Some(alpha);
             }
         }
 
@@ -1241,6 +1295,15 @@ impl<'engine> Search<'engine> {
             let stand_pat = self.evaluate();
 
             if stand_pat >= beta {
+                // The value returned is the hard-fail `beta`, but what is *known* is the stronger
+                // statement that this node is worth at least `stand_pat`. Recording the stronger
+                // bound lets a later visit with a higher beta still cut off here.
+                self.store_quiescence(
+                    stand_pat,
+                    Bound::Lower,
+                    &Move::null(),
+                    history_draws_on_entry,
+                );
                 return Some(beta);
             }
 
@@ -1249,13 +1312,13 @@ impl<'engine> Search<'engine> {
             }
         }
 
-        let mut score: Score;
         if in_check {
             let moves = self.pos.generate::<BasicMoveList, AllGen, Legal>();
-            return self.quiesce_evasions::<T, Node>(alpha, beta, &moves);
+            return self.quiesce_evasions::<T, Node>(alpha, beta, &moves, history_draws_on_entry);
         }
 
         // Step 6. Loop through all the moves until no moves remain or a beta cutoff occurs.
+        let mut best_move = Move::null();
         let mut moves = OrderedMoves::new();
         'move_loop: while moves.load_next_phase(QMoveLoader::from(self)) {
             for mov in &moves {
@@ -1267,23 +1330,35 @@ impl<'engine> Search<'engine> {
                 unsafe { self.pos.make_move_unchecked(mov) };
                 let child = self.quiesce::<T, Node>(beta.child_bound(), alpha.child_bound());
                 self.pos.unmake_move();
-                score = child?.neg().inc_mate();
+                // An aborted child leaves no usable value, and returning here without storing is
+                // what keeps a truncated subtree out of the table.
+                let score = child?.neg().inc_mate();
 
                 if score >= beta {
+                    self.store_quiescence(score, Bound::Lower, mov, history_draws_on_entry);
                     return Some(beta);
                 }
 
                 if score > alpha {
                     alpha = score;
+                    best_move = *mov;
                 }
             }
         }
 
+        // A stop breaks out of the loop with some captures unexamined, so `alpha` describes a
+        // subtree that was never finished. It is neither returned nor stored.
         if self.stopping() {
-            None
-        } else {
-            Some(alpha)
+            return None;
         }
+
+        self.store_quiescence(
+            alpha,
+            self.quiescence_bound(alpha, alpha_on_entry),
+            &best_move,
+            history_draws_on_entry,
+        );
+        Some(alpha)
     }
 
     fn quiesce_evasions<T: Thread, Node: NodeType>(
@@ -1291,10 +1366,26 @@ impl<'engine> Search<'engine> {
         mut alpha: Score,
         beta: Score,
         moves: &BasicMoveList,
+        history_draws_on_entry: u64,
     ) -> NodeResult {
+        // In check there is no stand pat, so the caller's alpha reaches here untouched and is still
+        // the window this node was given.
+        let alpha_on_entry = alpha;
+
         if moves.is_empty() {
+            // Checkmate: terminal, certain, and with no continuation to record. This is the entry
+            // shape that a move-gated cutoff can never reuse, which is why the cutoff paths in both
+            // searches are gated on the score alone.
+            self.store_quiescence(
+                Score::mate(0),
+                Bound::Exact,
+                &Move::null(),
+                history_draws_on_entry,
+            );
             return Some(Score::mate(0));
         }
+
+        let mut best_move = Move::null();
 
         for mov in moves {
             if self.stopping() {
@@ -1307,15 +1398,64 @@ impl<'engine> Search<'engine> {
             let score = child?.neg().inc_mate();
 
             if score >= beta {
+                self.store_quiescence(score, Bound::Lower, mov, history_draws_on_entry);
                 return Some(beta);
             }
 
             if score > alpha {
                 alpha = score;
+                best_move = *mov;
             }
         }
 
+        self.store_quiescence(
+            alpha,
+            self.quiescence_bound(alpha, alpha_on_entry),
+            &best_move,
+            history_draws_on_entry,
+        );
         Some(alpha)
+    }
+
+    /// Classifies a quiescence value that neither reached beta nor was cut short.
+    ///
+    /// Quiescence fails hard, so the value it returns is `alpha`, and what that means depends
+    /// entirely on whether anything raised it. A raised alpha was produced by a child that scored
+    /// strictly inside its own window, or by a stand pat that no capture beat; either way it is the
+    /// position's quiescence value rather than a threshold, so it is exact. An alpha that never
+    /// moved carries no information beyond "nothing here reached it", which is an upper bound.
+    #[inline(always)]
+    fn quiescence_bound(&self, alpha: Score, alpha_on_entry: Score) -> Bound {
+        if alpha > alpha_on_entry {
+            Bound::Exact
+        } else {
+            Bound::Upper
+        }
+    }
+
+    /// Publishes a completed quiescence result at [`Self::QUIESCENCE_DRAFT`].
+    ///
+    /// Every caller has already established that the value came from work that ran to completion:
+    /// an aborted quiescence subtree propagates `None` and never arrives here. The remaining
+    /// condition is the one the main search applies at Step 24 — a value that a history-sensitive
+    /// draw contributed to is not a property of the position, so it is dropped rather than stored.
+    #[inline]
+    fn store_quiescence(
+        &self,
+        score: Score,
+        bound: Bound,
+        mov: &Move,
+        history_draws_on_entry: u64,
+    ) {
+        if self.history_draws == history_draws_on_entry {
+            self.tt.store(
+                self.pos.zobrist().0,
+                score,
+                Self::QUIESCENCE_DRAFT,
+                bound,
+                mov,
+            );
+        }
     }
 
     fn emit_progress(&self, depth: u8, score: Score) {
@@ -1576,6 +1716,8 @@ impl<'a, 'search> Loader for QMoveLoader<'a, 'search> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::mov::MoveType;
+    use core::position::Square;
     use std::time::Duration;
 
     #[rustfmt::skip]
@@ -1686,7 +1828,7 @@ mod tests {
         search.root_fallback_ready = true;
 
         assert_eq!(
-            search.quiesce_evasions::<Master, Pv>(Score::INF_N, Score::INF_P, &moves),
+            search.quiesce_evasions::<Master, Pv>(Score::INF_N, Score::INF_P, &moves, 0),
             None
         );
     }
@@ -2017,25 +2159,53 @@ mod tests {
         );
     }
 
-    /// Both the main search and quiescence must claim the fifty-move draw at the same
-    /// boundary. Quiescence compared the clock against 50, reporting a draw at 25 moves.
+    /// Both the main search and quiescence must claim the fifty-move draw at the same boundary,
+    /// and that boundary is 100 plies rather than 50. Quiescence once compared the clock against
+    /// 50, reporting a draw at 25 moves — a whole half of the legal range in which the two searches
+    /// disagreed about whether the game was already over.
+    ///
+    /// The sweep covers every clock across that former disagreement, from the old boundary to the
+    /// real one, rather than sampling three points: the defect was a wrong constant, so the test
+    /// that pins it has to walk the range the constant governs.
     #[test]
-    fn quiescence_uses_the_same_fifty_move_boundary_as_the_main_search() {
+    fn both_searches_claim_the_fifty_move_draw_at_the_same_hundred_ply_boundary() {
         core::init::init_globals();
 
-        for (halfmove_clock, expected_draw) in [(50, false), (99, false), (100, true)] {
-            let fen = format!("4k3/8/8/8/8/8/8/Q3K3 w - - {halfmove_clock} 1");
+        // No captures and no checks, so quiescence stands pat unless the draw fires. The material
+        // value is a queen and a pawn up, nowhere near zero, so a zero score can only be the claim.
+        //
+        // The pawn is what makes the main-search leg meaningful. Without it every white move is
+        // quiet, so from clock 99 a one-ply search legitimately finds the draw on the next ply and
+        // scores zero whether or not the root position is itself drawn. A pawn push resets the
+        // clock, so below the boundary the search always has an escape and a zero score still means
+        // only one thing.
+        for halfmove_clock in 50..=100 {
+            let fen = format!("4k3/8/8/8/8/8/P7/Q3K3 w - - {halfmove_clock} 1");
             let position = Position::from_fen(&fen).unwrap();
-            let flag = AtomicBool::new(false);
-            let table = Table::new(1);
-            let mut search = Search::new(position, &flag, None, &table);
-
-            let score = search.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P);
+            let expected_draw = halfmove_clock >= 100;
 
             assert_eq!(
-                score == Some(Score::zero()),
+                position.fifty_move_rule_reached(),
+                expected_draw,
+                "the rule predicate disagreed at halfmove clock {halfmove_clock}"
+            );
+
+            let flag = AtomicBool::new(false);
+
+            let quiescence_table = Table::new(1);
+            let mut quiescence = Search::new(position.clone(), &flag, None, &quiescence_table);
+            assert_eq!(
+                quiescence.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P) == Some(Score::zero()),
                 expected_draw,
                 "quiescence disagreed at halfmove clock {halfmove_clock}"
+            );
+
+            let main_table = Table::new(1);
+            let mut main = Search::new(position, &flag, None, &main_table);
+            assert_eq!(
+                main.run::<Master>(1).unwrap().score == Score::zero(),
+                expected_draw,
+                "the main search disagreed at halfmove clock {halfmove_clock}"
             );
         }
     }
@@ -2060,6 +2230,231 @@ mod tests {
             search.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P),
             Some(Score::zero())
         );
+    }
+
+    /// Seeds an entry for a bare-king position whose true value is zero, so any non-zero score the
+    /// search returns can only have come out of the table. Seeding directly rather than warming
+    /// with a real search pins the cutoff path under test instead of depending on what a warming
+    /// search happens to leave behind.
+    fn score_from_seeded_entry(
+        seeded: Score,
+        bound: Bound,
+        mov: &Move,
+        depth: u8,
+    ) -> (NodeResult, usize) {
+        let position = Position::from_fen("7k/8/8/8/8/8/8/K7 w - - 0 1").unwrap();
+        let flag = AtomicBool::new(false);
+        let table = Table::new(1);
+        table.store(position.zobrist().0, seeded, depth, bound, mov);
+
+        let mut search = Search::new(position, &flag, None, &table);
+        search.search_depth = 4;
+        search.pvt = PVTable::new(4);
+        let score = search.search::<Master, NonPv>(Score::cp(299), Score::cp(300), 4);
+
+        (score, search.trace.hash_collisions())
+    }
+
+    /// A checkmated or stalemated node, and every node whose moves all failed low, stores its value
+    /// with no move at all. Gating the main search's score reuse on the presence of a playable
+    /// stored move made exactly those entries — the most certain ones in the table — permanently
+    /// unusable. Reuse must depend on the entry being verified, not on it carrying a move.
+    #[test]
+    fn a_verified_entry_without_a_move_still_cuts_off_the_main_search() {
+        core::init::init_globals();
+
+        let seeded = Score::cp(300);
+        let (score, _) = score_from_seeded_entry(seeded, Bound::Exact, &Move::null(), 8);
+
+        assert_eq!(
+            score,
+            Some(seeded),
+            "a move-less entry deep enough to cut off was ignored"
+        );
+    }
+
+    /// The same holds when the entry does carry a move but that move cannot be played here. The
+    /// full-key check inside `Table::probe` is what establishes identity; an unplayable move only
+    /// means the entry supplies no ordering hint, and is recorded as the genuine Zobrist collision
+    /// it must be. Both searches therefore treat the score and the move independently.
+    #[test]
+    fn an_unplayable_stored_move_costs_ordering_but_not_the_score() {
+        core::init::init_globals();
+
+        // No piece stands on e4 in the seeded position, so this move is not playable there.
+        let unplayable = Move::build(Square::E4, Square::E5, None, MoveType::QUIET);
+        let seeded = Score::cp(300);
+        let (score, collisions) = score_from_seeded_entry(seeded, Bound::Exact, &unplayable, 8);
+
+        assert_eq!(
+            score,
+            Some(seeded),
+            "an unplayable ordering move suppressed a verified score"
+        );
+        assert_eq!(
+            collisions, 1,
+            "an unplayable move on a verified entry must be counted as a collision"
+        );
+    }
+
+    /// Quiescence must publish its results, not merely consume other nodes'. A quiet position has
+    /// nothing to search, so the value it stores is its stand pat, recorded at the reserved
+    /// quiescence draft.
+    #[test]
+    fn quiescence_publishes_its_result_at_the_reserved_draft() {
+        core::init::init_globals();
+
+        let position = Position::from_fen("4k3/8/8/8/8/8/8/Q3K3 w - - 0 1").unwrap();
+        let flag = AtomicBool::new(false);
+        let table = Table::new(1);
+        let mut search = Search::new(position.clone(), &flag, None, &table);
+
+        let score = search
+            .quiesce::<Master, Pv>(Score::INF_N, Score::INF_P)
+            .unwrap();
+
+        let entry = table
+            .probe(position.zobrist().0)
+            .expect("quiescence must store a completed result");
+        assert_eq!(entry.score(), score);
+        assert_eq!(entry.depth(), Search::QUIESCENCE_DRAFT);
+        assert_eq!(entry.bound(), Bound::Exact);
+    }
+
+    /// The reserved draft is what keeps the two searches' entries apart. A capture-only value can
+    /// never satisfy a main-search node's depth requirement, so seeding one cannot change a
+    /// depth-one search: the result must match a search that never saw the entry at all.
+    #[test]
+    fn a_quiescence_entry_cannot_satisfy_a_main_search_depth_requirement() {
+        core::init::init_globals();
+
+        let position = Position::from_fen("7k/8/8/8/8/8/8/K7 w - - 0 1").unwrap();
+        let flag = AtomicBool::new(false);
+
+        let score_with = |table: &Table| {
+            let mut search = Search::new(position.clone(), &flag, None, table);
+            search.search_depth = 1;
+            search.pvt = PVTable::new(1);
+            search.search::<Master, NonPv>(Score::cp(299), Score::cp(300), 1)
+        };
+
+        let seeded = Table::new(1);
+        seeded.store(
+            position.zobrist().0,
+            Score::cp(300),
+            Search::QUIESCENCE_DRAFT,
+            Bound::Exact,
+            &Move::null(),
+        );
+
+        assert_eq!(
+            score_with(&seeded),
+            score_with(&Table::new(1)),
+            "a quiescence-draft entry was reused by a depth-one main search"
+        );
+    }
+
+    /// A quiescence subtree that a stop cut short has examined only some of its captures, so its
+    /// alpha is not a bound on anything. It must not reach the table, on the same terms as the
+    /// main search's aborted subtrees.
+    #[test]
+    fn an_aborted_quiescence_subtree_publishes_nothing() {
+        core::init::init_globals();
+
+        // A capture chain, so quiescence recurses rather than standing pat immediately, and the
+        // abort lands part way through the tree.
+        let position = Position::from_fen("4k3/8/8/3q4/4P3/5N2/8/4K3 w - - 0 1").unwrap();
+        let flag = AtomicBool::new(false);
+        let table = Table::new(16);
+        let mut search = Search::new(position.clone(), &flag, None, &table);
+        search.root_fallback_ready = true;
+        search.abort_after_nodes = Some(1);
+
+        assert_eq!(
+            search.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P),
+            None,
+            "the abort must actually cut the subtree short"
+        );
+        assert!(
+            table.probe(position.zobrist().0).is_none(),
+            "an aborted quiescence subtree published an entry"
+        );
+    }
+
+    /// Quiescence follows quiet check evasions, which advance the halfmove clock, so it can claim a
+    /// fifty-move draw below its own root. That value depends on the moves played before the
+    /// search, which the key does not cover, and is suppressed exactly as the main search
+    /// suppresses its own.
+    #[test]
+    fn a_history_sensitive_quiescence_value_is_not_stored() {
+        core::init::init_globals();
+
+        // White is in check from the rook, so quiescence follows the evasions rather than standing
+        // pat. Every evasion is a quiet king move, which advances the clock from 99 to the boundary
+        // and makes the child claim the draw — below this node's own root, which is not yet drawn.
+        let position = Position::from_fen("k3r3/8/8/8/8/8/8/4K3 w - - 99 1").unwrap();
+        let flag = AtomicBool::new(false);
+        let table = Table::new(16);
+        let mut search = Search::new(position.clone(), &flag, None, &table);
+
+        search
+            .quiesce::<Master, Pv>(Score::INF_N, Score::INF_P)
+            .unwrap();
+
+        assert!(
+            search.history_draws > 0,
+            "the test position must actually cross the fifty-move boundary below the root"
+        );
+        assert!(
+            table.probe(position.zobrist().0).is_none(),
+            "a clock-contaminated quiescence value was published"
+        );
+    }
+
+    /// The point of the table is that a repeated search costs less and answers the same. Re-running
+    /// each position against the table its own first search filled must not change the score or the
+    /// move, and must not cost more nodes than the cold search did.
+    #[test]
+    fn a_warm_table_matches_the_cold_result_and_never_costs_more_nodes() {
+        core::init::init_globals();
+
+        let positions = [
+            // A forced mate: terminal values, stored without a move, and the entries a move-gated
+            // cutoff could never reuse.
+            ("8/2R2pp1/k3p3/8/5Bn1/6P1/5r1r/1R4K1 w - - 4 3", 6),
+            ("2q4k/3r3p/2p2P2/p7/2P5/P2Q2P1/5bK1/1R6 w - - 0 36", 6),
+            // Tactical material wins, where the saving comes from ordinary bound reuse.
+            ("6k1/8/3q4/8/8/3B4/2P5/1K1R4 w - - 0 1", 5),
+            ("r5k1/p1P5/8/8/8/8/3RK3/8 w - - 0 1", 6),
+        ];
+
+        for (fen, depth) in positions {
+            let position = Position::from_fen(fen).unwrap();
+            let flag = AtomicBool::new(false);
+            let table = Table::new(16);
+
+            let mut cold = Search::new(position.clone(), &flag, None, &table);
+            let cold_result = cold.run::<Master>(depth).unwrap();
+            let cold_nodes = cold.trace.all_nodes_visited();
+
+            let mut warm = Search::new(position, &flag, None, &table);
+            let warm_result = warm.run::<Master>(depth).unwrap();
+            let warm_nodes = warm.trace.all_nodes_visited();
+
+            assert_eq!(
+                warm_result.score, cold_result.score,
+                "{fen}: a warm table changed the score"
+            );
+            assert_eq!(
+                warm_result.best_move, cold_result.best_move,
+                "{fen}: a warm table changed the best move"
+            );
+            assert!(
+                warm_nodes <= cold_nodes,
+                "{fen}: the warm search cost more nodes ({warm_nodes}) than the cold one \
+                 ({cold_nodes})"
+            );
+        }
     }
 
     #[test]
