@@ -1,9 +1,11 @@
 ---
 id: TASK-64.1
 title: Track ply explicitly and introduce a per-ply search stack
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-19 13:30'
+updated_date: '2026-07-19 16:10'
 labels:
   - search
   - architecture
@@ -51,3 +53,15 @@ This refactor should be behaviour-preserving. The search test suite in search.rs
 - [ ] #7 A regression test exercises a node searched at greater depth than its nominal iteration depth and asserts no panic and a legal reported principal variation
 - [ ] #8 The existing search test suite passes without modification to its assertions
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Add `Depth = i16` and `MAX_PLY` to search.rs; thread an explicit `ply: usize` through `search`/`search_inner`/`quiesce`/`quiesce_inner`/`quiesce_evasions`, root ply 0, child ply+1. Delete `search_depth` and the `draft = search_depth - depth` derivation.
+2. Make depth signed: `should_razor`, recursion (`depth - 1`), Step 5 becomes `depth <= 0 -> quiescence`, TT depth comparisons widen to `Depth`, TT stores clamp back into the u8 draft field.
+3. Introduce `SearchStack`/`StackEntry` (static eval, move played, excluded move) owned by `Search` and indexed by ply; razoring reads the stored eval, the move loop records the move played. Cap main-search ply at `MAX_PLY` by diverting to quiescence.
+4. Re-index `KillerTable` by ply (direct `data[ply]`, root slot unused) preserving the existing 20-ply killer reach.
+5. Rewrite `PVTable` to be ply-indexed and stored in forward order: row `ply` holds the line from that ply, `clear_at`/`copy_to` no-op above the nominal ply count so an extended node neither panics nor writes another row. Update pv_table unit tests to ply semantics and the Debug renderer.
+6. Add regression tests: a node searched deeper than its PV table's nominal depth (no panic, legal PV); killer store/probe by ply independent of depth; quiescence reached at a ply below the nominal horizon leaves no stale row.
+7. Run cargo fmt --check, clippy -D warnings, cargo test --workspace.
+<!-- SECTION:PLAN:END -->
