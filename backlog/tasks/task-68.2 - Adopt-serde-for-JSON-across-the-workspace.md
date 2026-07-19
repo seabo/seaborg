@@ -1,11 +1,11 @@
 ---
 id: TASK-68.2
 title: Adopt serde for JSON across the workspace
-status: In Review
+status: Ready to Merge
 assignee:
   - '@george'
 created_date: '2026-07-19 22:33'
-updated_date: '2026-07-19 22:57'
+updated_date: '2026-07-19 23:04'
 labels: []
 dependencies: []
 parent_task_id: TASK-68
@@ -28,11 +28,11 @@ Note: npx tsc silently no-ops in this repo, so do not rely on a TypeScript compi
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 `serde` (with derive) and `serde_json` are added as workspace dependencies following the workspace manifest policy
-- [ ] #2 engine/src/ui JSON handling uses serde/serde_json; the bespoke json.rs hand-rolled encoder/parser is removed or reduced to nothing custom
-- [ ] #3 All existing /api/* endpoints produce and accept the same wire format the current frontend expects (no frontend changes required)
-- [ ] #4 Existing UI server/wire tests pass; add serde round-trip coverage for the wire types
-- [ ] #5 cargo fmt --check, clippy (workspace, all-targets, all-features, -D warnings), and cargo test --workspace all pass
+- [x] #1 `serde` (with derive) and `serde_json` are added as workspace dependencies following the workspace manifest policy
+- [x] #2 engine/src/ui JSON handling uses serde/serde_json; the bespoke json.rs hand-rolled encoder/parser is removed or reduced to nothing custom
+- [x] #3 All existing /api/* endpoints produce and accept the same wire format the current frontend expects (no frontend changes required)
+- [x] #4 Existing UI server/wire tests pass; add serde round-trip coverage for the wire types
+- [x] #5 cargo fmt --check, clippy (workspace, all-targets, all-features, -D warnings), and cargo test --workspace all pass
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -77,4 +77,30 @@ Verification:
 - cargo test --workspace: pass (all binaries; engine lib 269 passed/2 ignored, ui 77 of them; integration + doc suites green)
 Known failures: none
 ---
+
+author: @george
+created: 2026-07-19 23:04
+---
+Approved TASK-68.2 at implementation SHA e78daa1bbdf576300f55073a86bb877ac8c178c1 (base 064f883e63cb04883cc3c764d15dd520f7e59441).
+
+Full base-to-target diff reviewed. All five acceptance criteria proven:
+- AC#1: serde (derive)+serde_json in root [workspace.dependencies], inherited via .workspace=true in engine/Cargo.toml; core untouched; serde 1.0.229 pinned in Cargo.lock.
+- AC#2: engine/src/ui/json.rs removed and mod json dropped; all UI JSON now uses serde/serde_json.
+- AC#3: /api/* wire format unchanged. snapshot_serializes_to_the_exact_wire_bytes pins the exact output; I traced it against the removed hand-rolled encoder and it is byte-identical (same field order, same integer/bool formatting). Inbound error codes (missing_uci/missing_revision/missing_human_side/invalid_human_side/missing_engine_limit, malformed_json) preserved. The only behavior change is Value::as_u64 rejecting exponent-form integers, a safe tightening the frontend never emits.
+- AC#4: existing server/wire tests migrated to serde_json::Value and pass; added golden-byte and tagged-subtype coverage.
+- AC#5: independently ran the three required checks on the target.
+
+Verification commands (run in the task worktree at the target code):
+- cargo fmt --check -> pass
+- CARGO_TARGET_DIR=/tmp/t682-clippy cargo clippy --workspace --all-targets --all-features -- -D warnings -> clean
+- cargo test --workspace -> pass (0 failures)
+
+No #[allow] introduced; comments are self-contained. Not a hot path, so no benchmarks required. Moving to Ready to Merge.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Migrated engine/src/ui JSON to serde/serde_json. serde (derive) + serde_json added to root [workspace.dependencies] and inherited by engine only (core untouched); the hand-rolled engine/src/ui/json.rs is deleted. Outbound wire types serialize via borrowing #[derive(Serialize)] DTOs whose declaration order reproduces the previous byte layout exactly; inbound bodies parse via serde_json::Value preserving all per-field error codes. Verified: cargo fmt --check pass; cargo clippy --workspace --all-targets --all-features -- -D warnings clean (fresh CARGO_TARGET_DIR); cargo test --workspace pass (core 45, engine 269/2 ignored, build_metadata 19, doc 1). Wire byte-compatibility confirmed by a golden exact-byte test and by tracing the DTO output against the removed encoder for the most complex nested snapshot.
+<!-- SECTION:FINAL_SUMMARY:END -->
