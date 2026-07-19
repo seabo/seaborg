@@ -1,11 +1,11 @@
 ---
 id: TASK-57
 title: Rewrite the transposition table around clustered verified snapshots
-status: Ready to Merge
+status: Changes Requested
 assignee:
   - '@codex'
 created_date: '2026-07-19 00:00'
-updated_date: '2026-07-19 13:53'
+updated_date: '2026-07-19 13:56'
 labels:
   - transposition-table
   - performance
@@ -403,6 +403,74 @@ Judgement recorded for the merge gate:
   key". The Stockfish-style 10-byte entry with tolerated torn reads is a real
   alternative but inverts AC#2 and AC#13, so it belongs to a separate task and a
   human decision, not to this one.
+---
+
+author: @codex
+created: 2026-07-19 13:56
+---
+Merge ejected: textual conflict
+Primary tip tested: 08e9261b9e44a98c06342806a41178e8259ae9e4
+Approved target: aa55cd18a5eb3f0a5e83b6bc6ec1e3b4e0e37e1f
+Branch tip merged: c7bcfe2
+Result: not merged, primary not advanced
+
+The trial merge was built on a detached HEAD, so nothing was left behind:
+primary is still exactly 08e9261 and no implementation file was modified.
+
+Failing command:
+  git merge --no-ff c7bcfe2
+  Auto-merging engine/src/search.rs
+  CONFLICT (content): Merge conflict in engine/src/search.rs
+  Automatic merge failed; fix conflicts and then commit the result.
+
+Exactly one conflict hunk, at the quiescence early-cutoff gate in
+engine/src/search.rs (around line 1209 of the merged file):
+
+  <<<<<<< HEAD
+              // the rule is still out of reach.
+              if tt_hit && !entry.is_empty() && self.clock_permits_tt_reuse(entry.depth) {
+  =======
+              // the rule is still out of reach (TASK-58).
+              if let Some(entry) = tt_entry.filter(|e| self.clock_permits_tt_reuse(e.depth())) {
+  >>>>>>> c7bcfe2
+
+This is a comment collision, not a semantic one. Master commit 74b53d6 ("docs:
+remove process-artifact references from code comments") deleted the "(TASK-58)"
+suffix from that comment line. This branch rewrote the immediately adjacent `if`
+to the new snapshot API while leaving the comment text as it was at the base
+commit, so the two edits land on adjacent lines and git cannot separate them.
+
+The resolution is to take master's comment line together with this branch's code
+line — that is, keep "// the rule is still out of reach." above
+`if let Some(entry) = tt_entry.filter(...)`. No behaviour is in question and the
+two sides do not disagree about any logic.
+
+Note the same class of conflict, against the same master commit, ejected TASK-42
+at 1f711d3 ("merge(task-42): eject on comment conflict against 74b53d6"). It was
+resolved on the task branch by 96adb9a ("docs(task-42): make time-allocation
+comments stand alone"), followed by a corrected implementation target and a fresh
+approval. That is the precedent to follow here.
+
+Also worth folding into the same rework: the branch still carries two other
+"(TASK-58)" comment references that 74b53d6 removed on master but that did not
+conflict, because this branch left them untouched. Merging as-is would silently
+reintroduce them. They are in engine/src/search.rs, in the main-search Step 24
+store comment and in the quiescence clock-gate comment. Resolving only the
+conflicting hunk would leave the branch inconsistent with the standard master now
+holds, so all three should be brought into line in one pass.
+
+State of the approval: the sixteen acceptance criteria and the final summary
+describe aa55cd1, which was fully verified and remains correct as a description of
+that commit. They are left checked deliberately rather than reset, because nothing
+about the reviewed work failed — only its integration against a primary branch that
+moved. Whatever new target the rework produces supersedes aa55cd1 and needs a fresh
+review before another merge attempt.
+
+No benchmarks were run on the merge: it never produced a mergeable commit. For the
+record, engine/src/perft.rs contains no transposition-table reference and neither
+benches/perft.rs nor benches/movegen.rs imports the table, so those two harnesses
+cannot observe this change; the meaningful hot-path evidence is the depth-10 node
+count and benches/search.rs, both already recorded against base 9b7bf33.
 ---
 <!-- COMMENTS:END -->
 
