@@ -4,12 +4,14 @@ title: Add counter-move and continuation history
 status: To Do
 assignee: []
 created_date: '2026-07-19 13:32'
+updated_date: '2026-07-19 13:44'
 labels:
   - search
   - move-ordering
 dependencies:
   - TASK-64.1
   - TASK-64.2
+  - TASK-64.17
 references:
   - engine/src/history.rs
   - engine/src/ordering.rs

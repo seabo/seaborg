@@ -4,6 +4,7 @@ title: 'Activate the history heuristic with bonus, malus and aging'
 status: To Do
 assignee: []
 created_date: '2026-07-19 13:30'
+updated_date: '2026-07-19 13:44'
 labels:
   - search
   - move-ordering
@@ -40,4 +41,6 @@ Whether history should be retained across moves within a game, rather than reset
 - [ ] #4 Quiet moves in the ordering Quiet phase are demonstrably ordered by history score, verified by a test asserting a known good quiet is yielded before a known poor one after training the table
 - [ ] #5 The decision on whether history persists across moves within a game is recorded with rationale
 - [ ] #6 Measured with the TASK-27 strength-regression script, with results recorded in the implementation notes
+- [ ] #7 The history value read at the ordering sites is not narrowed by a truncating cast: search.rs:1499 and search.rs:1559 currently cast a u32 table value to i16, which wraps above 32767 and orders a repeatedly successful quiet move last
+- [ ] #8 A test drives a history value past the storage boundary of the ordering score type and asserts the move is still ordered ahead of an untrained move
 <!-- AC:END -->

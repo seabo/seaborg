@@ -4,12 +4,14 @@ title: Add capture history to capture ordering
 status: To Do
 assignee: []
 created_date: '2026-07-19 13:33'
+updated_date: '2026-07-19 13:44'
 labels:
   - search
   - move-ordering
   - see
 dependencies:
   - TASK-64.2
+  - TASK-64.17
 references:
   - engine/src/ordering.rs
   - engine/src/history.rs
