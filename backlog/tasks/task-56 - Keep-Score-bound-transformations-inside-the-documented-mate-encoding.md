@@ -1,9 +1,11 @@
 ---
 id: TASK-56
 title: Keep Score bound transformations inside the documented mate encoding
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-18 23:43'
+updated_date: '2026-07-19 02:27'
 labels:
   - engine
   - search
@@ -33,3 +35,15 @@ Either make the representation total over the values search actually produces, o
 - [ ] #4 Debug and Display produce sensible output for every value search can now generate
 - [ ] #5 The TASK-54 regression child_mate_windows_preserve_distance_parity still passes and a debug WAC sweep still formats root scores without panicking
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Add a debug assertion that every score returned by quiesce/quiesce_evasions lies in the search-producible band [Score::mate(0), Score::mate(1)], and confirm it fires on the current code via child_mate_windows_preserve_distance_parity.
+2. Make Score::child_bound total over the documented encoding: the two boundary inputs whose exact inverse would fall outside the mate band saturate to the corresponding infinity. child_bound(mate(0)) == INF_P is semantically exact, since a bound one step beyond the best achievable score is unreachable, exactly like +inf as a cutoff threshold.
+3. Mirror search's Step 2 mate-distance clamp in quiesce so incoming windows are normalised into [mate(0), mate(1)] before use, with an alpha >= beta early return for the degenerate case. This stops the per-ply excursion compounding and keeps every quiescence return in band.
+4. Make Debug total: values outside the documented bands render explicitly rather than as a plausible-looking Mate(-1) or Cp(15_000).
+5. Correct the Score doc comment to state which values search actually produces, and document child_bound's saturation and why it is exact.
+6. Tests: child_bound at the mate(0)/mate(1) boundaries; Debug and Display over every search-producible value; keep child_mate_windows_preserve_distance_parity passing.
+7. Verify with cargo fmt/clippy/test plus a debug-build WAC sweep at depths 4/5/6 formatting every root score through Display.
+<!-- SECTION:PLAN:END -->
