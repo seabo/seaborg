@@ -1,11 +1,11 @@
 ---
 id: TASK-57
 title: Rewrite the transposition table around clustered verified snapshots
-status: In Review
+status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-19 00:00'
-updated_date: '2026-07-19 13:45'
+updated_date: '2026-07-19 13:53'
 labels:
   - transposition-table
   - performance
@@ -31,22 +31,22 @@ Replace the existing direct-mapped transposition-table module and its probe/writ
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Each indexed cache-conscious bucket provides multiple candidate entries within a documented compact layout and within the configured memory limit
-- [ ] #2 A probe returns one immutable snapshot whose identity, move, depth, bound, and score all came from the same atomic state; a concurrent replacement cannot turn a verified hit into data for another key
-- [ ] #3 Verification strength is assessed against realistic table sizes and search volumes; the chosen signature or full-key scheme makes accidental score acceptance suitably negligible for move-less and move-bearing entries without using move legality as proof of identity
-- [ ] #4 Replacement distinguishes same-key updates from clashes and accounts for depth, bound quality, and age so shallow or weak entries do not unconditionally evict deeper exact results
-- [ ] #5 Concurrent probes and competing writers remain lock-free and data-race-free without torn-entry reads, with deterministic tests for replacement between probe and consumption and for a different key sharing index and signature
-- [ ] #6 Age and administrative invalidation semantics support explicit new-game clearing and safe wrap behavior; the API enforces or deterministically tests the ownership boundary that prevents active searches from being invalidated accidentally
-- [ ] #7 Allocation uses checked integer sizing with defined boundary behavior, does not exceed the advertised memory limit, and hashfull safely reports a robust per-mille occupancy estimate for every supported capacity without relying on one fixed contiguous sample
-- [ ] #8 Large-table construction, clearing or wrap, probe throughput, and search efficiency are measured; avoidable stalls or material regressions are removed and retained lifecycle costs are documented
-- [ ] #9 The replacement module has clear snapshot and mutation semantics, explicit packed-field invariants, and no redundant, misleading, or unfinished legacy APIs
-- [ ] #10 Tests cover entry packing, cluster selection, replacement priorities, sizing boundaries, small-table telemetry, concurrent access, administrative invalidation, and generation or age wrap
-- [ ] #11 The table is Send + Sync by construction and supports one immutable allocation shared through Arc; probe, replacement selection, store, and telemetry operate through shared references with no worker-exclusive table state
-- [ ] #12 Probe and store are bounded lock-free operations on supported targets: no mutexes, read-write locks, spin locks, blocking coordination, or unbounded compare-exchange retry loops occur on the search hot path, and the native atomic target requirement or deliberate fallback policy is explicit
-- [ ] #13 If an entry spans multiple atomic words, its publication and validation protocol, memory orderings, and bounded retry behavior are documented and tested so readers can never observe a hybrid entry
-- [ ] #14 Concurrent races may discard or replace useful information but can never invent information; replacement is worker-agnostic so every worker can consume every other worker’s valid entries without permanent partitioning or ownership
-- [ ] #15 Cluster alignment, false sharing, replacement contention, and observational hashfull behavior are exercised under representative multi-worker load as well as single-thread benchmarks
-- [ ] #16 Deterministic or model-based concurrency tests cover adverse probe-versus-replace schedules, competing writers, administrative quiescence boundaries, and generation or age wrap
+- [x] #1 Each indexed cache-conscious bucket provides multiple candidate entries within a documented compact layout and within the configured memory limit
+- [x] #2 A probe returns one immutable snapshot whose identity, move, depth, bound, and score all came from the same atomic state; a concurrent replacement cannot turn a verified hit into data for another key
+- [x] #3 Verification strength is assessed against realistic table sizes and search volumes; the chosen signature or full-key scheme makes accidental score acceptance suitably negligible for move-less and move-bearing entries without using move legality as proof of identity
+- [x] #4 Replacement distinguishes same-key updates from clashes and accounts for depth, bound quality, and age so shallow or weak entries do not unconditionally evict deeper exact results
+- [x] #5 Concurrent probes and competing writers remain lock-free and data-race-free without torn-entry reads, with deterministic tests for replacement between probe and consumption and for a different key sharing index and signature
+- [x] #6 Age and administrative invalidation semantics support explicit new-game clearing and safe wrap behavior; the API enforces or deterministically tests the ownership boundary that prevents active searches from being invalidated accidentally
+- [x] #7 Allocation uses checked integer sizing with defined boundary behavior, does not exceed the advertised memory limit, and hashfull safely reports a robust per-mille occupancy estimate for every supported capacity without relying on one fixed contiguous sample
+- [x] #8 Large-table construction, clearing or wrap, probe throughput, and search efficiency are measured; avoidable stalls or material regressions are removed and retained lifecycle costs are documented
+- [x] #9 The replacement module has clear snapshot and mutation semantics, explicit packed-field invariants, and no redundant, misleading, or unfinished legacy APIs
+- [x] #10 Tests cover entry packing, cluster selection, replacement priorities, sizing boundaries, small-table telemetry, concurrent access, administrative invalidation, and generation or age wrap
+- [x] #11 The table is Send + Sync by construction and supports one immutable allocation shared through Arc; probe, replacement selection, store, and telemetry operate through shared references with no worker-exclusive table state
+- [x] #12 Probe and store are bounded lock-free operations on supported targets: no mutexes, read-write locks, spin locks, blocking coordination, or unbounded compare-exchange retry loops occur on the search hot path, and the native atomic target requirement or deliberate fallback policy is explicit
+- [x] #13 If an entry spans multiple atomic words, its publication and validation protocol, memory orderings, and bounded retry behavior are documented and tested so readers can never observe a hybrid entry
+- [x] #14 Concurrent races may discard or replace useful information but can never invent information; replacement is worker-agnostic so every worker can consume every other worker’s valid entries without permanent partitioning or ownership
+- [x] #15 Cluster alignment, false sharing, replacement contention, and observational hashfull behavior are exercised under representative multi-worker load as well as single-thread benchmarks
+- [x] #16 Deterministic or model-based concurrency tests cover adverse probe-versus-replace schedules, competing writers, administrative quiescence boundaries, and generation or age wrap
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -357,4 +357,61 @@ Verification on aa55cd1:
 - No behavioural change to the transposition table itself; the earlier round-robin
   measurement against base 9b7bf33 still describes this target.
 ---
+
+author: @codex
+created: 2026-07-19 13:53
+---
+Approval
+Reviewed branch: task-57-tt-clustered-snapshots
+Approved implementation: aa55cd18a5eb3f0a5e83b6bc6ec1e3b4e0e37e1f
+Verdict: approved
+
+Approval authority: the human owner, not an independent agent review. The
+reviewer authored the REV-1-01..03 fixes at aa55cd1 under explicit
+authorisation, so agent independence does not hold for that commit. The owner
+reviewed the resulting diff and signed off. Recording that plainly, because the
+lifecycle's usual guarantee is that an agent other than the author approved the
+work, and that is not what happened here.
+
+All sixteen acceptance criteria are checked on the evidence below. The base-to-
+target diff was reviewed in full, not only the fix.
+
+Verification on aa55cd1, all run by the reviewer:
+- cargo fmt --check: clean
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean on
+  a clean CARGO_TARGET_DIR, no warnings. Confirmed this way because Cargo caches
+  lint results and the first run finished in 0.82s.
+- cargo test --workspace: 280 passed, 0 failed, 2 ignored (both pre-existing)
+- Round-robin against base 9b7bf33, release builds in separate worktrees, three
+  rounds each, go depth 10 from startpos at the default 16MB hash:
+    base   4,883,269 nodes, hashfull 294, times 831/950/1244 ms
+    target 4,762,311 nodes, hashfull 607, times 883/935/993 ms
+  Node counts bit-identical across every round in both directions, identical
+  score and PV. The 2.5% node reduction and the hashfull density figure reproduce
+  exactly as BENCHMARKS.md reports them. Timings were taken under UI load and are
+  noisy, but the node count is exact and load-independent and carries the claim.
+- Drop-join guarantee proven rather than assumed: reverting Drop to
+  cancel-without-join makes the new test fail with "the hash cannot be cleared
+  while a search still holds the table"; restored, it passes.
+
+Judgement recorded for the merge gate:
+- The branch is behind primary. TASK-55 merged as 909d54e after this base, and
+  the master comment-standard commits 4025c4b and 74b53d6 also postdate it. None
+  of them touch the transposition table, but $merge integrates against the live
+  tip and must re-verify there, which is exactly what its gate is for.
+- The key-width question raised in comment #2 is settled as "keep the full 64-bit
+  key". The Stockfish-style 10-byte entry with tolerated torn reads is a real
+  alternative but inverts AC#2 and AC#13, so it belongs to a separate task and a
+  human decision, not to this one.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Rewrote the transposition table around cache-line clusters of fully verified, immutable snapshots.
+
+Each 64-byte cluster holds four 16-byte slots, and each slot publishes its entry as `key ^ data` plus `data`. A probe accepts a slot only when the XOR recovers the full 64-bit Zobrist key, which verifies identity outright instead of filtering a truncated signature through move legality, and makes a torn pair unconsumable: a hybrid of two writes can only be accepted on a 64-bit coincidence. `probe` returns an owned `Snapshot` rather than a borrow, so replacement between the probe and the point where the search consumes the result cannot change what it consumes; `store` picks its own victim at store time. Both take `&self` and are bounded and lock-free with no CAS and no retry, so one `Arc<Table>` serves arbitrary Lazy SMP workers with no partitioning or worker-owned state. Replacement distinguishes same-key updates from clashes and weighs depth, exactness and age, so a shallow entry cannot evict a deeper exact one. Clearing is physical and takes `&mut self`, making the new-game ownership boundary a type-system property, and `Drop for SearchHandle` now joins rather than detaches so no worker can outlive its handle and defeat it. Sizing rounds down to a power of two so the allocation never exceeds the advertised limit, and `hashfull` samples on a stride across the whole table, which the previous prefix sample could not do below 1000 entries without panicking.
+
+Verified at aa55cd1: `cargo fmt --check` clean; `cargo clippy --workspace --all-targets --all-features -- -D warnings` clean on a clean CARGO_TARGET_DIR; `cargo test --workspace` 280 passed, 0 failed, 2 pre-existing ignored, including deterministic tests for replacement between probe and consumption, a hand-constructed torn pair, a different key sharing a cluster index, age wrap, sizing boundaries, small-table telemetry, and threaded tests asserting no accepted snapshot ever carries invented data. Search effect reproduced independently round-robin against base 9b7bf33 over three rounds at `go depth 10` from the start position: 4,883,269 -> 4,762,311 nodes, bit-identical every round, with identical score and principal variation, and `hashfull` 294 -> 607. Time to depth is level within the machine's drift. `benches/tt.rs` and the BENCHMARKS.md "Transposition table" section record lifecycle, hot-path and multi-worker figures, including the linear clear as a deliberate regression against the old constant-time generation bump.
+<!-- SECTION:FINAL_SUMMARY:END -->
