@@ -1,11 +1,11 @@
 ---
 id: TASK-61
 title: Add benchmark-backed transposition-table hot-path enhancements
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-19 00:01'
-updated_date: '2026-07-19 16:09'
+updated_date: '2026-07-19 19:55'
 labels:
   - transposition-table
   - performance
@@ -46,3 +46,55 @@ After the identity policy, clean transposition-table rewrite, and search integra
 5. Add regression and benchmark coverage for whatever is accepted; write the measurements and rejection rationale for whatever is not into BENCHMARKS.md so the experiment is not rediscovered.
 6. Assert the final entry layout: size, alignment, cluster-per-cache-line organisation and the reserved-bit invariant.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+## Implementation
+
+Evaluated two TT hot-path candidates against a new hash-loading benchmark; retained the prefetch, rejected storing the static eval. Full measurement narrative is in BENCHMARKS.md under 'Transposition-table hot-path enhancements'.
+
+### Benchmark harness (AC#1)
+- benches/search.rs gains a 'search hash load' group over four positions (startpos d9, kiwipete d8, middlegame d8, endgame d11) at fixed depths that load a 16MB table to 51-100% occupancy. Table is cleared outside the timed region so every iteration searches the whole tree; the pre-existing depth-7 pair cannot see a TT change because criterion re-runs it against a warm table (135k nodes collapse to 579).
+- Exact, run-to-run-reproducible baseline printed before timings: startpos 2,501,994 nodes / 45.6% hit / hashfull 648; kiwipete 5,241,036 / 20.6% / 1000; middlegame 5,780,828 / 21.3% / 1000; endgame 1,839,611 / 48.2% / 513. Per-node cost ~75-82 ns.
+- Added Search::trace() to expose the tracer for telemetry.
+
+### Static eval, rejected (AC#2, AC#4)
+- New 'static evaluation' microbench: material_eval is 2.8 ns, i.e. 3.6% of a ~78 ns node, and that is an unreachable ceiling (must compute once to store; only 20-48% of probes hit). Rejected on cost.
+- Also rejected on entry space: the data word has exactly 15 spare reserved bits (the entry's only migration headroom); an i16 eval needs 16, so it would widen the 16-byte slot and halve density again on top of TASK-57.
+- TASK-50/51/52 interaction: futility and null-move pruning read the eval of the node they are already at (search step 6), not an ancestor's or a stored one, so a table-resident eval buys the imminent pruning consumers nothing.
+- Revisit condition recorded: a non-material-only evaluation (PSQT/NNUE, tens-hundreds of ns) changes the arithmetic.
+- Interaction with TASK-58 rule-sensitive policy: not applicable, because the candidate was not implemented. A stored eval would have been position-intrinsic (evaluate() does not read the clock), consistent with TASK-58 rule 3, but no such field exists.
+
+### Prefetch, retained (AC#3)
+- Table::prefetch: _mm_prefetch (x86_64), inline 'prfm pldl1keep' (aarch64, since core::arch::aarch64::_prefetch is unstable), empty body elsewhere. Called after make_move in both main search and quiescence, at the earliest point the child key exists.
+- Retained on mechanism/risk, not a measured figure: node counts identical by construction (a hint changes no visible state), the prefetched cluster is exactly what the child probes, and the mechanism is standard. A clean speedup was unobtainable: every round ran under sustained concurrent load (load avg 4-6 from other worktrees' benchmarks), which is the worst case for a latency-hiding benchmark. Minimum-of-6 was startpos -5.9%, endgame +0.8% (non-negative, not repeatable); documented as inconclusive, not cited as the effect.
+- Decision to keep on mechanism grounds was confirmed with the user this session.
+- Cost: one unsafe hint per architecture. prefetch_moves_no_observable_state pins that the hint perturbs nothing a probe returns and is total over keys.
+
+### Entry layout (AC#5)
+- Layout is unchanged (only a method was added), so the existing cluster_is_one_cache_line_and_slots_fill_it test still asserts the final layout: Cluster 64 bytes / align 64, Slot 16 bytes, 4 slots per cache line. clusters_are_cache_line_aligned_in_the_allocation covers alignment in the allocation.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @claude
+created: 2026-07-19 19:55
+---
+Implementation handoff
+Branch: task-61-tt-hot-path-enhancements
+Worktree: /Users/seabo/seaborg-worktrees/task-61-tt-hot-path-enhancements
+Base: c55508b3383577ed9bb62a9ebadb21fc3ecedc1f
+Implementation target: b76a0c234169623d7e5d519b1f34bc7c052fb74c
+Resolved findings: none (new work)
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean)
+- cargo test --workspace: pass (43 + 245 + 17 + 1 passed; 2 ignored are the pre-existing long perft suites)
+- cargo bench --bench search -- "hash load": runs; baseline table reproduces
+Known failures: none
+
+Reviewer note: AC#3's repeatable-benefit measurement could not be obtained on this machine; it carried sustained load (avg 4-6) from concurrent worktree benchmarks for the whole session, and a prefetch benchmark is the worst case for that. The prefetch is retained on mechanism and risk (node-count-neutral by construction, hint never wasted, standard technique, contained unsafe cost), a call confirmed with the user this session. The inconclusive figures and full rationale are in BENCHMARKS.md. If a genuinely idle machine is available, a clean round-robin of 'search hash load' base vs target would let the decision be promoted from mechanism-based to measurement-based.
+---
+<!-- COMMENTS:END -->
