@@ -646,6 +646,17 @@ impl<'engine> Search<'engine> {
         result
     }
 
+    /// The statistics gathered by the most recent [`Search::run`].
+    ///
+    /// Elapsed time alone cannot explain a change in search speed. A search that finishes sooner
+    /// because it visited fewer nodes got better informed; one that finishes sooner over the same
+    /// nodes got cheaper per node. Node counts and probe outcomes separate the two, and unlike the
+    /// timings they are exact and reproduce run to run, so a measurement harness needs them
+    /// alongside the clock.
+    pub fn trace(&self) -> &Tracer {
+        &self.trace
+    }
+
     fn iterative_deepening<T: Thread>(&mut self, depth: u8) -> Option<SearchResult> {
         let mut result = None;
 
@@ -949,6 +960,12 @@ impl<'engine> Search<'engine> {
                 // Step 18. Make the move.
                 // SAFETY: ordered moves originate from move generation for `self.pos`.
                 unsafe { self.pos.make_move_unchecked(&mov) };
+
+                // The child's first act is to probe this cluster, and the table is far larger than
+                // cache, so that probe misses. Starting the fetch here overlaps the miss with the
+                // recursive descent's own setup rather than stalling on it. The key is only known
+                // once the move has been made, so this is the earliest point the address exists.
+                self.tt.prefetch(self.pos.zobrist().0);
 
                 // Step 19. Search non-PV move with null window.
                 if !Node::pv() || move_count > 1 {
@@ -1451,6 +1468,9 @@ impl<'engine> Search<'engine> {
 
                 // SAFETY: quiescence moves originate from move generation for `self.pos`.
                 unsafe { self.pos.make_move_unchecked(&mov) };
+                // As in the main search: start the child's cluster fetch as soon as its key exists,
+                // so the miss overlaps the descent instead of stalling in front of the probe.
+                self.tt.prefetch(self.pos.zobrist().0);
                 let child =
                     self.quiesce::<T, Node>(beta.child_bound(), alpha.child_bound(), ply + 1);
                 self.pos.unmake_move();
