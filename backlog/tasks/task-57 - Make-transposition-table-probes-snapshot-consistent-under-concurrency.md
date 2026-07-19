@@ -1,10 +1,11 @@
 ---
 id: TASK-57
 title: Rewrite the transposition table around clustered verified snapshots
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-19 00:00'
-updated_date: '2026-07-19 03:37'
+updated_date: '2026-07-19 12:26'
 labels:
   - transposition-table
   - performance
@@ -47,3 +48,29 @@ Replace the existing direct-mapped transposition-table module and its probe/writ
 - [ ] #15 Cluster alignment, false sharing, replacement contention, and observational hashfull behavior are exercised under representative multi-worker load as well as single-thread benchmarks
 - [ ] #16 Deterministic or model-based concurrency tests cover adverse probe-versus-replace schedules, competing writers, administrative quiescence boundaries, and generation or age wrap
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+Rewrite engine/src/tt.rs from scratch; update the search call sites to the new API.
+
+1. Layout (AC#1, #15). `Slot` = two `AtomicU64` (16 bytes). `Cluster` = `#[repr(C, align(64))]` array of 4 slots = exactly one 64-byte cache line, so a cluster probe touches one line and clusters never straddle two. `Table { clusters: Box<[Cluster]>, mask, age: AtomicU8 }`.
+
+2. Identity and snapshot protocol (AC#2, #3, #13). Each slot stores `key ^ data` and `data`. A probe accepts a slot only when `w0 ^ w1 == key` and the data word's occupied bit is set, so the full 64-bit Zobrist key is verified rather than a truncated signature: accidental acceptance needs a genuine 64-bit key collision, not a 1-in-2^16 signature coincidence, and this holds identically for move-less and move-bearing entries (no move-legality proof of identity). The same XOR check validates the pair, so a reader can never consume a hybrid of two writes except on a 64-bit coincidence. Both words are Relaxed: the entry is self-contained, nothing else is published, and the validation is value-based so load/store reordering cannot defeat it. Document the write order (data, then key^data) and the bounded, retry-free reader.
+
+3. Packed data word (AC#9). move 16 | score 16 | depth 8 | bound 2 | age 6 | reserved 15 (zero) | occupied 1. Zeroed memory is therefore empty by construction. Explicit invariants documented; `PackedMove`, position-relative mate scores and lock-free shared access are retained from the current module.
+
+4. API (AC#2, #11, #12). `probe(&self, key: u64) -> Option<Snapshot>` returns an immutable value type, with no borrow of the slot, so replacement after a probe cannot change an already-consumed result. `store(&self, key, score, depth, bound, mov)` selects its own victim at store time, independently of any probe. Both take `&self`, are bounded (one cluster scan, no CAS, no locks, no retry loop), and there is no worker-exclusive state, so one `Arc<Table>` serves arbitrary workers. Taking a raw key rather than a `&Position` is what makes adversarial index/key tests expressible.
+
+5. Replacement (AC#4, #14). A same-key slot is updated in place, keeping the existing move when the new one is null and declining to overwrite a strictly deeper same-age entry unless the new bound is an Exact upgrade. Otherwise the victim minimises `depth + 4*(bound == Exact) - 8*relative_age`, with empty slots always chosen first and ties broken by lowest slot index. Worker-agnostic: no slot is ever reserved for a writer, so any worker consumes any other's entries.
+
+6. Age and invalidation (AC#6, #7). `clear(&mut self)` physically zeroes the table, which makes invalidation exact and removes the generation-wrap hazard entirely; `&mut self` plus `Arc::get_mut` in `SearchEngine` turns the current comment-only 'workers must not call this' rule into a boundary the type system enforces (both existing callers already join the worker first). Age is a separate 6-bit counter advanced once per root search via `&self`; it wraps freely because it only orders replacement priority and can never invalidate an entry. Sizing uses checked arithmetic and rounds the cluster count *down* to a power of two, so the allocation never exceeds the advertised limit (the current code rounds to nearest and a 100MB request allocates 128MB); size 0 yields one cluster.
+
+7. Telemetry (AC#7). `hashfull` samples clusters on a stride across the whole table instead of the first 1000 entries, which currently panics for any table smaller than 1000 entries and only ever observes one contiguous region.
+
+8. Search integration. `Search` probes once into a `Snapshot` and stores at Step 24 through `store`; quiescence Step 3/4 reads the snapshot. `Tracer`'s `hash_clash` becomes `hash_miss`, since with full-key verification 'same slot, different position' is no longer the observable event.
+
+9. Tests (AC#5, #10, #16). Packing round-trip and field invariants; cluster selection and alignment; replacement priority incl. deeper-exact survival and same-key update; sizing boundaries incl. 0, 1, non-power-of-two and overflow; hashfull on a one-cluster table and across capacities; deterministic replacement between probe and consumption; a different key sharing the cluster index; hand-constructed torn word pairs rejected; age wrap; clear. Concurrency: multi-writer/multi-reader stress where each key's data is a known function of the key, asserting no accepted snapshot ever carries invented data.
+
+10. Measurement (AC#8, #15). Add a `benches/tt.rs` Criterion harness for large-table construction, clear, single-thread probe/store throughput and a multi-worker mixed load; record results and retained lifecycle costs in BENCHMARKS.md, measured round-robin against the base commit.
+<!-- SECTION:PLAN:END -->
