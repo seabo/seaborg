@@ -1,9 +1,11 @@
 ---
 id: TASK-68.1
 title: Restructure the CLI into subcommands
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@george'
 created_date: '2026-07-19 22:33'
+updated_date: '2026-07-19 22:45'
 labels: []
 dependencies: []
 parent_task_id: TASK-68
@@ -38,3 +40,15 @@ Note: `seaborg lichess` is added by a later subtask; leave a clean place to hook
 - [ ] #4 `ui` subcommand still supports the port and no-open options
 - [ ] #5 cargo fmt --check, clippy (workspace, all-targets, all-features, -D warnings), and cargo test --workspace all pass
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Replace the ArgGroup("mode") booleans in src/cmdline.rs with a required-less Option<Commands> subcommand enum.
+2. Add variants: Uci, Ui(UiArgs{port, no_open}), Perft(PerftArgs), Dev, Licenses. Keep Perft as-is.
+3. Bare seaborg (command == None) dispatches to UCI, same as explicit Uci.
+4. Rewrite cmdline() to match on the subcommand and call the existing dispatch targets (engine::launch, run_ui, dev, perft, licenses).
+5. Rework run_ui to take a UiArgs instead of &Args.
+6. Leave a clear place to hook in the future lichess subcommand without implementing it.
+7. Run fmt, clippy, and workspace tests.
+<!-- SECTION:PLAN:END -->
