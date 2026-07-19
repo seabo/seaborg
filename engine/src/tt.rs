@@ -642,8 +642,9 @@ impl Table {
 
         let clusters = self.capacity_clusters();
         let sampled = TARGET_CLUSTERS.min(clusters);
-        // A power-of-two stride over a power-of-two cluster count visits `sampled` distinct
-        // clusters spread evenly across the table.
+        // `sampled` never exceeds `clusters`, so the stride is at least one and the `sampled`
+        // visited indices are distinct. The last one sits within a stride of the end, so the
+        // sample reaches across the whole allocation rather than clustering at either end.
         let stride = clusters / sampled;
 
         let mut occupied = 0_usize;
@@ -1071,7 +1072,7 @@ mod tests {
         );
     }
 
-    /// AC#2/AC#5. The probe result is a value, so replacement between the probe and the point where
+    /// The probe result is a value, so replacement between the probe and the point where
     /// the caller uses the result cannot change what the caller uses. This drives the adverse
     /// schedule deterministically rather than hoping to hit it with threads.
     #[test]
@@ -1097,7 +1098,7 @@ mod tests {
         assert_eq!(snapshot.bound(), Bound::Exact);
     }
 
-    /// AC#13. A reader that observes one write's key word paired with another write's data word
+    /// A reader that observes one write's key word paired with another write's data word
     /// must reject the pair. Both halves of the tear are constructed by hand so the schedule is
     /// exact rather than incidental.
     #[test]
@@ -1246,7 +1247,7 @@ mod tests {
         assert!(previous > 500, "a heavily loaded table reported {previous}");
     }
 
-    /// AC#14. Every writer stores a score that is a known function of its key, so any snapshot a
+    /// Every writer stores a score that is a known function of its key, so any snapshot a
     /// reader accepts whose score does not match that function is information the table invented.
     /// Races are allowed to lose entries; they are not allowed to fabricate one.
     #[test]
@@ -1297,7 +1298,7 @@ mod tests {
         );
     }
 
-    /// AC#11/AC#12. Probes and stores go through `&Table` from many threads with no coordination,
+    /// Probes and stores go through `&Table` from many threads with no coordination,
     /// and every worker can consume every other worker's entries: nothing is partitioned by worker.
     #[test]
     fn every_worker_can_consume_every_other_workers_entries() {

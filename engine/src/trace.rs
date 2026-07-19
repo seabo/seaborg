@@ -121,7 +121,11 @@ impl Tracer {
         self.hash_misses
     }
 
-    /// The total number of hash probes, which every probe falls into exactly one of.
+    /// The total number of hash probes, as the sum of hits and misses.
+    ///
+    /// Those two partition every probe, so their sum is the probe count. `hash_collisions` is
+    /// deliberately not added: it counts a subset of the hits rather than a third outcome, so
+    /// including it would count those probes twice.
     pub fn hash_probes(&self) -> usize {
         self.hash_hits + self.hash_misses
     }

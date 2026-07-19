@@ -269,9 +269,25 @@ impl SearchHandle {
 }
 
 impl Drop for SearchHandle {
+    /// Cancel the worker and wait for it to exit.
+    ///
+    /// Joining rather than detaching is what makes "no search is running" a structural property
+    /// instead of a caller convention. The worker holds a clone of the shared transposition table,
+    /// and [`SearchEngine::clear_hash`] needs an exclusive reference to it, so a detached worker
+    /// outliving its handle would make an otherwise correct `ucinewgame` panic — intermittently,
+    /// and pointing at the clear rather than at the drop that caused it. Once every handle either
+    /// joins through [`SearchHandle::wait`] or joins here, no path can leave a worker behind.
+    ///
+    /// The join always terminates: cancellation is checked on the search hot path, and neither
+    /// channel the worker writes on its way out can block it (the events channel is unbounded, and
+    /// the completion channel has capacity for the single message ever sent on it).
+    ///
+    /// The join result is discarded. There is no consumer for the outcome here, and a worker that
+    /// panicked must not panic this thread in turn: during unwinding that would abort the process.
     fn drop(&mut self) {
-        if self.join.is_some() {
+        if let Some(join) = self.join.take() {
             self.cancel();
+            let _ = join.join();
         }
     }
 }
@@ -2142,6 +2158,23 @@ mod tests {
         // every search has finished — the boundary that keeps a clear from racing a live worker.
         engine.clear_hash();
         assert!(engine.table.probe(marker.zobrist().0).is_none());
+    }
+
+    /// Dropping a handle rather than waiting on it must still leave the table unshared, so that a
+    /// subsequent new-game clear can take its exclusive reference. If `Drop` merely cancelled and
+    /// detached, the worker would outlive the handle still holding a clone of the table, and the
+    /// clear below would panic whenever it won the race.
+    #[test]
+    fn dropping_a_search_handle_releases_the_table_for_a_later_clear() {
+        core::init::init_globals();
+
+        let mut engine = SearchEngine::new(1);
+
+        // An unbounded search, so it is certainly still running at the point the handle is
+        // dropped. Nothing observes its outcome: the drop is the whole subject of the test.
+        drop(engine.start(Position::start_pos(), SearchLimit::Infinite));
+
+        engine.clear_hash();
     }
 
     #[test]
