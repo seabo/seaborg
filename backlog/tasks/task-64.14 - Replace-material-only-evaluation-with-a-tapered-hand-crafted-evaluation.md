@@ -1,11 +1,11 @@
 ---
 id: TASK-64.14
 title: Replace material-only evaluation with a tapered hand-crafted evaluation
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-19 13:33'
-updated_date: '2026-07-19 21:10'
+updated_date: '2026-07-19 21:13'
 labels:
   - evaluation
   - strength
@@ -89,6 +89,12 @@ Verification (on target 88b78c0):
 Razoring re-measurement (AC#7, superseding the earlier scale-only rationale): compared the retained margin (426 + 252*depth^2 through depth 6) directly against an otherwise identical tapered-evaluation build with should_razor forced false. TASK-27 harness, FastChess alpha 1.5.0, fixed depth 6, paired colour reversal, 20 games: retained-margin candidate 10 wins, 0 draws, 10 losses; pentanomial [0,0,10,0,0]; Elo estimate 0.0; LLR 0.0 within [-2.94,2.94]; zero crashes/forfeits. Every opening pair split 1-1, so this capped smoke sample detects no strength change attributable to razoring. Decision: retain the landed margin unchanged; the evidence does not justify a revision. This is a non-authoritative smoke measurement, not a parameter-tuning SPRT. Artifact: /tmp/seaborg-strength-64_14-rework/artifacts-razoring-depth6/report.json. Comparator SHA-256 04bdb6c538b1d1f0f5b87ab737898ba569a080c6a8d5f2fa5c2361b4e756b17e; retained-margin SHA-256 102d861cdee6261080a41b2554c73faf8c31cee5e591fae727faff5eba279fc7.
 
 Resolved REV-1-01: added the attributable current-margin-versus-disabled comparison requested by review, recorded the neutral result and explicit no-revision decision. The comparator was temporary; engine/src/search.rs is restored exactly to implementation target 88b78c0, so the immutable code target is unchanged.
+
+Integration rework after merge-gate failure:
+- Merged primary tip c7826f15b267cd89b0c1c02c97b5294f6ec9bf57 into the persistent task branch, bringing in the subsequently landed static-evaluation Criterion benchmark.
+- Updated benches/search.rs from material_eval() to static_eval() and revised the benchmark rationale so it remains valid for any future evaluation-term change.
+- Focused Criterion verification: cargo bench --bench search -- "static evaluation" --sample-size 10 passed; tapered evaluation measured approximately 23.1-23.5 ns (startpos), 23.8-25.3 ns (kiwipete), 24.5-27.3 ns (middlegame), and 9.7-14.9 ns (endgame).
+- Resolved the recorded merge integration failure: strict Clippy now compiles the benchmark against the renamed evaluator.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -187,5 +193,22 @@ Detached trial merge: dadd71d
 Failing command: clean-CARGO_TARGET_DIR cargo clippy --workspace --all-targets --all-features -- -D warnings
 Evidence: benches/search.rs:186 still calls Position::material_eval(), which TASK-64.14 replaces with static_eval(); Clippy also reports the Evaluation import unused as a consequence. The benchmark file landed on master after the task's recorded base, so the approved target passed in isolation but does not integrate with the live primary tip.
 Expected rework: update the search evaluation benchmark to call and describe static_eval(), verify the benchmark still measures the intended evaluator, then rerun the repository gates. cargo fmt --check passed and cargo test --workspace passed on the trial merge, but strict Clippy is a blocking integration gate. Master was not advanced.
+---
+
+author: @codex
+created: 2026-07-19 21:13
+---
+Implementation handoff
+Branch: task-64.14-tapered-eval
+Worktree: /Users/seabo/seaborg-worktrees/task-64.14-tapered-eval
+Base: c7826f15b267cd89b0c1c02c97b5294f6ec9bf57
+Implementation target: 04c6986bb22d1b131e5194a90de1b8221e4d8b18
+Resolved findings: merge integration failure recorded in comment #6 (stale material_eval benchmark call)
+Verification:
+- cargo bench --bench search -- "static evaluation" --sample-size 10: pass (all four positions measured)
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (0 warnings)
+- cargo test --workspace: pass (45 core; 273 engine passed, 2 ignored; 19 integration; 1 doc test; 0 failed)
+Known failures: none
 ---
 <!-- COMMENTS:END -->
