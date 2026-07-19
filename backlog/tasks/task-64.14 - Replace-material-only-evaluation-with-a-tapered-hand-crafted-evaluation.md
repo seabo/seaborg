@@ -1,11 +1,11 @@
 ---
 id: TASK-64.14
 title: Replace material-only evaluation with a tapered hand-crafted evaluation
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-19 13:33'
-updated_date: '2026-07-19 20:53'
+updated_date: '2026-07-19 20:58'
 labels:
   - evaluation
   - strength
@@ -85,6 +85,10 @@ Verification (on target 88b78c0):
 - cargo fmt --check: pass
 - cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (0 warnings)
 - cargo test --workspace: pass (266 engine + 43 core + others; 0 failed)
+
+Razoring re-measurement (AC#7, superseding the earlier scale-only rationale): compared the retained margin (426 + 252*depth^2 through depth 6) directly against an otherwise identical tapered-evaluation build with should_razor forced false. TASK-27 harness, FastChess alpha 1.5.0, fixed depth 6, paired colour reversal, 20 games: retained-margin candidate 10 wins, 0 draws, 10 losses; pentanomial [0,0,10,0,0]; Elo estimate 0.0; LLR 0.0 within [-2.94,2.94]; zero crashes/forfeits. Every opening pair split 1-1, so this capped smoke sample detects no strength change attributable to razoring. Decision: retain the landed margin unchanged; the evidence does not justify a revision. This is a non-authoritative smoke measurement, not a parameter-tuning SPRT. Artifact: /tmp/seaborg-strength-64_14-rework/artifacts-razoring-depth6/report.json. Comparator SHA-256 04bdb6c538b1d1f0f5b87ab737898ba569a080c6a8d5f2fa5c2361b4e756b17e; retained-margin SHA-256 102d861cdee6261080a41b2554c73faf8c31cee5e591fae727faff5eba279fc7.
+
+Resolved REV-1-01: added the attributable current-margin-versus-disabled comparison requested by review, recorded the neutral result and explicit no-revision decision. The comparator was temporary; engine/src/search.rs is restored exactly to implementation target 88b78c0, so the immutable code target is unchanged.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -129,5 +133,28 @@ Verification:
 - cargo test --workspace: pass (43 core; 266 engine passed, 2 ignored; 19 integration; 1 doc test)
 - archived fixed-depth smoke report: present and matches 19W-0D-1L, but does not isolate razoring
 - hot-path benchmark: not used for the verdict because another task's cargo test/engine process was active, so the machine did not meet the required idle condition
+---
+
+author: @codex
+created: 2026-07-19 20:58
+---
+Resolved REV-1-01: TASK-27 fixed-depth paired comparison now isolates the landed razoring margin from the tapered evaluator. Current margin vs razoring disabled finished 10W-0D-10L (0 Elo, LLR 0.0, no crashes/forfeits); margin retained unchanged. Evidence: /tmp/seaborg-strength-64_14-rework/artifacts-razoring-depth6/report.json.
+---
+
+author: @codex
+created: 2026-07-19 20:58
+---
+Implementation handoff
+Branch: task-64.14-tapered-eval
+Worktree: /Users/seabo/seaborg-worktrees/task-64.14-tapered-eval
+Base: aa915d85d32d03d829d0636c6af3e71b40a6632f
+Implementation target: 88b78c0
+Resolved findings: REV-1-01
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (0 warnings)
+- cargo test --workspace: pass (43 core; 266 engine passed, 2 ignored; 19 integration; 1 doc test; 0 failed)
+- TASK-27 fixed-depth smoke comparison, depth=6, 20 games, retained razoring margin vs disabled: 10W-0D-10L, Elo 0.0, LLR 0.0, zero crashes/forfeits; report at /tmp/seaborg-strength-64_14-rework/artifacts-razoring-depth6/report.json
+Known failures: none
 ---
 <!-- COMMENTS:END -->
