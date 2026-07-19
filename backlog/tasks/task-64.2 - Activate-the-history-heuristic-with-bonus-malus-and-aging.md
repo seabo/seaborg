@@ -1,10 +1,11 @@
 ---
 id: TASK-64.2
 title: 'Activate the history heuristic with bonus, malus and aging'
-status: To Do
-assignee: []
+status: Ready to Merge
+assignee:
+  - '@george'
 created_date: '2026-07-19 13:30'
-updated_date: '2026-07-19 13:44'
+updated_date: '2026-07-19 22:04'
 labels:
   - search
   - move-ordering
@@ -35,12 +36,158 @@ Whether history should be retained across moves within a game, rather than reset
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A quiet move causing a beta cutoff receives a depth-scaled history bonus
-- [ ] #2 Quiet moves searched and failing before the cutoff move receive a malus
-- [ ] #3 History values are bounded by a documented gravity or scaling scheme and cannot overflow their storage type
-- [ ] #4 Quiet moves in the ordering Quiet phase are demonstrably ordered by history score, verified by a test asserting a known good quiet is yielded before a known poor one after training the table
-- [ ] #5 The decision on whether history persists across moves within a game is recorded with rationale
-- [ ] #6 Measured with the TASK-27 strength-regression script, with results recorded in the implementation notes
-- [ ] #7 The history value read at the ordering sites is not narrowed by a truncating cast: search.rs:1499 and search.rs:1559 currently cast a u32 table value to i16, which wraps above 32767 and orders a repeatedly successful quiet move last
-- [ ] #8 A test drives a history value past the storage boundary of the ordering score type and asserts the move is still ordered ahead of an untrained move
+- [x] #1 A quiet move causing a beta cutoff receives a depth-scaled history bonus
+- [x] #2 Quiet moves searched and failing before the cutoff move receive a malus
+- [x] #3 History values are bounded by a documented gravity or scaling scheme and cannot overflow their storage type
+- [x] #4 Quiet moves in the ordering Quiet phase are demonstrably ordered by history score, verified by a test asserting a known good quiet is yielded before a known poor one after training the table
+- [x] #5 The decision on whether history persists across moves within a game is recorded with rationale
+- [x] #6 Measured with the TASK-27 strength-regression script, with results recorded in the implementation notes
+- [x] #7 The history value read at the ordering sites is not narrowed by a truncating cast: search.rs:1499 and search.rs:1559 currently cast a u32 table value to i16, which wraps above 32767 and orders a repeatedly successful quiet move last
+- [x] #8 A test drives a history value past the storage boundary of the ordering score type and asserts the move is still ordered ahead of an untrained move
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+Rework driven by merge finding REV (codex-merge, comment #4): the approved history behavior, once integrated with TASK-64.14 tapered eval on master, makes gives_correct_answers pick a1b2 where it pinned a1b1 for KPvKP pawn-race FEN 8/6pk/8/8/8/8/P7/K7 w - - 0 1.
+
+1. Merge pinned master tip cbec05f into the task branch to reproduce the combined state (done; failure reproduced).
+2. Establish ground truth with the Syzygy KPvKP tablebase: a1b1 and a1b2 are both WIN (the only two winning moves); a2a4 DRAW, a2a3 LOSS. The suite pinned a single arbitrary optimal move, so it is over-specified and rejects an equally-optimal winning move that history/tapered-eval ordering legitimately surfaced.
+3. Resolve by revalidating the expectation (sanctioned by the merge finding): change the suite best-move field from one &str to a slice of acceptable optimal moves and assert membership. The pawn-race entry accepts both a1b1 and a1b2 with a comment citing the tablebase result; every other entry keeps a single-element slice.
+4. Preserve the approved history/search production behavior unchanged; no history.rs/search production changes in this rework.
+5. Run cargo fmt --check, strict clippy, cargo test --workspace; record verification and hand off the integrated commit.
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented signed butterfly history with depth-squared evidence and bounded gravity updates in [-32,768, 32,768]. A quiet beta cutoff receives the positive update; every fully searched quiet predecessor at that node receives the matching malus. History-to-ordering conversion saturates explicitly to i16, so a table value of 32,768 remains ahead of an untrained move instead of wrapping negative, while OrderedMoves retains its existing compact footprint.
+
+Persistence decision: retain the existing per-search lifetime. Evidence is shared across iterative-deepening iterations within one Search::run, then reset when that run finishes; it does not persist across moves within a game. Search objects and their positions are request-specific today, so carrying this table across moves would require a new game-owned heuristic boundary and reset semantics. Keeping it local avoids leaking stale evidence across unrelated searches while still adapting throughout the tree where the gathered evidence is relevant.
+
+TASK-27 strength smoke: baseline c7826f15b267cd89b0c1c02c97b5294f6ec9bf57 versus candidate working tree, optimized cargo build --release --bin seaborg, FastChess alpha 1.5.0, 4 paired-colour games at depth=4, concurrency=2, Hash=64, Threads=1. Result: non-authoritative INCONCLUSIVE, 2 wins / 0 draws / 2 losses, LLR 0.0 within [-2.94, 2.94], 0 forfeits, 0 crashes, runner exit 0. This smoke run establishes successful match integration but is too small to claim a strength result.
+
+Rework (resolving merge finding, comment #4 @codex-merge).
+
+Proximate failure: with the approved history heuristic integrated onto master (which had gained TASK-64.14 tapered evaluation), search::tests::gives_correct_answers picked a1b2 for the KPvKP pawn-race FEN 8/6pk/8/8/8/8/P7/K7 w - - 0 1 where the suite pinned a1b1. Reproduced on this branch after merging pinned master tip cbec05f.
+
+Ground truth: probed the Syzygy KPvKP tablebase. From the root (White to move) a1b1 = WIN and a1b2 = WIN are the position's only two winning moves; a2a4 = DRAW and a2a3 = LOSS. The king must step aside before pushing, and the two king moves are equally optimal. The suite's single-move pin was therefore over-specified: it rejected an equally-optimal answer whenever quiet-move ordering surfaced the other king move. History ordering (now non-trivial) plus tapered eval legitimately flipped which of the two the depth-22 search returns first.
+
+Resolution (test-only; no engine/production change): changed the correctness suite's best-move field from a single &str to a slice of acceptable optimal moves and assert membership; the pawn-race entry now accepts both a1b1 and a1b2 with a comment recording the tablebase result, and every other entry keeps its single optimum. history.rs is byte-identical to the approved target 88cbd082; the only search.rs delta since the master merge is inside the test module.
+
+Persistence decision (AC#5) unchanged from the approved implementation: history retains per-search lifetime (reset per Search::run, shared across iterative-deepening iterations, not across game moves).
+
+Integration strength smoke (TASK-27 script, on the combined code): baseline = master engine (code cbec05f, built at 18a4fa2) sha256 1db198cd...; candidate = integrated target 5d84701 sha256 23ed3d56...; FastChess alpha 1.5.0, smoke mode, 4 paired-colour games at depth=4, concurrency=2, Hash=64, Threads=1. Result: NON-AUTHORITATIVE INCONCLUSIVE, 2-0-2, LLR 0.0 within [-2.94, 2.94], 0 crashes, 0 forfeits, runner exit 0. Confirms clean match integration of the combined code; too small for a strength claim.
+
+Master moved from cbec05f to 18a4fa2 during rework; the cbec05f..18a4fa2 delta is documentation and backlog files only (no Rust or Cargo changes), so it does not affect this integration. Base pinned at cbec05f per the recorded merge target.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @george
+created: 2026-07-19 21:20
+---
+Implementation handoff
+Branch: task-64.2-history-heuristic
+Worktree: /Users/seabo/seaborg-worktrees/task-64.2-history-heuristic
+Base: c7826f15b267cd89b0c1c02c97b5294f6ec9bf57
+Implementation target: 88cbd086fa88c56cbd7d908588685397178d52c3
+Resolved findings: none
+Verification:
+- cargo fmt --check: PASS
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: PASS
+- cargo test --workspace: PASS (45 core, 274 engine passed / 2 ignored, 19 build metadata, 1 doc)
+- python3 tools/strength/strength_test.py (smoke, 4 games, depth=4): INCONCLUSIVE, 2-0-2, LLR 0.0, no crashes or forfeits
+Known failures: none
+---
+
+author: @george
+created: 2026-07-19 21:21
+---
+Handoff correction: the full implementation target SHA is 88cbd082406a4442f1b78621a90116df94cc4145. The abbreviated 88cbd08 in git log was expanded incorrectly in comment #1; all other handoff fields and verification remain unchanged.
+---
+
+author: @codex-reviewer
+created: 2026-07-19 21:31
+---
+Review attempt: 1
+Reviewed branch: task-64.2-history-heuristic
+Reviewed implementation: 88cbd082406a4442f1b78621a90116df94cc4145
+Verdict: approved
+
+All eight acceptance criteria are proven. The base-to-target diff is task-scoped; commits after the implementation target contain only handoff metadata.
+
+Verification:
+- cargo fmt --check: PASS
+- CARGO_TARGET_DIR=/tmp/seaborg-review-task64-2-clippy cargo clippy --workspace --all-targets --all-features -- -D warnings: PASS from a clean target
+- cargo test --workspace: PASS (45 core; 274 engine passed, 2 ignored; 19 build metadata; 1 doc)
+- cargo bench --bench perft --bench movegen: benchmark executables are byte-identical between base and target; no code-induced delta
+- cargo bench --bench search -- 'search startpos depth 7': base 38.888/38.315 us versus target 39.162/38.707 us for deadline/no-deadline, approximately +0.7%/+1.0%, within the 5% gate
+- TASK-27 strength smoke evidence: recorded in implementation notes, 2-0-2 with no crashes or forfeits
+---
+
+author: @codex-merge
+created: 2026-07-19 21:35
+---
+Merge integration failure
+Primary tip tested: cbec05f7527e820b688462930b5a889a368ceb2f
+Detached merge tested: a6352c7b0c735c2b64eb7402a78127cdeb88de09
+Overlapping landed task: TASK-64.14 in engine/src/search.rs
+
+Failing command: cargo test --workspace
+Evidence: search::tests::gives_correct_answers failed for FEN 8/6pk/8/8/8/8/P7/K7 w - - 0 1 at engine/src/search.rs:2852; integrated search selected a1b2 while the test expects a1b1. Result: 275 passed, 1 failed, 2 ignored. cargo fmt --check and clean-target strict Clippy passed before the test failure.
+
+The detached trial was ejected and primary was not advanced. Rework must preserve the approved history behavior while resolving or deliberately revalidating this TASK-64.14 search expectation on the combined code.
+---
+
+author: @george
+created: 2026-07-19 21:51
+---
+Implementation handoff (rework)
+Branch: task-64.2-history-heuristic
+Worktree: /Users/seabo/seaborg-worktrees/task-64.2-history-heuristic
+Base: cbec05f7527e820b688462930b5a889a368ceb2f (pinned master tip merged at b71dcd55; current master 18a4fa2 differs only by docs/backlog files)
+Implementation target: 5d84701744c905683508c0d129108a145f6a2643
+Resolved findings: merge-integration finding (comment #4, @codex-merge) — gives_correct_answers a1b1/a1b2 expectation on the combined code
+Verification:
+- cargo fmt --check: PASS
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: PASS (clean target CARGO_TARGET_DIR=/tmp/seaborg-task642-clippy)
+- cargo test --workspace: PASS (core 45; engine 276 passed, 2 ignored; build metadata 19; doc 1)
+- TASK-27 strength smoke on integrated code: NON-AUTHORITATIVE INCONCLUSIVE, 2-0-2, LLR 0.0 in [-2.94,2.94], 0 crashes, 0 forfeits, runner exit 0
+Known failures: none
+Note: rework is test-only. history.rs is byte-identical to approved target 88cbd082; the only search.rs change since the master merge is the correctness-suite revalidation, backed by the Syzygy KPvKP tablebase (a1b1 and a1b2 are the position's only two winning moves).
+---
+
+author: @codex-reviewer
+created: 2026-07-19 22:03
+---
+Review attempt: 2
+Reviewed branch: task-64.2-history-heuristic
+Reviewed implementation: 5d84701744c905683508c0d129108a145f6a2643
+Verdict: approved
+
+Resolves the merge-integration finding (comment #4, @codex-merge). The rework is test-only: history.rs is byte-identical to the previously approved target 88cbd082, and the only search.rs delta since the master merge (b71dcd55) is inside the test module (git diff b71dcd5 5d84701 touches solely 'mod tests'). The base(cbec05f)-to-target diff activates the bounded signed butterfly history — depth-squared bonus on quiet cutoffs, matching malus on searched predecessors, gravity bound in [-32768, 32768] proven overflow-free (max intermediate 2^30 < i32::MAX), and a saturating i16 ordering score so a table value of 32768 stays ahead of an untrained move — and revalidates the over-specified KPvKP entry to accept both a1b1 and a1b2 (the position's only two winning moves by the Syzygy KPvKP tablebase). All eight acceptance criteria are proven. Commits after the target contain only handoff metadata.
+
+AC evidence:
+- AC#1/#2: history_bonus(depth)=min(depth^2, HISTORY_MAX) applied to the cutoff quiet; -bonus applied to every fully-searched quiet predecessor accumulated in failed_quiets (bounded by MAX_MOVES=254). Verified by history_bonus_grows_with_depth_and_gravity_applies_malus.
+- AC#3: gravity update entry += bonus - entry*|bonus|/HISTORY_MAX, clamped bonus, entry stays in [-HISTORY_MAX, HISTORY_MAX]. Verified by gravity_updates_are_bounded_and_adapt_to_opposing_evidence.
+- AC#4/#8: trained_quiets_are_ordered_without_narrowing_history_scores trains good to HISTORY_MAX (>i16::MAX) and poor to -HISTORY_MAX, asserts the raw value exceeds i16::MAX and that good is yielded before poor; the stable selection sort makes this fail under a truncating cast.
+- AC#5: per-search lifetime retained, rationale recorded in notes.
+- AC#6: TASK-27 strength smoke recorded (non-authoritative INCONCLUSIVE 2-0-2).
+- AC#7: history_ordering_score saturates to i16 (search.rs read sites), no truncating cast.
+
+Verification (on 5d84701):
+- cargo fmt --check: PASS
+- CARGO_TARGET_DIR=/tmp/seaborg-review-t642 cargo clippy --workspace --all-targets --all-features -- -D warnings: PASS from a clean target
+- cargo test --workspace: PASS (core 45; engine 276 passed, 2 ignored; build metadata 19; doc 1)
+- Focused: gravity_updates_are_bounded_and_adapt_to_opposing_evidence, history_bonus_grows_with_depth_and_gravity_applies_malus, trained_quiets_are_ordered_without_narrowing_history_scores, gives_correct_answers all PASS
+- Benchmarks: no core/ or movegen changes, so perft/movegen are structurally unaffected. Search hot-path production code is byte-identical to the approved 88cbd082, benchmarked within the 5% gate in review attempt 1 (comment #3). A fresh base-vs-target search bench was attempted but the host was not idle (load ~6, 9 users); the deadline-free variant showed no significant change (median -1.8%, CI straddling zero, p=0.27), corroborating no regression, while the deadline variant produced contention noise (CI 8.9-13.1 ms). No repeatable regression.
+---
+<!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Reworked and approved at implementation 5d84701744c905683508c0d129108a145f6a2643: a test-only resolution of the merge-integration finding (comment #4) atop the bounded signed butterfly history. Quiet beta cutoffs receive a depth-squared bonus, searched predecessor quiets receive the matching malus, gravity bounds every entry within [-32768, 32768] with no i32 overflow, and the ordering score saturates to i16 so a well-trained move never wraps below an untrained one. history.rs is byte-identical to the prior approved target 88cbd082; the over-specified KPvKP correctness entry now accepts both a1b1 and a1b2 (Syzygy-confirmed equally optimal). All eight acceptance criteria are proven by focused regressions, cargo fmt --check, clean-target strict Clippy, and the full workspace test suite (core 45; engine 276 passed, 2 ignored). Search hot-path production code is unchanged from the review-attempt-1 in-gate benchmark.
+<!-- SECTION:FINAL_SUMMARY:END -->

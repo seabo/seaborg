@@ -71,14 +71,20 @@ where
     }
 }
 
-/// A structure storing two butterfly tables of `u32`s, used to record the history value of moves
+/// Largest absolute history value.
+///
+/// This is deliberately one greater than `i16::MAX`: ordering scores must preserve the full
+/// history value rather than silently wrapping a well-trained move below an untrained one.
+pub const HISTORY_MAX: i32 = 32_768;
+
+/// A structure storing two butterfly tables of `i32`s, used to record the history value of moves
 /// during search.
 ///
 /// This data structure occupies about 32KB of memory.
 #[derive(Debug)]
 pub struct HistoryTable {
-    white: Butterfly<u32>,
-    black: Butterfly<u32>,
+    white: Butterfly<i32>,
+    black: Butterfly<i32>,
 }
 
 impl Default for HistoryTable {
@@ -95,14 +101,23 @@ impl HistoryTable {
         }
     }
 
-    pub fn inc(&mut self, from: Square, to: Square, amt: u32, side: Player) {
-        match side {
-            Player::WHITE => self.white.inc(from, to, amt),
-            Player::BLACK => self.black.inc(from, to, amt),
-        }
+    /// Apply a bounded history update.
+    ///
+    /// The gravity term `value * |bonus| / HISTORY_MAX` makes repeated evidence progressively less
+    /// influential near either boundary and pulls stale evidence back toward zero when the sign of
+    /// new evidence changes. Clamping the requested bonus before the arithmetic keeps every
+    /// intermediate within `i32`, and the resulting entry is always in
+    /// `-HISTORY_MAX..=HISTORY_MAX`.
+    pub fn update(&mut self, from: Square, to: Square, bonus: i32, side: Player) {
+        let entry = match side {
+            Player::WHITE => &mut self.white.data[from.index() as usize][to.index() as usize],
+            Player::BLACK => &mut self.black.data[from.index() as usize][to.index() as usize],
+        };
+        let bonus = bonus.clamp(-HISTORY_MAX, HISTORY_MAX);
+        *entry += bonus - *entry * bonus.abs() / HISTORY_MAX;
     }
 
-    pub fn get(&self, from: Square, to: Square, side: Player) -> u32 {
+    pub fn get(&self, from: Square, to: Square, side: Player) -> i32 {
         match side {
             Player::WHITE => self.white.get(from, to),
             Player::BLACK => self.black.get(from, to),
@@ -115,7 +130,7 @@ impl HistoryTable {
     ///
     /// Both squares must be in the range 0..64.
     #[inline(always)]
-    pub unsafe fn get_unchecked(&self, from: Square, to: Square, side: Player) -> u32 {
+    pub unsafe fn get_unchecked(&self, from: Square, to: Square, side: Player) -> i32 {
         match side {
             Player::WHITE => self.white.get_unchecked(from, to),
             Player::BLACK => self.black.get_unchecked(from, to),
@@ -125,5 +140,31 @@ impl HistoryTable {
     /// Reset the tables to zeros.
     pub fn reset(&mut self) {
         *self = Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gravity_updates_are_bounded_and_adapt_to_opposing_evidence() {
+        let from = Square::A2;
+        let to = Square::A3;
+        let mut history = HistoryTable::new();
+
+        for _ in 0..100 {
+            history.update(from, to, i32::MAX, Player::WHITE);
+        }
+        assert_eq!(history.get(from, to, Player::WHITE), HISTORY_MAX);
+
+        history.update(from, to, -HISTORY_MAX, Player::WHITE);
+        assert_eq!(history.get(from, to, Player::WHITE), -HISTORY_MAX);
+
+        for _ in 0..100 {
+            history.update(from, to, i32::MIN, Player::WHITE);
+        }
+        assert_eq!(history.get(from, to, Player::WHITE), -HISTORY_MAX);
+        assert_eq!(history.get(from, to, Player::BLACK), 0);
     }
 }

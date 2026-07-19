@@ -1,4 +1,4 @@
-use crate::history::HistoryTable;
+use crate::history::{HistoryTable, HISTORY_MAX};
 
 use super::eval::Evaluation;
 use super::killer::KillerTable;
@@ -33,6 +33,16 @@ const MAX_DEPTH: u8 = 255;
 /// saturating guard, and one missed guard wraps to a near-infinite depth rather than failing
 /// loudly. Letting depth go negative removes the hazard at the type level.
 pub type Depth = i16;
+
+/// Depth-squared history evidence, capped to the gravity table's representable range.
+fn history_bonus(depth: Depth) -> i32 {
+    i32::from(depth.max(1)).pow(2).min(HISTORY_MAX)
+}
+
+/// Preserve history ordering when the bounded table extends beyond the move list's compact score.
+fn history_ordering_score(value: i32) -> i16 {
+    value.clamp(i16::MIN.into(), i16::MAX.into()) as i16
+}
 
 /// The greatest ply from the root that per-ply state is kept for.
 ///
@@ -957,6 +967,7 @@ impl<'engine> Search<'engine> {
         let mut moves = OrderedMoves::new();
         let mut move_count = 0;
         let mut did_raise_alpha = false;
+        let mut failed_quiets = BasicMoveList::empty();
 
         'move_loop: while moves.load_next_phase(MoveLoader::from(self, tt_mov, ply)) {
             for mov in &mut moves {
@@ -1064,18 +1075,22 @@ impl<'engine> Search<'engine> {
                             // beta-cutoff; record killer and history
                             if mov.is_quiet() {
                                 self.kt.store(mov, ply);
+                                let bonus = history_bonus(depth);
+                                let side = self.pos.turn();
+                                self.history.update(mov.orig(), mov.dest(), bonus, side);
+                                for failed in &failed_quiets {
+                                    self.history
+                                        .update(failed.orig(), failed.dest(), -bonus, side);
+                                }
                             }
-
-                            // self.history.inc(
-                            //     mov.orig(),
-                            //     mov.dest(),
-                            //     depth as u32 * depth as u32,
-                            //     self.pos.turn(),
-                            // );
 
                             break 'move_loop;
                         }
                     }
+                }
+
+                if mov.is_quiet() {
+                    failed_quiets.push(mov);
                 }
             }
         }
@@ -1828,10 +1843,11 @@ impl<'a, 'search> Loader for MoveLoader<'a, 'search> {
         for (mov, score) in quiets {
             // SAFETY: these are legal moves, so both squares are valid.
             unsafe {
-                *score = self
-                    .search
-                    .history
-                    .get_unchecked(mov.orig(), mov.dest(), turn) as i16;
+                *score = history_ordering_score(self.search.history.get_unchecked(
+                    mov.orig(),
+                    mov.dest(),
+                    turn,
+                ));
             }
         }
     }
@@ -1888,10 +1904,11 @@ impl<'a, 'search> Loader for QMoveLoader<'a, 'search> {
         for (mov, score) in quiets {
             // SAFETY: these are legal moves, so both squares are valid.
             unsafe {
-                *score = self
-                    .search
-                    .history
-                    .get_unchecked(mov.orig(), mov.dest(), turn) as i16;
+                *score = history_ordering_score(self.search.history.get_unchecked(
+                    mov.orig(),
+                    mov.dest(),
+                    turn,
+                ));
             }
         }
     }
@@ -1900,40 +1917,53 @@ impl<'a, 'search> Loader for QMoveLoader<'a, 'search> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ordering::Phase;
     use core::mov::MoveType;
     use core::position::Square;
     use std::time::Duration;
 
     #[rustfmt::skip]
-    fn suite() -> Vec<(&'static str, u8, Score, Score, &'static str)> {
+    fn suite() -> Vec<(&'static str, u8, Score, Score, &'static [&'static str])> {
         // Test position tuples have the form:
-        // (fen, depth, score range, best_move)
+        // (fen, depth, score range, acceptable_best_moves)
+        //
+        // The final field lists every move that is objectively optimal for the
+        // position. Most positions have a single best move, so the slice holds
+        // one entry; positions with more than one equally best move list them
+        // all, and the search passes if it plays any of them. Pinning a single
+        // move for a position that has several would reject a correct answer
+        // whenever move ordering happens to surface a different optimal move.
 
         vec![
                 // Mates
-                ("8/2R2pp1/k3p3/8/5Bn1/6P1/5r1r/1R4K1 w - - 4 3", 6, Score::mate(5), Score::mate(5), "c7c6"),
-                ("5R2/1p1r2pk/p1n1B2p/2P1q3/2Pp4/P6b/1B1P4/2K3R1 w - - 5 3", 6, Score::mate(5), Score::mate(5), "e6g8"),
-                ("1r6/p5pk/1q1p2pp/3P3P/4Q1P1/3p4/PP6/3KR3 w - - 0 36", 6, Score::mate(5), Score::mate(5), "h5g6"),
-                ("1r4k1/p3p1bp/5P1r/3p2Q1/5R2/3Bq3/P1P2RP1/6K1 b - - 0 33", 6, Score::mate(5), Score::mate(5), "b8b1"),
-                ("2q4k/3r3p/2p2P2/p7/2P5/P2Q2P1/5bK1/1R6 w - - 0 36", 6, Score::mate(5), Score::mate(5), "d3d7"),
-                ("5rk1/rb3ppp/p7/1pn1q3/8/1BP2Q2/PP3PPP/3R1RK1 w - - 7 21", 6, Score::mate(5), Score::mate(5), "f3f7"),
-                ("6rk/p7/1pq1p2p/4P3/5BrP/P3Qp2/1P1R1K1P/5R2 b - - 0 34", 8, Score::mate(7), Score::mate(7), "g4g2"),
-                ("6k1/1p2qppp/4p3/8/p2PN3/P5QP/1r4PK/8 w - - 0 40", 6, Score::mate(5), Score::mate(5), "e4f6"),
-                ("2R1bk2/p5pp/5p2/8/3n4/3p1B1P/PP1q1PP1/4R1K1 w - - 0 27", 6, Score::mate(5), Score::mate(5), "c8e8"),
-                ("8/7R/r4pr1/5pkp/1R6/P5P1/5PK1/8 w - - 0 42", 6, Score::mate(5), Score::mate(5), "h7h5"),
-                ("r5k1/2qn2pp/2nN1p2/3pP2Q/3P1p2/5N2/4B1PP/1b4K1 w - - 0 25", 8, Score::mate(7), Score::mate(7), "h5f7"),
+                ("8/2R2pp1/k3p3/8/5Bn1/6P1/5r1r/1R4K1 w - - 4 3", 6, Score::mate(5), Score::mate(5), &["c7c6"]),
+                ("5R2/1p1r2pk/p1n1B2p/2P1q3/2Pp4/P6b/1B1P4/2K3R1 w - - 5 3", 6, Score::mate(5), Score::mate(5), &["e6g8"]),
+                ("1r6/p5pk/1q1p2pp/3P3P/4Q1P1/3p4/PP6/3KR3 w - - 0 36", 6, Score::mate(5), Score::mate(5), &["h5g6"]),
+                ("1r4k1/p3p1bp/5P1r/3p2Q1/5R2/3Bq3/P1P2RP1/6K1 b - - 0 33", 6, Score::mate(5), Score::mate(5), &["b8b1"]),
+                ("2q4k/3r3p/2p2P2/p7/2P5/P2Q2P1/5bK1/1R6 w - - 0 36", 6, Score::mate(5), Score::mate(5), &["d3d7"]),
+                ("5rk1/rb3ppp/p7/1pn1q3/8/1BP2Q2/PP3PPP/3R1RK1 w - - 7 21", 6, Score::mate(5), Score::mate(5), &["f3f7"]),
+                ("6rk/p7/1pq1p2p/4P3/5BrP/P3Qp2/1P1R1K1P/5R2 b - - 0 34", 8, Score::mate(7), Score::mate(7), &["g4g2"]),
+                ("6k1/1p2qppp/4p3/8/p2PN3/P5QP/1r4PK/8 w - - 0 40", 6, Score::mate(5), Score::mate(5), &["e4f6"]),
+                ("2R1bk2/p5pp/5p2/8/3n4/3p1B1P/PP1q1PP1/4R1K1 w - - 0 27", 6, Score::mate(5), Score::mate(5), &["c8e8"]),
+                ("8/7R/r4pr1/5pkp/1R6/P5P1/5PK1/8 w - - 0 42", 6, Score::mate(5), Score::mate(5), &["h7h5"]),
+                ("r5k1/2qn2pp/2nN1p2/3pP2Q/3P1p2/5N2/4B1PP/1b4K1 w - - 0 25", 8, Score::mate(7), Score::mate(7), &["h5f7"]),
 
                 // // Winning material
-                ("rn1q1rk1/5pp1/pppb4/5Q1p/3P4/3BPP1P/PP3PK1/R1B2R2 b - - 1 15", 7, Score::cp(345), Score::cp(385), "g7g6"),
-                ("4k3/8/8/4q3/8/8/7P/3K2R1 w - - 0 1", 3, Score::cp(40), Score::cp(90), "g1e1"),
-                ("6k1/8/3q4/8/8/3B4/2P5/1K1R4 w - - 0 1", 3, Score::cp(850), Score::cp(950), "d3c4"),
-                ("r5k1/p1P5/8/8/8/8/3RK3/8 w - - 0 1", 6, Score::cp(905), Score::cp(955), "d2d8"),
-                ("6k1/8/8/3q4/8/8/P7/1KNB4 w - - 0 1", 4, Score::cp(330), Score::cp(370), "d1b3"),
-                ("2kr3r/ppp1qpb1/5n2/5b1p/6p1/1PNP4/PBPQBPPP/2KRR3 b - - 6 14", 5, Score::cp(408), Score::cp(448), "g7h6"),
-                ("7k/2R5/8/8/6q1/7p/7P/7K w - - 0 1", 6, Score::cp(0), Score::cp(0), "c7h7"),
+                ("rn1q1rk1/5pp1/pppb4/5Q1p/3P4/3BPP1P/PP3PK1/R1B2R2 b - - 1 15", 7, Score::cp(345), Score::cp(385), &["g7g6"]),
+                ("4k3/8/8/4q3/8/8/7P/3K2R1 w - - 0 1", 3, Score::cp(40), Score::cp(90), &["g1e1"]),
+                ("6k1/8/3q4/8/8/3B4/2P5/1K1R4 w - - 0 1", 3, Score::cp(850), Score::cp(950), &["d3c4"]),
+                ("r5k1/p1P5/8/8/8/8/3RK3/8 w - - 0 1", 6, Score::cp(905), Score::cp(955), &["d2d8"]),
+                ("6k1/8/8/3q4/8/8/P7/1KNB4 w - - 0 1", 4, Score::cp(330), Score::cp(370), &["d1b3"]),
+                ("2kr3r/ppp1qpb1/5n2/5b1p/6p1/1PNP4/PBPQBPPP/2KRR3 b - - 6 14", 5, Score::cp(408), Score::cp(448), &["g7h6"]),
+                ("7k/2R5/8/8/6q1/7p/7P/7K w - - 0 1", 6, Score::cp(0), Score::cp(0), &["c7h7"]),
 
-                // Pawn race
-                ("8/6pk/8/8/8/8/P7/K7 w - - 0 1", 22, Score::cp(450), Score::cp(920), "a1b1"),
+                // Pawn race. Ka1 has exactly two winning moves, Kb1 and Kb2 (both
+                // WIN by the Syzygy KPvKP tablebase); the pawn pushes throw the
+                // win away (a2a4 draws, a2a3 loses), so the king must step aside
+                // first. The two king moves are equally optimal, and which one the
+                // search returns depends on quiet-move ordering, so both are
+                // accepted.
+                ("8/6pk/8/8/8/8/P7/K7 w - - 0 1", 22, Score::cp(450), Score::cp(920), &["a1b1", "a1b2"]),
         ]
     }
 
@@ -1943,6 +1973,59 @@ mod tests {
         assert!(should_razor(1, Score::cp(-1_000), Score::cp(0)));
         assert!(!should_razor(1, Score::cp(-1_000), Score::mate(5)));
         assert!(!should_razor(1, Score::cp(-1_000), Score::INF_P));
+    }
+
+    #[test]
+    fn trained_quiets_are_ordered_without_narrowing_history_scores() {
+        core::init::init_globals();
+
+        let position = Position::start_pos();
+        let generated = position.generate::<BasicMoveList, Quiets, Legal>();
+        let poor = generated[0];
+        let good = generated[1];
+        let side = position.turn();
+        let flag = AtomicBool::new(false);
+        let table = Table::new(1);
+        let mut search = Search::new(position, &flag, None, &table);
+
+        search
+            .history
+            .update(poor.orig(), poor.dest(), -HISTORY_MAX, side);
+        search
+            .history
+            .update(good.orig(), good.dest(), HISTORY_MAX, side);
+        assert!(search.history.get(good.orig(), good.dest(), side) > i16::MAX.into());
+
+        let mut ordered = OrderedMoves::new();
+        while ordered.load_next_phase(MoveLoader::from(&mut search, None, 0)) {
+            if ordered.phase() == Phase::Quiet {
+                let quiets: Vec<Move> = (&mut ordered).into_iter().collect();
+                let good_index = quiets.iter().position(|mov| *mov == good).unwrap();
+                let poor_index = quiets.iter().position(|mov| *mov == poor).unwrap();
+                assert!(good_index < poor_index);
+                return;
+            }
+            for _ in &mut ordered {}
+        }
+
+        panic!("quiet phase was not loaded");
+    }
+
+    #[test]
+    fn history_bonus_grows_with_depth_and_gravity_applies_malus() {
+        let from = Square::A2;
+        let to = Square::A3;
+        let side = Player::WHITE;
+        let mut shallow = HistoryTable::new();
+        let mut deep = HistoryTable::new();
+
+        shallow.update(from, to, history_bonus(2), side);
+        deep.update(from, to, history_bonus(8), side);
+        assert!(deep.get(from, to, side) > shallow.get(from, to, side));
+
+        let before = deep.get(from, to, side);
+        deep.update(from, to, -history_bonus(8), side);
+        assert!(deep.get(from, to, side) < before);
     }
 
     #[test]
@@ -2769,7 +2852,7 @@ mod tests {
 
         let suite = suite();
 
-        for (fen, depth, lo, hi, bm) in suite {
+        for (fen, depth, lo, hi, best_moves) in suite {
             let pos = Position::from_fen(fen).unwrap();
             let flag = AtomicBool::new(false);
             let tt = Table::new(16);
@@ -2778,7 +2861,11 @@ mod tests {
 
             assert!(lo <= result.score, "{fen}: {} < {lo}", result.score);
             assert!(result.score <= hi, "{fen}: {} > {hi}", result.score);
-            assert_eq!(result.best_move.unwrap().to_uci_string(), bm, "{fen}");
+            let played = result.best_move.unwrap().to_uci_string();
+            assert!(
+                best_moves.contains(&played.as_str()),
+                "{fen}: played {played}, expected one of {best_moves:?}"
+            );
         }
     }
 
