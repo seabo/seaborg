@@ -322,8 +322,10 @@ fn find_uci_move(position: &Position, uci: &str) -> Option<Move> {
 
 /// Render a principal variation as SAN, read against the position the search is running on.
 ///
-/// While a search is active the controller's position is the one the search was started from:
-/// human moves are refused, and undo and reset cancel the search before touching the position.
+/// While a search is active the controller's position is the one the search was started from.
+/// Human moves are refused outright, and although `undo` unmakes before it cancels, the search
+/// cannot observe the gap: every mutating entry point takes `&mut self` under the session mutex,
+/// and the search thread reads an independent clone of the position rather than this one.
 ///
 /// A reported variation is not guaranteed to be playable — a transposition-table move can survive
 /// into a line where it is not legal — so each move is checked against the position it would be

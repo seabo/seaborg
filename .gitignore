@@ -1,6 +1,5 @@
 .vscode
 /target
-/docs
 
 flamegraph.svg
 perf.*

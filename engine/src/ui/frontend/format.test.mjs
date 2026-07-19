@@ -12,6 +12,7 @@ const {
   formatScore,
   movePairs,
   parseEngineLimitValue,
+  quitEndsTheSession,
   shouldAdopt,
 } = await import(`data:text/javascript;base64,${Buffer.from(formatSource).toString("base64")}`);
 
@@ -27,6 +28,23 @@ test("a stale snapshot is not adopted, but the caller is still told to paint", (
   // Equal revisions must still be adopted: a re-render of the current state is how a change to
   // local-only state, such as a command finishing, reaches the screen at all.
   assert.equal(shouldAdopt({ revision: 5 }, { revision: 5 }), true, "same revision repaints");
+});
+
+// Regression (REV-1-01): `quit` used to discard the command result, so any refusal branded a
+// live server as stopped. That state closes the event stream and disables every control including
+// the quit button, so the page could not be recovered without a reload — and it overwrote the
+// accurate refusal message with "Seaborg has stopped". Both refusals below are reachable: 403
+// `invalid_token` when a tab outlives a server restart, and 503 `too_many_connections` once the
+// accept loop is saturated.
+test("only an accepted or unanswered quit stops the session, never a refused one", () => {
+  assert.equal(quitEndsTheSession("ok"), true, "an accepted quit stops the session");
+  // The socket dying under the request is the ordinary end of a successful shutdown, not a fault.
+  assert.equal(quitEndsTheSession("unreachable"), true, "a dropped connection stops the session");
+  assert.equal(
+    quitEndsTheSession("rejected"),
+    false,
+    "a server that answers a refusal is still running, so the page must stay usable",
+  );
 });
 
 test("evaluations are shown from White regardless of which side the engine plays", () => {
@@ -64,6 +82,11 @@ test("counts and hash occupancy abbreviate without losing the reading", () => {
   assert.equal(formatCount(84_000_000), "84M");
   assert.equal(formatCount(2_500_000_000), "2.5B");
   assert.equal(formatCount(Number.NaN), "—");
+
+  // A count just short of the next unit must carry into it rather than render a four-digit
+  // mantissa: the stat row is sized for at most `9.9k`-style readings, and `1000k` overflows it.
+  assert.equal(formatCount(999_999), "1.0M");
+  assert.equal(formatCount(999_999_999), "1.0B");
 
   assert.equal(formatHashfull(0), "0.0%");
   assert.equal(formatHashfull(55), "6%");

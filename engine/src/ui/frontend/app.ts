@@ -23,6 +23,7 @@ import {
   formatScore,
   movePairs,
   parseEngineLimitValue,
+  quitEndsTheSession,
   shouldAdopt,
   type EngineLimit,
   type Score,
@@ -124,6 +125,8 @@ let flippedOrientation: Color | null = null;
 let quitting = false;
 // Whether the keyboard is working inside the board, so a repaint can hand focus back to it.
 let boardOwnsFocus = false;
+// The search whose figures the panel is showing, so a new one clears them exactly once.
+let renderedSearchId = -1;
 
 function orientationOf(state: Snapshot): Color {
   return flippedOrientation ?? state.humanSide;
@@ -360,11 +363,21 @@ function renderEnginePanel(state: Snapshot): void {
   if (state.moveHistory.length === 0) clearEnginePanel();
   if (state.engineStatus.kind !== "thinking") return;
 
+  // A search is published the moment it starts, before it has reported anything, so without this
+  // the previous search's figures would sit under a live "Thinking" chip until the first progress
+  // event landed — the one arrangement in which stale stats read as current ones. Clearing is
+  // keyed on the search id rather than on progress being null so that it happens once per search
+  // instead of on every repaint that arrives before the first progress event.
+  if (state.engineStatus.searchId !== renderedSearchId) {
+    renderedSearchId = state.engineStatus.searchId;
+    clearEnginePanel();
+  }
+
   // Everything below is kept on screen after the search ends rather than blanked. The figures
-  // that produced the move just played are worth reading, and the state chip already says the
-  // engine is idle, so they cannot be mistaken for a search still in progress. Stats and the
-  // variation persist together: clearing one and not the other would suggest the remaining half
-  // was the newer of the two.
+  // that produced the move just played are worth reading, and the state chip says the engine is
+  // idle, so they cannot be mistaken for a search still in progress. Stats and the variation
+  // persist together: clearing one and not the other would suggest the remaining half was the
+  // newer of the two.
   const progress = state.engineStatus.progress;
   if (progress !== null) {
     evaluationElement.textContent = formatScore(progress.score, state.humanSide);
@@ -474,13 +487,24 @@ function reportError(message: string): void {
 }
 
 /**
- * Send a command and return the snapshot the server answered with.
+ * What became of a command.
  *
- * A rejection is reported as a sentence rather than as a protocol code, and returning null lets
- * the caller undo whatever it did optimistically — a snapback for a refused move, or repainting
- * the last known state for a refused control.
+ * Most callers only need to know whether they got a snapshot back, but quit has to tell a
+ * refusal apart from the connection dropping: the first means the server is still running and
+ * still ours to talk to, and the second is what a successful shutdown looks like from here.
  */
-async function postCommand(path: string, body: object): Promise<Snapshot | null> {
+type CommandOutcome =
+  | { readonly kind: "ok"; readonly snapshot: Snapshot }
+  | { readonly kind: "rejected" }
+  | { readonly kind: "unreachable" };
+
+/**
+ * Send a command and report what became of it.
+ *
+ * A rejection is reported as a sentence rather than as a protocol code, and the message is
+ * written here so a caller that has nothing to add can leave it alone.
+ */
+async function sendCommand(path: string, body: object): Promise<CommandOutcome> {
   reportError("");
   try {
     const response = await fetch(path, {
@@ -496,17 +520,29 @@ async function postCommand(path: string, body: object): Promise<Snapshot | null>
           ? `Seaborg hit an internal error (${response.status}). The position shown may be out of date.`
           : describeCommandError(failure.error ?? "request_failed"),
       );
-      return null;
+      return { kind: "rejected" };
     }
-    return (await response.json()) as Snapshot;
+    return { kind: "ok", snapshot: (await response.json()) as Snapshot };
   } catch {
     reportError(
       quitting
         ? "Seaborg has stopped. You can close this tab."
         : "Seaborg could not be reached. Check the terminal it was started from.",
     );
-    return null;
+    return { kind: "unreachable" };
   }
+}
+
+/**
+ * Send a command and return the snapshot the server answered with.
+ *
+ * Returning null lets the caller undo whatever it did optimistically — a snapback for a refused
+ * move, or repainting the last known state for a refused control. Callers that must act
+ * differently on a refusal than on a lost connection want `sendCommand` instead.
+ */
+async function postCommand(path: string, body: object): Promise<Snapshot | null> {
+  const outcome = await sendCommand(path, body);
+  return outcome.kind === "ok" ? outcome.snapshot : null;
 }
 
 async function sendControl(path: string, body: object): Promise<void> {
@@ -712,14 +748,25 @@ async function startGame(humanSide: Color): Promise<void> {
  * is just as likely once the server begins shutting down — is reported as a successful stop
  * rather than as a lost connection. It also stops the event stream reconnecting to a server that
  * is deliberately gone.
+ *
+ * A refusal is the one outcome that must not reach the stopped state. The server answering 403
+ * or 503 is a server that is still running, and branding it stopped would close the stream, lock
+ * the board, and disable every control — including this button — leaving nothing but a reload to
+ * recover from a page that is wrong about the thing it is most confident in. So `quitting` is
+ * rolled back and the message `sendCommand` already wrote is left to stand.
  */
 async function quit(): Promise<void> {
   if (commandPending || quitting) return;
   quitting = true;
   commandPending = true;
   if (snapshot !== null) render(snapshot);
-  await postCommand("/api/quit", {});
+  const outcome = await sendCommand("/api/quit", {});
   commandPending = false;
+  if (!quitEndsTheSession(outcome.kind)) {
+    quitting = false;
+    if (snapshot !== null) render(snapshot);
+    return;
+  }
   events.close();
   connectionElement.textContent = "Stopped";
   connectionElement.classList.remove("connected");

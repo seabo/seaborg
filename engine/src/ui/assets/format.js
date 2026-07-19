@@ -17,6 +17,23 @@
 export function shouldAdopt(current, incoming) {
     return current === null || incoming.revision >= current.revision;
 }
+/**
+ * Decide whether a quit attempt puts the page into its terminal stopped state.
+ *
+ * The stopped state is unrecoverable by design — it closes the event stream and disables every
+ * control, including the quit button — so it must only be entered when the process really is
+ * going away. An accepted quit obviously qualifies, and so does a request that never came back:
+ * the server tearing the socket down mid-shutdown is the ordinary way a successful quit ends.
+ *
+ * A refusal does not. A server that answers 403 `invalid_token` (a tab left open across a restart
+ * keeps reading the untokened event stream, so it looks connected while every command is refused)
+ * or 503 `too_many_connections` is still running and still reachable. Branding it stopped would
+ * strand the page in a false terminal state that only a reload clears, and would overwrite the
+ * accurate message the refusal produced.
+ */
+export function quitEndsTheSession(outcome) {
+    return outcome !== "rejected";
+}
 /** The value a limit `<option>` carries, so the select and the command agree on one spelling. */
 export function engineLimitValue(limit) {
     if (limit.kind === "time")
@@ -58,16 +75,32 @@ export function formatScore(score, humanSide) {
     const pawns = Math.abs(centipawns) / 100;
     return `${centipawns < 0 ? "−" : "+"}${pawns.toFixed(2)}`;
 }
-/** Abbreviate a node or node-rate count so the stat row keeps a stable width. */
+/**
+ * Abbreviate a node or node-rate count so the stat row keeps a stable width.
+ *
+ * Each unit is chosen from what the value rounds to rather than from the value itself, so 999,999
+ * reads as `1.0M` rather than as the four-digit `1000k` that truncating toward the smaller unit
+ * would produce.
+ */
 export function formatCount(value) {
     if (!Number.isFinite(value) || value < 0)
         return "—";
     if (value < 1_000)
         return String(Math.trunc(value));
-    if (value < 1_000_000)
-        return `${(value / 1_000).toFixed(value < 10_000 ? 1 : 0)}k`;
-    if (value < 1_000_000_000)
-        return `${(value / 1_000_000).toFixed(value < 10_000_000 ? 1 : 0)}M`;
+    const units = [
+        { scale: 1_000, suffix: "k" },
+        { scale: 1_000_000, suffix: "M" },
+        { scale: 1_000_000_000, suffix: "B" },
+    ];
+    for (const { scale, suffix } of units) {
+        const scaled = value / scale;
+        // One decimal below 10, none above, so the field never exceeds four characters.
+        const digits = scaled < 10 ? 1 : 0;
+        const rendered = scaled.toFixed(digits);
+        // `1000` here means the rounding carried into the next unit, so let that unit render it.
+        if (Number(rendered) < 1_000)
+            return `${rendered}${suffix}`;
+    }
     return `${(value / 1_000_000_000).toFixed(1)}B`;
 }
 /** Render a hash occupancy reading, which the engine reports in permille. */
