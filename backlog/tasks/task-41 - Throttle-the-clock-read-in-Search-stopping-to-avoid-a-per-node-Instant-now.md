@@ -3,11 +3,11 @@ id: TASK-41
 title: >-
   Throttle the clock read in Search::stopping() to avoid a per-node
   Instant::now()
-status: Ready to Merge
+status: Changes Requested
 assignee:
   - '@codex'
 created_date: '2026-07-18 12:17'
-updated_date: '2026-07-18 23:50'
+updated_date: '2026-07-19 01:11'
 labels:
   - engine
   - search
@@ -151,10 +151,26 @@ Verification:
 
 All acceptance criteria are proven; no blocking findings remain.
 ---
+
+author: @codex
+created: 2026-07-19 01:11
+---
+Merge attempt: 1
+Primary tip tested: 22a251255fc58987ee39c7303b7e72685f66f95f
+Approved branch tip: e2bcd03b49b603f6ed6cae585e3e6e0222893ae8
+Approved implementation: bc6ab57b4b56b6eaa99e507306b687708dd00806
+Verdict: integration_failed
+
+Failing command:
+- git merge --no-ff e2bcd03b49b603f6ed6cae585e3e6e0222893ae8
+
+Evidence:
+- Textual conflict in engine/src/search.rs.
+- Primary has since split cancellation gating around root_fallback_ready and added abort_after_nodes test behavior (TASK-45/TASK-46 era changes), while TASK-41 changes the same Search fields, stopping() implementation, and stopping regressions to add throttled/latching deadline state.
+- benches/search.rs and TASK-41 metadata merged automatically.
+- The isolated trial merge was aborted and discarded; primary remains unchanged at 22a251255fc58987ee39c7303b7e72685f66f95f.
+
+Expected rework:
+- Reapply the approved deadline-sampling/latching behavior onto the current stopping() semantics without weakening immediate cancellation after root fallback or the guaranteed deadline ply, update overlapping regressions, and produce a new immutable implementation target for independent review.
+---
 <!-- COMMENTS:END -->
-
-## Final Summary
-
-<!-- SECTION:FINAL_SUMMARY:BEGIN -->
-Throttled deadline clock reads to every 8 nodes in release builds while preserving per-call cancellation checks and the guaranteed first ply; latched expiry now stops unwind reliably. Reviewer verified formatting, clean-target strict Clippy, the full workspace suite, focused release deadline/cancellation/legal-move regressions, and the recorded before/after benchmarks (about +75% search NPS with no perft/movegen regression).
-<!-- SECTION:FINAL_SUMMARY:END -->
