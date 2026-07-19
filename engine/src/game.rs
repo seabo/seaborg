@@ -39,6 +39,12 @@ pub enum EngineStatus {
         search_id: u64,
         position_revision: u64,
         progress: Option<SearchProgress>,
+        /// The principal variation in standard algebraic notation.
+        ///
+        /// This is kept beside [`SearchProgress`] rather than inside it because SAN is a
+        /// presentation concern: the search reports moves, and only the controller holds the
+        /// position they are read against.
+        principal_variation_san: Vec<String>,
     },
 }
 
@@ -54,6 +60,8 @@ pub struct GameSnapshot {
     pub move_history: Vec<MoveRecord>,
     pub game_status: GameStatus,
     pub engine_status: EngineStatus,
+    /// The limit the next engine turn will be searched under.
+    pub engine_limit: SearchLimit,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -135,8 +143,34 @@ impl GameController {
                     search_id: search.id,
                     position_revision: search.revision,
                     progress: search.progress.clone(),
+                    principal_variation_san: search
+                        .progress
+                        .as_ref()
+                        .map(|progress| {
+                            principal_variation_san(
+                                &self.position,
+                                &progress.principal_variation,
+                            )
+                        })
+                        .unwrap_or_default(),
                 }),
+            engine_limit: self.search_limit,
         }
+    }
+
+    /// The limit the next engine turn will be searched under.
+    pub fn search_limit(&self) -> SearchLimit {
+        self.search_limit
+    }
+
+    /// Choose the limit for subsequent engine turns.
+    ///
+    /// A search already running keeps the limit it was started with. Reapplying the new limit
+    /// immediately would mean cancelling and restarting that search, which discards work and can
+    /// change the move the engine was about to play — a surprising result from adjusting a
+    /// setting. The change therefore takes effect from the next engine turn.
+    pub fn set_search_limit(&mut self, limit: SearchLimit) {
+        self.search_limit = limit;
     }
 
     pub fn play_human_move(&mut self, uci: &str, revision: u64) -> Result<(), CommandError> {
@@ -292,6 +326,28 @@ fn find_uci_move(position: &Position, uci: &str) -> Option<Move> {
         .iter()
         .find(|mov| mov.to_uci_string() == uci)
         .copied()
+}
+
+/// Render a principal variation as SAN, read against the position the search is running on.
+///
+/// While a search is active the controller's position is the one the search was started from:
+/// human moves are refused, and undo and reset cancel the search before touching the position.
+///
+/// A reported variation is not guaranteed to be playable — a transposition-table move can survive
+/// into a line where it is not legal — so each move is checked against the position it would be
+/// played in and the variation is truncated at the first move that does not appear there. Emitting
+/// a shorter honest line is better than naming a move that cannot be played.
+fn principal_variation_san(position: &Position, variation: &[Move]) -> Vec<String> {
+    let mut walked = position.clone();
+    let mut san = Vec::with_capacity(variation.len());
+    for mov in variation {
+        if find_uci_move(&walked, &mov.to_uci_string()) != Some(*mov) {
+            break;
+        }
+        san.push(move_to_san(&walked, *mov));
+        walked.make_move(mov);
+    }
+    san
 }
 
 fn position_status(position: &Position) -> GameStatus {
@@ -590,6 +646,103 @@ mod tests {
             fifty.snapshot().game_status,
             GameStatus::Draw(DrawReason::FiftyMoveRule)
         );
+    }
+
+    #[test]
+    fn a_new_engine_limit_applies_from_the_next_search() {
+        let mut game = controller(core::position::START_POSITION, Player::WHITE);
+        assert_eq!(game.snapshot().engine_limit, SearchLimit::Depth(1));
+
+        game.set_search_limit(SearchLimit::Depth(2));
+        assert_eq!(game.snapshot().engine_limit, SearchLimit::Depth(2));
+
+        // The setting survives a new game: it is a session preference, not game state.
+        game.reset(Player::WHITE);
+        assert_eq!(game.snapshot().engine_limit, SearchLimit::Depth(2));
+    }
+
+    #[test]
+    fn a_running_search_keeps_the_limit_it_started_with() {
+        let mut game = controller(core::position::START_POSITION, Player::BLACK);
+        assert!(matches!(
+            game.snapshot().engine_status,
+            EngineStatus::Thinking { .. }
+        ));
+        let started_id = match game.snapshot().engine_status {
+            EngineStatus::Thinking { search_id, .. } => search_id,
+            _ => unreachable!(),
+        };
+
+        // Changing the limit mid-search must not cancel and restart the search: that would throw
+        // away work and could change the move the engine was about to play.
+        game.set_search_limit(SearchLimit::Depth(3));
+        match game.snapshot().engine_status {
+            EngineStatus::Thinking { search_id, .. } => assert_eq!(search_id, started_id),
+            EngineStatus::Idle => panic!("the search was cancelled by a limit change"),
+        }
+        wait_for_engine(&mut game);
+        assert_eq!(game.snapshot().move_history.len(), 1);
+    }
+
+    #[test]
+    fn a_principal_variation_renders_as_san_and_stops_at_the_first_unplayable_move() {
+        init_globals();
+        let position = Position::from_fen("4k3/8/8/8/8/8/3N4/4K1N1 w - - 0 1").unwrap();
+
+        // Each move is resolved in the position it is actually played in, exactly as the search
+        // reports a variation.
+        let mut walked = position.clone();
+        let mut playable = Vec::new();
+        for uci in ["g1f3", "e8d8"] {
+            let mov = find_uci_move(&walked, uci).expect("fixture move is legal");
+            walked.make_move(&mov);
+            playable.push(mov);
+        }
+        assert_eq!(
+            principal_variation_san(&position, &playable),
+            vec!["Ngf3".to_owned(), "Kd8".to_owned()],
+            "a legal line renders in full, with disambiguation read against each position"
+        );
+
+        // A transposition-table move can survive into a line where it is not legal. The line is
+        // truncated there rather than naming a move that cannot be played: after 1. Ngf3 the d2
+        // knight can no longer reach f3.
+        let unplayable = find_uci_move(&position, "d2f3").expect("legal before the first move");
+        assert_eq!(
+            principal_variation_san(&position, &[playable[0], unplayable]),
+            vec!["Ngf3".to_owned()]
+        );
+
+        assert!(principal_variation_san(&position, &[]).is_empty());
+    }
+
+    #[test]
+    fn a_thinking_snapshot_carries_the_san_variation() {
+        let mut game = controller(core::position::START_POSITION, Player::BLACK);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            game.poll();
+            if let EngineStatus::Thinking {
+                progress: Some(progress),
+                principal_variation_san,
+                ..
+            } = game.snapshot().engine_status
+            {
+                assert_eq!(
+                    principal_variation_san.len(),
+                    progress.principal_variation.len(),
+                    "a variation from the searched position is playable in full"
+                );
+                assert!(!principal_variation_san.is_empty());
+                break;
+            }
+            if game.snapshot().engine_status == EngineStatus::Idle {
+                // A depth-1 search can finish before any progress event is observed here.
+                break;
+            }
+            assert!(Instant::now() < deadline, "timed out waiting for progress");
+            std::thread::yield_now();
+        }
     }
 
     #[test]
