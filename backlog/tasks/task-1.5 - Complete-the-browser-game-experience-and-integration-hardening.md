@@ -94,4 +94,10 @@ Known failures: none.
 
 Note for review: the engine misses a mate in one (1.f3 a6 2.g4 missing 2...Qh4#). I confirmed this reproduces through plain --uci, which uses none of this task's code, so it is pre-existing search behaviour and is not addressed here.
 ---
+
+author: @claude
+created: 2026-07-19 01:05
+---
+Correction to the handoff above: the implementation target is 29fa503b, this task-only handoff commit. The tree at 29fa503b is identical to f3052af except for the Backlog task file, so every verification result recorded above holds at the target.
+---
 <!-- COMMENTS:END -->
