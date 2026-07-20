@@ -58,6 +58,67 @@ pub const MAX_PLY: usize = 256;
 /// deepest iterations reach those plies at all.
 const KILLER_PLIES: usize = 21;
 
+/// Lowest iteration depth at which the root is searched with an aspiration window rather than the
+/// full `(-inf, +inf)` window.
+///
+/// Two things set the floor. A shallow iteration searches a tiny tree, so a mispredicted narrow
+/// window costs more in re-searches than the window saves; and iteration 1 must complete as a
+/// single search to honour the guaranteed-first-ply contract (`min_search_complete`), which an
+/// aspiration re-search loop would break. Keeping the floor above 1 covers both: the guaranteed
+/// ply is always a single full-window search, and aspiration only engages once a previous score
+/// exists to centre the window on and the tree is large enough to profit.
+const ASPIRATION_MIN_DEPTH: u8 = 4;
+
+/// Half-width, in centipawns, of the first aspiration window tried at each iteration.
+///
+/// The window is centred on the previous iteration's score. A score that moves by less than this
+/// between iterations lands inside the window and needs no re-search; a larger swing fails a bound
+/// and widens. The value trades the node savings of a tight window against the re-search cost of
+/// guessing too tight.
+///
+/// Half a pawn is deliberately wide: the current evaluation is material-only, so a root score
+/// routinely jumps by a whole pawn or more between iterations, and a tighter window would fail and
+/// re-search more often than it would save. This wants revisiting once a finer-grained evaluation
+/// makes successive scores move in smaller steps.
+const ASPIRATION_INITIAL_DELTA: i16 = 50;
+
+/// Growth factor applied to the failing side's half-width after each fail-high or fail-low.
+///
+/// Geometric growth bounds the number of re-searches to a logarithm of the eventual window width,
+/// so a badly mispredicted score reaches a full window in a handful of steps rather than crawling
+/// outward centipawn by centipawn.
+const ASPIRATION_WIDEN_FACTOR: i16 = 2;
+
+/// Half-width beyond which a widened aspiration bound is opened all the way to infinity.
+///
+/// Once the window is this wide, the odds that the true score sits just outside it are low enough
+/// that another bounded re-search is not worth its cost, and snapping to infinity guarantees the
+/// side can never fail again. That, with the mate short-circuit in [`Search::aspiration_search`],
+/// is what makes the re-search loop terminate in a bounded number of steps.
+const ASPIRATION_MAX_DELTA: i16 = 2_000;
+
+/// Offset a node score outward by a centipawn half-width to form one edge of an aspiration window.
+///
+/// The result is a *window bound*, not a node score: it only has to be a threshold to compare
+/// against, so it may sit at an infinity. Two cases open the bound fully. A mate (or any
+/// non-centipawn) score cannot be nudged by a centipawn amount — mates and centipawns occupy
+/// different bands and [`Score`] arithmetic would return the mate unchanged — so a mate collapses
+/// the bound straight to the matching infinity, which both widens correctly and keeps the window
+/// strictly ordered. A half-width past [`ASPIRATION_MAX_DELTA`] does the same, bounding the
+/// re-search count. Otherwise the centre is a centipawn score and the offset stays inside the
+/// centipawn band, where it is a valid, strictly ordered window edge.
+fn aspiration_bound(centre: Score, delta: i16) -> Score {
+    if !centre.is_cp() || delta.abs() > ASPIRATION_MAX_DELTA {
+        return if delta < 0 {
+            Score::INF_N
+        } else {
+            Score::INF_P
+        };
+    }
+    let raw = i32::from(centre.to_i16()) + i32::from(delta);
+    Score::cp(raw.clamp(-10_000, 10_000) as i16)
+}
+
 /// A node either completed with a usable score or aborted before establishing one.
 type NodeResult = Option<Score>;
 
@@ -713,19 +774,23 @@ impl<'engine> Search<'engine> {
 
         self.establish_root_fallback();
 
+        // The exact score of the deepest completed iteration, used to centre the next iteration's
+        // aspiration window. `None` before any iteration completes, which forces a full window.
+        let mut prev_score = None;
+
         for d in 1..=depth {
             if self.stopping() {
                 break;
             }
 
             let completed_pvt = std::mem::replace(&mut self.pvt, PVTable::new(d));
-            let Some(value) = self.search::<T, Root>(Score::INF_N, Score::INF_P, Depth::from(d), 0)
-            else {
+            let Some(value) = self.aspiration_search::<T>(d, prev_score) else {
                 self.pvt = completed_pvt;
                 break;
             };
 
             self.depth_reached = d;
+            prev_score = Some(value);
             result = Some(SearchResult {
                 score: value,
                 best_move: self.pvt.pv().next().copied(),
@@ -751,6 +816,65 @@ impl<'engine> Search<'engine> {
                 depth: 0,
             })
         })
+    }
+
+    /// Search iteration `d` at the root, narrowing the window around the previous iteration's
+    /// score where that is worthwhile.
+    ///
+    /// A full-window root search re-derives the position's value from `(-inf, +inf)` every
+    /// iteration and forfeits every cutoff a tighter window would have produced throughout the
+    /// tree. Successive iterations usually return nearly the same score, so a window centred on
+    /// [`prev`] and only a little wider than the expected swing lets far more of the tree fail its
+    /// bounds cheaply, while a fail-high or fail-low re-search recovers the exact score whenever the
+    /// guess was too tight.
+    ///
+    /// The returned score, when `Some`, always comes from a search whose window strictly contained
+    /// it: a fail-low or fail-high loops with a widened bound rather than reporting the bound as a
+    /// result. `None` propagates an aborted search unchanged, so the caller discards the iteration
+    /// and restores the previous principal variation — an aborted subtree must never commit a
+    /// bound as a result.
+    fn aspiration_search<T: Thread>(&mut self, d: u8, prev: Option<Score>) -> NodeResult {
+        // Decide whether a narrow window is worth it. Below the minimum depth, before any score
+        // exists to centre on, or when the previous score is a mate — which a centipawn window
+        // cannot bracket at all — fall back to the full window. Keeping the floor above depth 1
+        // also makes the guaranteed first ply a single search rather than a re-search loop.
+        let Some(centre) = prev.filter(|p| d >= ASPIRATION_MIN_DEPTH && !p.is_mate()) else {
+            return self.search::<T, Root>(Score::INF_N, Score::INF_P, Depth::from(d), 0);
+        };
+
+        let mut lo_delta = ASPIRATION_INITIAL_DELTA;
+        let mut hi_delta = ASPIRATION_INITIAL_DELTA;
+        let mut alpha = aspiration_bound(centre, -lo_delta);
+        let mut beta = aspiration_bound(centre, hi_delta);
+
+        loop {
+            let value = self.search::<T, Root>(alpha, beta, Depth::from(d), 0)?;
+
+            if value <= alpha {
+                // Fail low: the true score is at or below alpha. Widen downward and re-search,
+                // keeping beta so a subsequent fail high is still detected. A mate return means
+                // being mated; no centipawn window can bracket it, so open alpha fully at once.
+                if value.is_mate() {
+                    alpha = Score::INF_N;
+                } else {
+                    lo_delta = lo_delta.saturating_mul(ASPIRATION_WIDEN_FACTOR);
+                    alpha = aspiration_bound(centre, -lo_delta);
+                }
+            } else if value >= beta {
+                // Fail high, the mirror of the above: widen beta upward, snapping to infinity for a
+                // mate score.
+                if value.is_mate() {
+                    beta = Score::INF_P;
+                } else {
+                    hi_delta = hi_delta.saturating_mul(ASPIRATION_WIDEN_FACTOR);
+                    beta = aspiration_bound(centre, hi_delta);
+                }
+            } else {
+                // The score is strictly inside the window, so it is exact and the principal
+                // variation this search built is the one to report.
+                return Some(value);
+            }
+        }
     }
 
     /// Record a legal bestmove for the root position before any node is searched.
@@ -1081,8 +1205,10 @@ impl<'engine> Search<'engine> {
                             // Only an exact score at a PV node establishes a variation worth
                             // reporting. A fail-high returns a lower bound whose "best" move was
                             // never searched with a full window, so publishing it would splice a
-                            // non-PV continuation into the reported line. The root always lands
-                            // here: its beta is `INF_P` and `value` is asserted below it.
+                            // non-PV continuation into the reported line. Under a full-width root
+                            // window (`beta == INF_P`) the root always lands here; an aspiration
+                            // window gives it a finite beta, so a root fail-high now reaches the
+                            // else branch and is recovered by a widening re-search.
                             self.pvt.copy_to(ply, mov);
 
                             alpha = value;
@@ -1092,7 +1218,13 @@ impl<'engine> Search<'engine> {
                             debug_assert!(value >= beta);
                             // beta-cutoff; record killer and history
                             if mov.is_quiet() {
-                                self.kt.store(mov, ply);
+                                // The killer table reserves no slot for the root; a root cutoff is
+                                // only reachable at all through an aspiration window's finite beta,
+                                // and the refutation it names is relative to that artificial bound
+                                // rather than a true one, so it is not recorded there.
+                                if ply > 0 {
+                                    self.kt.store(mov, ply);
+                                }
                                 let bonus = history_bonus(depth);
                                 let side = self.pos.turn();
                                 self.history.update(mov.orig(), mov.dest(), bonus, side);
@@ -3056,11 +3188,16 @@ mod tests {
             .all(|event| !event.principal_variation.is_empty()));
     }
 
-    /// FastChess reached this WAC-derived position after a long forcing line. At depth five the
-    /// old search passed position-relative mate bounds to child nodes by negating them without
-    /// first removing one ply. A cutoff value then leaked back as `Score::mate(34)`: positive with
-    /// an impossible even ply count, and formatting the progress event tripped Score's parity
-    /// assertion on the UCI driver thread.
+    /// FastChess reached this WAC-derived position after a long forcing line. The old search passed
+    /// position-relative mate bounds to child nodes by negating them without first removing one
+    /// ply. A cutoff value then leaked back as `Score::mate(34)`: positive with an impossible even
+    /// ply count, and formatting the progress event tripped Score's parity assertion on the UCI
+    /// driver thread.
+    ///
+    /// The mate surfaces here at depth six: an aspiration window centred on the previous
+    /// iteration's non-mate score first fails high on the mate and only the widening re-search
+    /// recovers it, so this also exercises that a mate reported out of a re-search still carries
+    /// correct distance parity.
     #[test]
     fn child_mate_windows_preserve_distance_parity() {
         core::init::init_globals();
@@ -3068,17 +3205,17 @@ mod tests {
         let position =
             Position::from_fen("2k5/8/b1p5/Pq2r1p1/8/5PpP/3p2P1/Q2R2K1 b - - 1 61").unwrap();
         let engine = SearchEngine::new(1);
-        let search = engine.start(position, SearchLimit::Depth(5));
+        let search = engine.start(position, SearchLimit::Depth(6));
         let events = search.events().clone();
         let outcome = search.wait();
         let progress = events
             .try_iter()
             .filter_map(|event| match event {
-                SearchEvent::Progress(progress) if progress.depth == 5 => Some(progress),
+                SearchEvent::Progress(progress) if progress.depth == 6 => Some(progress),
                 _ => None,
             })
             .next()
-            .expect("depth-five progress must be emitted");
+            .expect("depth-six progress must be emitted");
 
         assert!(matches!(outcome, SearchOutcome::Completed(Some(_))));
         assert_eq!(progress.score, Score::mate(7));
@@ -3086,6 +3223,78 @@ mod tests {
             crate::info::format_search_event(&SearchEvent::Progress(progress))
                 .contains("score mate 4")
         );
+    }
+
+    /// A centipawn centre widens symmetrically and stays a strictly ordered, in-band window edge,
+    /// while any input that a centipawn offset cannot move opens the corresponding infinity. The
+    /// mate and max-delta cases are what keep an aspiration re-search from constructing a window a
+    /// mate score can never satisfy, which would loop forever.
+    #[test]
+    fn aspiration_bound_widens_clamps_and_opens_on_mate() {
+        // Ordinary centipawn centre: the offset is applied verbatim on both sides.
+        assert_eq!(aspiration_bound(Score::cp(30), -25), Score::cp(5));
+        assert_eq!(aspiration_bound(Score::cp(30), 25), Score::cp(55));
+
+        // Near the edge of the centipawn range the bound saturates rather than escaping it.
+        assert_eq!(aspiration_bound(Score::cp(9_990), 25), Score::cp(10_000));
+        assert_eq!(aspiration_bound(Score::cp(-9_990), -25), Score::cp(-10_000));
+
+        // A half-width past the cap, and any mate centre, open straight to the matching infinity:
+        // centipawns cannot bracket a mate, so the window is thrown fully open on that side.
+        assert_eq!(
+            aspiration_bound(Score::cp(0), ASPIRATION_MAX_DELTA + 1),
+            Score::INF_P
+        );
+        assert_eq!(
+            aspiration_bound(Score::cp(0), -(ASPIRATION_MAX_DELTA + 1)),
+            Score::INF_N
+        );
+        assert_eq!(aspiration_bound(Score::mate(3), 25), Score::INF_P);
+        assert_eq!(aspiration_bound(Score::mate(3), -25), Score::INF_N);
+        assert_eq!(aspiration_bound(Score::mate(-3), 25), Score::INF_P);
+    }
+
+    /// A forced mate at the root, searched deep enough that aspiration is active, must still report
+    /// the mate. The window is centred on the previous iteration's non-mate score, so the mate
+    /// first fails the window high and only the widening re-search recovers it; the reported score
+    /// must be the true mate and must stay inside the band a node can hold.
+    #[test]
+    fn aspiration_recovers_a_forced_mate_at_the_root() {
+        core::init::init_globals();
+
+        // Mate in five (`Score::mate(5)`, rendered as `mate 3`); the mating side is to move.
+        let position = Position::from_fen("8/2R2pp1/k3p3/8/5Bn1/6P1/5r1r/1R4K1 w - - 4 3").unwrap();
+        let flag = AtomicBool::new(false);
+        let table = Table::new(16);
+        let mut search = Search::new(position, &flag, None, &table);
+
+        // Depth six is comfortably above `ASPIRATION_MIN_DEPTH`, so several iterations run under a
+        // narrow window before the mate is found.
+        let result = search.run::<Master>(6).unwrap();
+
+        assert_eq!(result.score, Score::mate(5));
+        assert!(result.score.is_node_score());
+        assert!(result.best_move.is_some());
+    }
+
+    /// Once an iteration has found the mate, the next iteration centres its window on a mate score.
+    /// A centipawn window cannot bracket a mate, so aspiration must fall back to the full window
+    /// rather than build a degenerate one; the deeper iteration must still report the mate.
+    #[test]
+    fn aspiration_from_a_mate_previous_score_uses_the_full_window() {
+        core::init::init_globals();
+
+        let position = Position::from_fen("8/2R2pp1/k3p3/8/5Bn1/6P1/5r1r/1R4K1 w - - 4 3").unwrap();
+        let flag = AtomicBool::new(false);
+        let table = Table::new(16);
+        let mut search = Search::new(position, &flag, None, &table);
+
+        // Depth eight is two plies past where the mate first appears, so at least one iteration
+        // runs `aspiration_search` with a mate as its previous score.
+        let result = search.run::<Master>(8).unwrap();
+
+        assert_eq!(result.score, Score::mate(5));
+        assert!(result.score.is_node_score());
     }
 
     /// Sweep the 300-position Win At Chess tactical suite and format every root score, at the
