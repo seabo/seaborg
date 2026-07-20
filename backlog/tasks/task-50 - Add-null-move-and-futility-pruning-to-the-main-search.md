@@ -1,11 +1,11 @@
 ---
 id: TASK-50
 title: Add null move and futility pruning to the main search
-status: In Progress
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-18 18:30'
-updated_date: '2026-07-20 20:15'
+updated_date: '2026-07-20 21:19'
 labels: []
 dependencies:
   - TASK-46
@@ -91,6 +91,15 @@ Verification:
 Known failures: none
 
 Scope note for review: implementing null-move pruning required a null-move primitive on core Position (make_null_move/unmake_null_move). This was anticipated by the codebase — replay_last_move_deltas already documented the null-move carry-across as 'a constraint on whichever change introduces them' — so it is treated as in-scope additive work, not a structural change. The one non-obvious tuning decision (NULL_MOVE_MIN_DEPTH=5 to preserve exact shallow-mate detection) is documented at the constant and in the design note above.
+
+## Merge (landed)
+Approved immutable code target d256cd1 (base 02e3ba5) was forward-integrated onto master tip 8c863f5 as non-fast-forward merge commit a2d514f, with d256cd1 intact as a parent. Note: the rework re-pointed the two new tests from core::init to chess::init after TASK-20's crate rename, so the engine primitive lives on chess Position (not core), and verification below was run on the integrated merge, not the pre-rework e6acc56.
+Integrated-result verification on a2d514f:
+- cargo fmt --check: PASS
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: PASS (clean CARGO_TARGET_DIR, 0 warnings)
+- cargo test --workspace: PASS (chess 49, engine 303 passed / 2 pre-existing ignored, lichess 68, seaborg 19, build_metadata 1)
+- Hot-path benches (perft/movegen): not applicable — generate/make_move/unmake_move are byte-identical across the merge (chess Position changes are purely additive: make_null_move/unmake_null_move/has_non_pawn_material), so no move-generation regression is possible.
+Compare-and-swap: primary tip was unchanged (8c863f5) at land time; fast-forwarded master to a2d514f. Independent review approved d256cd1 (see task branch review verdict).
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -165,5 +174,5 @@ The merge skill does not edit implementation code, so no fix is applied here.
 ## Final Summary
 
 <!-- SECTION:FINAL_SUMMARY:BEGIN -->
-Implemented step 8 futility pruning and step 9 null-move pruning with verification in engine/src/search.rs, backed by a new make_null_move/unmake_null_move primitive and a has_non_pawn_material zugzwang proxy on core Position, plus Score::dec_one for the null window. All guards match the ACs: futility is non-PV / not-in-check / cp-alpha / near-horizon; null move adds eval>=beta, non-pawn material, and no-consecutive-null, with a reduced-depth verification search (NMP suppressed at the verifying ply) above NULL_MOVE_VERIFY_DEPTH. NULL_MOVE_MIN_DEPTH=5 preserves exact shallow-mate detection (documented at the constant). Verified on target e6acc56: cargo fmt --check PASS; cargo clippy --workspace --all-targets --all-features -- -D warnings PASS with a clean CARGO_TARGET_DIR; cargo test --workspace PASS (engine 294 passed, 2 pre-existing ignored). Guard-equivalence and tree-reduction tests confirm the pruning fires yet leaves sound-position results unchanged; TASK-27 node-limited strength runs (candidate vs base ba6aec1) show no loss.
+Step 8 futility pruning and step 9 null-move pruning with a reduced-depth verification search, implemented in engine/src/search.rs, backed by additive make_null_move/unmake_null_move and a has_non_pawn_material zugzwang proxy on chess Position plus Score::dec_one. Guards: futility is non-PV/not-in-check/cp-alpha/near-horizon; null move requires eval>=beta, non-pawn material, and no consecutive null, with NMP suppressed at the verifying ply (NULL_MOVE_MIN_DEPTH=5 preserves exact shallow-mate detection). Approved code target d256cd1, landed on master as merge commit a2d514f. Integrated-result verification: cargo fmt --check PASS; cargo clippy --workspace --all-targets --all-features -- -D warnings PASS (clean CARGO_TARGET_DIR); cargo test --workspace PASS (engine 303 passed / 2 pre-existing ignored, all crates green), including forward_pruning_does_not_change_sound_search_results and forward_pruning_reduces_the_search_tree. TASK-27 node-limited strength runs show no loss (pruning logic byte-identical to the strength-tested SHA).
 <!-- SECTION:FINAL_SUMMARY:END -->
