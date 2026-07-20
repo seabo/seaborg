@@ -1,11 +1,11 @@
 ---
 id: TASK-69.2
 title: Versioned NNUE network file format and loader
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:40'
-updated_date: '2026-07-20 22:57'
+updated_date: '2026-07-20 23:23'
 labels:
   - nnue
   - inference
@@ -46,4 +46,31 @@ The file is the contract between the Rust engine and the Python trainer: the tra
 
 <!-- SECTION:NOTES:BEGIN -->
 Claimed on branch task-69.2-nnue-file-format (worktree /Users/seabo/seaborg-worktrees/task-69.2-nnue-file-format), base 6d3d4ac.
+
+Implemented the SBNN network file format in a new engine 'nnue' module (engine/src/nnue/{mod.rs,format.rs}), registered as pub in engine/src/lib.rs sibling to eval. This is the serialization boundary only — no inference or accumulator.
+
+- format.rs defines the 64-byte little-endian header layout as named offset constants, a validated in-memory Network (hidden width H, qa/qb/scale, and the four quantized blocks W_ft i16 / b_ft i16 / W_out i16 / b_out i32) with read accessors, a public Parameters carrier so Network::new stays under the argument-count lint, a BuildError for in-memory construction, and a LoadError whose variants map one-to-one onto the contract's rejection rules.
+- write() emits magic SBNN, version 1, feature_set 0, input_dim 768, H, output_dim 1, activation 0, qa, qb, scale, param_bytes, an FNV-1a param_hash, and zeroed reserved bytes, then the blob in contract order.
+- read() validates the entire header (magic, version, feature_set/activation, input_dim/H/output_dim, positive qa/qb/scale, zero reserved, param_bytes-vs-dimensions) before touching weights, then reads the blob via Read::take so an untrusted param_bytes cannot pre-size an allocation, rejects trailing bytes, and checks the FNV-1a hash before decoding.
+- 17 unit tests: valid round-trip to identical weights+metadata; truncated header and truncated blob; trailing bytes; bad magic; unknown version; unknown feature-set; unknown activation; input-dim mismatch; H not a multiple of 16; zero H; wrong output_dim; non-positive qa/qb/scale; non-zero reserved; param_bytes disagreement; corrupt-blob hash mismatch; empty input; and BuildError paths for Network::new.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @claude
+created: 2026-07-20 23:23
+---
+Implementation handoff
+Branch: task-69.2-nnue-file-format
+Worktree: /Users/seabo/seaborg-worktrees/task-69.2-nnue-file-format
+Base: 6d3d4ac98a40a455959b4cea18d0b0a82b0c7867
+Implementation target: 346db314adb4418c688430ea83c45fa01fe56c50
+Resolved findings: none
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean, exit 0)
+- cargo test --workspace: pass (457 passed, 0 failed, 2 ignored; engine 320 incl. 17 new nnue::format tests)
+Known failures: none
+---
+<!-- COMMENTS:END -->
