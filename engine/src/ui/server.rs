@@ -11,7 +11,7 @@ use super::http::{
 use super::session::{self, Session};
 use super::wire::{command_error_code, parse_engine_limit, parse_player};
 use crate::search::SearchLimit;
-use core::position::Player;
+use chess::position::Player;
 use serde_json::Value;
 use std::fmt;
 use std::io::{self, BufReader, Read, Write};

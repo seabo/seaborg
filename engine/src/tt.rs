@@ -57,8 +57,8 @@ compile_error!(
 );
 
 use super::score::Score;
-use core::mov::{Move, MoveType};
-use core::position::{PieceType, Position, Square};
+use chess::mov::{Move, MoveType};
+use chess::position::{PieceType, Position, Square};
 
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 
@@ -923,7 +923,7 @@ mod tests {
 
     #[test]
     fn round_trips_every_packed_field() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let table = Table::new(1);
         let key = 0x0123_4567_89ab_cdef;
@@ -1356,7 +1356,7 @@ mod tests {
 
     #[test]
     fn a_move_less_update_keeps_the_move_already_recorded() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let table = Table::new(1);
         let key = 0x8b_u64;

@@ -1,4 +1,4 @@
-use core::position::{Piece, PieceDeltaSink, PieceType, Player, Position, Square};
+use chess::position::{Piece, PieceDeltaSink, PieceType, Player, Position, Square};
 
 /// Exchange values used by static exchange evaluation and move ordering, indexed by
 /// [`PieceType`].
@@ -358,9 +358,9 @@ const EG_PST: [[i16; 64]; 7] = [
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::init::init_globals;
-    use core::mono_traits::{All, Legal};
-    use core::movelist::BasicMoveList;
+    use chess::init::init_globals;
+    use chess::mono_traits::{All, Legal};
+    use chess::movelist::BasicMoveList;
 
     /// Exhaustively walks the legal move tree from `pos` to `depth`, maintaining an incrementally
     /// updated [`EvalState`] alongside it and asserting at every node — after each make and after

@@ -10,7 +10,7 @@
 use crate::game::{CommandError, DrawReason, EngineStatus, GameSnapshot, GameStatus, MoveRecord};
 use crate::score::Score;
 use crate::search::{SearchLimit, SearchProgress};
-use core::position::Player;
+use chess::position::Player;
 use serde::Serialize;
 use std::time::Duration;
 
@@ -306,8 +306,8 @@ pub fn snapshot_to_json(snapshot: &GameSnapshot) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::init::init_globals;
-    use core::position::Position;
+    use chess::init::init_globals;
+    use chess::position::Position;
     use serde_json::Value;
     use std::time::Duration;
 

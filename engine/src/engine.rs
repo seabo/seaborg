@@ -3,7 +3,7 @@ use super::options::{advertised_uci_options, EngineConfig, EngineOpt};
 use super::search::{SearchEngine, SearchEvent, SearchHandle, SearchLimit};
 use super::time::{self, TimingMode};
 use super::uci::{self, Command};
-use core::position::Position;
+use chess::position::Position;
 
 use crossbeam_channel::{select, unbounded, Receiver};
 
@@ -76,7 +76,7 @@ where
     W: Write,
     E: Write,
 {
-    core::init::init_globals();
+    chess::init::init_globals();
 
     let (uci_tx, uci_rx) = unbounded();
     thread::spawn(move || read_commands(BufReader::new(input), uci_tx));
@@ -90,7 +90,7 @@ where
     W: Write,
     E: Write,
 {
-    core::init::init_globals();
+    chess::init::init_globals();
 
     thread::scope(|scope| {
         let (uci_tx, uci_rx) = unbounded();
@@ -641,7 +641,7 @@ mod tests {
 
         let (done_tx, done_rx) = unbounded::<usize>();
         let searcher = thread::spawn(move || {
-            core::init::init_globals();
+            chess::init::init_globals();
             let engine = SearchEngine::new(1);
             // Never written to, but kept alive so the command arm of the select
             // stays open and completion is the only way out of `next_event`.

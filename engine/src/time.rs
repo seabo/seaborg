@@ -1,4 +1,4 @@
-use core::position::Player;
+use chess::position::Player;
 
 static AVERAGE_GAME_LENGTH: u64 = 40;
 static MINIMUM_REMAINING_MOVES: u64 = 20;

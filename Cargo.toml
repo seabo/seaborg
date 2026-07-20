@@ -1,5 +1,5 @@
 [workspace]
-members = ["core", "engine", "lichess"]
+members = ["chess", "engine", "lichess"]
 # Pin the feature resolver explicitly so it stays fixed if a member's edition
 # changes later; version 2 is the edition-2021 default this workspace already used.
 resolver = "2"
@@ -33,7 +33,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-chess_core = { package = "core", path = "./core" }
+chess = { path = "./chess" }
 engine = { path = "./engine" }
 lichess = { path = "./lichess" }
 clap = { version = "4.6.2", features = ["derive"] }

@@ -4,8 +4,8 @@ use super::eval::piece_value;
 use super::score::Score;
 use super::search::Search;
 
-use core::bb::Bitboard;
-use core::position::{PieceType, Player, Square};
+use chess::bb::Bitboard;
+use chess::position::{PieceType, Player, Square};
 
 use std::cmp::max;
 
@@ -150,13 +150,13 @@ fn promotion_bonus(promoting: bool, promotion_gain: Score) -> Score {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::position::Position;
+    use chess::position::Position;
     use std::sync::atomic::AtomicBool;
 
     #[test]
     #[rustfmt::skip]
     fn it_works() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let suite = vec![
                 ("1k1r4/1pp4p/p7/4p3/8/P5P1/1PP4P/2K1R3 w - - 0 1", Square::E1, Square::E5, PieceType::Pawn, PieceType::Rook, Score::cp(100)),

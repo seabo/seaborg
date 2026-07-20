@@ -1,7 +1,7 @@
-use core::mono_traits::{All, Legal};
-use core::mov::Move;
-use core::movelist::BasicMoveList;
-use core::position::{Position, START_POSITION};
+use chess::mono_traits::{All, Legal};
+use chess::mov::Move;
+use chess::movelist::BasicMoveList;
+use chess::position::{Position, START_POSITION};
 
 use separator::Separatable;
 
@@ -341,7 +341,7 @@ pub const TESTS: [(&str, usize, usize); 9] = [
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::init::init_globals;
+    use chess::init::init_globals;
 
     /// A reference perft row: fen, depth, nodes, captures, en passant, castles,
     /// promotions, checks, checkmates.
