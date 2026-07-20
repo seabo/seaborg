@@ -1,11 +1,11 @@
 ---
 id: TASK-69.1
 title: 'NNUE design contract: feature set, topology, quantization, file format, loss'
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:39'
-updated_date: '2026-07-20 21:07'
+updated_date: '2026-07-20 21:26'
 labels:
   - nnue
   - design
@@ -40,3 +40,29 @@ This subtask is a decision record, not code. It is the contract subtasks .2 thro
 3. Cross-check the contract against the real repo seam (square/piece/color conventions, eval units, PieceDeltaSink signature) so subtasks .2-.12 implement against accurate facts.
 4. Verify each acceptance criterion against the document; run repo-required checks (no code change, but confirm no regressions); hand off for review.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Authored docs/nnue-design-contract.md as the shared NNUE contract. Decisions were cross-checked against the live repo seam before writing: square indexing a1=0 rank-major (chess/src/position/square.rs), Piece/PieceType/Player enums and Player::relative_square (chess/src/position), the PieceDeltaSink trait signature (chess/src/position/mod.rs:162), EvalState/pst_index and the i16-centipawn tapered eval (engine/src/eval.rs), and the Score centipawn band +/-10_000 with mate at +/-20_000 (engine/src/score.rs). The feature-index formula, i16 accumulator, and centipawn clamp are all stated in those terms so subtasks .2-.12 implement against accurate conventions. Docs-only change; no Rust source touched.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @claude
+created: 2026-07-20 21:26
+---
+Implementation handoff
+Branch: task-69.1-nnue-design-contract
+Worktree: /Users/seabo/seaborg-worktrees/task-69.1-nnue-design-contract
+Base: 8c863f5e6ed50f9914cf7f7c66beda73582bc4da
+Implementation target: 8f8d6a1f4c3df72567bbfce17c38aa33cdacc439
+Resolved findings: none
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean)
+- cargo test --workspace: pass (432 tests: 45 + 300 + 68 + 19 + 1 doctest; 2 ignored; 0 failed)
+Known failures: none
+---
+<!-- COMMENTS:END -->
