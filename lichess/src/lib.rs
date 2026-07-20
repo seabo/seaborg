@@ -2,12 +2,13 @@
 //!
 //! This crate connects Seaborg to the Lichess Bot API: it authenticates with a
 //! personal API token, loads a challenge-acceptance policy from TOML, opens the
-//! account event stream, and accepts or declines incoming challenges. Actually
-//! playing the moves of an accepted game is handled by a later stage and is not
-//! wired up here (see [`game`] for the handoff point).
+//! account event stream, and accepts or declines incoming challenges. Each
+//! accepted game is played to completion by a per-game worker (see [`game`]),
+//! which streams the game and replies with the engine's moves.
 //!
 //! The HTTP surface sits behind the [`transport::Transport`] trait so the event
-//! loop can be exercised against recorded NDJSON without touching the network.
+//! loop and game loop can both be exercised against recorded NDJSON without
+//! touching the network.
 
 pub mod account;
 pub mod client;
@@ -15,6 +16,7 @@ pub mod config;
 pub mod error;
 pub mod event;
 pub mod game;
+pub mod game_stream;
 pub mod policy;
 pub mod run;
 pub mod transport;

@@ -2,13 +2,14 @@
 //! loop together for the `seaborg lichess` command.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::account::Account;
 use crate::client::LichessClient;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::event::Event;
-use crate::game::GameHandoff;
+use crate::game::{play_game, EngineMoveChooser};
 use crate::policy::{self, Decision};
 use crate::transport::{HttpTransport, Transport};
 
@@ -24,31 +25,61 @@ pub fn load_token() -> Result<String> {
 }
 
 /// Connect to Lichess and run the challenge-handling event loop until the stream
-/// ends.
+/// ends, playing each accepted game in its own worker thread.
 ///
 /// Fails fast when the token is missing or rejected, or when the authenticated
 /// account is not a BOT account (which needs [`upgrade`] first).
 pub fn run(config_path: Option<&Path>) -> Result<()> {
     let token = load_token()?;
-    let config = Config::load(config_path)?;
-    let client = LichessClient::new(HttpTransport::new(crate::DEFAULT_BASE_URL, token));
-    serve(&client, &config)
+    let config = Arc::new(Config::load(config_path)?);
+    let client = Arc::new(LichessClient::new(HttpTransport::new(
+        crate::DEFAULT_BASE_URL,
+        token,
+    )));
+
+    let account = require_bot_account(&client)?;
+    log::info!("connected to Lichess as bot {}", account.username);
+    // Lichess reports each game's players by their lowercase account id, which
+    // is what identifies the bot's own side once a game starts.
+    let bot_id = account.id;
+
+    // Each accepted game runs to completion on its own thread, matching the
+    // repo's std-thread idiom, so a slow search in one game cannot stall the
+    // event loop or the other games. The event loop keeps the concurrency count
+    // from the account stream's game lifecycle events (below).
+    let start_game = {
+        let client = Arc::clone(&client);
+        let config = Arc::clone(&config);
+        move |game_id: &str| {
+            let client = Arc::clone(&client);
+            let config = Arc::clone(&config);
+            let bot_id = bot_id.clone();
+            let game_id = game_id.to_string();
+            std::thread::spawn(move || {
+                let chooser = EngineMoveChooser::new(config.engine.hash_mb);
+                if let Err(error) = play_game(&client, &config, &bot_id, &game_id, &chooser) {
+                    log::warn!("game {game_id} stopped on error: {error}");
+                }
+            });
+        }
+    };
+
+    run_event_loop(&client, &config, start_game)
 }
 
-/// Verify the account is a bot, then run the event loop.
+/// Confirm the authenticated account is a BOT account, returning it.
 ///
 /// Generic over the transport so the non-bot rejection can be tested with a
 /// recorded account response instead of a live connection.
-fn serve<T: Transport>(client: &LichessClient<T>, config: &Config) -> Result<()> {
+fn require_bot_account<T: Transport>(client: &LichessClient<T>) -> Result<Account> {
     let account = client.account()?;
-    if !account.is_bot() {
-        return Err(Error::NotBotAccount {
+    if account.is_bot() {
+        Ok(account)
+    } else {
+        Err(Error::NotBotAccount {
             username: account.username,
-        });
+        })
     }
-
-    log::info!("connected to Lichess as bot {}", account.username);
-    run_event_loop(client, config)
 }
 
 /// The result of an upgrade attempt.
@@ -108,8 +139,21 @@ where
 /// Read the event stream and act on each event: accept or decline challenges by
 /// policy, and track how many games are in progress so the game cap is honored.
 ///
+/// `start_game` is invoked with a game's id when it starts, to begin playing it.
+/// The active-game count that gates the cap is kept from the account stream's
+/// own `gameStart`/`gameFinish` events, which are the authoritative lifecycle
+/// signal, rather than from the game workers.
+///
 /// Generic over the transport so it can be driven by recorded NDJSON in tests.
-pub fn run_event_loop<T: Transport>(client: &LichessClient<T>, config: &Config) -> Result<()> {
+pub fn run_event_loop<T, S>(
+    client: &LichessClient<T>,
+    config: &Config,
+    mut start_game: S,
+) -> Result<()>
+where
+    T: Transport,
+    S: FnMut(&str),
+{
     let mut active_games: u32 = 0;
 
     for event in client.event_stream()? {
@@ -143,15 +187,13 @@ pub fn run_event_loop<T: Transport>(client: &LichessClient<T>, config: &Config) 
             }
             Event::GameStart { game } => {
                 active_games = active_games.saturating_add(1);
-                // Building the handoff is where a future game runner takes over;
-                // for now the game is only logged so the operator sees it start.
-                let handoff = GameHandoff::new(game.id, &config.engine);
                 log::info!(
-                    "game {} started ({}/{} active); move play is not yet implemented",
-                    handoff.game_id,
+                    "game {} started ({}/{} active)",
+                    game.id,
                     active_games,
                     config.max_concurrent_games
                 );
+                start_game(&game.id);
             }
             Event::GameFinish { game } => {
                 active_games = active_games.saturating_sub(1);
@@ -248,7 +290,14 @@ mod tests {
         );
         let transport = FakeTransport::new("{}", &stream);
         let client = LichessClient::new(transport);
-        run_event_loop(&client, &Config::default()).unwrap();
+        let mut started = Vec::new();
+        run_event_loop(&client, &Config::default(), |id: &str| {
+            started.push(id.to_string())
+        })
+        .unwrap();
+
+        // The one started game is handed to the runner.
+        assert_eq!(started, vec!["g1".to_string()]);
 
         let posts = client_transport(&client).posts.borrow().clone();
         assert_eq!(
@@ -272,8 +321,15 @@ mod tests {
         );
         let transport = FakeTransport::new("{}", &stream);
         let client = LichessClient::new(transport);
-        run_event_loop(&client, &Config::default()).unwrap();
+        let mut started = Vec::new();
+        run_event_loop(&client, &Config::default(), |id: &str| {
+            started.push(id.to_string())
+        })
+        .unwrap();
 
+        // The game that filled the cap was still handed to the runner; only the
+        // challenge that would have exceeded the cap is declined.
+        assert_eq!(started, vec!["g1".to_string()]);
         assert_eq!(
             client_transport(&client).post_paths(),
             vec!["/api/challenge/good01/decline".to_string()]
@@ -285,7 +341,7 @@ mod tests {
         let account = r#"{"id":"human","username":"Human","title":null}"#;
         let transport = FakeTransport::new(account, "");
         let client = LichessClient::new(transport);
-        match serve(&client, &Config::default()) {
+        match require_bot_account(&client) {
             Err(Error::NotBotAccount { username }) => assert_eq!(username, "Human"),
             other => panic!("expected NotBotAccount, got {other:?}"),
         }

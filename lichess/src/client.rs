@@ -7,6 +7,7 @@
 use crate::account::Account;
 use crate::error::{Error, Result};
 use crate::event::{parse_line, Event};
+use crate::game_stream::{parse_game_line, GameEvent};
 use crate::policy::DeclineReason;
 use crate::transport::Transport;
 
@@ -76,5 +77,30 @@ impl<T: Transport> LichessClient<T> {
                 Err(e) => Some(Err(e)),
             },
         }))
+    }
+
+    /// Open a game's stream, yielding one [`GameEvent`] per JSON line.
+    ///
+    /// Like [`event_stream`](Self::event_stream), keepalive blank lines are
+    /// dropped and a transport or parse error surfaces as an `Err` item.
+    pub fn game_stream(&self, game_id: &str) -> Result<impl Iterator<Item = Result<GameEvent>>> {
+        let lines = self
+            .transport
+            .open_stream(&format!("/api/bot/game/stream/{game_id}"))?;
+        Ok(lines.filter_map(|line| match line {
+            Err(e) => Some(Err(e)),
+            Ok(line) => match parse_game_line(&line) {
+                Ok(None) => None,
+                Ok(Some(event)) => Some(Ok(event)),
+                Err(e) => Some(Err(e)),
+            },
+        }))
+    }
+
+    /// Play `uci` in the given game via the bot move endpoint.
+    pub fn play_move(&self, game_id: &str, uci: &str) -> Result<()> {
+        self.transport
+            .post_empty(&format!("/api/bot/game/{game_id}/move/{uci}"))
+            .map(drop)
     }
 }
