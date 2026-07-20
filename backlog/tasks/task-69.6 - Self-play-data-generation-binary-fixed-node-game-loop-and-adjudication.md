@@ -1,11 +1,11 @@
 ---
 id: TASK-69.6
 title: 'Self-play data generation binary: fixed-node game loop and adjudication'
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:41'
-updated_date: '2026-07-20 23:27'
+updated_date: '2026-07-20 23:44'
 labels:
   - nnue
   - datagen
@@ -26,9 +26,9 @@ Each game records, per retained position, the search score and the eventual game
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The binary self-plays games at a configurable fixed node budget per move and runs games concurrently across a configurable number of workers
-- [ ] #2 Games terminate by mate, stalemate, draw rules, or adjudication, and each recorded position carries a search score and the final game outcome
-- [ ] #3 Throughput (positions per second, aggregate) is measured and recorded so the training-cost estimates can be validated against reality
+- [x] #1 The binary self-plays games at a configurable fixed node budget per move and runs games concurrently across a configurable number of workers
+- [x] #2 Games terminate by mate, stalemate, draw rules, or adjudication, and each recorded position carries a search score and the final game outcome
+- [x] #3 Throughput (positions per second, aggregate) is measured and recorded so the training-cost estimates can be validated against reality
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -86,4 +86,34 @@ Verification:
 - manual: seaborg datagen --games 4 --workers 2 --nodes 20000 -> 4 games / 368 positions, resignation-adjudicated
 Known failures: none
 ---
+
+author: @claude
+created: 2026-07-20 23:44
+---
+Review attempt: 1
+Reviewed branch: task-69.6-selfplay-datagen
+Reviewed implementation: 32e9989
+Verdict: approved
+
+Immutability: base 6d3d4ac is an ancestor of target 32e9989, which is an ancestor of branch tip 44a6098; the only change from target to tip is this task file (handoff metadata). No implementation file differs between the reviewed SHA and the approval commit.
+
+Acceptance criteria (all proven):
+- AC#1 configurable fixed node budget + concurrent workers: SelfPlayConfig{node_budget,workers} drives run(), which spawns config.workers threads each owning a private SearchEngine (private TT, no contention) pulling games from a shared AtomicUsize; CLI exposes --nodes/--workers (default available_parallelism). Verified by run_plays_every_game_and_measures_throughput and manual CLI run.
+- AC#2 termination + labelled positions: terminal_status covers checkmate/stalemate/threefold/fifty-move/insufficient-material; Adjudicator covers resign/draw; plus a max-ply cap. Each retained Sample carries a side-to-move Score and a Wdl outcome mapped from the game result via outcome_for. Verified by checkmate/stalemate/fifty/threefold/insufficient/resign/draw-adjudication unit tests and the per-sample outcome assertion in run.
+- AC#3 throughput measured and recorded: ThroughputReport computes positions/elapsed/positions_per_second; CLI prints it plus a result/termination breakdown. Verified by the throughput assertions and manual run (240 positions / 3839 pos/s).
+
+Scope: new module + CLI subcommand only; no search/movegen source touched, so hot-path benchmarks are not warranted. No #[allow] introduced. Comments interpretable without external context; no task-ID/AC citations in code.
+
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings (clean CARGO_TARGET_DIR): pass, no warnings
+- cargo test --workspace: pass (chess 49; engine 318 + 2 ignored, incl. 15 new selfplay tests; lichess 68; integration green)
+- manual: seaborg datagen --games 4 --workers 2 --nodes 3000 --max-plies 60 -> 4 games / 240 positions / 3839 pos/s, full breakdown printed
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Added engine::selfplay (game loop, win/draw/loss adjudication, and per-worker parallel orchestration) plus a thin seaborg datagen CLI. Games self-play at a fixed node budget per move across a configurable worker pool; each retained position carries a side-to-move search score and the eventual game outcome; runs terminate by mate, stalemate, threefold, fifty-move, insufficient material, resign/draw adjudication, or a max-ply safety cap, and aggregate positions/second is measured and reported. Scope stops short of on-disk encoding, position filtering, and opening diversification (TASK-69.7). Verified on implementation target 32e9989: cargo fmt --check pass; cargo clippy --workspace --all-targets --all-features -D warnings pass on a clean CARGO_TARGET_DIR (no warnings); cargo test --workspace pass (chess 49, engine 318 + 2 ignored incl. 15 new selfplay tests, lichess 68, integration green); manual seaborg datagen --games 4 --workers 2 --nodes 3000 --max-plies 60 reported 240 positions / 3839 pos/s with a full result and termination breakdown.
+<!-- SECTION:FINAL_SUMMARY:END -->
