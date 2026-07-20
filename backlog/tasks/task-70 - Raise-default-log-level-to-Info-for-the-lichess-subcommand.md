@@ -1,11 +1,11 @@
 ---
 id: TASK-70
 title: Raise default log level to Info for the lichess subcommand
-status: Ready to Merge
+status: Done
 assignee:
   - '@george'
 created_date: '2026-07-20 20:06'
-updated_date: '2026-07-20 20:18'
+updated_date: '2026-07-20 20:31'
 labels: []
 dependencies: []
 ordinal: 115000
