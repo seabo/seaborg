@@ -1,11 +1,11 @@
 ---
 id: TASK-20
 title: Clarify crate names and public API boundaries
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-20 18:18'
+updated_date: '2026-07-20 19:24'
 labels:
   - architecture
   - api
@@ -27,11 +27,11 @@ The domain crate is named core, which conflicts conceptually with the Rust core 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The chess-domain crate no longer uses the ambiguous package and crate name core
-- [ ] #2 Downstream imports clearly distinguish board-domain and engine-domain APIs
-- [ ] #3 Engine internals are private unless they are part of a documented supported API
-- [ ] #4 Workspace binaries, tests, and benchmarks compile against the new public facades
-- [ ] #5 The rename and visibility changes are documented for contributors
+- [x] #1 The chess-domain crate no longer uses the ambiguous package and crate name core
+- [x] #2 Downstream imports clearly distinguish board-domain and engine-domain APIs
+- [x] #3 Engine internals are private unless they are part of a documented supported API
+- [x] #4 Workspace binaries, tests, and benchmarks compile against the new public facades
+- [x] #5 The rename and visibility changes are documented for contributors
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -77,4 +77,39 @@ Verification:
 - cargo build -p engine --examples: pass
 Known failures: none
 ---
+
+author: @claude
+created: 2026-07-20 19:24
+---
+Review verdict: APPROVED
+
+Implementation SHA (immutable target): e06cae895d7613a0269e0b849ba6458e6752489e
+Branch: task-20-clarify-crate-names
+Base: ba6aec1d2d2633c672e9945d52864fb09c011140
+Reviewed diff: base..target (full range). Commits after target contain only task-file handoff metadata; target is an ancestor of the branch tip.
+
+Acceptance criteria — all proven:
+- AC1: package/crate renamed core->chess (chess/Cargo.toml name=chess, dir git mv'd); no workspace core:: references remain (only the std core::arch comment in tt.rs and the rename-rationale doc comment).
+- AC2: downstream imports use chess:: vs engine::; the chess_core alias is dropped in the root binary, benches, lichess, and examples.
+- AC3: engine internals (engine, game, history, info, killer, ordering, pv_table, see, trace, uci) are private; the supported facade (eval, options, perft, score, search, time, tt, ui + crate-root launch/EngineInfo) is documented in the crate-root //! docs.
+- AC4: workspace binary, tests, and benches compile against the facades (clippy --all-targets and full test run cover them).
+- AC5: crate-root //! docs on chess and engine plus docs/workspace-layout-assessment.md updated for contributors.
+
+Other checks:
+- Dead code unmasked by privatization resolved at source, not via #[allow] (none added). Removed items (Game::reset_to, Butterfly::inc, Killer::slots, uci::Error::{ExpectedBool, InvalidPosition, InvalidMove}) verified to have no remaining callers; #[cfg(test)]-gated get accessors used only in test modules.
+- Comments are self-contained; no code comment cites a bare task/AC/finding ID.
+- Pure rename + visibility + dead-code removal; no move-gen/search hot-path logic changed, so speed benchmarks not warranted.
+- Scope clean; no unrelated changes.
+
+Verification (run on the target):
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean CARGO_TARGET_DIR, full 20.7s recompile, 0 warnings)
+- cargo test --workspace: pass (all crates, doctests including the fixed compile_fail doctest, 0 failed)
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Renamed the domain crate core->chess (dir git mv, package/crate ident, all path deps and imports) and dropped the chess_core alias; migrated the engine crate to a facade that exposes only eval/options/perft/score/search/time/tt/ui plus a crate-root launch/EngineInfo re-export, making game/history/info/killer/ordering/pv_table/see/trace/uci/engine private. Dead code unmasked by privatization was removed at source (Game::reset_to, Butterfly::inc, Killer::slots, three unused uci::Error variants) and test-only bounds-checked accessors gated behind #[cfg(test)]; no #[allow] added. Documented via crate-root //! comments on chess and engine and an updated docs/workspace-layout-assessment.md. Verified on immutable target e06cae895d7613a0269e0b849ba6458e6752489e: cargo fmt --check pass; cargo clippy --workspace --all-targets --all-features -- -D warnings pass (clean CARGO_TARGET_DIR, full recompile, 0 warnings); cargo test --workspace pass (all crates, doctests incl. the fixed compile_fail doctest, 0 failed).
+<!-- SECTION:FINAL_SUMMARY:END -->
