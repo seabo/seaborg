@@ -1,11 +1,11 @@
 ---
 id: TASK-69.3
 title: NNUE feature encoding and accumulator as a PieceDeltaSink
-status: Ready to Merge
+status: Changes Requested
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:40'
-updated_date: '2026-07-20 23:32'
+updated_date: '2026-07-20 23:47'
 labels:
   - nnue
   - inference
@@ -26,9 +26,9 @@ The accumulator plugs into the existing seam: Position::replay_last_move_deltas 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [x] #1 Feature indices for both perspectives match the design contract and are covered by tests over representative positions
-- [x] #2 The accumulator is maintained incrementally across make and unmake and a debug assertion checks it against a from-scratch recomputation at every node
-- [x] #3 A make-then-unmake restores the accumulator bit-for-bit, and a subtree walk asserts incremental equals from-scratch, mirroring the existing EvalState tests
+- [ ] #1 Feature indices for both perspectives match the design contract and are covered by tests over representative positions
+- [ ] #2 The accumulator is maintained incrementally across make and unmake and a debug assertion checks it against a from-scratch recomputation at every node
+- [ ] #3 A make-then-unmake restores the accumulator bit-for-bit, and a subtree walk asserts incremental equals from-scratch, mirroring the existing EvalState tests
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -106,10 +106,25 @@ No benchmark run: the diff adds an as-yet-unreferenced module and one module dec
 
 Scope note (non-blocking): Search threading (eval_stack-style push/pop and a search-node debug assertion) is deferred to TASK-69.4, which owns the Search::evaluate selection seam per the approved design contract. AC#2/#3 are satisfied by the subtree-walk test 'mirroring the existing EvalState tests' as AC#3 specifies, and threading a not-yet-consumed accumulator into the per-node hot path before .4 would add cost with no benefit. The deferral is documented in the implementation notes and leaves no acceptance criterion unprovable.
 ---
+
+author: @claude
+created: 2026-07-20 23:46
+---
+Merge attempt: ejected (integration failure — not a review reversal)
+Primary tip tested: 097854d4ce43827fa003ee907e8bcd7935b9e50c
+Approved target merged: 9d2096a5f5b8f418a760f9b76af636ebb2e4bd98
+
+Result: the non-fast-forward merge of the approved target into the live primary tip is textually clean (git auto-merged engine/src/lib.rs; both sides add 'pub mod nnue;') but the integrated tree does not compile.
+
+Failing command: cargo build -p engine (and therefore cargo test --workspace) on the trial merge commit.
+Evidence:
+  error[E0761]: file for module `nnue` found at both "engine/src/nnue.rs" and "engine/src/nnue/mod.rs"
+    --> engine/src/lib.rs:32:1
+
+Cause: TASK-69.2 (versioned NNUE file format/loader) landed on master after this task's base (6d3d4ac) and introduced nnue as a *directory* module — engine/src/nnue/mod.rs re-exporting Network/format plus INPUT_DIM et al. This task's approved target adds nnue as a *single file* — engine/src/nnue.rs — with feature_index + FeatureTransformer + Accumulator, and its own INPUT_DIM const. Both module paths now coexist, which Rust rejects (E0761); the two also both define INPUT_DIM. This is exactly the parallel-module collision the implementation notes flagged as an integration concern.
+
+The review verdict stands — the approved code is correct in isolation against its base. This is a forward-integration conflict introduced by 69.2 landing first, so it is ejected to Changes Requested rather than Done. No implementation file was changed by $merge; primary remains at 097854d.
+
+Rework guidance for $implement (not performed here): re-home the accumulator into the existing nnue/ directory module (e.g. engine/src/nnue/accumulator.rs + encoding, declared from nnue/mod.rs) and reconcile the duplicated INPUT_DIM (69.2's format.rs already defines/re-exports it) rather than re-adding engine/src/nnue.rs and a second 'pub mod nnue;'. Re-verify fmt/clippy/test on the rebased result and hand back for a fresh review.
+---
 <!-- COMMENTS:END -->
-
-## Final Summary
-
-<!-- SECTION:FINAL_SUMMARY:BEGIN -->
-Adds engine/src/nnue.rs (the perspective-doubled 768-input feature encoding and the incrementally-maintained first-layer Accumulator as a second PieceDeltaSink) plus the pub mod nnue declaration in engine/src/lib.rs. feature_index implements the TASK-69.1 contract's normative formula (oriented = relative_square; +64*(piece_type-1); +384 for enemy); FeatureTransformer stores feature-major i16 weights + i16 bias with load-time invariant checks (H a positive multiple of 16, correct lengths); Accumulator seeds from bias, folds one weight column per perspective on add/remove, and from_position is the from-scratch reference driving the same add path. i16 arithmetic uses plain +=/-= so a debug build panics on the contract's defect-level overflow rather than wrapping. No forward pass, scoring, or Search wiring (deferred to TASK-69.4, which owns the Search::evaluate seam per the contract). Verified on target 9d2096a5f5b8f418a760f9b76af636ebb2e4bd98: cargo fmt --check pass; cargo clippy --workspace --all-targets --all-features -- -D warnings exit 0 on a clean CARGO_TARGET_DIR (no warnings); cargo test --workspace green including 5 new nnue tests (feature-index-vs-contract, bijection onto 0..768 for both perspectives, subtree-walk incremental==from-scratch at every node across captures/castling/en-passant/promotions, make-then-unmake bit-for-bit restore, clone equivalence).
-<!-- SECTION:FINAL_SUMMARY:END -->
