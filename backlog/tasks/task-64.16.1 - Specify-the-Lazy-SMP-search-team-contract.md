@@ -1,11 +1,11 @@
 ---
 id: TASK-64.16.1
 title: Specify the Lazy SMP search-team contract
-status: Changes Requested
+status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-07-19 23:23'
-updated_date: '2026-07-20 11:32'
+updated_date: '2026-07-20 11:37'
 labels:
   - search
   - concurrency
@@ -50,14 +50,12 @@ This task records architecture and tests the seams needed to enforce it; it does
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Add a new `search::team` submodule (engine/src/search/team.rs, declared `pub mod team;` in search.rs) that is the checked-in home for the Lazy SMP search-team contract. It adds documentation and classification types only; it changes no existing search code path, so one-worker behavior is unchanged (AC#7).
-2. Write the module-level contract as module doc covering: team composition (one master + zero-or-more helpers), team identity, shared team state vs per-worker state, and the authoritative-result rule (master's last completed iteration; helpers influence only via the shared TT; no cross-worker voting in baseline) (AC#1).
-3. Document the four team outcomes (Completed/Cancelled/Failed/Panicked) and the single explicit completion signal: emitted exactly once per team, after the master's outcome is fixed and every worker has released the shared table (generalizes TASK-35's finished channel; preserves join-on-drop) (AC#2).
-4. Document limit semantics for Depth/Time/Nodes/Infinite for the whole team, stating the master decides normal completion and helpers never turn a limit into team completion; node budget stays reproducible by binding authoritative completion to the master's own counter (AC#3).
-5. Document TT rules: age advances once per root search (per team, not per worker); one Arc<Table> allocation shared by all workers; clear/replacement only after all workers release it (Arc::get_mut boundary from TASK-57) (AC#4).
-6. Document the fallback + no-partial-results rules: master establishes a legal root fallback before any node (TASK-45); a partial or aborted iteration never becomes the official result (TASK-46); helpers' partial work influences only the TT (AC#5).
-7. Add public classification marker traits SharedTeamState (: Send + Sync) and PerWorkerState, implement them for the shared Table and the per-worker heuristics (KillerTable, HistoryTable, PVTable, Tracer, EvalState), and add focused compile-time tests: assert the shared allocation is Send+Sync, assert each heuristic is classified per-worker, and prove the worker-issue seam borrows shared state while moving per-worker state so heuristics cannot be accidentally shared (AC#6).
-8. Run cargo fmt --check, cargo clippy --workspace --all-targets --all-features -- -D warnings, and cargo test --workspace; record results in the handoff.
+1. Reuse existing branch/worktree; address blocking REV-1-01 only, preserving the approved contract prose elsewhere.
+2. REV-1-01: the contract's §2 condition 2 and §4 wrongly assert the single completion signal is emitted only after every worker releases its table clone, and claim this is today's one-worker rule. It is not: in SearchEngine::start the worker sends finished_tx while still owning its Arc<Table> clone (released only on closure return); clear-safety is guaranteed by join-on-drop (SearchHandle::drop cancels+joins), not by the signal.
+3. Rewrite §2 so the signal's sole precondition is that the master's outcome is fixed, and state explicitly that a worker (incl. the master) may still hold its table clone when the signal fires, exactly as the one worker does today.
+4. Rewrite §4 so clear/replacement reachability is attributed to joining every worker (the join-on-drop guarantee via Arc::get_mut), not to the withheld signal; generalize join-on-drop to the whole team.
+5. Make the preserved join-on-drop guarantee explicit in the preamble.
+6. Run cargo fmt --check, clippy -D warnings, cargo test --workspace; record Resolved REV-1-01 with evidence in the handoff.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
