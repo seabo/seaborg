@@ -4227,7 +4227,7 @@ mod tests {
         let table_a = Table::new(1);
         let table_b = Table::new(1);
         let mut search_a = Search::new(position.clone(), &flag, None, &table_a);
-        let mut search_b = Search::new(position, &flag, None, &table_b);
+        let search_b = Search::new(position, &flag, None, &table_b);
 
         let killer = Move::build(Square::E2, Square::E4, None, MoveType::QUIET);
         search_a.kt.store(killer, 3);
