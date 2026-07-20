@@ -1,5 +1,5 @@
 use super::info::{format_search_event, format_search_outcome};
-use super::options::EngineOpt;
+use super::options::{advertised_uci_options, EngineConfig, EngineOpt};
 use super::search::{SearchEngine, SearchEvent, SearchHandle, SearchLimit};
 use super::time::{self, TimingMode};
 use super::uci::{self, Command};
@@ -104,8 +104,8 @@ where
     W: Write,
     E: Write,
 {
-    let mut hash_size_mb = 16;
-    let mut search_engine = SearchEngine::new(hash_size_mb);
+    let mut config = EngineConfig::new();
+    let mut search_engine = SearchEngine::new(config.hash_mb());
     let mut active_search: Option<SearchHandle> = None;
     let mut pos = Position::start_pos();
 
@@ -140,15 +140,27 @@ where
                     stop_search(search, &mut output);
                 }
             }
-            DriverEvent::Input(Ok(Input::Command(Command::SetOption(option)))) => {
-                if let Some(search) = active_search.take() {
-                    stop_search(search, &mut output);
+            DriverEvent::Input(Ok(Input::Command(Command::SetOption(option)))) => match option {
+                EngineOpt::Hash(size) => {
+                    // Resizing the hash reallocates the table the search shares, so the active
+                    // search must be cancelled and joined first: replacing the allocation while a
+                    // worker still holds it is exactly what `SearchEngine::set_hash_size` refuses to
+                    // do. The config is updated in step with the resource so the two never disagree,
+                    // and a value the engine cannot apply leaves both untouched.
+                    if let Some(search) = active_search.take() {
+                        stop_search(search, &mut output);
+                    }
+                    match config.set_hash_mb(size) {
+                        Ok(()) => search_engine.set_hash_size(config.hash_mb()),
+                        Err(err) => {
+                            let _ = writeln!(errors, "error: {err}");
+                        }
+                    }
                 }
-                if let EngineOpt::Hash(size) = option {
-                    hash_size_mb = size;
-                    search_engine = SearchEngine::new(hash_size_mb);
-                }
-            }
+                // Debug is a mode flag rather than a resource: it allocates nothing and must not
+                // disturb a running search, so it is recorded without a quiescent boundary.
+                EngineOpt::DebugMode(on) => config.set_debug(on),
+            },
             DriverEvent::Input(Ok(Input::Command(Command::Go(timing)))) => {
                 if let Some(search) = active_search.take() {
                     stop_search(search, &mut output);
@@ -175,7 +187,7 @@ where
                 search_engine.new_game();
             }
             DriverEvent::Input(Ok(Input::Command(command))) => {
-                handle_command(&info, command, &mut pos, &mut output, &mut errors);
+                handle_command(&info, command, &config, &mut pos, &mut output, &mut errors);
             }
             DriverEvent::SearchProgress(event) => {
                 let _ = writeln!(output, "{}", format_search_event(&event));
@@ -248,6 +260,7 @@ fn next_event(commands: &Receiver<Input>, search: Option<&SearchHandle>) -> Driv
 fn handle_command<W: Write, E: Write>(
     info: &EngineInfo,
     command: Command,
+    config: &EngineConfig,
     pos: &mut Position,
     output: &mut W,
     errors: &mut E,
@@ -291,16 +304,15 @@ fn handle_command<W: Write, E: Write>(
         Command::Uci => {
             let _ = writeln!(output, "id name {} {}", info.name, info.version);
             let _ = writeln!(output, "id author {}", info.author);
-            let _ = writeln!(
-                output,
-                "option name Hash type spin default 16 min 1 max 1024"
-            );
+            let _ = writeln!(output, "{}", advertised_uci_options());
             let _ = writeln!(output, "uciok");
         }
         Command::IsReady => {
             let _ = writeln!(output, "readyok");
         }
-        Command::Config => {}
+        Command::Config => {
+            let _ = writeln!(output, "{config}");
+        }
         Command::UciNewGame
         | Command::SetOption(_)
         | Command::Go(_)
@@ -508,6 +520,43 @@ mod tests {
         assert!(!output.contains("not yet implemented"));
         assert!(!output.contains("SetOption"));
         assert!(!output.contains("UciNewGame"));
+        assert_eq!(diagnostics_after_banner(&errors), "");
+    }
+
+    #[test]
+    fn hash_change_while_searching_applies_at_a_quiescent_boundary() {
+        // The resize reallocates the shared table, which `SearchEngine::set_hash_size` refuses to do
+        // while any worker still holds it. If the driver did not stop and join the active search
+        // first, the resize would panic the driver thread; a clean `readyok` after it proves the
+        // search was quiesced before the table was replaced.
+        let (output, errors) =
+            run_script("go infinite\nsetoption name Hash value 1\nisready\nquit\n");
+        assert!(output.contains("bestmove "));
+        assert!(output.contains("readyok"));
+        assert_eq!(diagnostics_after_banner(&errors), "");
+    }
+
+    #[test]
+    fn repeated_hash_changes_are_each_applied_cleanly() {
+        let (output, errors) = run_script(
+            "setoption name Hash value 1\n\
+             setoption name Hash value 256\n\
+             setoption name Hash value 16\n\
+             isready\nquit\n",
+        );
+        assert!(output.contains("readyok"));
+        assert_eq!(diagnostics_after_banner(&errors), "");
+    }
+
+    #[test]
+    fn config_command_reflects_the_authoritative_configuration() {
+        // The `config` command reads the one owner of the runtime settings, so it must show the
+        // defaults first and then the values a `setoption`/`debug` sequence applied — evidence that
+        // those commands feed a single authoritative config rather than ad hoc state.
+        let (output, errors) =
+            run_script("config\nsetoption name Hash value 256\ndebug on\nconfig\nquit\n");
+        assert!(output.contains("hash 16 MB, threads 1, debug off"));
+        assert!(output.contains("hash 256 MB, threads 1, debug on"));
         assert_eq!(diagnostics_after_banner(&errors), "");
     }
 

@@ -19,6 +19,21 @@ in that situation — for a release tarball or a distribution package — set
 SEABORG_GIT_HASH=$(cat REVISION) cargo build --release
 ```
 
+## UCI options
+
+Seaborg advertises exactly the options it implements:
+
+- `Hash` (spin, default 16, min 1, max 1024) — size in MiB of the transposition
+  table. A change takes effect only at a quiescent boundary: any running search
+  is stopped and joined before the table is reallocated, so a resize never pulls
+  the allocation out from under a live search.
+
+`Threads` is not advertised. The search currently runs a single worker, so there
+is no worker count to configure; a `Threads` option appears once Lazy SMP
+multithreading lands. For forward compatibility seaborg tolerates an unrecognised
+`setoption` — it is reported on the diagnostic channel and otherwise ignored — so
+a harness that always sends `Threads` still runs against today's build.
+
 ## Past and future development
 
 Seaborg currently has minimal built-in understanding of chess strategy -
@@ -68,7 +83,6 @@ positional awareness.
     - [PV-move](https://www.chessprogramming.org/PV-Move)
     - [MVV-LVA](https://www.chessprogramming.org/MVV-LVA)
   - [Killer move heuristic](https://www.chessprogramming.org/Killer_Heuristic)
-  - [LazySMP multithreading](https://www.chessprogramming.org/Lazy_SMP)
   - Basic [time management](https://www.chessprogramming.org/Time_Management)
 - Evaluation
   - [Material](https://www.chessprogramming.org/Material) counting
@@ -79,6 +93,10 @@ The main future development direction is to improve static evaluation at
 leaf nodes using a neural net approach.
 
 - [Efficiently-updatable neural network](https://www.chessprogramming.org/NNUE)
+- [Lazy SMP multithreading](https://www.chessprogramming.org/Lazy_SMP) — the
+  search runs a single worker today; the configuration already carries a worker
+  count so a multi-worker search can be enabled without reworking option
+  ownership.
 
 ## Development
 

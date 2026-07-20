@@ -327,6 +327,23 @@ impl SearchEngine {
             .clear();
     }
 
+    /// Reallocate the shared hash to `hash_mb` megabytes at an owner-controlled quiescent boundary.
+    ///
+    /// The replacement table is built before the live one is touched, so a failure to allocate it
+    /// leaves the existing table — and the configuration that describes it — in place rather than
+    /// dropping the engine into a state with no table. The swap is then gated on exclusivity exactly
+    /// as [`clear_hash`](Self::clear_hash) is: `Arc::get_mut` only yields once every worker has
+    /// released its clone, so a caller that has not stopped and joined its search first panics here
+    /// rather than replacing an allocation a running worker is still probing.
+    pub fn set_hash_size(&mut self, hash_mb: usize) {
+        let replacement = Table::new(hash_mb);
+        assert!(
+            Arc::get_mut(&mut self.table).is_some(),
+            "the hash cannot be resized while a search still holds the table"
+        );
+        self.table = Arc::new(replacement);
+    }
+
     /// Begin a new game with an empty transposition table.
     ///
     /// Normal searches reuse the existing contents; only the session owner discards them.
