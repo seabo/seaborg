@@ -1,16 +1,20 @@
 //! Top-level entry points that wire configuration, transport, and the event
 //! loop together for the `seaborg lichess` command.
 
+use std::collections::HashSet;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::account::Account;
+use crate::backoff::{Backoff, RECONNECT_BASE, RECONNECT_MAX};
 use crate::client::LichessClient;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::event::Event;
 use crate::game::{play_game, EngineMoveChooser};
 use crate::policy::{self, Decision};
+use crate::shutdown::{self, Shutdown};
 use crate::transport::{HttpTransport, Transport};
 
 /// Read the bot token from the environment, failing fast when it is absent.
@@ -24,17 +28,24 @@ pub fn load_token() -> Result<String> {
     }
 }
 
-/// Connect to Lichess and run the challenge-handling event loop until the stream
-/// ends, playing each accepted game in its own worker thread.
+/// Connect to Lichess and run the challenge-handling event loop, playing each
+/// accepted game in its own worker thread until Ctrl-C is pressed.
+///
+/// The event stream and per-game streams drop routinely; both reconnect with
+/// exponential backoff rather than ending the bot. On Ctrl-C the bot stops
+/// accepting new challenges and waits for its in-flight games to resign and exit
+/// cleanly instead of dropping their connections mid-move.
 ///
 /// Fails fast when the token is missing or rejected, or when the authenticated
 /// account is not a BOT account (which needs [`upgrade`] first).
 pub fn run(config_path: Option<&Path>) -> Result<()> {
     let token = load_token()?;
     let config = Arc::new(Config::load(config_path)?);
+    let shutdown = shutdown::install_signal_handler();
     let client = Arc::new(LichessClient::new(HttpTransport::new(
         crate::DEFAULT_BASE_URL,
         token,
+        shutdown.clone(),
     )));
 
     let account = require_bot_account(&client)?;
@@ -45,26 +56,53 @@ pub fn run(config_path: Option<&Path>) -> Result<()> {
 
     // Each accepted game runs to completion on its own thread, matching the
     // repo's std-thread idiom, so a slow search in one game cannot stall the
-    // event loop or the other games. The event loop keeps the concurrency count
-    // from the account stream's game lifecycle events (below).
-    let start_game = {
+    // event loop or the other games. The handles are kept so shutdown can wait
+    // for every worker to resign and exit rather than dropping mid-move.
+    let mut workers: Vec<std::thread::JoinHandle<()>> = Vec::new();
+
+    // Which games have a live worker. This persists across event-stream
+    // reconnects, so a `gameStart` replayed on reconnect does not spawn a second
+    // worker for a game already in progress, and it is the source of truth for
+    // the concurrency cap.
+    let active = ActiveGames::new();
+
+    let spawn_game = |game_id: &str| -> std::thread::JoinHandle<()> {
         let client = Arc::clone(&client);
         let config = Arc::clone(&config);
-        move |game_id: &str| {
-            let client = Arc::clone(&client);
-            let config = Arc::clone(&config);
-            let bot_id = bot_id.clone();
-            let game_id = game_id.to_string();
-            std::thread::spawn(move || {
-                let chooser = EngineMoveChooser::new(config.engine.hash_mb);
-                if let Err(error) = play_game(&client, &config, &bot_id, &game_id, &chooser) {
-                    log::warn!("game {game_id} stopped on error: {error}");
-                }
-            });
-        }
+        let shutdown = shutdown.clone();
+        let active = active.clone();
+        let bot_id = bot_id.clone();
+        let game_id = game_id.to_string();
+        std::thread::spawn(move || {
+            let chooser = EngineMoveChooser::new(config.engine.hash_mb);
+            if let Err(error) = play_game(&client, &config, &bot_id, &game_id, &chooser, &shutdown)
+            {
+                log::warn!("game {game_id} stopped on error: {error}");
+            }
+            // Free the cap slot when the game ends, however it ended. Doing this
+            // from the worker keeps the count correct even if the matching
+            // `gameFinish` event was missed while the event stream was down.
+            active.remove(&game_id);
+        })
     };
 
-    run_event_loop(&client, &config, start_game)
+    let result = run_event_loop(
+        &client,
+        &config,
+        &shutdown,
+        &active,
+        |game_id| workers.push(spawn_game(game_id)),
+        |wait| shutdown.sleep(wait),
+    );
+
+    // However the loop ended, wind the workers down: request shutdown so any
+    // in-flight game resigns, then join every worker before returning so the
+    // process does not exit while a game is still connected.
+    shutdown.request();
+    for worker in workers {
+        let _ = worker.join();
+    }
+    result
 }
 
 /// Confirm the authenticated account is a BOT account, returning it.
@@ -105,7 +143,13 @@ where
     F: FnOnce(&Account) -> bool,
 {
     let token = load_token()?;
-    let client = LichessClient::new(HttpTransport::new(crate::DEFAULT_BASE_URL, token));
+    // A one-shot command with no long-lived streams: an untripped shutdown handle
+    // is all the transport needs.
+    let client = LichessClient::new(HttpTransport::new(
+        crate::DEFAULT_BASE_URL,
+        token,
+        Shutdown::new(),
+    ));
     upgrade_account(&client, confirm)
 }
 
@@ -136,79 +180,229 @@ where
     Ok(UpgradeOutcome::Upgraded)
 }
 
-/// Read the event stream and act on each event: accept or decline challenges by
-/// policy, and track how many games are in progress so the game cap is honored.
+/// The set of games that currently have a live worker.
 ///
-/// `start_game` is invoked with a game's id when it starts, to begin playing it.
-/// The active-game count that gates the cap is kept from the account stream's
-/// own `gameStart`/`gameFinish` events, which are the authoritative lifecycle
-/// signal, rather than from the game workers.
+/// Shared between the event loop — which records a game when it starts and reads
+/// the count for the concurrency cap — and each game worker, which removes its
+/// own game when it exits. Worker-driven removal keeps the cap correct even if a
+/// `gameFinish` event is missed while the event stream is disconnected, which the
+/// event-driven count alone could not guarantee.
+#[derive(Clone, Default)]
+pub struct ActiveGames(Arc<Mutex<HashSet<String>>>);
+
+impl ActiveGames {
+    /// An empty set.
+    pub fn new() -> ActiveGames {
+        ActiveGames::default()
+    }
+
+    /// Record `id` as active, returning whether it was newly inserted. A `false`
+    /// means a worker already tracks this game, so the caller must not start
+    /// another for it.
+    fn insert(&self, id: &str) -> bool {
+        self.0.lock().unwrap().insert(id.to_string())
+    }
+
+    /// Drop `id` from the set. Idempotent, so the worker and a `gameFinish` event
+    /// removing the same game is harmless.
+    fn remove(&self, id: &str) {
+        self.0.lock().unwrap().remove(id);
+    }
+
+    /// How many games currently have a worker.
+    fn len(&self) -> usize {
+        self.0.lock().unwrap().len()
+    }
+}
+
+/// Read the account event stream and act on each event, reconnecting with
+/// exponential backoff when the stream drops.
+///
+/// `start_game` is invoked with a game's id the first time that game starts, to
+/// begin playing it. `active` tracks the games with live workers; it gates the
+/// concurrency cap and survives reconnects so a replayed `gameStart` never spawns
+/// a duplicate worker. `sleep` performs the reconnect wait (injected so tests can
+/// avoid real delays). The loop returns cleanly once shutdown is requested.
 ///
 /// Generic over the transport so it can be driven by recorded NDJSON in tests.
-pub fn run_event_loop<T, S>(
+pub fn run_event_loop<T, S, P>(
     client: &LichessClient<T>,
     config: &Config,
+    shutdown: &Shutdown,
+    active: &ActiveGames,
     mut start_game: S,
+    mut sleep: P,
+) -> Result<()>
+where
+    T: Transport,
+    S: FnMut(&str),
+    P: FnMut(Duration),
+{
+    let mut backoff = Backoff::new(RECONNECT_BASE, RECONNECT_MAX);
+    loop {
+        if shutdown.is_requested() {
+            return Ok(());
+        }
+        match run_event_stream_once(client, config, shutdown, active, &mut start_game)? {
+            StreamOutcome::Shutdown => return Ok(()),
+            StreamOutcome::Disconnected { made_progress } => {
+                if shutdown.is_requested() {
+                    return Ok(());
+                }
+                // A connection that delivered events before dropping counts as
+                // healthy, so its next unrelated drop backs off from the base.
+                if made_progress {
+                    backoff.reset();
+                }
+                log::warn!("event stream disconnected; reconnecting");
+                sleep(backoff.next_delay());
+            }
+        }
+    }
+}
+
+/// Why a single event-stream connection stopped.
+enum StreamOutcome {
+    /// Shutdown was requested; the loop should end.
+    Shutdown,
+    /// The connection ended without a fatal error. `made_progress` is whether any
+    /// event arrived before it dropped.
+    Disconnected { made_progress: bool },
+}
+
+/// Consume one event-stream connection until it drops, a fatal error occurs, or
+/// shutdown is requested.
+fn run_event_stream_once<T, S>(
+    client: &LichessClient<T>,
+    config: &Config,
+    shutdown: &Shutdown,
+    active: &ActiveGames,
+    start_game: &mut S,
+) -> Result<StreamOutcome>
+where
+    T: Transport,
+    S: FnMut(&str),
+{
+    let stream = match client.event_stream() {
+        Ok(stream) => stream,
+        Err(error) if error.is_recoverable() => {
+            return Ok(StreamOutcome::Disconnected {
+                made_progress: false,
+            })
+        }
+        Err(error) => return Err(error),
+    };
+
+    let mut made_progress = false;
+    for item in stream {
+        if shutdown.is_requested() {
+            return Ok(StreamOutcome::Shutdown);
+        }
+        let event = match item {
+            Ok(Some(event)) => event,
+            // Keepalive line: no event, but a chance to notice shutdown, taken by
+            // the check at the top of the next iteration.
+            Ok(None) => continue,
+            Err(error) if error.is_recoverable() => {
+                return Ok(StreamOutcome::Disconnected { made_progress })
+            }
+            Err(error) => return Err(error),
+        };
+        made_progress = true;
+        handle_event(client, config, active, start_game, event)?;
+    }
+    Ok(StreamOutcome::Disconnected { made_progress })
+}
+
+/// Act on one account event: accept or decline a challenge by policy, or track a
+/// game's lifecycle. A transient failure to accept or decline a challenge is
+/// logged and swallowed so one bad request does not end the bot; a non-recoverable
+/// error (a rejected token) still surfaces.
+fn handle_event<T, S>(
+    client: &LichessClient<T>,
+    config: &Config,
+    active: &ActiveGames,
+    start_game: &mut S,
+    event: Event,
 ) -> Result<()>
 where
     T: Transport,
     S: FnMut(&str),
 {
-    let mut active_games: u32 = 0;
-
-    for event in client.event_stream()? {
-        match event? {
-            Event::Challenge { challenge } => {
-                let decision = policy::evaluate(
-                    &challenge,
-                    &config.challenge,
-                    active_games,
-                    config.max_concurrent_games,
-                );
-                match decision {
-                    Decision::Accept => {
-                        log::info!(
-                            "accepting challenge {} from {}",
-                            challenge.id,
-                            challenge.challenger.name
-                        );
-                        client.accept_challenge(&challenge.id)?;
-                    }
-                    Decision::Decline(reason) => {
-                        log::info!(
-                            "declining challenge {} from {} ({})",
-                            challenge.id,
-                            challenge.challenger.name,
-                            reason.as_str()
-                        );
-                        client.decline_challenge(&challenge.id, reason)?;
-                    }
+    match event {
+        Event::Challenge { challenge } => {
+            let decision = policy::evaluate(
+                &challenge,
+                &config.challenge,
+                active.len() as u32,
+                config.max_concurrent_games,
+            );
+            match decision {
+                Decision::Accept => {
+                    log::info!(
+                        "accepting challenge {} from {}",
+                        challenge.id,
+                        challenge.challenger.name
+                    );
+                    tolerate_recoverable(client.accept_challenge(&challenge.id), || {
+                        format!("accepting challenge {}", challenge.id)
+                    })?;
+                }
+                Decision::Decline(reason) => {
+                    log::info!(
+                        "declining challenge {} from {} ({})",
+                        challenge.id,
+                        challenge.challenger.name,
+                        reason.as_str()
+                    );
+                    tolerate_recoverable(client.decline_challenge(&challenge.id, reason), || {
+                        format!("declining challenge {}", challenge.id)
+                    })?;
                 }
             }
-            Event::GameStart { game } => {
-                active_games = active_games.saturating_add(1);
+        }
+        Event::GameStart { game } => {
+            if active.insert(&game.id) {
                 log::info!(
                     "game {} started ({}/{} active)",
                     game.id,
-                    active_games,
+                    active.len(),
                     config.max_concurrent_games
                 );
                 start_game(&game.id);
+            } else {
+                // A `gameStart` for a game already being played. The event stream
+                // replays in-progress games when it reconnects, so ignore the
+                // duplicate rather than spawning a second worker for it.
+                log::debug!("ignoring duplicate gameStart for game {}", game.id);
             }
-            Event::GameFinish { game } => {
-                active_games = active_games.saturating_sub(1);
-                log::info!("game {} finished ({} active)", game.id, active_games);
-            }
-            Event::Other => {}
         }
+        Event::GameFinish { game } => {
+            active.remove(&game.id);
+            log::info!("game {} finished ({} active)", game.id, active.len());
+        }
+        Event::Other => {}
     }
-
     Ok(())
+}
+
+/// Swallow a recoverable error from a challenge action, logging it with a context
+/// message built lazily by `context`; propagate anything non-recoverable.
+fn tolerate_recoverable(result: Result<()>, context: impl FnOnce() -> String) -> Result<()> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) if error.is_recoverable() => {
+            log::warn!("{}: {error}", context());
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::collections::VecDeque;
 
     use super::*;
     use crate::config::Config;
@@ -218,20 +412,28 @@ mod tests {
     /// posts).
     type RecordedPost = (String, Vec<(String, String)>);
 
-    /// A [`Transport`] that replays a recorded event stream and a canned account
-    /// response, and records the POSTs the bot makes. It never touches the
-    /// network, so challenge handling can be asserted deterministically.
+    /// A [`Transport`] that replays a canned account response and one recorded
+    /// event stream per connection (in order, so a reconnect is fed the next
+    /// stream), recording the POSTs the bot makes. It never touches the network,
+    /// so challenge handling can be asserted deterministically.
     struct FakeTransport {
         account_json: String,
-        stream: String,
+        streams: RefCell<VecDeque<String>>,
         posts: RefCell<Vec<RecordedPost>>,
     }
 
     impl FakeTransport {
         fn new(account_json: &str, stream: &str) -> FakeTransport {
+            FakeTransport::with_streams(account_json, [stream])
+        }
+
+        fn with_streams<'a>(
+            account_json: &str,
+            streams: impl IntoIterator<Item = &'a str>,
+        ) -> FakeTransport {
             FakeTransport {
                 account_json: account_json.to_string(),
-                stream: stream.to_string(),
+                streams: RefCell::new(streams.into_iter().map(str::to_string).collect()),
                 posts: RefCell::new(Vec::new()),
             }
         }
@@ -239,6 +441,11 @@ mod tests {
         /// The request paths POSTed, in order.
         fn post_paths(&self) -> Vec<String> {
             self.posts.borrow().iter().map(|(p, _)| p.clone()).collect()
+        }
+
+        /// How many recorded streams remain unopened.
+        fn streams_remaining(&self) -> usize {
+            self.streams.borrow().len()
         }
     }
 
@@ -264,13 +471,15 @@ mod tests {
 
         fn open_stream(&self, path: &str) -> Result<Box<dyn Iterator<Item = Result<String>>>> {
             assert_eq!(path, "/api/stream/event", "unexpected stream path in test");
+            let stream = self
+                .streams
+                .borrow_mut()
+                .pop_front()
+                .expect("event loop opened more connections than it recorded streams");
             // `str::lines` yields empty strings for the blank keepalive lines,
             // exercising the loop's tolerance of them.
-            let lines: Vec<Result<String>> = self
-                .stream
-                .lines()
-                .map(|line| Ok(line.to_string()))
-                .collect();
+            let lines: Vec<Result<String>> =
+                stream.lines().map(|line| Ok(line.to_string())).collect();
             Ok(Box::new(lines.into_iter()))
         }
     }
@@ -281,6 +490,23 @@ mod tests {
     // A Chess960 challenge — declined by the default standard-only policy.
     const VARIANT_CHALLENGE: &str = r#"{"type":"challenge","challenge":{"id":"bad960","rated":false,"variant":{"key":"chess960"},"timeControl":{"type":"clock","limit":300,"increment":3},"challenger":{"id":"bob","name":"bob","rating":1600,"title":null}}}"#;
 
+    /// Drive one event-stream connection to its end, returning the game ids the
+    /// runner was asked to start. Used by the challenge-handling tests, which
+    /// assert on a single connection without the reconnect wrapper.
+    fn drive_one_connection(client: &LichessClient<FakeTransport>) -> Vec<String> {
+        let active = ActiveGames::new();
+        let mut started = Vec::new();
+        run_event_stream_once(
+            client,
+            &Config::default(),
+            &Shutdown::new(),
+            &active,
+            &mut |id: &str| started.push(id.to_string()),
+        )
+        .unwrap();
+        started
+    }
+
     #[test]
     fn event_loop_accepts_and_declines_by_policy() {
         // A blank keepalive, an acceptable challenge, an unhandled event type,
@@ -290,11 +516,7 @@ mod tests {
         );
         let transport = FakeTransport::new("{}", &stream);
         let client = LichessClient::new(transport);
-        let mut started = Vec::new();
-        run_event_loop(&client, &Config::default(), |id: &str| {
-            started.push(id.to_string())
-        })
-        .unwrap();
+        let started = drive_one_connection(&client);
 
         // The one started game is handed to the runner.
         assert_eq!(started, vec!["g1".to_string()]);
@@ -321,11 +543,7 @@ mod tests {
         );
         let transport = FakeTransport::new("{}", &stream);
         let client = LichessClient::new(transport);
-        let mut started = Vec::new();
-        run_event_loop(&client, &Config::default(), |id: &str| {
-            started.push(id.to_string())
-        })
-        .unwrap();
+        let started = drive_one_connection(&client);
 
         // The game that filled the cap was still handed to the runner; only the
         // challenge that would have exceeded the cap is declined.
@@ -333,6 +551,106 @@ mod tests {
         assert_eq!(
             client_transport(&client).post_paths(),
             vec!["/api/challenge/good01/decline".to_string()]
+        );
+    }
+
+    #[test]
+    fn duplicate_game_start_does_not_spawn_a_second_worker() {
+        // The event stream replays an in-progress game after reconnecting, so a
+        // repeated gameStart for the same id must start the game only once.
+        let stream = concat!(
+            r#"{"type":"gameStart","game":{"id":"g1"}}"#,
+            "\n",
+            r#"{"type":"gameStart","game":{"id":"g1"}}"#,
+            "\n",
+        );
+        let client = LichessClient::new(FakeTransport::new("{}", stream));
+        assert_eq!(drive_one_connection(&client), vec!["g1".to_string()]);
+    }
+
+    #[test]
+    fn active_games_tracks_membership_and_frees_slots() {
+        let active = ActiveGames::new();
+        assert!(active.insert("g1"));
+        assert!(
+            !active.insert("g1"),
+            "a game already tracked must not be inserted again"
+        );
+        assert!(active.insert("g2"));
+        assert_eq!(active.len(), 2);
+
+        // A worker removing its game frees the slot for the cap.
+        active.remove("g1");
+        assert_eq!(active.len(), 1);
+        // Removing a game that is not present (e.g. a duplicate removal) is safe.
+        active.remove("absent");
+        assert_eq!(active.len(), 1);
+    }
+
+    #[test]
+    fn event_loop_reconnects_after_a_drop_then_stops_on_shutdown() {
+        // Two connections, each ending (a drop). The injected reconnect wait
+        // requests shutdown on its second call, so the loop reconnects once, runs
+        // the second stream, then exits cleanly.
+        let first = format!("{ACCEPTABLE_CHALLENGE}\n");
+        let second = format!("{VARIANT_CHALLENGE}\n");
+        let client = LichessClient::new(FakeTransport::with_streams(
+            "{}",
+            [first.as_str(), second.as_str()],
+        ));
+        let shutdown = Shutdown::new();
+        let active = ActiveGames::new();
+        let waits = RefCell::new(0u32);
+        run_event_loop(
+            &client,
+            &Config::default(),
+            &shutdown,
+            &active,
+            |_id| {},
+            |_wait| {
+                *waits.borrow_mut() += 1;
+                if *waits.borrow() >= 2 {
+                    shutdown.request();
+                }
+            },
+        )
+        .unwrap();
+
+        // Both recorded streams were opened (one reconnect happened), and each
+        // connection's challenge was acted on.
+        assert_eq!(client_transport(&client).streams_remaining(), 0);
+        assert_eq!(waits.into_inner(), 2);
+        assert_eq!(
+            client_transport(&client).post_paths(),
+            vec![
+                "/api/challenge/good01/accept".to_string(),
+                "/api/challenge/bad960/decline".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn event_loop_returns_immediately_when_already_shut_down() {
+        // Shutdown requested before the loop starts: it returns without opening a
+        // connection or accepting anything.
+        let client = LichessClient::new(FakeTransport::new("{}", ACCEPTABLE_CHALLENGE));
+        let shutdown = Shutdown::new();
+        shutdown.request();
+        let active = ActiveGames::new();
+        run_event_loop(
+            &client,
+            &Config::default(),
+            &shutdown,
+            &active,
+            |_id| panic!("no game should start during shutdown"),
+            |_wait| panic!("no reconnect wait during shutdown"),
+        )
+        .unwrap();
+        assert!(client_transport(&client).post_paths().is_empty());
+        assert_eq!(
+            client_transport(&client).streams_remaining(),
+            1,
+            "the stream must not be opened once shutdown is requested"
         );
     }
 

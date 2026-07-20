@@ -17,3 +17,9 @@ log = "0.4"
 ureq = "3"
 # The bot configuration file is TOML; only this crate reads it.
 toml = "1"
+# Used only to install a SIGINT/SIGTERM handler for graceful shutdown. libc is
+# already in the build graph (via ureq's TLS stack), so depending on it directly
+# adds no new crate; a dedicated Ctrl-C crate would pull in several. Unix-only in
+# effect: the handler is compiled behind `cfg(unix)`.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

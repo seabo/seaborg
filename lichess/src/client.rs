@@ -63,44 +63,47 @@ impl<T: Transport> LichessClient<T> {
             .map(drop)
     }
 
-    /// Open the account event stream, yielding one [`Event`] per JSON line.
+    /// Open the account event stream, yielding one item per JSON line.
     ///
-    /// Keepalive blank lines are dropped; a transport error or an unparseable
-    /// line surfaces as an `Err` item without ending the stream's type.
-    pub fn event_stream(&self) -> Result<impl Iterator<Item = Result<Event>>> {
+    /// Each item is `Ok(Some(event))` for a real event, `Ok(None)` for a blank
+    /// keepalive line, or `Err` for a transport or parse failure. Keepalives are
+    /// surfaced rather than dropped so the consumer regains control frequently
+    /// enough to notice a shutdown request between real events.
+    pub fn event_stream(&self) -> Result<impl Iterator<Item = Result<Option<Event>>>> {
         let lines = self.transport.open_stream("/api/stream/event")?;
-        Ok(lines.filter_map(|line| match line {
-            Err(e) => Some(Err(e)),
-            Ok(line) => match parse_line(&line) {
-                Ok(None) => None,
-                Ok(Some(event)) => Some(Ok(event)),
-                Err(e) => Some(Err(e)),
-            },
-        }))
+        Ok(lines.map(|line| line.and_then(|line| parse_line(&line))))
     }
 
-    /// Open a game's stream, yielding one [`GameEvent`] per JSON line.
+    /// Open a game's stream, yielding one item per JSON line.
     ///
-    /// Like [`event_stream`](Self::event_stream), keepalive blank lines are
-    /// dropped and a transport or parse error surfaces as an `Err` item.
-    pub fn game_stream(&self, game_id: &str) -> Result<impl Iterator<Item = Result<GameEvent>>> {
+    /// Like [`event_stream`](Self::event_stream), each item is
+    /// `Ok(Some(event))`, `Ok(None)` for a keepalive, or `Err`; keepalives are
+    /// surfaced so a game worker can observe a shutdown request promptly even
+    /// while it is the opponent's turn.
+    pub fn game_stream(
+        &self,
+        game_id: &str,
+    ) -> Result<impl Iterator<Item = Result<Option<GameEvent>>>> {
         let lines = self
             .transport
             .open_stream(&format!("/api/bot/game/stream/{game_id}"))?;
-        Ok(lines.filter_map(|line| match line {
-            Err(e) => Some(Err(e)),
-            Ok(line) => match parse_game_line(&line) {
-                Ok(None) => None,
-                Ok(Some(event)) => Some(Ok(event)),
-                Err(e) => Some(Err(e)),
-            },
-        }))
+        Ok(lines.map(|line| line.and_then(|line| parse_game_line(&line))))
     }
 
     /// Play `uci` in the given game via the bot move endpoint.
     pub fn play_move(&self, game_id: &str, uci: &str) -> Result<()> {
         self.transport
             .post_empty(&format!("/api/bot/game/{game_id}/move/{uci}"))
+            .map(drop)
+    }
+
+    /// Resign the given game via the bot resign endpoint.
+    ///
+    /// Used on shutdown to end an in-flight game cleanly instead of dropping the
+    /// connection mid-game and leaving the bot to flag on time.
+    pub fn resign_game(&self, game_id: &str) -> Result<()> {
+        self.transport
+            .post_empty(&format!("/api/bot/game/{game_id}/resign"))
             .map(drop)
     }
 }
