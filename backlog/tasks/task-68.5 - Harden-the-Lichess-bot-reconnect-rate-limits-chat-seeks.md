@@ -1,11 +1,11 @@
 ---
 id: TASK-68.5
 title: 'Harden the Lichess bot: reconnect, rate limits, chat, seeks'
-status: In Review
+status: Ready to Merge
 assignee:
   - '@george'
 created_date: '2026-07-19 22:34'
-updated_date: '2026-07-20 14:25'
+updated_date: '2026-07-20 15:13'
 labels: []
 dependencies:
   - TASK-68.4
@@ -34,11 +34,11 @@ Everything here is additive; the bot from TASK-68.4 must keep working if the opt
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Dropped event/game streams reconnect with exponential backoff without crashing or abandoning live games
-- [ ] #2 HTTP 429 responses are handled with backoff and do not crash the bot
-- [ ] #3 Ctrl-C triggers a graceful shutdown that stops accepting challenges and does not corrupt in-flight games
-- [ ] #4 Any optional chat or proactive-challenge features added are gated by config and documented, including the challenge:write scope requirement for issuing challenges
-- [ ] #5 cargo fmt --check, clippy (workspace, all-targets, all-features, -D warnings), and cargo test --workspace all pass
+- [x] #1 Dropped event/game streams reconnect with exponential backoff without crashing or abandoning live games
+- [x] #2 HTTP 429 responses are handled with backoff and do not crash the bot
+- [x] #3 Ctrl-C triggers a graceful shutdown that stops accepting challenges and does not corrupt in-flight games
+- [x] #4 Any optional chat or proactive-challenge features added are gated by config and documented, including the challenge:write scope requirement for issuing challenges
+- [x] #5 cargo fmt --check, clippy (workspace, all-targets, all-features, -D warnings), and cargo test --workspace all pass
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -98,4 +98,38 @@ Reviewer notes:
 - AC#4 is vacuous: optional chat/proactive-challenge features were deferred, so nothing new is config-gated. The challenge:write scope requirement for issuing challenges is recorded in the implementation notes for the future proactive-play work.
 - Graceful-shutdown wake-up relies on Lichess stream keepalives plus connect/response-header timeouts; there is intentionally no recv-body timeout on the long-lived streams. Signal handling is cfg(unix) via libc (no new crates).
 ---
+
+author: @george
+created: 2026-07-20 15:13
+---
+Review attempt: 1
+Reviewed branch: task-68.5-lichess-hardening
+Reviewed implementation: 9e1891ee068c75b19e1b1e16a8afea96afa852b0
+Base: 1a5c1ef1d9193d719753b6af29a241731cf06c4a
+Verdict: approved
+
+Immutability: target 9e1891e descends from the recorded base 1a5c1ef; the only commit after it (branch tip 2fefbdf) touches solely the backlog task file, so no implementation file changed after the reviewed SHA. Worktree clean.
+
+Acceptance criteria (all proven):
+- #1 Event loop and per-game loop both reconnect with exponential Backoff (base 1s / cap 30s). ActiveGames dedups a replayed gameStart across reconnects; per-game reconnect resyncs from the authoritative move list. Covered by event_loop_reconnects_after_a_drop_then_stops_on_shutdown, reconnects_after_a_midgame_drop_and_finishes, duplicate_game_start_does_not_spawn_a_second_worker, active_games_tracks_membership_and_frees_slots.
+- #2 429 mapped to Error::RateLimited and retried by with_rate_limit_retry (honors Retry-After, backoff fallback, bounded attempts, shutdown-aware) over one shared ureq::Agent. Covered by the five transport retry tests.
+- #3 cfg(unix) SIGINT/SIGTERM handler trips a shared Shutdown; loop stops accepting, workers resign cleanly, run() joins workers. Covered by resigns_the_in_flight_game_on_shutdown, shutdown_midstream_stops_before_moving, event_loop_returns_immediately_when_already_shut_down.
+- #4 Vacuous: optional chat/proactive play deferred (task sanctions deferral); challenge:write scope documented in implementation notes.
+- #5 Required checks pass (see below).
+
+Scope: changes confined to the lichess crate plus Cargo.lock/Cargo.toml (libc target-gated to cfg(unix), no new crate in the graph). No new #[allow], no source comments citing task/AC/finding IDs, no movegen/search hot-path changes (no benchmark required).
+
+Verification (run on the implementation target in the task worktree):
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass, exit 0, fresh CARGO_TARGET_DIR, 0 warnings
+- cargo test --workspace: pass (lichess 68; whole workspace green, 2 pre-existing ignored)
+
+Non-blocking observation (not required for these ACs; consistent with the pre-TASK-68.4 design): a transient Error::Http on a move-submission POST propagates out of on_state and terminates that game worker rather than reconnecting, since the reconnect loop only converts stream-open/stream-read failures to a reconnect. 429s on moves are still retried by the transport. Worth considering in a future hardening pass but outside AC#1's stream-drop scope and not a regression.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Hardened the Lichess bot with three mandatory pillars: (1) exponential-backoff reconnect for the account event stream (run.rs) and each per-game stream (game.rs), with an Arc<Mutex<HashSet>> ActiveGames set that survives event-stream reconnects so a replayed gameStart never double-spawns a worker and the concurrency cap stays correct even across a missed gameFinish; (2) HTTP 429 handling in a single shared ureq::Agent (one connection pool) via with_rate_limit_retry, which honors Retry-After, falls back to a doubling backoff, is bounded, and aborts promptly on shutdown; (3) graceful shutdown via a cfg(unix) SIGINT/SIGTERM handler that trips a shared Shutdown flag, after which the event loop stops accepting challenges, in-flight workers resign cleanly (POST .../resign) instead of dropping mid-move, and run() joins every worker before returning. Optional chat/proactive-play were deferred as the task sanctions; the challenge:write scope requirement is documented for that future work (AC#4 vacuous). Verified on implementation target 9e1891ee068c75b19e1b1e16a8afea96afa852b0: cargo fmt --check clean; cargo clippy --workspace --all-targets --all-features -- -D warnings clean (exit 0, fresh CARGO_TARGET_DIR, 0 warnings); cargo test --workspace green (lichess 68 tests incl. backoff schedule, shutdown handle, 429-retry helper, event-loop reconnect/dedup/shutdown-decline, per-game reconnect and shutdown-resign; whole workspace passing, 2 pre-existing ignored).
+<!-- SECTION:FINAL_SUMMARY:END -->
