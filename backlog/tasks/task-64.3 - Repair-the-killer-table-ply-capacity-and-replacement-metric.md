@@ -1,10 +1,11 @@
 ---
 id: TASK-64.3
 title: Repair the killer table ply capacity and replacement metric
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-19 13:31'
-updated_date: '2026-07-19 23:49'
+updated_date: '2026-07-20 10:14'
 labels:
   - search
   - move-ordering
@@ -49,3 +50,16 @@ This task retains the current staged-ordering architecture rather than requiring
 - [ ] #8 Fixed-depth node counts and search throughput are recorded for killers disabled, one recency slot and two recency slots, with the selected policy justified by the results
 - [ ] #9 The selected design is measured with the TASK-27 strength-regression script and results are recorded in implementation notes
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Redesign KillerTable: fixed two-slot recency table sized by MAX_PLY. Slots count is a compile-time KILLER_SLOTS const (0=disabled,1,2) so measurement can build all three configs; shipped default 2.
+2. Read-only probe returning slots in deterministic slot order (slot 0 then slot 1); no counters, no legality-based eviction. Add slot_of(ply, mov) for telemetry attribution and reset() for deliberate clearing.
+3. Recency store: distinct quiet beta cutoff shifts slot 0 into slot 1 and installs the new killer in slot 0; re-storing the current slot-0 move is a no-op.
+4. Wire search.rs to MAX_PLY capacity and KILLER_SLOTS; keep the ply>0 root guard and legality validation/duplicate suppression intact.
+5. Persistence/reset: killers are search-scoped -- retained across iterative-deepening iterations, reset at the end of each Search::run (mirroring history), and each Lazy SMP worker owns its own table. Document and test.
+6. Telemetry: replace the availability metric with per-slot killer attempts and beta cutoffs counted after duplicate suppression (attribute via Phase::Killers + slot_of). Report per-slot cutoff rates.
+7. Tests: deep-ply retrieval, neighbouring-ply isolation, duplicate stores, deterministic returned order, replacement after three distinct cutoffs, exact supported boundary, reset across iterations/runs.
+8. Measurement: fixed-depth node counts and NPS for KILLER_SLOTS 0/1/2 (AC#8); TASK-27 strength-regression run for the selected 2-slot design (AC#9). Record in implementation notes.
+<!-- SECTION:PLAN:END -->
