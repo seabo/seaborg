@@ -1,9 +1,11 @@
 ---
 id: TASK-50
 title: Add null move and futility pruning to the main search
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-18 18:30'
+updated_date: '2026-07-20 17:54'
 labels: []
 dependencies:
   - TASK-46
@@ -40,3 +42,15 @@ TODO sites: engine/src/search.rs:595 (futility), engine/src/search.rs:598 (null 
 - [ ] #5 The evaluation-quality assessment is recorded, including the decision to proceed or to defer
 - [ ] #6 The step 8 and step 9 TODO markers are replaced by implementations, with the numbered step comments retained
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Evaluation assessment: confirm eval is tapered material+PST (MG/EG by phase), not material-only, so futility/null-move margins are meaningful. Record decision to proceed.
+2. Core: add Position::make_null_move/unmake_null_move (flip side to move, clear ep, bump halfmove clock + move number, recompute State, push/pop a NULL UndoableMove). No piece placement changes. Debug-assert not-in-check precondition and make/unmake symmetry. Unit-test zobrist round-trip, state restore, and repetition-scan parity.
+3. Search: add make_null_move/unmake_null_move wrappers carrying the White-relative eval accumulator across unchanged.
+4. Step 8 futility pruning: shared guards (non-PV, not in check, usable cp eval). Near horizon, skip quiet moves whose eval + depth-scaled margin cannot reach alpha; keep best_value as the futility bound. Never near mate scores. Decision computed at the Step 8 site, applied in the move loop.
+5. Step 9 null-move pruning with verification: guards (non-PV, not in check, eval >= beta, side has non-pawn material to avoid zugzwang, not already a null-move reply). Reduced-depth null search; on fail-high, run a verification search at reduced depth and prune only if it also fails high. Retain numbered step comments; replace only the TODO markers.
+6. Tests: node/depth-fixed best-move equivalence where guards disable pruning; unit tests for margins and zugzwang guard.
+7. Verification: cargo fmt --check, clippy -D warnings, cargo test --workspace. Run node-limited fastchess match (base ba6aec1 vs candidate) for a strength signal; record W/D/L and Elo estimate in notes with the timed-self-play caveat.
+<!-- SECTION:PLAN:END -->
