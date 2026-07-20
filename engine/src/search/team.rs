@@ -232,6 +232,7 @@ impl PerWorkerState for EvalState {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::killer::MAX_KILLER_SLOTS;
 
     /// The one shared allocation must be safe to hand to every worker as `&T`, i.e. `Send + Sync`.
     /// The `SharedTeamState` bound already requires this; naming it as a standalone check keeps the
@@ -272,7 +273,7 @@ mod tests {
         }
 
         let table = Table::new(1);
-        let (_shared0, _kt0) = issue_to_worker(&table, KillerTable::new(1));
-        let (_shared1, _kt1) = issue_to_worker(&table, KillerTable::new(1));
+        let (_shared0, _kt0) = issue_to_worker(&table, KillerTable::new(1, MAX_KILLER_SLOTS));
+        let (_shared1, _kt1) = issue_to_worker(&table, KillerTable::new(1, MAX_KILLER_SLOTS));
     }
 }
