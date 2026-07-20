@@ -1,11 +1,11 @@
 ---
 id: TASK-15
 title: Connect engine configuration to UCI options and search resources
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-20 18:19'
+updated_date: '2026-07-20 19:24'
 labels:
   - engine
   - uci
