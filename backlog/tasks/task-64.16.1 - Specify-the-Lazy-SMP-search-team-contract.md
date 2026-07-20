@@ -1,11 +1,11 @@
 ---
 id: TASK-64.16.1
 title: Specify the Lazy SMP search-team contract
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-19 23:23'
-updated_date: '2026-07-20 13:44'
+updated_date: '2026-07-20 13:54'
 labels:
   - search
   - concurrency
@@ -91,6 +91,19 @@ Verification (worktree, base f84b6d8, target 20aa3fb):
 - cargo clippy --workspace --all-targets --all-features -- -D warnings: clean, no warnings
 - cargo test --workspace: all passed (engine 275 passed incl. the 3 search::team::tests and dropping_a_search_handle_releases_the_table_for_a_later_clear)
 - cargo doc -p engine --no-deps: same 6 pre-existing private-intra-doc-link warnings in eval.rs/search.rs/tt.rs; none from the team module; the new SearchHandle/SearchEngine/Table links resolve cleanly (not a required check)
+
+--- Rework attempt 3 (merge-integration failure) ---
+Merge-time integration ejection (comment #5): the approved target 20aa3fb was textually clean but failed to compile once merged onto master 1a5c1ef, because TASK-64.3 landed on master after this task's original base and changed KillerTable::new from one arg to two (plies, slots). The compile-time test in search/team.rs still called the one-arg form.
+
+Fix (pinned-SHA workflow):
+- Merged pinned current master 1a5c1ef into the task branch (merge commit 99221ea) so the branch compiles against the base it will integrate onto. search.rs auto-merged cleanly; the branch now carries TASK-64.3's two-arg KillerTable API.
+- Updated the two KillerTable::new(1) call sites in the search/team::tests::shared_state_is_borrowed_and_per_worker_state_is_owned test to KillerTable::new(1, MAX_KILLER_SLOTS), importing MAX_KILLER_SLOTS in the tests module (commit acdd363). Table dimensions are irrelevant to what the test asserts (per-worker state is moved, not borrowed); the values only need to be valid.
+No contract prose or production search path changed in this rework.
+
+Verification (worktree, base 1a5c1ef, target acdd363):
+- cargo fmt --check: OK
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean, no warnings
+- cargo test --workspace: all passed; engine 287 passed (up from 275: TASK-64.3 added killer tests) incl. the 3 search::team::tests
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -204,6 +217,22 @@ Evidence:
   error: could not compile `engine` (lib test) due to 2 previous errors
 
 Rework: integrate current master (re-base the task onto a current master SHA per the pinned-SHA workflow) and update the two KillerTable::new call sites in the compile-time test to the two-argument signature (a plies and slots value, e.g. mirroring how Search constructs its KillerTable at the new base). Then re-run fmt/clippy/test and re-hand off for review; approval pinned to 20aa3fb is void because the integrated result fails.
+---
+
+author: @claude
+created: 2026-07-20 13:54
+---
+Implementation handoff
+Branch: task-64.16.1-lazy-smp-team-contract
+Worktree: /Users/seabo/seaborg-worktrees/task-64.16.1-lazy-smp-team-contract
+Base: 1a5c1ef1d9193d719753b6af29a241731cf06c4a (current master; merged into the branch at 99221ea)
+Implementation target: acdd363
+Resolved findings: none open. Resolves the merge-integration ejection in comment #5 (KillerTable::new arity). Prior approval pinned to 20aa3fb is void because the integrated result failed to compile.
+Verification:
+- cargo fmt --check: OK
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean (no warnings)
+- cargo test --workspace: all passed (engine 287 passed incl. 3 search::team::tests)
+Known failures: none. cargo doc -p engine --no-deps still emits pre-existing private-intra-doc-link warnings in eval.rs/search.rs/tt.rs (present at base 1a5c1ef, outside this task's scope); the team module adds none. cargo doc is not a repository-required check.
 ---
 <!-- COMMENTS:END -->
 
