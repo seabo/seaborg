@@ -1,11 +1,11 @@
 ---
 id: TASK-64.16.1
 title: Specify the Lazy SMP search-team contract
-status: Changes Requested
+status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-07-19 23:23'
-updated_date: '2026-07-20 13:05'
+updated_date: '2026-07-20 13:44'
 labels:
   - search
   - concurrency
@@ -50,12 +50,11 @@ This task records architecture and tests the seams needed to enforce it; it does
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Reuse existing branch/worktree; address blocking REV-1-01 only, preserving the approved contract prose elsewhere.
-2. REV-1-01: the contract's §2 condition 2 and §4 wrongly assert the single completion signal is emitted only after every worker releases its table clone, and claim this is today's one-worker rule. It is not: in SearchEngine::start the worker sends finished_tx while still owning its Arc<Table> clone (released only on closure return); clear-safety is guaranteed by join-on-drop (SearchHandle::drop cancels+joins), not by the signal.
-3. Rewrite §2 so the signal's sole precondition is that the master's outcome is fixed, and state explicitly that a worker (incl. the master) may still hold its table clone when the signal fires, exactly as the one worker does today.
-4. Rewrite §4 so clear/replacement reachability is attributed to joining every worker (the join-on-drop guarantee via Arc::get_mut), not to the withheld signal; generalize join-on-drop to the whole team.
-5. Make the preserved join-on-drop guarantee explicit in the preamble.
-6. Run cargo fmt --check, clippy -D warnings, cargo test --workspace; record Resolved REV-1-01 with evidence in the handoff.
+1. Reattach existing task branch/worktree (Changes Requested rework after merge-time integration ejection).
+2. Merge pinned current master SHA 1a5c1ef into the branch (pinned-SHA workflow) so the branch compiles against the base it will merge onto; expect a clean auto-merge of search.rs plus the KillerTable API change from TASK-64.3.
+3. Fix the integration failure: update the two one-arg KillerTable::new(1) calls in the search/team.rs compile-time test to the two-arg (plies, slots) signature introduced by TASK-64.3, mirroring how Search constructs its table (import MAX_KILLER_SLOTS in the tests module).
+4. Re-run the required checks (fmt, clippy -D warnings, test --workspace) plus focused search::team tests.
+5. Commit, write the review handoff, move to In Review. Prior approval pinned to 20aa3fb is void.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
