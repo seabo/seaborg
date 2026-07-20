@@ -23,6 +23,11 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 
+// The durable specification for a multi-worker (Lazy SMP) root search. The module's own `//!` docs
+// carry the contract; keep it here (not as an outer doc on this line) so its intra-doc links
+// resolve in the module's own scope.
+pub mod team;
+
 const MAX_DEPTH: u8 = 255;
 
 /// Remaining search depth at a node.
