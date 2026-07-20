@@ -1,11 +1,11 @@
 ---
 id: TASK-64.16.1
 title: Specify the Lazy SMP search-team contract
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-19 23:23'
-updated_date: '2026-07-20 10:09'
+updated_date: '2026-07-20 10:16'
 labels:
   - search
   - concurrency
@@ -59,3 +59,45 @@ This task records architecture and tests the seams needed to enforce it; it does
 7. Add public classification marker traits SharedTeamState (: Send + Sync) and PerWorkerState, implement them for the shared Table and the per-worker heuristics (KillerTable, HistoryTable, PVTable, Tracer, EvalState), and add focused compile-time tests: assert the shared allocation is Send+Sync, assert each heuristic is classified per-worker, and prove the worker-issue seam borrows shared state while moving per-worker state so heuristics cannot be accidentally shared (AC#6).
 8. Run cargo fmt --check, cargo clippy --workspace --all-targets --all-features -- -D warnings, and cargo test --workspace; record results in the handoff.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Added engine/src/search/team.rs (declared `pub mod team;` in search.rs) as the checked-in module-level Lazy SMP search-team contract.
+
+Contract prose (module `//!` docs), mapped to acceptance criteria:
+- AC#1 §1: team = one master + zero-or-more helpers; team identity = one `go` sharing one table/stop-flag/limit; shared team state (Table, cancellation flag, limit) vs per-worker state (position copy, eval + eval stack, killer/history/PV tables, tracer, per-ply stack, root fallback); authoritative-result rule = master's last completed iteration, helpers influence only via the shared TT, cross-worker voting deferred to a later task.
+- AC#2 §2: four outcomes (Completed/Cancelled/Failed/Panicked) with helper-vs-master degradation rules; single explicit completion signal emitted once, only after the master's outcome is fixed AND every worker has released the shared table (generalizes TASK-35; underpins the clear-after-completion guarantee).
+- AC#3 §3: Depth/Time/Nodes/Infinite semantics; the master decides normal completion for every limit; node budget stays reproducible by binding authoritative completion to the master's own counter; Infinite has no normal-completion path.
+- AC#4 §4: age advances once per root search (per team, not per worker); one Arc<Table> shared, owned by no worker; clear/replace only after all workers release the Arc (Arc::get_mut boundary from TASK-57), reachable because the completion signal is withheld until release.
+- AC#5 §5: master establishes a legal root fallback before any node and honours cancellation only after (TASK-45); no partial/aborted iteration becomes official, last completed PV preserved (TASK-46); helper partial work influences the move only via committed TT entries.
+- AC#6: public marker traits SharedTeamState (: Send + Sync, impl for Table) and PerWorkerState (impl for KillerTable/HistoryTable/PVTable/Tracer/EvalState), plus three compile-time tests: shared allocation is Send+Sync; each heuristic is classified per-worker; the issue-to-worker seam borrows shared state and moves per-worker state so a heuristic cannot be shared by accident.
+- AC#7 §6: no production search path changed; the zero-helper team is exactly today's engine.
+
+Note on doc links: kept the contract docs solely as the module's inner `//!` and used a plain (non-doc) comment on the `pub mod team;` line. An outer `///` there concatenates with the inner docs and resolves intra-doc links in the parent (search) scope, which broke every `super::`/same-module link; `cargo doc -p engine --no-deps` now emits no team-module warnings (the 6 remaining private-intra-doc-link warnings in eval/search/tt pre-exist on master).
+
+Verification (in worktree, base f84b6d8):
+- cargo fmt --check: OK
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean, no warnings
+- cargo test --workspace: all passed (engine unit tests 275 passed incl. 3 new team tests; other suites green)
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @claude
+created: 2026-07-20 10:16
+---
+Implementation handoff
+Branch: task-64.16.1-lazy-smp-team-contract
+Worktree: /Users/seabo/seaborg-worktrees/task-64.16.1-lazy-smp-team-contract
+Base: f84b6d8c6afd11c30841cf287a38fa82daacd648
+Implementation target: 6cf81946bdad68093067d6cde212b7d4684e319f
+Resolved findings: none
+Verification:
+- cargo fmt --check: OK
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean (no warnings)
+- cargo test --workspace: all passed (3 new tests in search::team::tests)
+Known failures: none. cargo doc -p engine --no-deps emits 6 private-intra-doc-link warnings in eval.rs/search.rs/tt.rs that reproduce at base f84b6d8 and are outside this task's scope; the team module adds no doc warnings. cargo doc is not one of the repository-required checks.
+---
+<!-- COMMENTS:END -->
