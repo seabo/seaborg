@@ -103,8 +103,6 @@ pub enum Error {
     ExpectedNumber,
     /// Expected a string, but got e.g. a reserved keyword.
     ExpectedString,
-    /// Expected a boolean value "true" or "false".
-    ExpectedBool,
     /// The input stream ended unexpectedly.
     UnexpectedEnd,
     /// Unexpected token in input.
@@ -113,10 +111,6 @@ pub enum Error {
     InvalidOption,
     /// No position was defined after the `position` keyword.
     NoPosition,
-    /// The position provided was invalid.
-    InvalidPosition(core::position::FenError),
-    /// A move provided as part of setting the position is invalid.
-    InvalidMove,
     /// A go command was issued with an unsupported time control.
     UnsupportedTimeControl,
     /// A go comannd was issued with a time control that was incomplete.
@@ -241,7 +235,7 @@ impl<'a> Parser<'a> {
     fn parse_position(&mut self) -> Result<String, Error> {
         match self.advance() {
             Some(tok) => match tok {
-                Token::Kw(Keyword::Startpos) => Ok(core::position::START_POSITION.to_string()),
+                Token::Kw(Keyword::Startpos) => Ok(chess::position::START_POSITION.to_string()),
                 Token::Kw(Keyword::Fen) => self.parse_fen(),
                 _ => Err(Error::UnexpectedToken),
             },
@@ -529,7 +523,7 @@ impl<'a> Token<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::position::Player;
+    use chess::position::Player;
 
     #[test]
     fn reserved_standalone_tokens_return_errors_without_panicking() {

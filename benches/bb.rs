@@ -1,4 +1,4 @@
-use chess_core::bb::Bitboard;
+use chess::bb::Bitboard;
 use criterion::{criterion_group, criterion_main, Criterion};
 use std::hint::black_box;
 

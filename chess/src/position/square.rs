@@ -8,7 +8,7 @@ use std::ops::{Add, AddAssign, BitXor, Sub, SubAssign};
 /// constructed through safe code. Use [`Square::try_from`] for raw indices.
 ///
 /// ```compile_fail
-/// use core::position::Square;
+/// use chess::position::Square;
 /// let invalid = Square(64);
 /// ```
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd)]

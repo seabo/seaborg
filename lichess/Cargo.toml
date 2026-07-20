@@ -6,7 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-core = { path = "../core" }
+chess = { path = "../chess" }
 engine = { path = "../engine" }
 serde.workspace = true
 serde_json.workspace = true

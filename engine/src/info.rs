@@ -43,7 +43,7 @@ mod tests {
     use super::*;
     use crate::score::Score;
     use crate::search::{CurrentMove, SearchProgress, SearchResult};
-    use core::position::Position;
+    use chess::position::Position;
     use std::time::Duration;
 
     #[test]

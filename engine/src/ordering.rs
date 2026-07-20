@@ -1,8 +1,8 @@
 //! Tools for ordering and iterating moves in a search environment.
 
-use core::mov::Move;
-use core::movelist::{ArrayVec, MoveList};
-use core::position::PieceType;
+use chess::mov::Move;
+use chess::movelist::{ArrayVec, MoveList};
+use chess::position::PieceType;
 
 use std::iter::Chain;
 use std::ops::Range;
@@ -585,9 +585,9 @@ impl<'a> IntoIterator for &'a mut OrderedMoves {
 mod tests {
     use super::*;
     use crate::perft::TESTS;
-    use core::mono_traits::{All, Captures, Legal, QueenPromotions, Quiets};
-    use core::movelist::BasicMoveList;
-    use core::position::Position;
+    use chess::mono_traits::{All, Captures, Legal, QueenPromotions, Quiets};
+    use chess::movelist::BasicMoveList;
+    use chess::position::Position;
 
     use rand::RngExt;
 
@@ -722,7 +722,7 @@ mod tests {
 
     #[test]
     fn perft() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         for (p, d, r) in TESTS {
             let pos = Position::from_fen(p).unwrap();
@@ -743,7 +743,7 @@ mod tests {
     /// A handful of distinct legal moves to hang synthetic scores off. Their identity does not
     /// matter to selection; only that they are distinguishable.
     fn sample_moves(n: usize) -> Vec<Move> {
-        core::init::init_globals();
+        chess::init::init_globals();
         let pos = Position::start_pos();
         let moves = pos.generate::<BasicMoveList, All, Legal>();
         let moves: Vec<Move> = moves.iter().copied().take(n).collect();
@@ -974,7 +974,7 @@ mod tests {
     /// order as if it had never been the hash move.
     #[test]
     fn underpromotions_survive_a_queen_promotion_that_duplicates_the_hash_move() {
-        core::init::init_globals();
+        chess::init::init_globals();
         // Both b7xa8 and b7xc8 promote with a capture; b7b8 promotes quietly. The white king is off
         // the a-file so that the rook on a8 does not give check and restrict the legal moves.
         let pos = Position::from_fen("r1r4k/1P6/8/8/8/8/8/6K1 w - - 0 1").unwrap();

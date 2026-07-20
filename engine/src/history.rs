@@ -1,6 +1,6 @@
 //! History tables.
 
-use core::position::{Player, Square};
+use chess::position::{Player, Square};
 
 /// Butterfly boards.
 ///
@@ -27,21 +27,6 @@ where
 
 impl<T> Butterfly<T>
 where
-    T: std::ops::AddAssign,
-{
-    /// Increment by `amt` a from-to pair on the butterfly board, indexed by the squares.
-    ///
-    /// # Panics
-    ///
-    /// This method will panic if the squares passed are not valid squares (i.e. they satisfy
-    /// `square.is_okay() == true`).
-    pub fn inc(&mut self, from: Square, to: Square, amt: T) {
-        self.data[from.index() as usize][to.index() as usize] += amt;
-    }
-}
-
-impl<T> Butterfly<T>
-where
     T: Copy,
 {
     /// Get the value indexed by `from` and `to`.
@@ -50,6 +35,10 @@ where
     ///
     /// This method will panic if the squares passed are not valid squares (i.e. they satisfy
     /// `square.is_okay() == true`).
+    ///
+    /// Only the tests use the bounds-checked accessor; the search hot path reads
+    /// through [`Butterfly::get_unchecked`].
+    #[cfg(test)]
     pub fn get(&self, from: Square, to: Square) -> T {
         self.data[from.index() as usize][to.index() as usize]
     }
@@ -117,6 +106,9 @@ impl HistoryTable {
         *entry += bonus - *entry * bonus.abs() / HISTORY_MAX;
     }
 
+    /// Read a history score with bounds-checked square indexing. Only the tests
+    /// use this; the search hot path reads through [`HistoryTable::get_unchecked`].
+    #[cfg(test)]
     pub fn get(&self, from: Square, to: Square, side: Player) -> i32 {
         match side {
             Player::WHITE => self.white.get(from, to),

@@ -13,7 +13,7 @@
 //! PV tables are often not used when the search uses a transpostion table, since the principal
 //! variation can usually be recovered by inspecting this directly as needed.
 
-use core::mov::Move;
+use chess::mov::Move;
 
 /// Table for storing the principal variation during search.
 ///
@@ -154,8 +154,8 @@ impl std::fmt::Debug for PVTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::mov::MoveType;
-    use core::position::Square;
+    use chess::mov::MoveType;
+    use chess::position::Square;
 
     fn mov(orig: Square, dest: Square) -> Move {
         Move::build(orig, dest, None, MoveType::QUIET)
