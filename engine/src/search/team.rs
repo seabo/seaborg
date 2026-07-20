@@ -25,6 +25,11 @@
 //! * *One shared table, cleared only when quiescent.* Every worker shares one transposition-table
 //!   allocation through an `Arc`; the table can only be cleared or replaced once no worker still
 //!   holds it.
+//! * *Join on drop.* No worker may outlive the handle that owns it. Dropping (or waiting on) the
+//!   handle cancels every worker and joins it, so once the handle is gone every worker has exited
+//!   and released its table clone. This is the guarantee that makes clearing the table safe (§4);
+//!   it is distinct from the completion signal (§2), which announces the result but does not by
+//!   itself release the table.
 //!
 //! # 1. Team composition, identity, and the authoritative result
 //!
@@ -94,17 +99,20 @@
 //! **The single explicit completion signal.** A team announces completion exactly once, through one
 //! explicit signal, for every outcome above. The owner never has to *infer* that the team finished
 //! from a side effect such as an events channel disconnecting; that inference has been observed to
-//! lose the wakeup and park the owner forever. The signal may be emitted only once **both** of the
-//! following hold:
+//! lose the wakeup and park the owner forever. The signal's only precondition is that **the master's
+//! outcome is fixed** — its authoritative result, or fallback, is final. It says the played move is
+//! ready, so the owner can stop waiting and collect it.
 //!
-//! 1. the master's outcome is fixed (its authoritative result, or fallback, is final), and
-//! 2. every worker in the team — master and every helper — has released its clone of the shared
-//!    table.
-//!
-//! Condition 2 is what lets the session owner clear or resize the table immediately after it
-//! observes completion (see §4); a signal emitted while a helper still held the table would make an
-//! otherwise correct `ucinewgame` race a live worker. With zero helpers this reduces to today's
-//! rule: the one worker signals after its outcome is determined and it has dropped the table.
+//! The signal does **not** imply the table has been released. A worker — including the master that
+//! emits the signal — may still hold its clone of the shared table when the signal fires, and
+//! helpers may still be winding down. This matches today's one worker exactly: it sends its
+//! completion signal while it still owns its table clone and releases that clone only as the thread
+//! exits (see [`SearchEngine::start`](super::SearchEngine::start)). Table release, and the
+//! clear-safety that depends on it, is a *separate* guarantee provided by joining every worker, not
+//! by the signal; see the join-on-drop guarantee and §4. Coupling the two — emitting the signal only
+//! after every worker had dropped the table — is not today's behaviour and is not required: an owner
+//! that wants to clear the table joins the team first rather than trusting the signal to have done
+//! it.
 //!
 //! # 3. Limit semantics, and which worker decides normal completion
 //!
@@ -145,9 +153,16 @@
 //!   cleared ([`Table::clear`](crate::tt::Table::clear)) or replaced only once no worker still holds
 //!   a clone of the `Arc`. This is enforced, not merely documented:
 //!   [`clear_hash`](super::SearchEngine::clear_hash) obtains the exclusive reference `clear` needs
-//!   through `Arc::get_mut`, which only succeeds once the last worker has dropped its clone. Because
-//!   the completion signal (§2) is withheld until every worker has released the table, an owner that
-//!   waited for completion can always clear.
+//!   through `Arc::get_mut`, which only succeeds once the last worker has dropped its clone. What
+//!   makes that reference reachable is the join-on-drop guarantee, **not** the completion signal:
+//!   dropping or waiting on the team handle cancels and joins every worker, so no worker can outlive
+//!   the handle still holding a clone, and the join is what releases the last one. The completion
+//!   signal (§2) only reports that the result is ready; a worker may still hold the table when it
+//!   fires. An owner therefore clears by joining the team (letting the handle drop, or waiting on
+//!   it) and only then calling [`clear_hash`](super::SearchEngine::clear_hash) — never by clearing on
+//!   the signal alone, which would race a worker that has not yet exited. Today's one-worker engine
+//!   is exactly this: [`SearchHandle`](super::SearchHandle) cancels and joins its worker on drop, and
+//!   the following `ucinewgame` clear then finds the table unshared.
 //!
 //! # 5. Legal fallback, and no partial or aborted result
 //!
