@@ -1,10 +1,11 @@
 ---
 id: TASK-15
 title: Connect engine configuration to UCI options and search resources
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-19 23:22'
+updated_date: '2026-07-20 17:55'
 labels:
   - engine
   - uci
@@ -46,3 +47,15 @@ Truthfulness boundary. The UCI handshake must advertise exactly what the running
 - [ ] #7 Tests cover defaults, handshake truthfulness, valid and invalid values, repeated changes, and changes while a search is active
 - [ ] #8 Strength tooling and documentation accurately describe which options are required and do not claim unsupported Lazy SMP behavior
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Replace the dead Config/HashConfig/MoveOrderingConfig/HaltingConfig types in engine/src/options.rs with one authoritative EngineConfig owning hash_mb, threads (worker count), and debug. Centralise Hash default/min/max and Threads default/min/max as associated constants (single source of truth); keep the live EngineOpt enum.
+2. Make the constants the sole source of the advertised handshake, parser validation, and config validation: add EngineConfig::validate_hash_mb + set_hash_mb (Result), an advertised_uci_options() renderer, and a Display for the 'config' command. Threads stays unadvertised (max 1) with a comment explaining it awaits real multi-worker search.
+3. uci.rs parse_hash validates via the shared constant range (preserving the existing reject-0/1025 behaviour). Threads remains an unadvertised, tolerated InvalidOption.
+4. engine.rs drive(): own one EngineConfig; on setoption Hash, stop+join the active search then apply at the quiescent boundary via a new SearchEngine::set_hash_size that builds the new Table first and asserts the old allocation is unshared (Arc::get_mut) before swapping (construct-then-commit, no inconsistency); DebugMode no longer needlessly stops the search; wire the 'config' command to display EngineConfig; derive the uci handshake option line from advertised_uci_options().
+5. search.rs: add SearchEngine::set_hash_size enforcing the owner-controlled quiescent rebuild alongside clear_hash.
+6. Docs/tooling (AC#8): move README 'LazySMP multithreading' from Features to Future features (single worker today); add a UCI options note documenting Hash bounds and that Threads is not yet advertised; clarify strength_test.py --threads help that seaborg is single-worker and tolerates Threads for forward-compat.
+7. Tests (AC#7): EngineConfig unit tests (defaults, valid/invalid/repeated hash, bounds, threads); driver tests for handshake truthfulness (already present, keep exact), setoption while a search is active, repeated hash changes, and that resize happens at a quiescent boundary. Run fmt/clippy/test.
+<!-- SECTION:PLAN:END -->
