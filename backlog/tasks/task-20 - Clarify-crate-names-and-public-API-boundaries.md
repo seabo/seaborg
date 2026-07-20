@@ -1,11 +1,11 @@
 ---
 id: TASK-20
 title: Clarify crate names and public API boundaries
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-20 19:24'
+updated_date: '2026-07-20 19:32'
 labels:
   - architecture
   - api
