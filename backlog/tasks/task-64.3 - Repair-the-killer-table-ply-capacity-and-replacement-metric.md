@@ -1,11 +1,11 @@
 ---
 id: TASK-64.3
 title: Repair the killer table ply capacity and replacement metric
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-19 13:31'
-updated_date: '2026-07-20 12:00'
+updated_date: '2026-07-20 12:44'
 labels:
   - search
   - move-ordering
