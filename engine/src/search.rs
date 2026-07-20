@@ -57,8 +57,9 @@ pub const MAX_PLY: usize = 256;
 /// previous distinct one shifts to slot two. Setting this to `1` keeps only the newest killer and
 /// `0` disables killers entirely, which is how the disabled/one-slot/two-slot ablation is built
 /// without a separate search path. It must not exceed
-/// [`MAX_KILLER_SLOTS`](super::killer::MAX_KILLER_SLOTS).
-const KILLER_SLOTS: usize = 2;
+/// [`MAX_KILLER_SLOTS`](super::killer::MAX_KILLER_SLOTS). Public so the ablation harness in
+/// `examples/killer_ablation.rs` can label its output with the width it was built against.
+pub const KILLER_SLOTS: usize = 2;
 
 /// Lowest iteration depth at which the root is searched with an aspiration window rather than the
 /// full `(-inf, +inf)` window.
