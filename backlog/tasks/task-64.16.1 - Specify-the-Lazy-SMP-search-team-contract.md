@@ -1,11 +1,11 @@
 ---
 id: TASK-64.16.1
 title: Specify the Lazy SMP search-team contract
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-19 23:23'
-updated_date: '2026-07-20 11:40'
+updated_date: '2026-07-20 12:00'
 labels:
   - search
   - concurrency
@@ -38,13 +38,13 @@ This task records architecture and tests the seams needed to enforce it; it does
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A checked-in module-level contract defines one master, zero or more helpers, team identity, shared state, per-worker state, and the authoritative-result rule
-- [ ] #2 The contract defines completed, cancelled, failed, and panicked team outcomes and when the single explicit completion signal may be emitted
-- [ ] #3 The contract specifies fixed-depth, time, node, and infinite limit semantics for the complete team, including which worker decides normal completion
-- [ ] #4 The contract states that TT age advances once per root search, every worker shares one table allocation, and clearing or replacement occurs only after all workers release it
-- [ ] #5 The contract preserves legal root fallback and prohibits partial or aborted iterations from becoming official results
-- [ ] #6 Public types or focused compile-time tests make the shared-versus-per-worker state boundary explicit enough that later tasks cannot accidentally share mutable search heuristics
-- [ ] #7 The existing one-worker behavior remains unchanged
+- [x] #1 A checked-in module-level contract defines one master, zero or more helpers, team identity, shared state, per-worker state, and the authoritative-result rule
+- [x] #2 The contract defines completed, cancelled, failed, and panicked team outcomes and when the single explicit completion signal may be emitted
+- [x] #3 The contract specifies fixed-depth, time, node, and infinite limit semantics for the complete team, including which worker decides normal completion
+- [x] #4 The contract states that TT age advances once per root search, every worker shares one table allocation, and clearing or replacement occurs only after all workers release it
+- [x] #5 The contract preserves legal root fallback and prohibits partial or aborted iterations from becoming official results
+- [x] #6 Public types or focused compile-time tests make the shared-versus-per-worker state boundary explicit enough that later tasks cannot accidentally share mutable search heuristics
+- [x] #7 The existing one-worker behavior remains unchanged
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -149,4 +149,41 @@ Verification:
 - cargo test --workspace: all passed (engine 275 passed incl. 3 search::team::tests and dropping_a_search_handle_releases_the_table_for_a_later_clear)
 Known failures: none. cargo doc -p engine --no-deps emits 6 pre-existing private-intra-doc-link warnings in eval.rs/search.rs/tt.rs that reproduce at base f84b6d8 and are outside this task's scope; the team module adds no doc warnings. cargo doc is not a repository-required check.
 ---
+
+author: @claude
+created: 2026-07-20 12:00
+---
+Review attempt: 2
+Reviewed branch: task-64.16.1-lazy-smp-team-contract
+Reviewed implementation: 20aa3fbad6c40a2078e8360afd9a89f69d4bb77a
+Base: f84b6d8c6afd11c30841cf287a38fa82daacd648
+Verdict: approved
+
+REV-1-01 [P1] resolved. The prior finding was that §2/§4 wrongly asserted the completion signal is emitted only after every worker releases its table clone, and claimed this is today's one-worker rule. The rework (only file: engine/src/search/team.rs, plus the task record) corrects this and now matches the code:
+- §2 (team.rs:99-115): the signal's sole precondition is that the master's outcome is fixed; an explicit paragraph states the signal does NOT imply table release and that a worker (incl. the emitting master) may still hold its Arc<Table> clone when it fires. Verified against SearchEngine::start (engine/src/search.rs:322,343-357): finished_tx.send(()) runs before the closure returns and drops the `table` clone.
+- §4 (team.rs:152-165): clear/replace reachability is attributed to the join-on-drop guarantee, not the withheld signal. Verified against SearchHandle::drop (engine/src/search.rs:440-445) cancel+join, clear_hash's Arc::get_mut (engine/src/search.rs:283-287), and the test dropping_a_search_handle_releases_the_table_for_a_later_clear (engine/src/search.rs:3136-3146).
+- Preamble (team.rs:28-32): join-on-drop added as an explicit fifth preserved guarantee, distinct from the completion signal. The false 'reduces to today's rule: the one worker signals after ... it has dropped the table' claim is removed.
+
+Acceptance criteria (all proven):
+- AC#1 §1 team.rs:34-80: master/helpers, team identity, shared vs per-worker state, master-authoritative rule.
+- AC#2 §2 team.rs:82-115: four outcomes + single completion signal precondition.
+- AC#3 §3 team.rs:117-141: depth/time/nodes/infinite; master decides normal completion.
+- AC#4 §4 team.rs:143-165: age once per root search; one shared Arc<Table>; clear/replace only after all release.
+- AC#5 §5 team.rs:167-181: legal root fallback; no partial/aborted result becomes official.
+- AC#6 team.rs:197-278: public SharedTeamState/PerWorkerState marker traits + 3 compile-time tests (all pass).
+- AC#7: no production search path changed; only `pub mod team;` added; 275 engine tests pass.
+
+Scope: base..target changes only engine/src/search.rs (+5, the module declaration) and the new engine/src/search/team.rs; commits after target touch only the task markdown. No opaque task-ID/AC/finding citations in the contract prose. No new #[allow]. cargo doc emits only 6 pre-existing private-intra-doc-link warnings (eval/search/tt/score); none from the team module.
+
+Verification (worktree, base f84b6d8, target 20aa3fb):
+- cargo fmt --check: OK
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean (confirmed with a fresh CARGO_TARGET_DIR)
+- cargo test --workspace: all passed; engine 275 passed incl. the 3 search::team::tests
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Adds engine/src/search/team.rs (declared via `pub mod team;` in search.rs): the checked-in module-level Lazy SMP search-team contract. Module `//!` docs specify team composition (one master, zero+ helpers), team identity, shared vs per-worker state, the master-authoritative-result rule (§1); the four team outcomes and the single explicit completion signal, whose sole precondition is the master's outcome being fixed (§2); depth/time/nodes/infinite limit semantics with the master deciding normal completion (§3); TT rules — age advances once per root search, one shared Arc<Table> owned by no worker, clear/replace only after every worker releases the Arc, reachable via the join-on-drop guarantee not the signal (§4); legal root fallback and no-partial/aborted-result rules (§5); and the one-worker degenerate case (§6). AC#6 is enforced by public marker traits SharedTeamState (: Send+Sync) / PerWorkerState with three compile-time tests. No production search path changed (AC#7). Verified at target 20aa3fbad6c40a2078e8360afd9a89f69d4bb77a: cargo fmt --check OK; cargo clippy --workspace --all-targets --all-features -- -D warnings clean (confirmed with a fresh CARGO_TARGET_DIR); cargo test --workspace all passed (engine 275 passed incl. the 3 search::team::tests). REV-1-01 resolved: §2/§4 and the preamble now correctly describe the signal firing while a worker still holds its table clone, with clear-safety attributed to join-on-drop, matching SearchEngine::start/SearchHandle::drop/clear_hash.
+<!-- SECTION:FINAL_SUMMARY:END -->
