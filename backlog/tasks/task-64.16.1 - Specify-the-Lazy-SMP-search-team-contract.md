@@ -1,11 +1,11 @@
 ---
 id: TASK-64.16.1
 title: Specify the Lazy SMP search-team contract
-status: In Review
+status: Changes Requested
 assignee:
   - '@claude'
 created_date: '2026-07-19 23:23'
-updated_date: '2026-07-20 10:16'
+updated_date: '2026-07-20 11:32'
 labels:
   - search
   - concurrency
@@ -99,5 +99,26 @@ Verification:
 - cargo clippy --workspace --all-targets --all-features -- -D warnings: clean (no warnings)
 - cargo test --workspace: all passed (3 new tests in search::team::tests)
 Known failures: none. cargo doc -p engine --no-deps emits 6 private-intra-doc-link warnings in eval.rs/search.rs/tt.rs that reproduce at base f84b6d8 and are outside this task's scope; the team module adds no doc warnings. cargo doc is not one of the repository-required checks.
+---
+
+author: @claude
+created: 2026-07-20 11:32
+---
+Review attempt: 1
+Reviewed branch: task-64.16.1-lazy-smp-team-contract
+Reviewed implementation: 6cf81946bdad68093067d6cde212b7d4684e319f
+Verdict: changes_requested
+
+REV-1-01 [P1] Contract misstates the completion-signal vs. table-release ordering
+Location: engine/src/search/team.rs:106-107 (also the §2 signal conditions at team.rs:100-102 and the §4 clear rule at team.rs:148-150)
+Impact: The contract is the authoritative source that is supposed to stop later Lazy SMP tasks from relying on implicit ownership assumptions, but §2 asserts the single completion signal may be emitted only after "every worker in the team ... has released its clone of the shared table", and states: "With zero helpers this reduces to today's rule: the one worker signals after its outcome is determined and it has dropped the table." Today's one worker does the opposite. In SearchEngine::start (engine/src/search.rs:340-357) it fixes the outcome, drops only the Search (which just ends the &Table borrow), then calls finished_tx.send(()) while it still owns the `table` Arc<Table> clone; that clone is released only when the closure returns. The real table-release-for-clear guarantee is join-on-drop, not the signal: SearchHandle::drop (engine/src/search.rs:424-445) cancels and joins the worker precisely so a detached worker cannot outlive its handle still holding a table clone, and dropping_a_search_handle_releases_the_table_for_a_later_clear (engine/src/search.rs:3131-3146) tests exactly that. §4 (team.rs:148-150) compounds the error by attributing clear-reachability to the withheld signal ("Because the completion signal (§2) is withheld until every worker has released the table, an owner that waited for completion can always clear") instead of to the join. A later task that trusts the contract -- clearing on the completion signal without joining, as "the session owner clear[s] or resize[s] the table immediately after it observes completion" invites -- reintroduces the intermittent ucinewgame panic at Arc::get_mut(&mut self.table).expect(...) in clear_hash (engine/src/search.rs:283-287) that join-on-drop was written to prevent. This leaves AC#2 (when the single completion signal may be emitted) and AC#7 (existing one-worker behavior accurately preserved) unproven.
+Reproduction: Read engine/src/search.rs:340-357 -- finished_tx.send(()) executes before the closure return that drops the `table` Arc clone, so the allocation still has two owners at signal time. Read SearchHandle::drop (engine/src/search.rs:424-445) and the test at engine/src/search.rs:3131-3146 -- release for a later clear is guaranteed by joining the worker on handle drop/wait. Compare against the contract at team.rs:100-107 and team.rs:148-150, which claim the signal itself implies release and that this is today's behavior.
+Expected: Describe the current one-worker completion path accurately: the worker emits the single completion signal while it still holds its shared-table clone, and table release (hence clear-safety) is guaranteed by joining the worker on handle drop/wait, not by the signal. If the team design deliberately intends to strengthen this so the signal implies release, state it as an explicit change from today's behavior and reconcile it with the preserved join-on-drop guarantee (specify who releases and who joins helpers before the signal is emitted), rather than asserting the signal-after-release ordering is already today's rule.
+
+Verification:
+- cargo fmt --check: OK (target 6cf8194)
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean, no warnings
+- cargo test --workspace: all passed; engine 275 passed incl. the 3 new search::team::tests and dropping_a_search_handle_releases_the_table_for_a_later_clear
+- cargo doc -p engine --no-deps: 6 pre-existing private-intra-doc-link warnings in eval.rs/search.rs/tt.rs, none from the team module (not a required check)
 ---
 <!-- COMMENTS:END -->
