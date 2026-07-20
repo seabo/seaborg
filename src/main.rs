@@ -1,4 +1,5 @@
 mod cmdline;
+mod datagen;
 mod dev;
 mod perft;
 
