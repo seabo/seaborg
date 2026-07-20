@@ -1,11 +1,11 @@
 ---
 id: TASK-64.16.1
 title: Specify the Lazy SMP search-team contract
-status: Ready to Merge
+status: Changes Requested
 assignee:
   - '@claude'
 created_date: '2026-07-19 23:23'
-updated_date: '2026-07-20 12:00'
+updated_date: '2026-07-20 13:05'
 labels:
   - search
   - concurrency
@@ -179,6 +179,32 @@ Verification (worktree, base f84b6d8, target 20aa3fb):
 - cargo fmt --check: OK
 - cargo clippy --workspace --all-targets --all-features -- -D warnings: clean (confirmed with a fresh CARGO_TARGET_DIR)
 - cargo test --workspace: all passed; engine 275 passed incl. the 3 search::team::tests
+---
+
+author: @claude
+created: 2026-07-20 13:05
+---
+Merge attempt: eject (integration failure)
+Primary tip tested: 1a5c1ef1d9193d719753b6af29a241731cf06c4a (master)
+Approved target: 20aa3fbad6c40a2078e8360afd9a89f69d4bb77a
+Trial merge: non-ff merge of branch tip e424aaa onto detached primary tip 1a5c1ef
+
+The merge is textually clean (search.rs auto-merges) but the integrated result does NOT compile, so it is ejected without advancing primary. Master has been left at 1a5c1ef.
+
+Cause: TASK-64.3 (killer table repair) landed on master after this task's base f84b6d8 and changed KillerTable::new from one argument to two — it is now `pub fn new(plies: usize, slots: usize)` (engine/src/killer.rs:50 at 1a5c1ef). This task's compile-time test still calls the old one-arg form:
+  engine/src/search/team.rs:275: issue_to_worker(&table, KillerTable::new(1))
+  engine/src/search/team.rs:276: issue_to_worker(&table, KillerTable::new(1))
+
+Failing command (on the trial merge commit, fresh CARGO_TARGET_DIR):
+  cargo clippy --workspace --all-targets --all-features -- -D warnings
+Evidence:
+  error[E0061]: this function takes 2 arguments but 1 argument was supplied
+    --> engine/src/search/team.rs:275:56  (argument #2 of type `usize` is missing)
+  error[E0061]: this function takes 2 arguments but 1 argument was supplied
+    --> engine/src/search/team.rs:276:56
+  error: could not compile `engine` (lib test) due to 2 previous errors
+
+Rework: integrate current master (re-base the task onto a current master SHA per the pinned-SHA workflow) and update the two KillerTable::new call sites in the compile-time test to the two-argument signature (a plies and slots value, e.g. mirroring how Search constructs its KillerTable at the new base). Then re-run fmt/clippy/test and re-hand off for review; approval pinned to 20aa3fb is void because the integrated result fails.
 ---
 <!-- COMMENTS:END -->
 
