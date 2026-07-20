@@ -1,11 +1,11 @@
 ---
 id: TASK-69.6
 title: 'Self-play data generation binary: fixed-node game loop and adjudication'
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:41'
-updated_date: '2026-07-20 23:01'
+updated_date: '2026-07-20 23:27'
 labels:
   - nnue
   - datagen
@@ -52,3 +52,38 @@ Each game records, per retained position, the search score and the eventual game
 
 9. Run fmt, clippy -D warnings, cargo test --workspace; hand off for review.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented engine::selfplay (game loop, adjudication, parallel orchestration) plus a seaborg datagen CLI subcommand. Scope boundary respected: no on-disk sample format, position filtering, or opening diversification (those are TASK-69.7); records are in-memory only and the CLI drops them after tallying.
+
+Key decisions:
+- Search driving: SearchEngine::start(pos, SearchLimit::Nodes(budget)).wait() per move (the only public path to a node budget). One SearchEngine per worker => private Arc<Table>, zero cross-worker contention; new_game() between games keeps each game reproducible in isolation. Score is taken from the side-to-move perspective (engine negamax), matching the training-target contract; centipawn and mate scores are both preserved on Sample.score, leaving the mate->cp band decision to the TASK-69.7 encoder.
+- Terminal detection reuses public chess predicates (generate<BasicMoveList,All,Legal>, in_check, in_threefold, fifty_move_rule_reached). Added a minimal insufficient-material rule (KvK, KNvK, KBvK) via piece_bb+popcnt since the engine has none; harder theoretical draws are deliberately left to the fifty-move rule.
+- Adjudication is a small state machine over White's-eye centipawns: resign when the winning side holds >= resign margin for N consecutive plies (mate scores exceed any cp margin, so found mates adjudicate promptly); draw when |score| <= margin for N plies after a minimum ply; plus a hard max_plies cap scored as a draw.
+- Orchestration: workers pull game indices from a shared AtomicUsize and send GameRecords over an mpsc channel; the caller drains into the sink (no Send bound on the sink) and computes throughput. play_game takes the start position as a parameter so TASK-69.7 can plug diversified openings without changing the loop.
+
+Note for the reviewer: with no diversification yet and a deterministic node budget, all games from the initial position are identical. This is by design (diversification is TASK-69.7); the run still exercises the loop, adjudication, and throughput measurement. Verified end to end: seaborg datagen --games 4 --workers 2 --nodes 20000 produced 4 games / 368 positions terminating by resignation.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @claude
+created: 2026-07-20 23:27
+---
+Implementation handoff
+Branch: task-69.6-selfplay-datagen
+Worktree: /Users/seabo/seaborg-worktrees/task-69.6-selfplay-datagen
+Base: 6d3d4ac98a40a455959b4cea18d0b0a82b0c7867
+Implementation target: 32e9989
+Resolved findings: none
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (no warnings)
+- cargo test --workspace: pass (chess 49, engine 318 + 2 ignored, lichess 68, integration suites green); 15 new engine::selfplay tests included
+- manual: seaborg datagen --games 4 --workers 2 --nodes 20000 -> 4 games / 368 positions, resignation-adjudicated
+Known failures: none
+---
+<!-- COMMENTS:END -->
