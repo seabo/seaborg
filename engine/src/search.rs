@@ -153,6 +153,59 @@ fn should_razor(depth: Depth, eval: Score, alpha: Score, improving: bool) -> boo
             < alpha
 }
 
+/// Largest remaining depth at which futility pruning is considered.
+///
+/// Futility pruning bets that a quiet move cannot lift a static evaluation that already sits a
+/// margin below alpha into a useful score before the horizon. That bet is only safe close to the
+/// leaves: with more depth remaining, a quiet move has room to set up a threat the static
+/// evaluation cannot see, so the technique is switched off entirely above this draft.
+const FUTILITY_MAX_DEPTH: Depth = 6;
+
+/// The futility margin at a given remaining depth, in centipawns.
+///
+/// This is how much a single quiet move is generously assumed to be able to improve the static
+/// evaluation before the horizon. A quiet move whose node evaluates at `eval` can raise the score
+/// to at most about `eval + margin`; if that still does not reach alpha, searching the move cannot
+/// change this node's result and it is skipped. The allowance grows with remaining depth because a
+/// deeper subtree has more room to realise a latent gain, keeping the pruning conservative exactly
+/// where the horizon is further away.
+#[inline]
+fn futility_margin(depth: Depth) -> Score {
+    debug_assert!(depth >= 1);
+    Score::cp(100 + 100 * depth)
+}
+
+/// Smallest remaining depth at which a null-move search is attempted.
+///
+/// A null cutoff is a fail-high bound, not an exact score, so where it fires it replaces whatever a
+/// full search of the node would have returned — including a forced mate the node was about to
+/// prove. Close to the horizon the reduced null search cannot see such a mate, so the side about to
+/// be mated appears to hold and the mate drops out of the line. Gating the technique above this
+/// remaining depth leaves the last few plies before the horizon — where a shallow mate is proved —
+/// searched in full, while still pruning the large subtrees higher up where null move earns almost
+/// all of its saving. The bound is set where the engine stops losing exact-mate detection; the
+/// shallow forced mates in the search regression suite are what pin it here.
+const NULL_MOVE_MIN_DEPTH: Depth = 5;
+
+/// Remaining depth at or above which a fail-high null search is confirmed by a verification search.
+///
+/// A shallow null cutoff is cheap and its blunders are bounded, so it is trusted directly. A deep
+/// one commits a large subtree, and zugzwang — where passing is better than any legal move — makes
+/// the null result unsound in exactly the endgames where the stakes are highest. From this draft
+/// up, the cutoff is re-checked by a normal reduced-depth search with null moves disabled, and only
+/// taken if that search also fails high.
+const NULL_MOVE_VERIFY_DEPTH: Depth = 10;
+
+/// The depth reduction applied to a null-move search at a given remaining depth.
+///
+/// The opponent is handed a free move and the resulting position is searched this much shallower
+/// than the node itself. A larger reduction is cheaper but trusts the null result over a coarser
+/// search; the depth term lets deeper nodes reduce a little more without collapsing shallow ones.
+#[inline]
+fn null_move_reduction(depth: Depth) -> Depth {
+    3 + depth / 4
+}
+
 /// Whether the side to move is doing better than the last time it was on move.
 ///
 /// The *improving* signal compares this node's static evaluation against the static evaluation two
@@ -711,6 +764,11 @@ pub struct Search<'engine> {
     root_fallback: Option<Move>,
     #[cfg(test)]
     abort_after_nodes: Option<usize>,
+    /// Test hook that disables the forward-pruning steps (futility, null move) so a test can search
+    /// the same position with and without them and confirm the guards leave sound positions
+    /// unchanged.
+    #[cfg(test)]
+    forward_pruning_disabled: bool,
     /// Destination for typed search progress events.
     events: Option<Sender<SearchEvent>>,
     /// Per-ply state for the nodes on the current search path, indexed by ply from the root.
@@ -719,6 +777,14 @@ pub struct Search<'engine> {
     /// rather than per node.
     stack: Box<[StackEntry; MAX_PLY]>,
     depth_reached: u8,
+    /// Plies below which null-move pruning is suppressed.
+    ///
+    /// Normally zero, so null moves are allowed at every ply. While a null-move cutoff is being
+    /// confirmed by a verification search, this is raised to the verifying node's ply so that the
+    /// verification re-searches the position with null moves switched off — otherwise the very
+    /// cutoff under test could confirm itself. A node attempts a null move only when its ply is at
+    /// or above this bound. See the null-move step in [`Search::search`].
+    nmp_min_ply: usize,
 }
 
 impl<'engine> Search<'engine> {
@@ -768,11 +834,14 @@ impl<'engine> Search<'engine> {
             events,
             stack: Box::new([StackEntry::default(); MAX_PLY]),
             depth_reached: 0,
+            nmp_min_ply: 0,
             min_search_complete: false,
             root_fallback_ready: false,
             root_fallback: None,
             #[cfg(test)]
             abort_after_nodes: None,
+            #[cfg(test)]
+            forward_pruning_disabled: false,
         }
     }
 
@@ -1160,10 +1229,88 @@ impl<'engine> Search<'engine> {
         }
 
         // Step 8. Futility pruning.
-        //         TODO
+        //
+        // Near the horizon a single quiet move rarely swings the static evaluation by more than a
+        // depth-scaled margin. When even `eval + margin` cannot reach alpha, the quiet moves in the
+        // loop below cannot change this node's result, so they are skipped there. The decision is
+        // taken once here and applied per move in the loop. It is confined to non-PV nodes, disabled
+        // while in check — a forcing position has no trustworthy static evaluation — and disabled
+        // when alpha is a mate bound, where a centipawn margin is meaningless.
+        let futility_pruning = self.forward_pruning_enabled()
+            && !Node::pv()
+            && !self.pos.in_check()
+            && depth <= FUTILITY_MAX_DEPTH
+            && alpha.is_cp()
+            && eval + futility_margin(depth) <= alpha;
 
         // Step 9. Null move search with verification (non-PV only).
-        //         TODO
+        //
+        // Give the opponent a free move from a position that already looks at least as good as beta.
+        // If even then a reduced-depth search cannot lift the opponent to beta, this node is so
+        // strong that searching our own moves in full is wasted work, and it fails high at once.
+        //
+        // The guards keep the bet sound. It is a non-PV device: a PV node must never be pruned on a
+        // null-window argument. It is disabled in check, where passing would leave the king
+        // capturable. It requires the static evaluation to already reach beta, so the free move only
+        // has to fail to *extend* a standing advantage. It requires the side to move to hold a piece
+        // beyond king and pawns, because in king-and-pawn zugzwang passing can beat every legal move
+        // and the null result is then a lie. It is not tried twice running — two passes only search
+        // the same position more slowly — nor while a verification search has suppressed it through
+        // `nmp_min_ply`.
+        if self.forward_pruning_enabled()
+            && !Node::pv()
+            && !self.pos.in_check()
+            && depth >= NULL_MOVE_MIN_DEPTH
+            && ply >= self.nmp_min_ply
+            && eval >= beta
+            && self.pos.has_non_pawn_material(self.pos.turn())
+            && !(ply > 0 && self.stack[ply - 1].mov.is_null())
+        {
+            let r = null_move_reduction(depth);
+
+            // Record the pass as this node's current move so the child can see it arrived through a
+            // null move and decline to pass straight back.
+            self.stack[ply].mov = Move::null();
+            self.make_null_move();
+            self.tt.prefetch(self.pos.zobrist().0);
+            let child = self.search::<T, NonPv>(
+                beta.child_bound(),
+                beta.dec_one().child_bound(),
+                depth - 1 - r,
+                ply + 1,
+            );
+            self.unmake_null_move();
+
+            // The null move is already unmade, so an aborted child simply propagates upward.
+            let null_value = child?.neg().inc_mate();
+
+            if null_value >= beta {
+                // A mate score returned by a search that skipped a move is not a proven mate, so it
+                // is reported as the beta bound rather than as a mate distance nothing established.
+                let value = if null_value.is_mate() {
+                    beta
+                } else {
+                    null_value
+                };
+
+                if depth < NULL_MOVE_VERIFY_DEPTH {
+                    return Some(value);
+                }
+
+                // Deep cutoff: confirm it with a normal reduced-depth search of this same position,
+                // null moves suppressed in its subtree so the cutoff under test cannot rubber-stamp
+                // itself. This is the net that catches the zugzwang the material guard only
+                // approximates.
+                let saved = self.nmp_min_ply;
+                self.nmp_min_ply = ply + 1;
+                let verify = self.search::<T, NonPv>(alpha, beta, depth - r, ply);
+                self.nmp_min_ply = saved;
+
+                if verify? >= beta {
+                    return Some(value);
+                }
+            }
+        }
 
         // Step 10. ProbCut.
         //         TODO
@@ -1233,6 +1380,23 @@ impl<'engine> Search<'engine> {
                 // recursive descent's own setup rather than stalling on it. The key is only known
                 // once the move has been made, so this is the earliest point the address exists.
                 self.tt.prefetch(self.pos.zobrist().0);
+
+                // Step 8 (applied). Futility pruning skips a quiet move whose node cannot reach alpha
+                // even granted the depth's margin. The move is already on the board, so its check
+                // status is known: a move that gives check can still force mate near the horizon and
+                // is never dropped. The first move is always searched, so the node still returns a
+                // real value rather than an empty `-inf`; the futility bound the move could at best
+                // have reached is folded into `best_value`, keeping the fail-low score meaningful.
+                // The recursive search — the real cost — is what this avoids; the make/unmake is
+                // negligible beside it and is what makes the check test exact.
+                if futility_pruning && move_count > 1 && mov.is_quiet() && !self.pos.in_check() {
+                    self.unmake_move();
+                    let futility_value = eval + futility_margin(depth);
+                    if futility_value > best_value {
+                        best_value = futility_value;
+                    }
+                    continue;
+                }
 
                 // Step 19. Search non-PV move with null window.
                 if !Node::pv() || move_count > 1 {
@@ -1645,6 +1809,48 @@ impl<'engine> Search<'engine> {
             .eval_stack
             .pop()
             .expect("unmake_move without a matching make_move");
+    }
+
+    /// Passes the turn to the opponent for a null-move search, carrying the evaluation accumulator
+    /// across unchanged.
+    ///
+    /// A null move moves no piece, so the placement-derived accumulator is identical on both sides
+    /// of it; the perspective flip is applied by [`Self::pov`] when the value is read, exactly as
+    /// for an ordinary move. The saved copy is still pushed so [`Self::unmake_null_move`] can pop it
+    /// symmetrically with [`Self::unmake_move`], keeping one stack discipline for both kinds of move.
+    #[inline(always)]
+    fn make_null_move(&mut self) {
+        self.eval_stack.push(self.eval_state);
+        self.pos.make_null_move();
+        debug_assert_eq!(
+            self.eval_state,
+            EvalState::from_position(&self.pos),
+            "a null move must leave the evaluation accumulator unchanged"
+        );
+    }
+
+    /// Unmakes a null move and restores the accumulator that went with the prior position.
+    #[inline(always)]
+    fn unmake_null_move(&mut self) {
+        self.pos.unmake_null_move();
+        self.eval_state = self
+            .eval_stack
+            .pop()
+            .expect("unmake_null_move without a matching make_null_move");
+    }
+
+    /// Whether the forward-pruning steps (futility, null move) are active. Always true in normal
+    /// builds; a test can switch it off to search a position with the pruning bypassed.
+    #[inline(always)]
+    fn forward_pruning_enabled(&self) -> bool {
+        #[cfg(test)]
+        {
+            !self.forward_pruning_disabled
+        }
+        #[cfg(not(test))]
+        {
+            true
+        }
     }
 
     /// Returns 1 if the player to move is White, -1 if Black. Useful wherever we are using
@@ -3217,6 +3423,101 @@ mod tests {
                  ({cold_nodes})"
             );
         }
+    }
+
+    /// The futility margin grows monotonically with remaining depth: a subtree with more room to
+    /// realise a latent gain is granted a more generous allowance, so pruning stays more cautious
+    /// further from the horizon.
+    #[test]
+    fn futility_margin_grows_with_depth() {
+        for depth in 1..FUTILITY_MAX_DEPTH {
+            assert!(
+                futility_margin(depth) < futility_margin(depth + 1),
+                "futility margin did not grow from depth {depth} to {}",
+                depth + 1
+            );
+        }
+    }
+
+    /// The forward-pruning guards must not change the result of a search on a sound position: with
+    /// futility and null-move pruning switched off, a fixed-depth search of each position returns
+    /// exactly the score and best move it returns with them on. This is the guard-correctness
+    /// contract — where the pruning fires it only skips work the full search would have discarded
+    /// anyway, so these known-answer searches are identical either way — and it also confirms the
+    /// test toggle actually reaches both steps.
+    #[test]
+    fn forward_pruning_does_not_change_sound_search_results() {
+        core::init::init_globals();
+
+        // Forced mates and clean material wins across a range of fixed depths. Each has an
+        // unambiguous result that pruning must not disturb.
+        let positions = [
+            ("8/2R2pp1/k3p3/8/5Bn1/6P1/5r1r/1R4K1 w - - 4 3", 6),
+            ("6rk/p7/1pq1p2p/4P3/5BrP/P3Qp2/1P1R1K1P/5R2 b - - 0 34", 8),
+            ("6k1/8/3q4/8/8/3B4/2P5/1K1R4 w - - 0 1", 5),
+            ("r5k1/p1P5/8/8/8/8/3RK3/8 w - - 0 1", 6),
+            (
+                "2kr3r/ppp1qpb1/5n2/5b1p/6p1/1PNP4/PBPQBPPP/2KRR3 b - - 6 14",
+                5,
+            ),
+        ];
+
+        for (fen, depth) in positions {
+            let position = Position::from_fen(fen).unwrap();
+            let flag = AtomicBool::new(false);
+
+            let pruned_table = Table::new(16);
+            let mut pruned = Search::new(position.clone(), &flag, None, &pruned_table);
+            let pruned_result = pruned.run::<Master>(depth).unwrap();
+
+            let plain_table = Table::new(16);
+            let mut plain = Search::new(position, &flag, None, &plain_table);
+            plain.forward_pruning_disabled = true;
+            let plain_result = plain.run::<Master>(depth).unwrap();
+
+            assert_eq!(
+                pruned_result.score, plain_result.score,
+                "{fen}: forward pruning changed the score"
+            );
+            assert_eq!(
+                pruned_result.best_move, plain_result.best_move,
+                "{fen}: forward pruning changed the best move"
+            );
+        }
+    }
+
+    /// Forward pruning must earn its keep: on a quiet middlegame position with a decisive advantage
+    /// — where the null-move and futility guards are satisfied deep in the tree — the pruned search
+    /// visits strictly fewer nodes than the same search with pruning switched off, at the same
+    /// fixed depth. This confirms the pruning actually fires rather than being dead code behind its
+    /// guards.
+    #[test]
+    fn forward_pruning_reduces_the_search_tree() {
+        core::init::init_globals();
+
+        // A quiet position a few pawns up for White, with pieces on the board so the zugzwang guard
+        // is satisfied and null-move pruning can fire.
+        let position =
+            Position::from_fen("r3k2r/pppq1ppp/2np1n2/4p3/2B1P3/2NP1N2/PPP2PPP/R2Q1RK1 w kq - 0 1")
+                .unwrap();
+        let flag = AtomicBool::new(false);
+        let depth = 6;
+
+        let pruned_table = Table::new(16);
+        let mut pruned = Search::new(position.clone(), &flag, None, &pruned_table);
+        pruned.run::<Master>(depth).unwrap();
+        let pruned_nodes = pruned.trace.all_nodes_visited();
+
+        let plain_table = Table::new(16);
+        let mut plain = Search::new(position, &flag, None, &plain_table);
+        plain.forward_pruning_disabled = true;
+        plain.run::<Master>(depth).unwrap();
+        let plain_nodes = plain.trace.all_nodes_visited();
+
+        assert!(
+            pruned_nodes < plain_nodes,
+            "forward pruning did not reduce the tree: {pruned_nodes} pruned vs {plain_nodes} plain"
+        );
     }
 
     #[test]

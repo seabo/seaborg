@@ -161,6 +161,12 @@ impl Score {
     pub fn inc_one(&self) -> Self {
         Self(self.0 + 1)
     }
+
+    /// Decrement the value of the score by 1, the mirror of [`Self::inc_one`]. Search uses it to
+    /// build the lower end of a null window around beta, the way `inc_one` builds one around alpha.
+    pub fn dec_one(&self) -> Self {
+        Self(self.0 - 1)
+    }
 }
 
 impl Neg for Score {
