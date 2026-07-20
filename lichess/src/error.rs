@@ -1,6 +1,7 @@
 //! Error type shared across the crate.
 
 use std::fmt;
+use std::time::Duration;
 
 /// Result alias for fallible operations in this crate.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -34,10 +35,28 @@ pub enum Error {
     /// The configuration file exists but could not be read or parsed.
     Config(String),
     /// An HTTP request failed at the transport level (connection, TLS, or a
-    /// non-success status other than 401).
+    /// non-success status other than 401 or 429).
     Http(String),
+    /// The API returned HTTP 429 (too many requests). `retry_after` carries the
+    /// server's `Retry-After` hint in seconds when it sent one.
+    RateLimited {
+        /// How long the server asked the client to wait, if it said.
+        retry_after: Option<Duration>,
+    },
     /// A response body was not the JSON this crate expected.
     Decode(String),
+}
+
+impl Error {
+    /// Whether this error is a transient network condition worth retrying by
+    /// reconnecting or backing off, as opposed to a terminal fault.
+    ///
+    /// A dropped connection or a rate-limit response is recoverable; a rejected
+    /// token or a decode failure (a protocol change or a bug) is not, and must
+    /// surface rather than spin in a reconnect loop.
+    pub fn is_recoverable(&self) -> bool {
+        matches!(self, Error::Http(_) | Error::RateLimited { .. })
+    }
 }
 
 impl fmt::Display for Error {
@@ -67,6 +86,14 @@ impl fmt::Display for Error {
             ),
             Error::Config(detail) => write!(f, "configuration error: {detail}"),
             Error::Http(detail) => write!(f, "HTTP request failed: {detail}"),
+            Error::RateLimited { retry_after } => match retry_after {
+                Some(wait) => write!(
+                    f,
+                    "rate limited by Lichess (HTTP 429); retry after {}s",
+                    wait.as_secs()
+                ),
+                None => write!(f, "rate limited by Lichess (HTTP 429)"),
+            },
             Error::Decode(detail) => write!(f, "could not decode Lichess response: {detail}"),
         }
     }

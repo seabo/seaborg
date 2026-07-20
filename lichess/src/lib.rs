@@ -11,6 +11,7 @@
 //! touching the network.
 
 pub mod account;
+pub mod backoff;
 pub mod client;
 pub mod config;
 pub mod error;
@@ -19,6 +20,7 @@ pub mod game;
 pub mod game_stream;
 pub mod policy;
 pub mod run;
+pub mod shutdown;
 pub mod transport;
 
 pub use error::{Error, Result};

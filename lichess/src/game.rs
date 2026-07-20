@@ -14,10 +14,12 @@ use core::position::{Player, Position};
 use engine::search::{SearchEngine, SearchLimit};
 use engine::time::TimeControl;
 
+use crate::backoff::{Backoff, RECONNECT_BASE, RECONNECT_MAX};
 use crate::client::LichessClient;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::game_stream::{GameEvent, GameFull, GameState};
+use crate::shutdown::Shutdown;
 use crate::transport::Transport;
 
 /// Chooses the move to play in a position under a time budget.
@@ -60,29 +62,148 @@ impl MoveChooser for EngineMoveChooser {
 /// replying with `chooser`'s moves on the bot's turn.
 ///
 /// `bot_id` is the bot's own Lichess account id, matched against the game's two
-/// players to find which side the bot has. The loop ends when the stream closes
-/// or reports a terminal status.
+/// players to find which side the bot has. Game streams drop routinely, so a
+/// disconnect that is not a terminal game-over reconnects with exponential
+/// backoff; because the position is rebuilt from the server's authoritative move
+/// list on every state, a reconnect resumes exactly in sync. When `shutdown` is
+/// requested the in-flight game is resigned cleanly rather than left mid-move.
 pub fn play_game<T, C>(
     client: &LichessClient<T>,
     config: &Config,
     bot_id: &str,
     game_id: &str,
     chooser: &C,
+    shutdown: &Shutdown,
 ) -> Result<()>
 where
     T: Transport,
     C: MoveChooser,
 {
-    let mut game: Option<GameContext<'_, T, C>> = None;
+    play_game_reconnecting(client, config, bot_id, game_id, chooser, shutdown, |wait| {
+        shutdown.sleep(wait)
+    })
+}
 
-    for event in client.game_stream(game_id)? {
-        match event? {
+/// The reconnect loop behind [`play_game`], with the reconnect wait injected so
+/// tests can drive it without real sleeps.
+fn play_game_reconnecting<T, C, S>(
+    client: &LichessClient<T>,
+    config: &Config,
+    bot_id: &str,
+    game_id: &str,
+    chooser: &C,
+    shutdown: &Shutdown,
+    mut sleep: S,
+) -> Result<()>
+where
+    T: Transport,
+    C: MoveChooser,
+    S: FnMut(Duration),
+{
+    let mut backoff = Backoff::new(RECONNECT_BASE, RECONNECT_MAX);
+    loop {
+        if shutdown.is_requested() {
+            return resign_on_shutdown(client, game_id);
+        }
+        match play_game_once(client, config, bot_id, game_id, chooser, shutdown)? {
+            GameOutcome::Finished => return Ok(()),
+            GameOutcome::ShutdownRequested => return resign_on_shutdown(client, game_id),
+            GameOutcome::Disconnected { made_progress } => {
+                if shutdown.is_requested() {
+                    return resign_on_shutdown(client, game_id);
+                }
+                // A connection that carried real game data before dropping is
+                // treated as healthy, so its next unrelated drop starts backing
+                // off from the base delay again.
+                if made_progress {
+                    backoff.reset();
+                }
+                log::warn!("game {game_id}: stream disconnected; reconnecting");
+                sleep(backoff.next_delay());
+            }
+        }
+    }
+}
+
+/// Resign an in-flight game as part of shutdown, best effort.
+///
+/// A failure to reach the resign endpoint must not mask the shutdown itself, so
+/// it is logged and swallowed; the process is going down regardless.
+fn resign_on_shutdown<T: Transport>(client: &LichessClient<T>, game_id: &str) -> Result<()> {
+    log::info!("game {game_id}: resigning on shutdown");
+    if let Err(error) = client.resign_game(game_id) {
+        log::warn!("game {game_id}: resign request failed during shutdown: {error}");
+    }
+    Ok(())
+}
+
+/// Why a single game-stream connection stopped.
+#[derive(Debug)]
+enum GameOutcome {
+    /// The server reported a terminal status: the game is genuinely over.
+    Finished,
+    /// Shutdown was requested while the game was still in progress.
+    ShutdownRequested,
+    /// The connection ended without a terminal status. `made_progress` is whether
+    /// any real game data arrived before it dropped.
+    Disconnected { made_progress: bool },
+}
+
+/// Stream one game-stream connection to a stopping point.
+///
+/// Returns [`GameOutcome::Finished`] on a terminal status, `ShutdownRequested`
+/// when the shutdown flag trips mid-stream, and `Disconnected` when the stream
+/// ends or hits a recoverable transport error. A non-recoverable error (a
+/// rejected token, or a malformed/illegal move list) propagates.
+fn play_game_once<T, C>(
+    client: &LichessClient<T>,
+    config: &Config,
+    bot_id: &str,
+    game_id: &str,
+    chooser: &C,
+    shutdown: &Shutdown,
+) -> Result<GameOutcome>
+where
+    T: Transport,
+    C: MoveChooser,
+{
+    let stream = match client.game_stream(game_id) {
+        Ok(stream) => stream,
+        Err(error) if error.is_recoverable() => {
+            return Ok(GameOutcome::Disconnected {
+                made_progress: false,
+            })
+        }
+        Err(error) => return Err(error),
+    };
+
+    let mut game: Option<GameContext<'_, T, C>> = None;
+    let mut made_progress = false;
+
+    for item in stream {
+        if shutdown.is_requested() {
+            return Ok(GameOutcome::ShutdownRequested);
+        }
+        let event = match item {
+            Ok(Some(event)) => event,
+            // Keepalive line: no event, but a chance to notice shutdown, which
+            // the check at the top of the next iteration takes.
+            Ok(None) => continue,
+            Err(error) if error.is_recoverable() => {
+                return Ok(GameOutcome::Disconnected { made_progress })
+            }
+            Err(error) => return Err(error),
+        };
+        made_progress = true;
+
+        match event {
             GameEvent::GameFull(full) => {
                 let context = GameContext::new(client, config, chooser, game_id, bot_id, &full)?;
                 // The opening message already carries a state; the bot may be on
-                // move immediately, having the white pieces.
-                if let Flow::Stop = context.on_state(&full.state)? {
-                    break;
+                // move immediately, having the white pieces. On a reconnect this
+                // gameFull rebuilds the context and resyncs from the move list.
+                if let Flow::Stop = context.on_state(&full.state, shutdown)? {
+                    return Ok(GameOutcome::Finished);
                 }
                 game = Some(context);
             }
@@ -90,8 +211,8 @@ where
                 let context = game.as_ref().ok_or_else(|| {
                     Error::Decode(format!("game {game_id}: gameState arrived before gameFull"))
                 })?;
-                if let Flow::Stop = context.on_state(&state)? {
-                    break;
+                if let Flow::Stop = context.on_state(&state, shutdown)? {
+                    return Ok(GameOutcome::Finished);
                 }
             }
             // Chat and opponent-gone notifications carry no move; claiming a win
@@ -100,7 +221,7 @@ where
         }
     }
 
-    Ok(())
+    Ok(GameOutcome::Disconnected { made_progress })
 }
 
 /// Whether the game loop should keep reading the stream after handling a state.
@@ -147,7 +268,7 @@ impl<'a, T: Transport, C: MoveChooser> GameContext<'a, T, C> {
 
     /// Handle one game state: stop on a terminal status, otherwise reconstruct
     /// the position and, if it is the bot's turn, compute and submit a move.
-    fn on_state(&self, state: &GameState) -> Result<Flow> {
+    fn on_state(&self, state: &GameState, shutdown: &Shutdown) -> Result<Flow> {
         if !state.is_ongoing() {
             log::info!("game {}: finished ({})", self.game_id, state.status);
             return Ok(Flow::Stop);
@@ -156,6 +277,13 @@ impl<'a, T: Transport, C: MoveChooser> GameContext<'a, T, C> {
         let position = replay(&self.base, &state.moves)?;
         if position.turn() != self.our_side {
             // The opponent is on move; wait for the next state.
+            return Ok(Flow::Continue);
+        }
+
+        if shutdown.is_requested() {
+            // It is our move, but the bot is shutting down: do not start a fresh
+            // search or submit a move. The worker loop observes the shutdown next
+            // and resigns the game cleanly.
             return Ok(Flow::Continue);
         }
 
@@ -245,12 +373,14 @@ fn search_limit(state: &GameState, position: &Position, move_overhead_ms: u32) -
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::collections::VecDeque;
 
     use core::mono_traits::{All, Legal};
     use core::movelist::BasicMoveList;
 
     use super::*;
     use crate::config::Config;
+    use crate::shutdown::Shutdown;
 
     /// A [`MoveChooser`] that returns the first legal move, so the loop can be
     /// exercised deterministically without launching a search.
@@ -263,18 +393,25 @@ mod tests {
         }
     }
 
-    /// A [`Transport`] that replays a recorded game stream and records the move
-    /// submissions the bot makes, touching no network.
+    /// A [`Transport`] that replays one recorded game stream per connection (in
+    /// order, so a reconnect after a drop is fed the next stream) and records the
+    /// POSTs the bot makes, touching no network.
     struct FakeTransport {
-        stream: String,
-        moves: RefCell<Vec<String>>,
+        streams: RefCell<VecDeque<String>>,
+        posts: RefCell<Vec<String>>,
     }
 
     impl FakeTransport {
+        /// A transport that serves a single connection from `stream`.
         fn new(stream: &str) -> FakeTransport {
+            FakeTransport::with_streams([stream])
+        }
+
+        /// A transport that serves one connection per recorded stream, in order.
+        fn with_streams<'a>(streams: impl IntoIterator<Item = &'a str>) -> FakeTransport {
             FakeTransport {
-                stream: stream.to_string(),
-                moves: RefCell::new(Vec::new()),
+                streams: RefCell::new(streams.into_iter().map(str::to_string).collect()),
+                posts: RefCell::new(Vec::new()),
             }
         }
     }
@@ -285,7 +422,7 @@ mod tests {
         }
 
         fn post_empty(&self, path: &str) -> Result<String> {
-            self.moves.borrow_mut().push(path.to_string());
+            self.posts.borrow_mut().push(path.to_string());
             Ok(String::new())
         }
 
@@ -298,8 +435,12 @@ mod tests {
                 path.starts_with("/api/bot/game/stream/"),
                 "unexpected stream path {path}"
             );
-            let lines: Vec<Result<String>> =
-                self.stream.lines().map(|l| Ok(l.to_string())).collect();
+            let stream = self
+                .streams
+                .borrow_mut()
+                .pop_front()
+                .expect("game test opened more connections than it recorded streams");
+            let lines: Vec<Result<String>> = stream.lines().map(|l| Ok(l.to_string())).collect();
             Ok(Box::new(lines.into_iter()))
         }
     }
@@ -308,11 +449,17 @@ mod tests {
     fn submitted_moves(client: &LichessClient<FakeTransport>) -> Vec<String> {
         client
             .transport()
-            .moves
+            .posts
             .borrow()
             .iter()
+            .filter(|path| path.contains("/move/"))
             .map(|path| path.rsplit('/').next().unwrap().to_string())
             .collect()
+    }
+
+    /// Every recorded POST path, in order (moves and resigns).
+    fn post_paths(client: &LichessClient<FakeTransport>) -> Vec<String> {
+        client.transport().posts.borrow().clone()
     }
 
     // A Scholar's-mate game recorded with the bot playing black: white opens,
@@ -340,14 +487,16 @@ mod tests {
     fn plays_a_legal_move_on_each_of_its_turns() {
         let transport = FakeTransport::new(SCHOLARS_MATE_BOT_BLACK);
         let client = LichessClient::new(transport);
-        play_game(
+        let outcome = play_game_once(
             &client,
             &Config::default(),
             "seaborg",
             "sm1",
             &FirstLegalMove,
+            &Shutdown::new(),
         )
         .unwrap();
+        assert!(matches!(outcome, GameOutcome::Finished));
 
         // Black is on move after white's first, third, and fifth plies: three
         // moves, and no move for the terminal `mate` state that follows.
@@ -378,14 +527,16 @@ mod tests {
             "\n",
         );
         let client = LichessClient::new(FakeTransport::new(stream));
-        play_game(
+        let outcome = play_game_once(
             &client,
             &Config::default(),
             "seaborg",
             "w1",
             &FirstLegalMove,
+            &Shutdown::new(),
         )
         .unwrap();
+        assert!(matches!(outcome, GameOutcome::Finished));
 
         // One move for the opening position, then a stop on the resignation.
         let submitted = submitted_moves(&client);
@@ -404,14 +555,23 @@ mod tests {
             "\n",
         );
         let client = LichessClient::new(FakeTransport::new(stream));
-        play_game(
+        // The stream ends without a terminal status, so a single connection ends
+        // in a disconnect; the one move it managed is still recorded.
+        let outcome = play_game_once(
             &client,
             &Config::default(),
             "seaborg",
             "n1",
             &FirstLegalMove,
+            &Shutdown::new(),
         )
         .unwrap();
+        assert!(matches!(
+            outcome,
+            GameOutcome::Disconnected {
+                made_progress: true
+            }
+        ));
         assert_eq!(submitted_moves(&client).len(), 1);
     }
 
@@ -428,12 +588,13 @@ mod tests {
             "\n",
         );
         let client = LichessClient::new(FakeTransport::new(stream));
-        play_game(
+        play_game_once(
             &client,
             &Config::default(),
             "seaborg",
             "c1",
             &FirstLegalMove,
+            &Shutdown::new(),
         )
         .unwrap();
         assert!(submitted_moves(&client).is_empty());
@@ -446,12 +607,13 @@ mod tests {
             "\n",
         );
         let client = LichessClient::new(FakeTransport::new(stream));
-        let err = play_game(
+        let err = play_game_once(
             &client,
             &Config::default(),
             "seaborg",
             "x1",
             &FirstLegalMove,
+            &Shutdown::new(),
         )
         .unwrap_err();
         assert!(matches!(err, Error::Decode(_)));
@@ -464,12 +626,13 @@ mod tests {
             "\n",
         );
         let client = LichessClient::new(FakeTransport::new(stream));
-        let err = play_game(
+        let err = play_game_once(
             &client,
             &Config::default(),
             "seaborg",
             "a1",
             &FirstLegalMove,
+            &Shutdown::new(),
         )
         .unwrap_err();
         assert!(matches!(err, Error::Decode(_)));
@@ -484,15 +647,104 @@ mod tests {
             "\n",
         );
         let client = LichessClient::new(FakeTransport::new(stream));
-        let err = play_game(
+        let err = play_game_once(
             &client,
             &Config::default(),
             "seaborg",
             "i1",
             &FirstLegalMove,
+            &Shutdown::new(),
         )
         .unwrap_err();
         assert!(matches!(err, Error::Decode(_)));
+
+        // The illegal move list is a protocol fault, not a transient drop, so it
+        // must surface rather than being retried by the reconnect loop.
+        assert!(!err.is_recoverable());
+    }
+
+    #[test]
+    fn reconnects_after_a_midgame_drop_and_finishes() {
+        // First connection: the bot (black) replies to 1.e4, then the stream
+        // drops with the game still in progress. Second connection: the stream
+        // reopens and immediately reports a terminal status, ending the game.
+        let first = concat!(
+            r#"{"type":"gameFull","id":"r1","white":{"id":"alice","name":"Alice"},"black":{"id":"seaborg","name":"seaborg"},"state":{"type":"gameState","moves":"","wtime":60000,"btime":60000,"winc":0,"binc":0,"status":"started"}}"#,
+            "\n",
+            r#"{"type":"gameState","moves":"e2e4","wtime":60000,"btime":60000,"winc":0,"binc":0,"status":"started"}"#,
+            "\n",
+        );
+        let second = concat!(
+            r#"{"type":"gameFull","id":"r1","white":{"id":"alice","name":"Alice"},"black":{"id":"seaborg","name":"seaborg"},"state":{"type":"gameState","moves":"e2e4","wtime":60000,"btime":60000,"winc":0,"binc":0,"status":"resign","winner":"black"}}"#,
+            "\n",
+        );
+        let client = LichessClient::new(FakeTransport::with_streams([first, second]));
+        let sleeps = RefCell::new(Vec::new());
+        play_game_reconnecting(
+            &client,
+            &Config::default(),
+            "seaborg",
+            "r1",
+            &FirstLegalMove,
+            &Shutdown::new(),
+            |wait| sleeps.borrow_mut().push(wait),
+        )
+        .unwrap();
+
+        // Exactly one reconnect happened (one backoff wait between the two
+        // connections), and the single move from before the drop was submitted.
+        assert_eq!(sleeps.into_inner().len(), 1, "expected one reconnect wait");
+        assert_eq!(submitted_moves(&client).len(), 1);
+    }
+
+    #[test]
+    fn resigns_the_in_flight_game_on_shutdown() {
+        // Shutdown is already requested, so the worker resigns before opening a
+        // connection rather than playing on.
+        let shutdown = Shutdown::new();
+        shutdown.request();
+        let client = LichessClient::new(FakeTransport::new(""));
+        play_game_reconnecting(
+            &client,
+            &Config::default(),
+            "seaborg",
+            "g",
+            &FirstLegalMove,
+            &shutdown,
+            |_| panic!("must not wait to reconnect during shutdown"),
+        )
+        .unwrap();
+        assert_eq!(
+            post_paths(&client),
+            vec!["/api/bot/game/g/resign".to_string()]
+        );
+    }
+
+    #[test]
+    fn shutdown_midstream_stops_before_moving() {
+        // The bot has white and is on move at the opening, but shutdown is set:
+        // a single connection reports the shutdown and submits no move.
+        let stream = concat!(
+            r#"{"type":"gameFull","id":"s1","white":{"id":"seaborg","name":"seaborg"},"black":{"id":"bob","name":"Bob"},"state":{"type":"gameState","moves":"","wtime":60000,"btime":60000,"winc":0,"binc":0,"status":"started"}}"#,
+            "\n",
+        );
+        let shutdown = Shutdown::new();
+        shutdown.request();
+        let client = LichessClient::new(FakeTransport::new(stream));
+        let outcome = play_game_once(
+            &client,
+            &Config::default(),
+            "seaborg",
+            "s1",
+            &FirstLegalMove,
+            &shutdown,
+        )
+        .unwrap();
+        assert!(matches!(outcome, GameOutcome::ShutdownRequested));
+        assert!(
+            submitted_moves(&client).is_empty(),
+            "no move may be submitted once shutdown is requested"
+        );
     }
 
     #[test]
