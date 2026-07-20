@@ -8,8 +8,8 @@
 //! * The **hash load** group searches trees large enough to fill the table, from an empty table
 //!   each iteration. This is the group that can see a change in probe or store cost.
 
-use chess_core::init::init_globals;
-use chess_core::position::Position;
+use chess::init::init_globals;
+use chess::position::Position;
 use criterion::{criterion_group, criterion_main, Criterion, SamplingMode};
 use engine::eval::Evaluation;
 use engine::search::{Search, Worker};

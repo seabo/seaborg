@@ -12,7 +12,7 @@
 //!   throughput against the single-threaded figure is what would expose false sharing or
 //!   replacement contention between workers.
 
-use chess_core::mov::Move;
+use chess::mov::Move;
 use criterion::{criterion_group, criterion_main, Criterion};
 use engine::score::Score;
 use engine::tt::{Bound, Table};

@@ -8,10 +8,10 @@ use super::score::Score;
 use super::trace::Tracer;
 use super::tt::{Bound, Snapshot, Table};
 
-use core::mono_traits::{All as AllGen, Captures, Legal, QueenPromotions, Quiets};
-use core::mov::Move;
-use core::movelist::{BasicMoveList, MoveList};
-use core::position::{Player, Position};
+use chess::mono_traits::{All as AllGen, Captures, Legal, QueenPromotions, Quiets};
+use chess::mov::Move;
+use chess::movelist::{BasicMoveList, MoveList};
+use chess::position::{Player, Position};
 
 use separator::Separatable;
 
@@ -378,6 +378,23 @@ impl SearchEngine {
         Arc::get_mut(&mut self.table)
             .expect("the hash cannot be cleared while a search still holds the table")
             .clear();
+    }
+
+    /// Reallocate the shared hash to `hash_mb` megabytes at an owner-controlled quiescent boundary.
+    ///
+    /// The replacement table is built before the live one is touched, so a failure to allocate it
+    /// leaves the existing table — and the configuration that describes it — in place rather than
+    /// dropping the engine into a state with no table. The swap is then gated on exclusivity exactly
+    /// as [`clear_hash`](Self::clear_hash) is: `Arc::get_mut` only yields once every worker has
+    /// released its clone, so a caller that has not stopped and joined its search first panics here
+    /// rather than replacing an allocation a running worker is still probing.
+    pub fn set_hash_size(&mut self, hash_mb: usize) {
+        let replacement = Table::new(hash_mb);
+        assert!(
+            Arc::get_mut(&mut self.table).is_some(),
+            "the hash cannot be resized while a search still holds the table"
+        );
+        self.table = Arc::new(replacement);
     }
 
     /// Begin a new game with an empty transposition table.
@@ -2471,8 +2488,8 @@ impl<'a, 'search> Loader for QMoveLoader<'a, 'search> {
 mod tests {
     use super::*;
     use crate::ordering::Phase;
-    use core::mov::MoveType;
-    use core::position::Square;
+    use chess::mov::MoveType;
+    use chess::position::Square;
     use std::time::Duration;
 
     #[rustfmt::skip]
@@ -2586,7 +2603,7 @@ mod tests {
 
     #[test]
     fn trained_quiets_are_ordered_without_narrowing_history_scores() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let position = Position::start_pos();
         let generated = position.generate::<BasicMoveList, Quiets, Legal>();
@@ -2639,7 +2656,7 @@ mod tests {
 
     #[test]
     fn fifty_move_rule_uses_halfmove_boundary() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         for (halfmove_clock, expected) in [(99, false), (100, true), (101, true)] {
             let fen = format!("4k3/8/8/8/8/8/P7/Q3K3 w - - {halfmove_clock} 1");
@@ -2656,7 +2673,7 @@ mod tests {
 
     #[test]
     fn quiescence_searches_quiet_check_evasions() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let position = Position::from_fen("k3r3/8/8/8/8/8/8/4K3 w - - 0 1").unwrap();
         let flag = AtomicBool::new(false);
@@ -2676,7 +2693,7 @@ mod tests {
 
     #[test]
     fn quiescence_detects_checkmate_at_the_horizon() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let position = Position::from_fen("7k/6Q1/6K1/8/8/8/8/8 b - - 0 1").unwrap();
         let flag = AtomicBool::new(false);
@@ -2691,7 +2708,7 @@ mod tests {
 
     #[test]
     fn quiescence_abort_with_legal_evasions_is_not_checkmate() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let position = Position::from_fen("k3r3/8/8/8/8/8/8/4K3 w - - 0 1").unwrap();
         let moves = position.generate::<BasicMoveList, AllGen, Legal>();
@@ -2713,7 +2730,7 @@ mod tests {
 
     #[test]
     fn quiescence_uses_tt_scores_only_with_valid_bound_semantics() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let position = Position::from_fen("7k/8/8/8/8/8/8/K7 w - - 0 1").unwrap();
         let flag = AtomicBool::new(false);
@@ -2745,7 +2762,7 @@ mod tests {
     /// material figure, precisely because the piece-square terms are folded in.
     #[test]
     fn static_evaluation_is_independent_of_the_halfmove_clock() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let eval_at = |halfmove_clock: u32| {
             let fen = format!("4k3/8/8/8/8/8/8/Q3K3 w - - {halfmove_clock} 1");
@@ -2772,7 +2789,7 @@ mod tests {
     /// plausible.
     #[test]
     fn the_evaluation_is_symmetric_under_a_colour_mirror() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         for fen in [
             "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w - - 0 1",
@@ -2823,7 +2840,7 @@ mod tests {
     /// untapered tables could not express both.
     #[test]
     fn piece_square_scores_are_tapered_by_game_phase() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let eval = |fen: &str| Position::from_fen(fen).unwrap().static_eval();
 
@@ -2851,7 +2868,7 @@ mod tests {
     /// position-intrinsic the warm result was computed under the warming clock and silently reused.
     #[test]
     fn warm_table_reuse_agrees_across_materially_different_halfmove_clocks() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let score_at = |halfmove_clock: u32, table: &Table| {
             let fen = format!("4k3/8/8/8/8/5N2/8/Q3K3 w - - {halfmove_clock} 1");
@@ -2888,7 +2905,7 @@ mod tests {
     /// White only a knight up, worth 244. Reusing the 1295 where the 244 applies is the defect.
     #[test]
     fn the_same_key_is_worth_different_scores_at_different_halfmove_clocks() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let score_at = |halfmove_clock: u32| {
             let fen = format!("4k3/8/8/8/8/5N2/8/Q3K3 w - - {halfmove_clock} 1");
@@ -2920,7 +2937,7 @@ mod tests {
     /// only that two searches agreed, which held whether or not the gate was present.
     #[test]
     fn the_main_search_refuses_a_stored_cutoff_near_the_fifty_move_boundary() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         // Bare kings: the true value is 0, so a seeded 300 can only come from the table.
         let seeded_score = Score::cp(300);
@@ -2971,7 +2988,7 @@ mod tests {
     /// Quiescence probes the same table and needs the same gate.
     #[test]
     fn quiescence_refuses_a_stored_cutoff_near_the_fifty_move_boundary() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let score_at = |halfmove_clock: u32| {
             let fen = format!("k7/8/8/8/8/8/8/K7 w - - {halfmove_clock} 1");
@@ -3006,7 +3023,7 @@ mod tests {
     /// available at the clocks a search actually spends most of its time at.
     #[test]
     fn the_clock_gate_only_bites_near_the_fifty_move_boundary() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let permits = |halfmove_clock: u32, entry_depth: u8| {
             let fen = format!("4k3/8/8/8/8/5N2/8/Q3K3 w - - {halfmove_clock} 1");
@@ -3049,7 +3066,7 @@ mod tests {
     /// which the key does not cover, so it must not reach the table at all.
     #[test]
     fn a_repetition_derived_value_is_not_stored_in_the_table() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let position = position_repeated_once();
         let flag = AtomicBool::new(false);
@@ -3078,7 +3095,7 @@ mod tests {
     /// subtree that crosses the boundary produces a value that only applies at this clock.
     #[test]
     fn a_fifty_move_derived_value_is_not_stored_in_the_table() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         // Two plies into the search the clock reaches 100 and the draw is claimed below the root.
         let position = Position::from_fen("4k3/8/8/8/8/8/8/Q3K3 w - - 98 1").unwrap();
@@ -3106,7 +3123,7 @@ mod tests {
     /// blanket suppression of the table.
     #[test]
     fn a_history_independent_value_is_still_stored_in_the_table() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let position = Position::from_fen("4k3/8/8/8/8/5N2/8/Q3K3 w - - 0 1").unwrap();
         let flag = AtomicBool::new(false);
@@ -3136,7 +3153,7 @@ mod tests {
     /// that pins it has to walk the range the constant governs.
     #[test]
     fn both_searches_claim_the_fifty_move_draw_at_the_same_hundred_ply_boundary() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         // No captures and no checks, so quiescence stands pat unless the draw fires. The material
         // value is a queen and a pawn up, nowhere near zero, so a zero score can only be the claim.
@@ -3180,7 +3197,7 @@ mod tests {
 
     #[test]
     fn quiescence_does_not_use_a_search_score_as_static_evaluation() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let position = Position::from_fen("k7/8/8/8/8/8/8/K7 w - - 0 1").unwrap();
         let flag = AtomicBool::new(false);
@@ -3229,7 +3246,7 @@ mod tests {
     /// unusable. Reuse must depend on the entry being verified, not on it carrying a move.
     #[test]
     fn a_verified_entry_without_a_move_still_cuts_off_the_main_search() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let seeded = Score::cp(300);
         let (score, _) = score_from_seeded_entry(seeded, Bound::Exact, &Move::null(), 8);
@@ -3247,7 +3264,7 @@ mod tests {
     /// it must be. Both searches therefore treat the score and the move independently.
     #[test]
     fn an_unplayable_stored_move_costs_ordering_but_not_the_score() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         // No piece stands on e4 in the seeded position, so this move is not playable there.
         let unplayable = Move::build(Square::E4, Square::E5, None, MoveType::QUIET);
@@ -3270,7 +3287,7 @@ mod tests {
     /// quiescence draft.
     #[test]
     fn quiescence_publishes_its_result_at_the_reserved_draft() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let position = Position::from_fen("4k3/8/8/8/8/8/8/Q3K3 w - - 0 1").unwrap();
         let flag = AtomicBool::new(false);
@@ -3294,7 +3311,7 @@ mod tests {
     /// depth-one search: the result must match a search that never saw the entry at all.
     #[test]
     fn a_quiescence_entry_cannot_satisfy_a_main_search_depth_requirement() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let position = Position::from_fen("7k/8/8/8/8/8/8/K7 w - - 0 1").unwrap();
         let flag = AtomicBool::new(false);
@@ -3327,7 +3344,7 @@ mod tests {
     /// main search's aborted subtrees.
     #[test]
     fn an_aborted_quiescence_subtree_publishes_nothing() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         // A capture chain, so quiescence recurses rather than standing pat immediately, and the
         // abort lands part way through the tree.
@@ -3355,7 +3372,7 @@ mod tests {
     /// suppresses its own.
     #[test]
     fn a_history_sensitive_quiescence_value_is_not_stored() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         // White is in check from the rook, so quiescence follows the evasions rather than standing
         // pat. Every evasion is a quiet king move, which advances the clock from 99 to the boundary
@@ -3384,7 +3401,7 @@ mod tests {
     /// move, and must not cost more nodes than the cold search did.
     #[test]
     fn a_warm_table_matches_the_cold_result_and_never_costs_more_nodes() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let positions = [
             // A forced mate: terminal values, stored without a move, and the entries a move-gated
@@ -3447,7 +3464,7 @@ mod tests {
     /// test toggle actually reaches both steps.
     #[test]
     fn forward_pruning_does_not_change_sound_search_results() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         // Forced mates and clean material wins across a range of fixed depths. Each has an
         // unambiguous result that pruning must not disturb.
@@ -3493,7 +3510,7 @@ mod tests {
     /// guards.
     #[test]
     fn forward_pruning_reduces_the_search_tree() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         // A quiet position a few pawns up for White, with pieces on the board so the zugzwang guard
         // is satisfied and null-move pruning can fire.
@@ -3522,7 +3539,7 @@ mod tests {
 
     #[test]
     fn quiescence_ignores_tt_slot_clashes() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let position = Position::from_fen("k7/8/8/8/8/8/8/K7 w - - 0 1").unwrap();
         let clashing_position = Position::from_fen("k7/8/8/8/8/8/8/K7 b - - 0 1").unwrap();
@@ -3557,7 +3574,7 @@ mod tests {
     /// range of positions.
     #[test]
     fn gives_correct_answers() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let suite = suite();
 
@@ -3580,7 +3597,7 @@ mod tests {
 
     #[test]
     fn typed_api_returns_completed_search() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let engine = SearchEngine::new(1);
         let search = engine.start(Position::start_pos(), SearchLimit::Depth(2));
@@ -3593,7 +3610,7 @@ mod tests {
 
     #[test]
     fn searches_reuse_the_shared_table_until_the_owner_clears_it() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let mut engine = SearchEngine::new(1);
         let marker = Position::from_fen("7k/8/8/8/8/8/8/K7 w - - 0 1").unwrap();
@@ -3632,7 +3649,7 @@ mod tests {
     /// clear below would panic whenever it won the race.
     #[test]
     fn dropping_a_search_handle_releases_the_table_for_a_later_clear() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let mut engine = SearchEngine::new(1);
 
@@ -3645,7 +3662,7 @@ mod tests {
 
     #[test]
     fn concurrent_searches_do_not_invalidate_the_shared_generation() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let engine = SearchEngine::new(1);
         let marker = Position::from_fen("7k/8/8/8/8/8/8/K7 w - - 0 1").unwrap();
@@ -3668,7 +3685,7 @@ mod tests {
 
     #[test]
     fn typed_api_delivers_iterative_deepening_events() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let engine = SearchEngine::new(1);
         let search = engine.start(Position::start_pos(), SearchLimit::Depth(2));
@@ -3704,7 +3721,7 @@ mod tests {
     /// correct distance parity.
     #[test]
     fn child_mate_windows_preserve_distance_parity() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let position =
             Position::from_fen("2k5/8/b1p5/Pq2r1p1/8/5PpP/3p2P1/Q2R2K1 b - - 1 61").unwrap();
@@ -3764,7 +3781,7 @@ mod tests {
     /// must be the true mate and must stay inside the band a node can hold.
     #[test]
     fn aspiration_recovers_a_forced_mate_at_the_root() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         // Mate in five (`Score::mate(5)`, rendered as `mate 3`); the mating side is to move.
         let position = Position::from_fen("8/2R2pp1/k3p3/8/5Bn1/6P1/5r1r/1R4K1 w - - 4 3").unwrap();
@@ -3786,7 +3803,7 @@ mod tests {
     /// rather than build a degenerate one; the deeper iteration must still report the mate.
     #[test]
     fn aspiration_from_a_mate_previous_score_uses_the_full_window() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let position = Position::from_fen("8/2R2pp1/k3p3/8/5Bn1/6P1/5r1r/1R4K1 w - - 4 3").unwrap();
         let flag = AtomicBool::new(false);
@@ -3813,7 +3830,7 @@ mod tests {
     #[test]
     #[ignore = "sweeps 900 searches; run explicitly when changing Score or the search window"]
     fn wac_root_scores_format_without_panicking() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let raw =
             std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../suites/wac.epd"))
@@ -3885,7 +3902,7 @@ mod tests {
     /// bound sanitation rather than mate-distance pruning.
     #[test]
     fn out_of_band_windows_do_not_leak_into_returned_scores() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let out_of_band_alpha = Score::from_i16(20_100);
         let out_of_band_beta = Score::from_i16(20_101);
@@ -3924,7 +3941,7 @@ mod tests {
     /// returns `alpha` and `beta` themselves as fail-soft scores.
     #[test]
     fn quiescence_clamps_out_of_band_windows_into_the_node_score_band() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let flag = AtomicBool::new(false);
         let table = Table::new(1);
@@ -3948,7 +3965,7 @@ mod tests {
 
     #[test]
     fn search_emits_typed_current_move_events() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let mut position = Position::start_pos();
         let current_move = position.make_uci_move("e2e4").unwrap();
@@ -3971,7 +3988,7 @@ mod tests {
 
     #[test]
     fn typed_api_cancels_running_search() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let engine = SearchEngine::new(1);
         let search = engine.start(Position::start_pos(), SearchLimit::Infinite);
@@ -3996,7 +4013,7 @@ mod tests {
 
     #[test]
     fn mid_subtree_abort_keeps_the_last_completed_iteration() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let position = Position::start_pos();
         let flag = AtomicBool::new(false);
@@ -4036,7 +4053,7 @@ mod tests {
 
     #[test]
     fn aborted_child_cannot_score_or_write_its_parent() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let position = Position::start_pos();
         let start_zob = position.zobrist();
@@ -4067,7 +4084,7 @@ mod tests {
 
     #[test]
     fn zero_time_limit_still_returns_a_legal_move() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let position = Position::start_pos();
         let engine = SearchEngine::new(1);
@@ -4090,7 +4107,7 @@ mod tests {
 
     #[test]
     fn near_zero_time_budget_completes_the_guaranteed_ply() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let position = Position::start_pos();
         let engine = SearchEngine::new(1);
@@ -4104,7 +4121,7 @@ mod tests {
 
     #[test]
     fn the_time_deadline_is_suppressed_until_the_first_ply_completes() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let position = Position::start_pos();
         let flag = AtomicBool::new(false);
@@ -4122,7 +4139,7 @@ mod tests {
 
     #[test]
     fn cancellation_is_suppressed_only_until_the_root_fallback_exists() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let position = Position::start_pos();
         let flag = AtomicBool::new(true);
@@ -4143,7 +4160,7 @@ mod tests {
 
     #[test]
     fn cancellation_is_not_throttled_with_the_deadline_clock() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let flag = AtomicBool::new(false);
         let table = Table::new(1);
@@ -4168,7 +4185,7 @@ mod tests {
 
     #[test]
     fn expired_deadline_stays_latched_at_the_same_node() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let flag = AtomicBool::new(false);
         let table = Table::new(1);
@@ -4184,7 +4201,7 @@ mod tests {
 
     #[test]
     fn time_limited_search_honors_the_budget_after_the_guaranteed_ply() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let budget = Duration::from_millis(20);
         let started = Instant::now();
@@ -4209,7 +4226,7 @@ mod tests {
 
     #[test]
     fn the_node_limit_is_suppressed_until_the_first_ply_completes() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let position = Position::start_pos();
         let flag = AtomicBool::new(false);
@@ -4229,7 +4246,7 @@ mod tests {
 
     #[test]
     fn cancellation_under_a_node_limit_is_not_gated_on_the_budget() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let position = Position::start_pos();
         let flag = AtomicBool::new(true);
@@ -4250,7 +4267,7 @@ mod tests {
 
     #[test]
     fn a_node_budget_below_one_ply_still_returns_a_legal_move() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let position = Position::start_pos();
         let engine = SearchEngine::new(1);
@@ -4273,7 +4290,7 @@ mod tests {
 
     #[test]
     fn a_node_budget_exhausted_mid_iteration_keeps_the_last_completed_iteration() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let position = Position::start_pos();
         let flag = AtomicBool::new(false);
@@ -4299,7 +4316,7 @@ mod tests {
 
     #[test]
     fn a_node_limited_search_is_reproducible_across_runs() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         // A position with a large quiescence tree, so a mid-search abort lands deep in the
         // recursion where any nondeterminism would surface.
@@ -4339,7 +4356,7 @@ mod tests {
 
     #[test]
     fn immediate_cancellation_returns_a_legal_move() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let position = Position::start_pos();
         let engine = SearchEngine::new(1);
@@ -4365,7 +4382,7 @@ mod tests {
 
     #[test]
     fn cancellation_stops_the_first_iteration_without_searching_it() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let position = Position::from_fen(QUIESCENCE_HEAVY_FEN).unwrap();
         let table = Table::new(1);
@@ -4398,7 +4415,7 @@ mod tests {
 
     #[test]
     fn the_root_fallback_tracks_the_best_searched_root_move() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let position = Position::from_fen(QUIESCENCE_HEAVY_FEN).unwrap();
         let flag = AtomicBool::new(false);
@@ -4414,7 +4431,7 @@ mod tests {
 
     #[test]
     fn cancelled_terminal_root_reports_no_move() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         // Checkmate: there is no legal move to fall back to, so cancellation must not invent one.
         let position = Position::from_fen("7k/6Q1/6K1/8/8/8/8/8 b - - 0 1").unwrap();
@@ -4434,7 +4451,7 @@ mod tests {
 
     #[test]
     fn terminal_position_returns_score_without_a_best_move() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let position = Position::from_fen("7k/6Q1/6K1/8/8/8/8/8 b - - 0 1").unwrap();
         let engine = SearchEngine::new(1);
@@ -4448,7 +4465,7 @@ mod tests {
 
     #[test]
     fn typed_api_supports_time_limits() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let engine = SearchEngine::new(1);
         let search = engine.start(
@@ -4546,7 +4563,7 @@ mod tests {
     /// node, which produced `pv d7f8 g6a6 f8g6 c5f8` scored `mate -2` in self-play.
     #[test]
     fn reported_principal_variations_are_legal() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         for (label, root) in pv_legality_positions() {
             // A fresh engine per position keeps the transposition table cold; the second pass
@@ -4573,7 +4590,7 @@ mod tests {
     /// does cover — every move of which must still be legal.
     #[test]
     fn a_node_searched_past_the_nominal_horizon_still_reports_a_legal_pv() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         // The horizon the PV table is sized for, and the greater depth the node is actually
         // searched to, standing in for what an extension would produce.
@@ -4606,7 +4623,7 @@ mod tests {
     /// unsigned depth would have wrapped to a near-infinite one instead.
     #[test]
     fn a_depth_reduced_below_zero_hands_over_to_quiescence() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let position = Position::from_fen(
             "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5Q2/PPPP1PPP/RNB1K1NR w KQkq - 4 4",
@@ -4641,7 +4658,7 @@ mod tests {
     /// that search, proving the deepening loop preserves it rather than rebuilding from empty.
     #[test]
     fn killers_persist_across_iterative_deepening_iterations() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let position = Position::start_pos();
         let flag = AtomicBool::new(false);
@@ -4666,7 +4683,7 @@ mod tests {
     /// finishes and the next search starts from empty.
     #[test]
     fn a_new_search_run_starts_from_an_empty_killer_table() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let position = Position::start_pos();
         let flag = AtomicBool::new(false);
@@ -4687,7 +4704,7 @@ mod tests {
     /// the same ply keep their tables separate.
     #[test]
     fn separate_searches_own_independent_killer_tables() {
-        core::init::init_globals();
+        chess::init::init_globals();
 
         let position = Position::start_pos();
         let flag = AtomicBool::new(false);

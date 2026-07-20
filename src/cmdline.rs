@@ -4,9 +4,7 @@ use std::path::PathBuf;
 use crate::dev::dev;
 use crate::perft::{perft, PerftArgs};
 use clap::{Parser, Subcommand};
-// Leading `::` names the crate: importing `engine::engine` otherwise shadows the crate name for
-// the remaining imports.
-use ::engine::{engine, ui};
+use engine::ui;
 
 // This is a plain comment because a doc comment here would replace the crate description in
 // `--help`.

@@ -9,7 +9,7 @@
 use super::wire::snapshot_to_json;
 use crate::game::{CommandError, GameController};
 use crate::search::SearchLimit;
-use core::position::Player;
+use chess::position::Player;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -235,7 +235,7 @@ fn generate_token() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::init::init_globals;
+    use chess::init::init_globals;
     use serde_json::Value;
 
     /// Parse a published snapshot for inspection. Kept fallible so call sites can assert on the

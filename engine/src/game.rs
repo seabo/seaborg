@@ -1,10 +1,10 @@
 //! Transport-independent ownership of a human-versus-engine game.
 
 use crate::search::{SearchEngine, SearchHandle, SearchLimit, SearchOutcome, SearchProgress};
-use core::mono_traits::{All, Legal};
-use core::mov::Move;
-use core::movelist::BasicMoveList;
-use core::position::{PieceType, Player, Position};
+use chess::mono_traits::{All, Legal};
+use chess::mov::Move;
+use chess::movelist::BasicMoveList;
+use chess::position::{PieceType, Player, Position};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DrawReason {
@@ -225,10 +225,6 @@ impl GameController {
         self.replace_position(Position::start_pos(), human_side);
     }
 
-    pub fn reset_to(&mut self, position: Position, human_side: Player) {
-        self.replace_position(position, human_side);
-    }
-
     /// Undo the last full turn, stopping once it is the human's turn again.
     pub fn undo(&mut self, revision: u64) -> Result<(), CommandError> {
         if revision != self.revision {
@@ -439,7 +435,7 @@ pub fn move_to_san(position: &Position, mov: Move) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::init::init_globals;
+    use chess::init::init_globals;
     use std::time::{Duration, Instant};
 
     fn controller(fen: &str, human: Player) -> GameController {
@@ -463,7 +459,7 @@ mod tests {
 
     #[test]
     fn snapshots_and_normal_play_are_authoritative() {
-        let mut game = controller(core::position::START_POSITION, Player::WHITE);
+        let mut game = controller(chess::position::START_POSITION, Player::WHITE);
         let initial = game.snapshot();
         assert_eq!(initial.revision, 0);
         assert!(!initial.in_check);
@@ -477,7 +473,7 @@ mod tests {
 
     #[test]
     fn rejects_illegal_stale_and_wrong_side_commands() {
-        let mut game = controller(core::position::START_POSITION, Player::WHITE);
+        let mut game = controller(chess::position::START_POSITION, Player::WHITE);
         assert_eq!(
             game.play_human_move("e2e5", 0),
             Err(CommandError::IllegalMove)
@@ -492,7 +488,7 @@ mod tests {
             Err(CommandError::NotHumanTurn)
         );
 
-        let black = controller(core::position::START_POSITION, Player::BLACK);
+        let black = controller(chess::position::START_POSITION, Player::BLACK);
         assert!(matches!(
             black.snapshot().engine_status,
             EngineStatus::Thinking { .. }
@@ -501,7 +497,7 @@ mod tests {
 
     #[test]
     fn reset_and_undo_cancel_search_and_advance_revision() {
-        let mut game = controller(core::position::START_POSITION, Player::WHITE);
+        let mut game = controller(chess::position::START_POSITION, Player::WHITE);
         game.play_human_move("e2e4", 0).unwrap();
         let old_id = match game.snapshot().engine_status {
             EngineStatus::Thinking { search_id, .. } => search_id,
@@ -509,7 +505,7 @@ mod tests {
         };
         game.undo(1).unwrap();
         assert_eq!(game.snapshot().revision, 2);
-        assert_eq!(game.snapshot().fen, core::position::START_POSITION);
+        assert_eq!(game.snapshot().fen, chess::position::START_POSITION);
         assert_eq!(game.snapshot().engine_status, EngineStatus::Idle);
 
         game.reset(Player::BLACK);
@@ -521,7 +517,7 @@ mod tests {
 
     #[test]
     fn empty_undo_preserves_the_opening_engine_turn() {
-        let mut game = controller(core::position::START_POSITION, Player::BLACK);
+        let mut game = controller(chess::position::START_POSITION, Player::BLACK);
         let initial = game.snapshot();
         let initial_search_id = match initial.engine_status {
             EngineStatus::Thinking { search_id, .. } => search_id,
@@ -546,7 +542,7 @@ mod tests {
 
     #[test]
     fn stale_or_cancelled_search_outcomes_are_never_applied() {
-        let mut game = controller(core::position::START_POSITION, Player::BLACK);
+        let mut game = controller(chess::position::START_POSITION, Player::BLACK);
         let original = game.snapshot().fen;
         game.revision += 1;
         wait_for_engine(&mut game);
@@ -554,7 +550,7 @@ mod tests {
 
         game.reset(Player::BLACK);
         game.cancel_search();
-        assert_eq!(game.snapshot().fen, core::position::START_POSITION);
+        assert_eq!(game.snapshot().fen, chess::position::START_POSITION);
     }
 
     #[test]
@@ -642,7 +638,7 @@ mod tests {
 
     #[test]
     fn a_new_engine_limit_applies_from_the_next_search() {
-        let mut game = controller(core::position::START_POSITION, Player::WHITE);
+        let mut game = controller(chess::position::START_POSITION, Player::WHITE);
         assert_eq!(game.snapshot().engine_limit, SearchLimit::Depth(1));
 
         game.set_search_limit(SearchLimit::Depth(2));
@@ -655,7 +651,7 @@ mod tests {
 
     #[test]
     fn a_running_search_keeps_the_limit_it_started_with() {
-        let mut game = controller(core::position::START_POSITION, Player::BLACK);
+        let mut game = controller(chess::position::START_POSITION, Player::BLACK);
         assert!(matches!(
             game.snapshot().engine_status,
             EngineStatus::Thinking { .. }
@@ -710,7 +706,7 @@ mod tests {
 
     #[test]
     fn a_thinking_snapshot_carries_the_san_variation() {
-        let mut game = controller(core::position::START_POSITION, Player::BLACK);
+        let mut game = controller(chess::position::START_POSITION, Player::BLACK);
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             game.poll();
@@ -739,7 +735,7 @@ mod tests {
 
     #[test]
     fn detects_threefold_repetition() {
-        let mut game = controller(core::position::START_POSITION, Player::WHITE);
+        let mut game = controller(chess::position::START_POSITION, Player::WHITE);
         for uci in [
             "g1f3", "g8f6", "f3g1", "f6g8", "g1f3", "g8f6", "f3g1", "f6g8",
         ] {

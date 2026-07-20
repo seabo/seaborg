@@ -9,8 +9,8 @@
 
 use std::time::Duration;
 
-use core::mov::Move;
-use core::position::{Player, Position};
+use chess::mov::Move;
+use chess::position::{Player, Position};
 use engine::search::{SearchEngine, SearchLimit};
 use engine::time::TimeControl;
 
@@ -375,8 +375,8 @@ mod tests {
     use std::cell::RefCell;
     use std::collections::VecDeque;
 
-    use core::mono_traits::{All, Legal};
-    use core::movelist::BasicMoveList;
+    use chess::mono_traits::{All, Legal};
+    use chess::movelist::BasicMoveList;
 
     use super::*;
     use crate::config::Config;

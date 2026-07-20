@@ -19,8 +19,8 @@
 //! # repeat with KILLER_SLOTS = 1 and = 2
 //! ```
 
-use core::init::init_globals;
-use core::position::Position;
+use chess::init::init_globals;
+use chess::position::Position;
 
 use engine::search::{Search, KILLER_SLOTS};
 use engine::tt::Table;

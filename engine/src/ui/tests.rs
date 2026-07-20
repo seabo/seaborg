@@ -6,8 +6,8 @@
 
 use super::server::{bind, UiConfig, UiError, UiHandle, MAX_CONNECTIONS, MAX_REQUEST_BODY};
 use crate::search::SearchLimit;
-use core::init::init_globals;
-use core::position::Player;
+use chess::init::init_globals;
+use chess::position::Player;
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};

@@ -11,8 +11,8 @@
 //! search. Killers only supply "this exact quiet just refuted a sibling at this ply", which recency
 //! captures directly and cheaply.
 
-use core::mov::Move;
-use core::position::Position;
+use chess::mov::Move;
+use chess::position::Position;
 
 /// The greatest number of recency slots a ply can hold.
 ///
@@ -57,11 +57,6 @@ impl KillerTable {
             slots,
             rows: vec![[Move::null(); MAX_KILLER_SLOTS]; plies],
         }
-    }
-
-    /// The number of active recency slots per ply.
-    pub fn slots(&self) -> usize {
-        self.slots
     }
 
     /// Probe the killer table for moves stored at `ply` from the root, returning them in slot order:
@@ -162,8 +157,8 @@ impl std::fmt::Display for KillerTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::mov::MoveType;
-    use core::position::Square;
+    use chess::mov::MoveType;
+    use chess::position::Square;
 
     fn quiet(orig: Square, dest: Square) -> Move {
         Move::build(orig, dest, None, MoveType::QUIET)
@@ -180,7 +175,7 @@ mod tests {
     /// two subtrees apart so that neither ever saw the other's refutation.
     #[test]
     fn a_killer_is_visible_to_every_node_at_the_same_ply() {
-        core::init::init_globals();
+        chess::init::init_globals();
         let pos = Position::start_pos();
         let first = quiet(Square::E2, Square::E4);
         let second = quiet(Square::D2, Square::D4);
@@ -200,7 +195,7 @@ mod tests {
     /// shallower node, whose position it has no relationship to.
     #[test]
     fn a_killer_does_not_leak_to_a_neighbouring_ply() {
-        core::init::init_globals();
+        chess::init::init_globals();
         let pos = Position::start_pos();
         let killer = quiet(Square::E2, Square::E4);
 
@@ -215,7 +210,7 @@ mod tests {
     /// onto some other ply's entry.
     #[test]
     fn the_root_and_plies_beyond_the_table_hold_nothing() {
-        core::init::init_globals();
+        chess::init::init_globals();
         let pos = Position::start_pos();
 
         let mut kt = KillerTable::new(4, MAX_KILLER_SLOTS);
@@ -233,7 +228,7 @@ mod tests {
     /// supported ply is actually retrievable there.
     #[test]
     fn the_last_supported_ply_stores_and_the_next_is_dropped() {
-        core::init::init_globals();
+        chess::init::init_globals();
         let pos = Position::start_pos();
         let killer = quiet(Square::E2, Square::E4);
 
@@ -251,7 +246,7 @@ mod tests {
     /// position they are read in.
     #[test]
     fn returned_order_is_newest_first() {
-        core::init::init_globals();
+        chess::init::init_globals();
         let pos = Position::start_pos();
         let older = quiet(Square::E2, Square::E4);
         let newer = quiet(Square::D2, Square::D4);
@@ -267,7 +262,7 @@ mod tests {
     /// disturb the ordering.
     #[test]
     fn restoring_the_first_slot_changes_nothing() {
-        core::init::init_globals();
+        chess::init::init_globals();
         let pos = Position::start_pos();
         let first = quiet(Square::E2, Square::E4);
         let second = quiet(Square::D2, Square::D4);
@@ -285,7 +280,7 @@ mod tests {
     /// across both slots.
     #[test]
     fn promoting_the_second_slot_does_not_duplicate_it() {
-        core::init::init_globals();
+        chess::init::init_globals();
         let pos = Position::start_pos();
         let a = quiet(Square::E2, Square::E4);
         let b = quiet(Square::D2, Square::D4);
@@ -301,7 +296,7 @@ mod tests {
     /// fallen off the end.
     #[test]
     fn a_third_distinct_cutoff_evicts_the_oldest() {
-        core::init::init_globals();
+        chess::init::init_globals();
         let pos = Position::start_pos();
         let first = quiet(Square::E2, Square::E4);
         let second = quiet(Square::D2, Square::D4);
@@ -319,7 +314,7 @@ mod tests {
     /// that is not a killer at that ply.
     #[test]
     fn slot_of_reports_the_recency_slot() {
-        core::init::init_globals();
+        chess::init::init_globals();
         let first = quiet(Square::E2, Square::E4);
         let second = quiet(Square::D2, Square::D4);
         let absent = quiet(Square::G1, Square::F3);
@@ -337,7 +332,7 @@ mod tests {
     /// A single-slot table keeps only the most recent killer, and probe never returns a second.
     #[test]
     fn one_slot_keeps_only_the_newest() {
-        core::init::init_globals();
+        chess::init::init_globals();
         let pos = Position::start_pos();
         let older = quiet(Square::E2, Square::E4);
         let newer = quiet(Square::D2, Square::D4);
@@ -354,7 +349,7 @@ mod tests {
     /// ablation runs the search with killers off through the same code path.
     #[test]
     fn zero_slots_disables_killers() {
-        core::init::init_globals();
+        chess::init::init_globals();
         let pos = Position::start_pos();
 
         let mut kt = KillerTable::new(8, 0);
@@ -368,7 +363,7 @@ mod tests {
     /// earlier search's refutations.
     #[test]
     fn reset_clears_every_ply() {
-        core::init::init_globals();
+        chess::init::init_globals();
         let pos = Position::start_pos();
         let killer = quiet(Square::E2, Square::E4);
 

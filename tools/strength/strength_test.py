@@ -115,7 +115,12 @@ def parser() -> argparse.ArgumentParser:
                         "engines, e.g. tc=10+0.1, st=0.5, depth=8, nodes=200000; "
                         "authoritative mode requires a time-based limit")
     p.add_argument("--concurrency", type=positive, default=1)
-    p.add_argument("--threads", type=positive, default=1)
+    p.add_argument("--threads", type=positive, default=1,
+                   help="worker threads per engine, sent as the UCI Threads "
+                        "option. seaborg currently runs a single worker and does "
+                        "not advertise Threads, so it tolerates the option for "
+                        "forward compatibility but does not parallelise its search "
+                        "until Lazy SMP lands; keep this at 1 for seaborg")
     p.add_argument("--hash-mb", type=positive, default=64)
     p.add_argument("--engine-arg", action="append", default=[],
                    metavar="ARG",

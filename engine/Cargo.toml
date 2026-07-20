@@ -6,7 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-core = { path = "../core" }
+chess = { path = "../chess" }
 crossbeam-channel = "0.5.16"
 separator.workspace = true
 open = "5.4.0"

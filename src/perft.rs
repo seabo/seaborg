@@ -1,5 +1,5 @@
-use chess_core::init::init_globals;
-use chess_core::position::Position;
+use chess::init::init_globals;
+use chess::position::Position;
 use engine::perft::Perft;
 
 use separator::Separatable;
@@ -20,7 +20,7 @@ pub struct PerftArgs {
     #[clap(short = 'n', long, action, default_value_t = 1)]
     depth: u8,
     /// FEN string to run perft on; default to start position
-    #[clap(default_value_t = String::from(chess_core::position::START_POSITION))]
+    #[clap(default_value_t = String::from(chess::position::START_POSITION))]
     fen: String,
 }
 

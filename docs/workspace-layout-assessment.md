@@ -13,29 +13,31 @@ package. Its workspace has three members:
 
 | Package | Location and targets | Responsibility | Workspace dependencies |
 | --- | --- | --- | --- |
-| `seaborg` | Repository root; one binary, integration tests, and six Criterion benchmarks | Process entry point, command-line selection, logging, developer utilities, and build revision metadata | `core`, `engine` |
-| `core` | `core/`; one library | Chess-domain representation and rules: bitboards, pieces and squares, positions and FEN, move representation and generation, precomputed tables, and global initialization | None |
-| `engine` | `engine/`; one library and one analysis example | Game/search behavior layered on the chess domain: evaluation, move ordering, search, transposition tables, time control, UCI, and the loopback browser UI | `core` |
+| `seaborg` | Repository root; one binary, integration tests, and six Criterion benchmarks | Process entry point, command-line selection, logging, developer utilities, and build revision metadata | `chess`, `engine` |
+| `chess` | `chess/`; one library | Chess-domain representation and rules: bitboards, pieces and squares, positions and FEN, move representation and generation, precomputed tables, and global initialization | None |
+| `engine` | `engine/`; one library and one analysis example | Game/search behavior layered on the chess domain: evaluation, move ordering, search, transposition tables, time control, UCI, and the loopback browser UI | `chess` |
 
 The internal dependency graph is acyclic:
 
 ```text
-seaborg binary ───────> engine library ───────> core library
-       └──────────────────────────────────────> core library
+seaborg binary ───────> engine library ───────> chess library
+       └──────────────────────────────────────> chess library
 ```
 
-The direct `seaborg` to `core` edge supports its development and perft command
+The direct `seaborg` to `chess` edge supports its development and perft command
 modules and root benchmarks. The `engine` crate never depends back on the
 binary package. Tests generally live beside their modules; process-level build
 metadata tests live in root `tests/`, performance targets in root `benches/`,
 and the engine-specific analysis program in `engine/examples/`.
 
-Within `core`, low-level implementation helpers such as bit-twiddling, masks,
+Within `chess`, low-level implementation helpers such as bit-twiddling, masks,
 macros, and precalculation internals are private. The `position` module also
 uses a conventional facade: its implementation submodules are private and it
-re-exports the domain types callers need. By contrast, most top-level modules
-in both libraries are public, and `engine` exposes every implementation module
-from its crate root.
+re-exports the domain types callers need. The `engine` crate exposes only its
+supported modules (`eval`, `options`, `perft`, `score`, `search`, `time`,
+`tt`, `ui`) plus the crate-root `launch`/`EngineInfo` entry point; its game
+tree, heuristics, ordering, PV table, static exchange evaluation, tracing, and
+UCI parser are private implementation detail.
 
 ## Convention assessment
 
@@ -83,20 +85,22 @@ responsibility boundaries are wrong.
 
 ## Recommendations and follow-up work
 
-### Rename crates and define deliberate facades
+### Rename crates and define deliberate facades — done (TASK-20)
 
-Rename the domain library to a project-specific name (for example
-`seaborg-chess`) and choose equally unambiguous names for public engine APIs.
-Make implementation modules private where possible, re-export stable domain
-types and engine entry points from deliberate crate-root or feature facades,
-and migrate the binary, tests, examples, and benchmarks to those facades.
+Deviations 1 and 2 above have been addressed. The domain library was renamed
+from `core` to `chess`, so imports read `use chess::position::Position` and no
+longer masquerade as standard-library paths. The `engine` package name was kept
+deliberately — its ambiguity was the milder one — and the awkward `engine::engine`
+double-name was removed instead by re-exporting the `launch` entry point and
+`EngineInfo` from the engine crate root. The `engine` crate now declares only
+its supported modules `pub`; its implementation modules (game tree, history and
+killer heuristics, move ordering, PV table, static exchange evaluation, search
+tracing, and the UCI parser) are private. The binary, Lichess client, tests, and
+benchmarks build against those facades. Each crate root carries a `//!` comment
+describing its supported surface for contributors.
 
-Rationale: this removes the standard-library name ambiguity and lets modules
-evolve without every internal path becoming an accidental contract. The work
-is **medium effort** because imports across all packages and benchmark targets
-must be migrated together and visibility changes will reveal implicit API
-coupling. This recommendation is tracked by **TASK-20, “Clarify crate names and
-public API boundaries.”**
+Deviation 3 (workspace manifest policy) remains open under **TASK-67,
+“Centralize Cargo workspace manifest policy.”**
 
 ### Centralize workspace manifest policy and modernize dependencies
 
@@ -134,6 +138,6 @@ right boundary rather than directory aesthetics.
 
 The workspace is structurally idiomatic: it uses standard Cargo target
 locations, has understandable package responsibilities, and maintains an
-acyclic layering. Complete TASK-20, TASK-21, and TASK-67 to address the
-substantive deviations. No broader workspace reorganisation is justified by
-the current repository.
+acyclic layering. TASK-20 has clarified the crate names and API boundaries;
+complete TASK-21 and TASK-67 to address the remaining substantive deviations.
+No broader workspace reorganisation is justified by the current repository.

@@ -43,10 +43,10 @@
 //! and size of its reachable ply-1 q-tree and by `max_quiet_check_chain`, the run of consecutive
 //! quiet check evasions that drives quiescence deepest.
 
-use core::mono_traits::{All, Captures, Legal, QueenPromotions};
-use core::mov::Move;
-use core::movelist::BasicMoveList;
-use core::position::Position;
+use chess::mono_traits::{All, Captures, Legal, QueenPromotions};
+use chess::mov::Move;
+use chess::movelist::BasicMoveList;
+use chess::position::Position;
 
 /// Ply cap applied to the modelled q-tree, counted from the depth-1 child.
 const MAX_Q_PLY: u32 = 64;

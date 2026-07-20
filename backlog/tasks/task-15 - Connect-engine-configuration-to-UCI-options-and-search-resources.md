@@ -1,10 +1,11 @@
 ---
 id: TASK-15
 title: Connect engine configuration to UCI options and search resources
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-19 23:22'
+updated_date: '2026-07-20 19:24'
 labels:
   - engine
   - uci
@@ -37,12 +38,81 @@ Truthfulness boundary. The UCI handshake must advertise exactly what the running
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 One authoritative runtime configuration owns all advertised engine resource settings; obsolete or disconnected configuration types are removed or integrated
-- [ ] #2 The UCI handshake advertises exactly the configurable options implemented by that build, with documented defaults and bounds
-- [ ] #3 setoption validates values and applies resource changes only after any active search or search team has been cancelled and fully joined
-- [ ] #4 Hash controls the actual transposition-table allocation, and allocation failure or an unsupported size is handled without leaving configuration and resources inconsistent
-- [ ] #5 The configuration model supports a worker count, but Threads is not advertised until a real multi-worker search consumes it
-- [ ] #6 Hash replacement, clearing, and worker-resource rebuilds occur only at an owner-controlled quiescent boundary where no worker holds the old table allocation
-- [ ] #7 Tests cover defaults, handshake truthfulness, valid and invalid values, repeated changes, and changes while a search is active
-- [ ] #8 Strength tooling and documentation accurately describe which options are required and do not claim unsupported Lazy SMP behavior
+- [x] #1 One authoritative runtime configuration owns all advertised engine resource settings; obsolete or disconnected configuration types are removed or integrated
+- [x] #2 The UCI handshake advertises exactly the configurable options implemented by that build, with documented defaults and bounds
+- [x] #3 setoption validates values and applies resource changes only after any active search or search team has been cancelled and fully joined
+- [x] #4 Hash controls the actual transposition-table allocation, and allocation failure or an unsupported size is handled without leaving configuration and resources inconsistent
+- [x] #5 The configuration model supports a worker count, but Threads is not advertised until a real multi-worker search consumes it
+- [x] #6 Hash replacement, clearing, and worker-resource rebuilds occur only at an owner-controlled quiescent boundary where no worker holds the old table allocation
+- [x] #7 Tests cover defaults, handshake truthfulness, valid and invalid values, repeated changes, and changes while a search is active
+- [x] #8 Strength tooling and documentation accurately describe which options are required and do not claim unsupported Lazy SMP behavior
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Replace the dead Config/HashConfig/MoveOrderingConfig/HaltingConfig types in engine/src/options.rs with one authoritative EngineConfig owning hash_mb, threads (worker count), and debug. Centralise Hash default/min/max and Threads default/min/max as associated constants (single source of truth); keep the live EngineOpt enum.
+2. Make the constants the sole source of the advertised handshake, parser validation, and config validation: add EngineConfig::validate_hash_mb + set_hash_mb (Result), an advertised_uci_options() renderer, and a Display for the 'config' command. Threads stays unadvertised (max 1) with a comment explaining it awaits real multi-worker search.
+3. uci.rs parse_hash validates via the shared constant range (preserving the existing reject-0/1025 behaviour). Threads remains an unadvertised, tolerated InvalidOption.
+4. engine.rs drive(): own one EngineConfig; on setoption Hash, stop+join the active search then apply at the quiescent boundary via a new SearchEngine::set_hash_size that builds the new Table first and asserts the old allocation is unshared (Arc::get_mut) before swapping (construct-then-commit, no inconsistency); DebugMode no longer needlessly stops the search; wire the 'config' command to display EngineConfig; derive the uci handshake option line from advertised_uci_options().
+5. search.rs: add SearchEngine::set_hash_size enforcing the owner-controlled quiescent rebuild alongside clear_hash.
+6. Docs/tooling (AC#8): move README 'LazySMP multithreading' from Features to Future features (single worker today); add a UCI options note documenting Hash bounds and that Threads is not yet advertised; clarify strength_test.py --threads help that seaborg is single-worker and tolerates Threads for forward-compat.
+7. Tests (AC#7): EngineConfig unit tests (defaults, valid/invalid/repeated hash, bounds, threads); driver tests for handshake truthfulness (already present, keep exact), setoption while a search is active, repeated hash changes, and that resize happens at a quiescent boundary. Run fmt/clippy/test.
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Established EngineConfig (engine/src/options.rs) as the single authoritative owner of hash size, worker count, and debug mode, replacing the dead Config/HashConfig/MoveOrderingConfig/HaltingConfig types. Bounds live as associated constants read by three call sites — advertised_uci_options(), the uci.rs parser, and the config's own validate/set methods — so the advertised range is by construction the accepted range.
+
+Hash application (engine.rs drive): on setoption Hash the driver stops+joins the active search, updates the config, then reallocates via the new SearchEngine::set_hash_size (search.rs). That method builds the replacement Table before touching the live one and asserts exclusivity through Arc::get_mut, the same quiescent-boundary guard as clear_hash, so a resize can never replace an allocation a worker still holds and a rejected value leaves config and table untouched. DebugMode no longer stops a running search. The custom 'config' command now displays the config.
+
+Threads: modelled as a validated worker count (default 1, THREADS_MAX 1) but intentionally not advertised while the search is single-worker; the parser still tolerates an unknown option on the diagnostic channel, so the strength harness that always sends Threads keeps working.
+
+AC#8 docs/tooling: README moved 'LazySMP multithreading' from Features to Future features and added a UCI options section; tools/strength/strength_test.py --threads help now explains the single-worker tolerance.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @codex
+created: 2026-07-20 18:04
+---
+Implementation handoff
+Branch: task-15-engine-config-uci-options
+Worktree: /Users/seabo/seaborg-worktrees/task-15-engine-config-uci-options
+Base: ba6aec1d2d2633c672e9945d52864fb09c011140
+Implementation target: a4a2e60b76bbed4d41abd586c77a46672d575b5e
+Resolved findings: none (initial implementation)
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean)
+- cargo test --workspace: pass (engine 300 passed / 45 passed integration incl. 8 new; workspace 0 failed)
+Known failures: none
+---
+
+author: @codex
+created: 2026-07-20 18:19
+---
+Approval — implementation SHA a4a2e60
+
+All eight acceptance criteria verified:
+
+AC#1: Config/HashConfig/MoveOrderingConfig/HaltingConfig removed; EngineConfig is sole owner.
+AC#2: advertised_uci_options() renders from the same constants that validate() uses; uci_handshake_stream_is_exact asserts exact output.
+AC#3: Driver stops+joins search before set_hash_mb+set_hash_size; hash_change_while_searching_applies_at_a_quiescent_boundary confirms engine survives and reports bestmove then readyok.
+AC#4: validate_hash_mb rejects out-of-range values before any resource change; set_hash_size builds replacement before touching live table; standard allocator aborts on OOM.
+AC#5: threads field and THREADS_MAX=1 present; advertisement_and_validation_share_one_range asserts Threads absent from handshake and THREADS_MIN==THREADS_MAX.
+AC#6: Arc::get_mut assert in both clear_hash and set_hash_size enforces the boundary; SearchHandle::drop joins on cancel, structurally preventing a detached worker from outliving its handle.
+AC#7: 9 new tests — defaults, advertisement/validation coupling, valid/invalid/repeated hash, threads bounds, debug isolation, quiescent boundary, config command.
+AC#8: README LazySMP moved to Future features; UCI options section added; strength_test.py --threads help explains single-worker tolerance.
+
+Checks on a4a2e60: cargo fmt --check (pass), cargo clippy --workspace --all-targets --all-features -D warnings with fresh CARGO_TARGET_DIR (clean), cargo test --workspace (433+ passed, 0 failed).
+---
+<!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Replaced dead Config/HashConfig/MoveOrderingConfig/HaltingConfig with a single EngineConfig in options.rs. Bounds constants serve as the sole source for the handshake advertisement, the parser, and the config's own validation, making an advertise-but-reject inconsistency structurally impossible. Hash resizing uses construct-then-swap via set_hash_size, gated on Arc::get_mut after stop-and-join in the driver, so the quiescent boundary is enforced rather than documented. DebugMode correctly skips the quiescent boundary. Threads is modelled but intentionally unadvertised while the search runs a single worker. README and strength_test.py updated to reflect single-worker reality. Verified: cargo fmt --check clean, cargo clippy (fresh CARGO_TARGET_DIR) clean, cargo test --workspace 433+ tests 0 failures including 9 new tests covering defaults, handshake truthfulness, valid/invalid/repeated hash, threads bounds, debug isolation, quiescent boundary enforcement, and the config command.
+<!-- SECTION:FINAL_SUMMARY:END -->

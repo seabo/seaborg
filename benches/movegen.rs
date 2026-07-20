@@ -1,7 +1,7 @@
-use chess_core::init::init_globals;
-use chess_core::mono_traits::{All, Legal};
-use chess_core::movelist::BasicMoveList;
-use chess_core::position::Position;
+use chess::init::init_globals;
+use chess::mono_traits::{All, Legal};
+use chess::movelist::BasicMoveList;
+use chess::position::Position;
 use criterion::{criterion_group, criterion_main, Criterion};
 use std::hint::black_box;
 
