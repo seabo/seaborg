@@ -1,11 +1,11 @@
 ---
 id: TASK-64.16.1
 title: Specify the Lazy SMP search-team contract
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-19 23:23'
-updated_date: '2026-07-20 13:54'
+updated_date: '2026-07-20 13:59'
 labels:
   - search
   - concurrency
@@ -233,6 +233,38 @@ Verification:
 - cargo clippy --workspace --all-targets --all-features -- -D warnings: clean (no warnings)
 - cargo test --workspace: all passed (engine 287 passed incl. 3 search::team::tests)
 Known failures: none. cargo doc -p engine --no-deps still emits pre-existing private-intra-doc-link warnings in eval.rs/search.rs/tt.rs (present at base 1a5c1ef, outside this task's scope); the team module adds none. cargo doc is not a repository-required check.
+---
+
+author: @claude
+created: 2026-07-20 13:59
+---
+Review attempt: 3
+Reviewed branch: task-64.16.1-lazy-smp-team-contract
+Reviewed implementation: acdd3638db39db9af7d8f16829dc8025be1fe1cb
+Base: 1a5c1ef1d9193d719753b6af29a241731cf06c4a (current master, merged into the branch at 99221ea)
+Verdict: approved
+
+Resolves the merge-integration ejection in comment #5. TASK-64.3 landed on master after this task's original base and changed KillerTable::new from one arg to two (plies, slots). The rework merged pinned master 1a5c1ef into the branch (search.rs auto-merged cleanly) and updated the two one-arg KillerTable::new(1) call sites in the search::team compile-time test to KillerTable::new(1, MAX_KILLER_SLOTS), importing MAX_KILLER_SLOTS.
+
+Rework scope verified: the only task-source change from the prior approved target 20aa3fb is engine/src/search/team.rs -- one added `use crate::killer::MAX_KILLER_SLOTS;` and the two call-site edits (git diff 20aa3fb acdd363 -- engine/src/search/team.rs). The fix is correct: KillerTable::new(plies, slots) requires slots <= MAX_KILLER_SLOTS (=2); table dimensions are irrelevant to what the test asserts (per-worker state is moved, not borrowed), mirroring production Search::new which builds KillerTable::new(MAX_PLY, KILLER_SLOTS). The contract prose is byte-identical to the approved 20aa3fb, so REV-1-01 remains resolved -- re-verified against code: SearchEngine::start (engine/src/search.rs:343-357) sends finished_tx before the closure returns and drops its `table` Arc clone, matching contract §2 (the signal does not imply table release); clear_hash Arc::get_mut (engine/src/search.rs:286-288) matches §4 (clear only after every worker releases the Arc, reachable via join-on-drop).
+
+Net task diff base..target (excluding backlog/): engine/src/search.rs +5 (the `pub mod team;` declaration + comment) and new engine/src/search/team.rs (+279). No production search path changed (AC#7). No new #[allow]. The comment on `pub mod team;` and the module `//!` docs are interpretable without external context (no opaque task-ID/AC/finding citations; parenthetical links are to code symbols).
+
+Acceptance criteria (all proven):
+- AC#1 §1 (team.rs:34-80): one master + zero-or-more helpers, team identity, shared vs per-worker state, master-authoritative-result rule.
+- AC#2 §2 (team.rs:82-115): four outcomes (Completed/Cancelled/Failed/Panicked) + single completion signal whose sole precondition is the master's outcome being fixed.
+- AC#3 §3 (team.rs:117-141): depth/time/nodes/infinite; the master decides normal completion; node authority bound to the master's counter.
+- AC#4 §4 (team.rs:143-165): age advances once per root search; one shared Arc<Table>; clear/replace only after every worker releases it, via join-on-drop.
+- AC#5 §5 (team.rs:167-181): legal root fallback preserved; no partial/aborted iteration becomes official.
+- AC#6 (team.rs:197-278): public SharedTeamState (: Send+Sync) / PerWorkerState marker traits + 3 compile-time tests (all pass).
+- AC#7: no production search path changed; only the module declaration added.
+
+Target immutability: acdd363 is an ancestor of branch tip c2b3c3e; the single later commit (c2b3c3e) touches only the task markdown.
+
+Verification (worktree, base 1a5c1ef, target acdd363, fresh CARGO_TARGET_DIR):
+- cargo fmt --check: OK
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean, no warnings
+- cargo test --workspace: all passed; engine 287 passed incl. the 3 search::team::tests
 ---
 <!-- COMMENTS:END -->
 
