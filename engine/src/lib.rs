@@ -12,6 +12,7 @@
 //! - [`launch`] / [`EngineInfo`] — start the UCI loop for a named engine build.
 //! - [`ui`] — serve the loopback browser UI.
 //! - [`search`] — the search driver and its limits.
+//! - [`selfplay`] — self-play data generation for network training.
 //! - [`eval`] — static position evaluation.
 //! - [`nnue`] — the NNUE network file format and its loader.
 //! - [`tt`] — the shared transposition table.
@@ -34,6 +35,7 @@ pub mod options;
 pub mod perft;
 pub mod score;
 pub mod search;
+pub mod selfplay;
 pub mod time;
 pub mod tt;
 pub mod ui;

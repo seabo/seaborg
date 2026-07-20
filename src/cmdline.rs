@@ -1,6 +1,7 @@
 use std::io::Write;
 use std::path::PathBuf;
 
+use crate::datagen::{datagen, DatagenArgs};
 use crate::dev::dev;
 use crate::perft::{perft, PerftArgs};
 use clap::{Parser, Subcommand};
@@ -29,6 +30,8 @@ enum Commands {
     Perft(PerftArgs),
     /// Run the dev mode loop
     Dev,
+    /// Generate self-play training data at a fixed node budget per move
+    Datagen(DatagenArgs),
     /// Print the notices for third-party material embedded in this executable
     Licenses,
     /// Play on Lichess as a bot, or upgrade the account to a bot
@@ -79,6 +82,7 @@ pub fn cmdline() {
         Commands::Ui(ui_args) => run_ui(&ui_args),
         Commands::Perft(perft_args) => perft(&perft_args),
         Commands::Dev => dev(),
+        Commands::Datagen(datagen_args) => datagen(&datagen_args),
         Commands::Licenses => {
             // The embedded piece artwork is permissively licensed on the one condition that its
             // notice reaches whoever receives the binary. Someone who only ever runs the executable
