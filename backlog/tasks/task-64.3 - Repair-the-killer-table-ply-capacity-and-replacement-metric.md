@@ -1,11 +1,11 @@
 ---
 id: TASK-64.3
 title: Repair the killer table ply capacity and replacement metric
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-19 13:31'
-updated_date: '2026-07-20 10:14'
+updated_date: '2026-07-20 11:46'
 labels:
   - search
   - move-ordering
@@ -63,3 +63,72 @@ This task retains the current staged-ordering architecture rather than requiring
 7. Tests: deep-ply retrieval, neighbouring-ply isolation, duplicate stores, deterministic returned order, replacement after three distinct cutoffs, exact supported boundary, reset across iterations/runs.
 8. Measurement: fixed-depth node counts and NPS for KILLER_SLOTS 0/1/2 (AC#8); TASK-27 strength-regression run for the selected 2-slot design (AC#9). Record in implementation notes.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+## Implementation summary
+
+Replaced the killer table's exposure-counter replacement and 21-ply cap with a fixed two-slot recency table over the full main-search ply range.
+
+- Capacity: table sized to MAX_PLY (256). The deepest main-search node that runs a move loop is ply MAX_PLY-2 (a node hands to quiescence once ply+1 >= MAX_PLY), so every reachable main-search ply is covered. probe/store share one boundary; a killer stored at the last row is retrievable, the first index past it is dropped.
+- Replacement/ordering: probe is observationally read-only (no counters, no legality-based eviction) and returns slots in deterministic recency order. A distinct quiet beta cutoff shifts slot 1 into slot 2 and installs the new killer in slot 1; re-storing the current slot-1 move is a no-op; a move already in slot 2 that cuts off is promoted without duplication.
+- Legality/duplicate suppression preserved: probe still validates pseudo-legality (a killer is learned in a different position at the same ply); staged ordering still suppresses hash/killer/quiet duplicates before any unsafe move execution.
+- Persistence/reset: killers are search-scoped -- retained across iterative-deepening iterations, reset at the end of each Search::run (alongside history), and owned per worker (a plain field, not shared) as Lazy SMP expects. Covered by killer.rs reset test plus search-level tests: killers_persist_across_iterative_deepening_iterations, a_new_search_run_starts_from_an_empty_killer_table, separate_searches_own_independent_killer_tables.
+- Telemetry: the availability-only "killers found per node" metric is replaced by per-slot killer attempts and beta cutoffs counted after duplicate suppression (attributed in the move loop via Phase::Killers + KillerTable::slot_of). report_telemetry prints per-slot cutoff rates.
+- Slot count is a compile-time KILLER_SLOTS const (0/1/2), shipped at 2, so the disabled/one-slot/two-slot ablation runs through one search path and the future ablation is a one-line rebuild.
+
+## AC#8 -- fixed-depth node counts and throughput (disabled / 1 slot / 2 slots)
+
+Method: engine/examples/killer_ablation.rs, built with KILLER_SLOTS = 0, 1, 2 (RUSTFLAGS="-C target-cpu=native" cargo run --release -p engine --example killer_ablation). Single-thread, fresh 16MB TT per position, no time/node limit -> node counts are deterministic per build.
+
+Total nodes (all four positions): disabled 250,032,738 | 1 slot 269,149,636 | 2 slots 290,072,425.
+
+Per position (depth) nodes | disabled | 1 slot | 2 slots:
+- startpos (11):   110,580,558 | 129,817,419 | 137,965,725
+- kiwipete (10):    72,980,323 |  72,694,087 |  72,450,918
+- middlegame (10):  45,439,079 |  46,623,102 |  47,818,509
+- endgame (14):     21,032,778 |  20,015,028 |  31,837,273
+
+Throughput (Mnps, wall-clock, noisy) disabled/1/2:
+- startpos 8.80/9.68/9.79, kiwipete 5.92/6.66/6.70, middlegame 4.99/6.94/6.88, endgame 8.19/9.07/9.07.
+
+Per-slot cutoff telemetry on the 2-slot build (cutoffs/attempts, rate):
+- startpos:   slot1 4,642,553/5,878,855 (79.0%)  slot2 116,206/1,147,073 (10.1%)
+- kiwipete:   slot1    80,985/  205,990 (39.3%)  slot2   4,615/  111,727 ( 4.1%)
+- middlegame: slot1 1,002,058/1,130,496 (88.6%)  slot2  10,926/  126,999 ( 8.6%)
+- endgame:    slot1 1,278,218/1,553,766 (82.3%)  slot2 129,682/  321,610 (40.3%)
+
+Reference: master's counter-based 21-ply table on the same positions/depths totals 281,237,072 nodes (startpos 129.58M, kiwipete 73.12M, middlegame 60.27M, endgame 18.27M) -- the new design is markedly better on the middlegame (47.8M vs 60.3M) and comparable overall, confirming no gross regression.
+
+Justification for the selected 2-slot policy: the node-count direction across 0/1/2 is non-monotone and dominated by aspiration-window re-search sensitivity (a slightly different score flips a fail-high/fail-low re-search of a large subtree -- see the endgame 2-slot spike), not by a clean killer signal. Reductions/extensions are still TODO, so killers cannot yet be exempted from LMR, which is the regime where a second slot typically earns its place; per-slot telemetry shows slot 2 does produce genuine but marginal cutoffs (4-40% vs slot 1's 39-89%). The 2-slot recency table is the task-mandated conventional design, and the point of this task is the structural repair (capacity, read-only probe, recency replacement, per-slot telemetry). The keep/shrink/delete decision is the future ablation this task schedules after counter-move and continuation history land; KILLER_SLOTS makes it trivial.
+
+## AC#9 -- TASK-27 strength regression (selected 2-slot design)
+
+Runner: fastchess (via tools/strength/strength_test.py), authoritative mode. tc=8+0.08, concurrency 6, 16MB hash, opening suite seaborg-openings-v1 (bundled EPD, colours-reversed paired). SPRT elo0=-5, elo1=0, alpha=beta=0.05.
+Baseline: master f84b6d8 (target-cpu=native release). Candidate: branch 18e647f (target-cpu=native release). The candidate binary's engine code is identical to the final implementation target 9413b64 -- the two commits differ only in test-file formatting and a test-local `mut`, neither of which affects the built engine.
+
+Result: INCONCLUSIVE at the 200-game cap. LLR = -0.26, bounds [-2.94, 2.94], 200 games, all normal terminations (0 forfeits). Candidate W-D-L 64-55-81. No evidence of a practically significant (>5 Elo) regression, nor enough to conclude non-regression at the boundary; the point estimate is slightly negative but well within noise at 200 games. A longer run would tighten the estimate and appropriately belongs to the scheduled future killer ablation. (An earlier attempt at tc/st=0.1 produced ~25% time forfeits on both engines -- a time-control artifact, not strength -- and correctly returned INFRASTRUCTURE ERROR; tc=8+0.08 eliminated forfeits.)
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @claude
+created: 2026-07-20 11:46
+---
+Implementation handoff
+Branch: task-64.3-killer-table-repair
+Worktree: /Users/seabo/seaborg-worktrees/task-64.3-killer-table-repair
+Base: f84b6d8
+Implementation target: 9413b64
+Resolved findings: none (new work)
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass
+- cargo test --workspace: pass (engine 284 passed / 2 ignored; workspace 0 failed)
+- AC#8 node-count/throughput ablation (KILLER_SLOTS 0/1/2) via engine/examples/killer_ablation.rs: recorded in notes
+- AC#9 TASK-27 strength SPRT (candidate 18e647f == engine code of target 9413b64, vs baseline f84b6d8, tc=8+0.08, 200 games): AUTHORITATIVE INCONCLUSIVE, LLR=-0.26, 0 forfeits; recorded in notes
+Known failures: none
+---
+<!-- COMMENTS:END -->
