@@ -1,11 +1,11 @@
 ---
 id: TASK-69.2
 title: Versioned NNUE network file format and loader
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:40'
-updated_date: '2026-07-20 23:23'
+updated_date: '2026-07-20 23:28'
 labels:
   - nnue
   - inference
@@ -26,9 +26,9 @@ The file is the contract between the Rust engine and the Python trainer: the tra
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A network file with a valid header round-trips (write then read) to identical weights and metadata
-- [ ] #2 A file whose version, architecture parameters, or quantization scales are unknown or unsupported is rejected with a clear typed error, never silently misread
-- [ ] #3 Tests cover a valid file, a truncated file, an unknown-version file, and an architecture-mismatch file
+- [x] #1 A network file with a valid header round-trips (write then read) to identical weights and metadata
+- [x] #2 A file whose version, architecture parameters, or quantization scales are unknown or unsupported is rejected with a clear typed error, never silently misread
+- [x] #3 Tests cover a valid file, a truncated file, an unknown-version file, and an architecture-mismatch file
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -73,4 +73,35 @@ Verification:
 - cargo test --workspace: pass (457 passed, 0 failed, 2 ignored; engine 320 incl. 17 new nnue::format tests)
 Known failures: none
 ---
+
+author: @claude
+created: 2026-07-20 23:28
+---
+Review attempt: 1
+Reviewed branch: task-69.2-nnue-file-format
+Reviewed implementation: 346db314adb4418c688430ea83c45fa01fe56c50
+Verdict: approved
+
+Full base(6d3d4ac)-to-target diff reviewed: engine/src/nnue/{mod.rs,format.rs}, a pub mod nnue line in engine/src/lib.rs, and the task file. No accidental or unrelated changes; no new #[allow] and no unsafe. The handoff commit (c872f7d) touches only the task file, so the implementation target is immutable.
+
+Contract conformance: header offsets, field sizes/types, blob order (W_ft, b_ft, W_out, b_out), the param_bytes = 2*(input_dim*H)+2*H+2*(2H)+4*output_dim formula, and all nine deterministic-rejection rules match docs/nnue-design-contract.md. The loader validates the whole header before allocating or interpreting weights and reads the blob via take() so an untrusted param_bytes cannot pre-size an allocation; because declared param_bytes is a u32 that must equal the dimension-implied size, hidden_width is effectively bounded, so no oversized allocation is reachable.
+
+Acceptance criteria:
+- AC#1 (valid round-trip to identical weights and metadata): proven by valid_file_round_trips_to_identical_weights_and_metadata.
+- AC#2 (unknown/unsupported version, architecture params, or quantization scales rejected with a clear typed error, never silently misread): proven by the distinct-variant rejection tests (unknown version/feature-set/activation, input-dim/hidden-width/output-dim mismatch, non-positive scale) plus bad magic, reserved-non-zero, param_bytes mismatch, and hash mismatch.
+- AC#3 (tests cover valid, truncated, unknown-version, architecture-mismatch): all present, including truncated header and truncated blob, and multiple architecture-mismatch shapes.
+
+Verification (on 346db31):
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings (clean CARGO_TARGET_DIR): exit 0, no warnings
+- cargo test --workspace: all pass (49 chess + 320 engine incl. 17 nnue::format + others; 0 failed)
+
+Not a movegen/search hot path (module is not yet wired into eval or search), so hot-path benchmarks are not applicable.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Added the engine 'nnue' module (engine/src/nnue/{mod.rs,format.rs}, registered pub in lib.rs) owning the SBNN serialization boundary only — no inference or accumulator. A fixed 64-byte little-endian header carries the architecture dimensions and quantization scales; a validated in-memory Network with a checked constructor round-trips through a writer and a loader that parses and validates the entire header before allocating or interpreting any weights, mapping each of the design contract's nine rejection rules to a distinct typed LoadError. The untrusted param_bytes is bounded with take() so it can never pre-size an allocation, and an FNV-1a blob hash guards against corruption. Header layout, blob order, and rejection rules match docs/nnue-design-contract.md exactly. Verified on implementation SHA 346db314adb4418c688430ea83c45fa01fe56c50 with cargo fmt --check (pass), cargo clippy --workspace --all-targets --all-features -- -D warnings on a clean CARGO_TARGET_DIR (exit 0, no warnings), and cargo test --workspace (all pass; 320 engine tests including 17 nnue::format tests covering valid round-trip, truncated header/blob, trailing bytes, bad magic, unknown version/feature-set/activation, input-dim/hidden-width/output-dim mismatch, non-positive scale, non-zero reserved, param_bytes disagreement, and hash mismatch).
+<!-- SECTION:FINAL_SUMMARY:END -->
