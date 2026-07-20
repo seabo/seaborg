@@ -1,11 +1,11 @@
 ---
 id: TASK-15
 title: Connect engine configuration to UCI options and search resources
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-17 17:14'
-updated_date: '2026-07-20 17:55'
+updated_date: '2026-07-20 18:04'
 labels:
   - engine
   - uci
@@ -59,3 +59,35 @@ Truthfulness boundary. The UCI handshake must advertise exactly what the running
 6. Docs/tooling (AC#8): move README 'LazySMP multithreading' from Features to Future features (single worker today); add a UCI options note documenting Hash bounds and that Threads is not yet advertised; clarify strength_test.py --threads help that seaborg is single-worker and tolerates Threads for forward-compat.
 7. Tests (AC#7): EngineConfig unit tests (defaults, valid/invalid/repeated hash, bounds, threads); driver tests for handshake truthfulness (already present, keep exact), setoption while a search is active, repeated hash changes, and that resize happens at a quiescent boundary. Run fmt/clippy/test.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Established EngineConfig (engine/src/options.rs) as the single authoritative owner of hash size, worker count, and debug mode, replacing the dead Config/HashConfig/MoveOrderingConfig/HaltingConfig types. Bounds live as associated constants read by three call sites — advertised_uci_options(), the uci.rs parser, and the config's own validate/set methods — so the advertised range is by construction the accepted range.
+
+Hash application (engine.rs drive): on setoption Hash the driver stops+joins the active search, updates the config, then reallocates via the new SearchEngine::set_hash_size (search.rs). That method builds the replacement Table before touching the live one and asserts exclusivity through Arc::get_mut, the same quiescent-boundary guard as clear_hash, so a resize can never replace an allocation a worker still holds and a rejected value leaves config and table untouched. DebugMode no longer stops a running search. The custom 'config' command now displays the config.
+
+Threads: modelled as a validated worker count (default 1, THREADS_MAX 1) but intentionally not advertised while the search is single-worker; the parser still tolerates an unknown option on the diagnostic channel, so the strength harness that always sends Threads keeps working.
+
+AC#8 docs/tooling: README moved 'LazySMP multithreading' from Features to Future features and added a UCI options section; tools/strength/strength_test.py --threads help now explains the single-worker tolerance.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @codex
+created: 2026-07-20 18:04
+---
+Implementation handoff
+Branch: task-15-engine-config-uci-options
+Worktree: /Users/seabo/seaborg-worktrees/task-15-engine-config-uci-options
+Base: ba6aec1d2d2633c672e9945d52864fb09c011140
+Implementation target: a4a2e60b76bbed4d41abd586c77a46672d575b5e
+Resolved findings: none (initial implementation)
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean)
+- cargo test --workspace: pass (engine 300 passed / 45 passed integration incl. 8 new; workspace 0 failed)
+Known failures: none
+---
+<!-- COMMENTS:END -->
