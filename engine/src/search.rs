@@ -2,7 +2,7 @@ use crate::history::{HistoryTable, HISTORY_MAX};
 
 use super::eval::{EvalState, Evaluation};
 use super::killer::KillerTable;
-use super::ordering::{Loader, OrderedMoves, ScoredMoveList, Scorer};
+use super::ordering::{Loader, OrderedMoves, Phase, ScoredMoveList, Scorer};
 use super::pv_table::PVTable;
 use super::score::Score;
 use super::trace::Tracer;
@@ -51,12 +51,15 @@ fn history_ordering_score(value: i32) -> i16 {
 /// tree; quiescence has no cap of its own yet, and capping it is separate work.
 pub const MAX_PLY: usize = 256;
 
-/// Size of the killer table, which covers plies `0..KILLER_PLIES` from the root.
+/// Active recency slots per ply in the killer table.
 ///
-/// Index 0 is the root, which never records a killer, so the effective reach is plies 1 through
-/// 20. Refutations found deeper than that are dropped rather than growing the table; only the
-/// deepest iterations reach those plies at all.
-const KILLER_PLIES: usize = 21;
+/// Two is the shipped policy: the newest quiet refutation at a ply occupies slot one and the
+/// previous distinct one shifts to slot two. Setting this to `1` keeps only the newest killer and
+/// `0` disables killers entirely, which is how the disabled/one-slot/two-slot ablation is built
+/// without a separate search path. It must not exceed
+/// [`MAX_KILLER_SLOTS`](super::killer::MAX_KILLER_SLOTS). Public so the ablation harness in
+/// `examples/killer_ablation.rs` can label its output with the width it was built against.
+pub const KILLER_SLOTS: usize = 2;
 
 /// Lowest iteration depth at which the root is searched with an aspiration window rather than the
 /// full `(-inf, +inf)` window.
@@ -710,7 +713,7 @@ impl<'engine> Search<'engine> {
             eval_state,
             eval_stack: Vec::with_capacity(MAX_PLY),
             tt,
-            kt: KillerTable::new(KILLER_PLIES),
+            kt: KillerTable::new(MAX_PLY, KILLER_SLOTS),
             history: HistoryTable::new(),
             pvt: PVTable::new(8),
             trace: Tracer::new(),
@@ -753,7 +756,14 @@ impl<'engine> Search<'engine> {
             self.report_telemetry(d, result.score);
         }
 
+        // Move-ordering memory is scoped to a single search. Within this call killers and history
+        // are retained across the iterative-deepening iterations, where a refutation learned at a
+        // shallow depth still holds at the next; but they are cleared here so the next search on this
+        // worker starts from an empty table rather than inheriting refutations learned for an
+        // unrelated position. Each Lazy SMP worker owns its own tables, so this resets only this
+        // worker's state.
         self.history.reset();
+        self.kt.reset();
 
         result
     }
@@ -1112,6 +1122,9 @@ impl<'engine> Search<'engine> {
         let mut failed_quiets = BasicMoveList::empty();
 
         'move_loop: while moves.load_next_phase(MoveLoader::from(self, tt_mov, ply)) {
+            // The phase is fixed for the whole batch the inner loop is about to drain, and the
+            // iterator borrows `moves` for that batch, so read it once here rather than inside.
+            let phase = moves.phase();
             for mov in &mut moves {
                 if self.stopping() {
                     break 'move_loop;
@@ -1119,6 +1132,17 @@ impl<'engine> Search<'engine> {
 
                 move_count += 1;
                 let mut value = Score::INF_N;
+
+                // Attribute this move to the killer slot it came from, if any, for the effectiveness
+                // telemetry. `phase == Killers` means staged ordering already yielded it as a
+                // distinct killer — a killer that duplicated the hash move was suppressed into the
+                // hash phase and is not counted here.
+                let killer_slot = (phase == Phase::Killers)
+                    .then(|| self.kt.slot_of(ply, mov))
+                    .flatten();
+                if let Some(slot) = killer_slot {
+                    self.trace.killer_attempt(slot);
+                }
 
                 // Start reporting which move we're considering after 3 seconds have elapsed.
                 if T::is_master() && Node::root() && self.trace.live_elapsed().as_millis() > 3000 {
@@ -1217,6 +1241,9 @@ impl<'engine> Search<'engine> {
                         } else {
                             debug_assert!(value >= beta);
                             // beta-cutoff; record killer and history
+                            if let Some(slot) = killer_slot {
+                                self.trace.killer_cutoff(slot);
+                            }
                             if mov.is_quiet() {
                                 // The killer table reserves no slot for the root; a root cutoff is
                                 // only reachable at all through an aspiration window's finite beta,
@@ -1959,10 +1986,22 @@ impl<'engine> Search<'engine> {
                 "tt move found at {:.2}% of nodes",
                 self.trace.hash_found.avg() * 100_f64
             );
-            println!(
-                "killers found per node: {:.2}",
-                self.trace.killers_per_node.avg() * 2_f64
-            );
+            let attempts = self.trace.killer_attempts();
+            let cutoffs = self.trace.killer_cutoffs();
+            for (slot, (&searched, &cut)) in attempts.iter().zip(cutoffs.iter()).enumerate() {
+                let rate = if searched > 0 {
+                    cut as f64 / searched as f64 * 100.
+                } else {
+                    0.
+                };
+                println!(
+                    "killer slot {}: {} searched, {} cutoffs ({:.2}%)",
+                    slot + 1,
+                    searched,
+                    cut,
+                    rate
+                );
+            }
         }
     }
 }
@@ -2011,18 +2050,16 @@ impl<'a, 'search> Loader for MoveLoader<'a, 'search> {
     }
 
     fn load_killers(&mut self, movelist: &mut ScoredMoveList) {
+        // Both slots are loaded in recency order. Which of them was actually searched, and which
+        // produced a cutoff, is attributed by slot in the main move loop after staged ordering has
+        // dropped any killer that duplicated an earlier phase.
         let (km1, km2) = self.search.kt.probe(self.ply, &self.search.pos);
-        let mut cnt = 0;
-
         if let Some(km) = km1 {
-            cnt += 1;
             movelist.push(km);
         }
         if let Some(km) = km2 {
-            cnt += 1;
             movelist.push(km);
         }
-        self.search.trace.killers_per_node.push_many(cnt, 2);
     }
 
     fn load_quiets(&mut self, movelist: &mut ScoredMoveList) {
@@ -4129,5 +4166,73 @@ mod tests {
                 "depth {depth} did not hand over to quiescence",
             );
         }
+    }
+
+    /// A quiet move used as a killer at a shallow depth is just as likely to refute the same ply on
+    /// the next, deeper iteration, so the table is not cleared between iterative-deepening
+    /// iterations. A killer seeded past the reach of a shallow search survives every iteration of
+    /// that search, proving the deepening loop preserves it rather than rebuilding from empty.
+    #[test]
+    fn killers_persist_across_iterative_deepening_iterations() {
+        core::init::init_globals();
+
+        let position = Position::start_pos();
+        let flag = AtomicBool::new(false);
+        let table = Table::new(1);
+        let mut search = Search::new(position, &flag, None, &table);
+
+        // A ply far deeper than a depth-4 main search can reach, so the search never overwrites this
+        // slot itself and its survival can only mean the deepening loop left it in place.
+        let deep_ply = 20;
+        let seeded = Move::build(Square::E2, Square::E4, None, MoveType::QUIET);
+        search.kt.store(seeded, deep_ply);
+
+        // `iterative_deepening` runs every iteration but, unlike `run`, does not reset afterwards, so
+        // the table can be inspected in the state the final iteration left it.
+        search.iterative_deepening::<Master>(4);
+
+        assert_eq!(search.kt.slot_of(deep_ply, seeded), Some(0));
+    }
+
+    /// Killers are scoped to a single search. A refutation learned for one position must not order
+    /// moves in a later, unrelated search on the same worker, so `run` clears the table when it
+    /// finishes and the next search starts from empty.
+    #[test]
+    fn a_new_search_run_starts_from_an_empty_killer_table() {
+        core::init::init_globals();
+
+        let position = Position::start_pos();
+        let flag = AtomicBool::new(false);
+        let table = Table::new(1);
+        let mut search = Search::new(position, &flag, None, &table);
+
+        let deep_ply = 20;
+        let seeded = Move::build(Square::E2, Square::E4, None, MoveType::QUIET);
+        search.kt.store(seeded, deep_ply);
+
+        search.run::<Master>(4);
+
+        assert_eq!(search.kt.slot_of(deep_ply, seeded), None);
+    }
+
+    /// Each search owns its own killer table, which is the ownership a Lazy SMP worker relies on: one
+    /// worker's refutations never appear in another's ordering. Two independent searches storing at
+    /// the same ply keep their tables separate.
+    #[test]
+    fn separate_searches_own_independent_killer_tables() {
+        core::init::init_globals();
+
+        let position = Position::start_pos();
+        let flag = AtomicBool::new(false);
+        let table_a = Table::new(1);
+        let table_b = Table::new(1);
+        let mut search_a = Search::new(position.clone(), &flag, None, &table_a);
+        let search_b = Search::new(position, &flag, None, &table_b);
+
+        let killer = Move::build(Square::E2, Square::E4, None, MoveType::QUIET);
+        search_a.kt.store(killer, 3);
+
+        assert_eq!(search_a.kt.slot_of(3, killer), Some(0));
+        assert_eq!(search_b.kt.slot_of(3, killer), None);
     }
 }
