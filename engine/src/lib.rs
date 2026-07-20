@@ -28,6 +28,7 @@
 
 // Supported public API.
 pub mod eval;
+pub mod nnue;
 pub mod options;
 pub mod perft;
 pub mod score;
