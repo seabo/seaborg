@@ -1,11 +1,11 @@
 ---
 id: TASK-69.1
 title: 'NNUE design contract: feature set, topology, quantization, file format, loss'
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:39'
-updated_date: '2026-07-20 22:39'
+updated_date: '2026-07-20 22:51'
 labels:
   - nnue
   - design
