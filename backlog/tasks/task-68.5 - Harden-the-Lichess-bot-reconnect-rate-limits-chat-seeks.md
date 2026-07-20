@@ -1,11 +1,11 @@
 ---
 id: TASK-68.5
 title: 'Harden the Lichess bot: reconnect, rate limits, chat, seeks'
-status: Ready to Merge
+status: Done
 assignee:
   - '@george'
 created_date: '2026-07-19 22:34'
-updated_date: '2026-07-20 15:13'
+updated_date: '2026-07-20 15:20'
 labels: []
 dependencies:
   - TASK-68.4
