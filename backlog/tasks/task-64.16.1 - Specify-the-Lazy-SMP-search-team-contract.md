@@ -1,11 +1,11 @@
 ---
 id: TASK-64.16.1
 title: Specify the Lazy SMP search-team contract
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-19 23:23'
-updated_date: '2026-07-20 11:37'
+updated_date: '2026-07-20 11:40'
 labels:
   - search
   - concurrency
@@ -78,6 +78,20 @@ Verification (in worktree, base f84b6d8):
 - cargo fmt --check: OK
 - cargo clippy --workspace --all-targets --all-features -- -D warnings: clean, no warnings
 - cargo test --workspace: all passed (engine unit tests 275 passed incl. 3 new team tests; other suites green)
+
+--- Rework attempt 2 ---
+Resolved REV-1-01: the contract's §2 and §4 misdescribed the completion-signal vs table-release ordering.
+Behaviour changed (documentation only; no production search path touched):
+- §2: the single completion signal's only precondition is now that the master's outcome is fixed. Added an explicit paragraph stating the signal does NOT imply table release — a worker, including the master that emits it, may still hold its Arc<Table> clone when the signal fires, exactly as SearchEngine::start does today (finished_tx.send runs before the closure returns and drops the `table` clone). Clear-safety is attributed to a separate guarantee (join), not the signal.
+- §4: clear/replacement reachability is now attributed to the join-on-drop guarantee (dropping/waiting the handle cancels+joins every worker, so Arc::get_mut in clear_hash succeeds because the join released the last clone), explicitly NOT to the withheld signal. Added the correct owner protocol: join the team, then clear — never clear on the signal alone.
+- Preamble: added join-on-drop as an explicit fifth preserved guarantee, distinguished from the completion signal.
+Removed the false claim that "with zero helpers this reduces to today's rule: the one worker signals after it has dropped the table."
+
+Verification (worktree, base f84b6d8, target 20aa3fb):
+- cargo fmt --check: OK
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean, no warnings
+- cargo test --workspace: all passed (engine 275 passed incl. the 3 search::team::tests and dropping_a_search_handle_releases_the_table_for_a_later_clear)
+- cargo doc -p engine --no-deps: same 6 pre-existing private-intra-doc-link warnings in eval.rs/search.rs/tt.rs; none from the team module; the new SearchHandle/SearchEngine/Table links resolve cleanly (not a required check)
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -118,5 +132,21 @@ Verification:
 - cargo clippy --workspace --all-targets --all-features -- -D warnings: clean, no warnings
 - cargo test --workspace: all passed; engine 275 passed incl. the 3 new search::team::tests and dropping_a_search_handle_releases_the_table_for_a_later_clear
 - cargo doc -p engine --no-deps: 6 pre-existing private-intra-doc-link warnings in eval.rs/search.rs/tt.rs, none from the team module (not a required check)
+---
+
+author: @claude
+created: 2026-07-20 11:40
+---
+Implementation handoff
+Branch: task-64.16.1-lazy-smp-team-contract
+Worktree: /Users/seabo/seaborg-worktrees/task-64.16.1-lazy-smp-team-contract
+Base: f84b6d8c6afd11c30841cf287a38fa82daacd648
+Implementation target: 20aa3fbad6c40a2078e8360afd9a89f69d4bb77a
+Resolved findings: REV-1-01
+Verification:
+- cargo fmt --check: OK
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean (no warnings)
+- cargo test --workspace: all passed (engine 275 passed incl. 3 search::team::tests and dropping_a_search_handle_releases_the_table_for_a_later_clear)
+Known failures: none. cargo doc -p engine --no-deps emits 6 pre-existing private-intra-doc-link warnings in eval.rs/search.rs/tt.rs that reproduce at base f84b6d8 and are outside this task's scope; the team module adds no doc warnings. cargo doc is not a repository-required check.
 ---
 <!-- COMMENTS:END -->
