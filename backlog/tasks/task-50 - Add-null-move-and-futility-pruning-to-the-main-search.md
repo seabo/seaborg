@@ -1,11 +1,11 @@
 ---
 id: TASK-50
 title: Add null move and futility pruning to the main search
-status: Ready to Merge
+status: Changes Requested
 assignee:
   - '@codex'
 created_date: '2026-07-18 18:30'
-updated_date: '2026-07-20 19:37'
+updated_date: '2026-07-20 20:12'
 labels: []
 dependencies:
   - TASK-46
@@ -128,6 +128,38 @@ Branch: task-50-null-move-futility-pruning
 - No code comment cites a task ID, AC, or finding ID.
 
 Verdict: all acceptance criteria proven, no blocking findings. Approving e6acc56 as the immutable code target. Moving to Ready to Merge.
+---
+
+author: @codex
+created: 2026-07-20 20:12
+---
+## Merge ejected: integrated result fails to compile
+
+Merge attempted by $merge and ejected. Primary (master) was NOT advanced; it remains at the tip tested below.
+
+### Environment
+- Primary tip tested (T): 02e3ba5
+- Approved implementation target: e6acc56 (base ba6aec1)
+- Trial merge M: non-ff merge of task tip 2d9ba26 into detached T (discarded)
+
+### Failing command and evidence
+`cargo test --workspace --no-run` on the trial merge M:
+```
+error[E0433]: cannot find `init` in `core`   (x2)
+error: could not compile `engine` (lib test) due to 2 previous errors
+```
+
+### Root cause
+TASK-20 (crate rename core -> chess, commit e06cae8) landed on master *after* this task branched from ba6aec1. master's engine crate now depends on `chess` (engine/Cargo.toml: `chess = { path = "../chess" }`), and its search.rs tests call `chess::init::init_globals()`. This task's two NEW tests still call `core::init::init_globals()`:
+- engine/src/search.rs: fn forward_pruning_does_not_change_sound_search_results
+- engine/src/search.rs: fn forward_pruning_reduces_the_search_tree
+
+git's rename detection correctly relocated the core/src/position/mod.rs changes to chess/src/position/mod.rs and converted master's own `core::` references, but it left these two task-added lines untouched (master never had them), so they reference a crate path that no longer resolves. Textually clean, semantically broken.
+
+### Required rework ($implement)
+Re-target this task onto the current master tip (pin the base SHA per the merge-time base-drift guidance) and update the two new tests to `chess::init::init_globals()` (and any other core:: paths the diff introduces). Re-run fmt/clippy/test, then hand back for a fresh review — the prior approval of e6acc56 is invalidated because the integrated code target must change.
+
+The merge skill does not edit implementation code, so no fix is applied here.
 ---
 <!-- COMMENTS:END -->
 
