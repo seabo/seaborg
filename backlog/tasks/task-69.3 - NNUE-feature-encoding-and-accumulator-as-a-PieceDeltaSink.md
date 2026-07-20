@@ -1,11 +1,11 @@
 ---
 id: TASK-69.3
 title: NNUE feature encoding and accumulator as a PieceDeltaSink
-status: Changes Requested
+status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:40'
-updated_date: '2026-07-20 23:47'
+updated_date: '2026-07-20 23:55'
 labels:
   - nnue
   - inference
@@ -34,12 +34,13 @@ The accumulator plugs into the existing seam: Position::replay_last_move_deltas 
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Add engine/src/nnue module (sibling of eval), declared in lib.rs.
-2. Feature encoding: INPUT_DIM=768, feature_index(perspective, piece, square) = relative_square ^ + 64*pt0 + 384*side, per the design contract. Unit tests over representative pieces/squares/perspectives (both colours, friendly/enemy, orientation flip).
-3. FeatureTransformer: in-memory i16 weight table (input_dim x H feature-major) + i16 bias, parameterizable H (multiple of 16). Minimal container the accumulator needs; the file loader (TASK-69.2) will construct it later.
-4. Accumulator: two per-perspective i16 activation vectors seeded from bias; implements PieceDeltaSink (add/remove toggle one feature column per perspective). from_position rebuild is the from-scratch reference, mirroring EvalState::from_position.
-5. Tests mirroring EvalState: subtree walk asserting incremental == from-scratch at every node (make and unmake) across captures/castling/en-passant/promotions; make-then-unmake bit-for-bit restore; clone equivalence. Use a deterministic synthetic FeatureTransformer with bounded weights.
-6. Run cargo fmt --check, clippy -D warnings, cargo test --workspace. Hand off for review. No forward pass/scoring and no Search wiring (deferred to TASK-69.4).
+Rework after eject (integration collision): TASK-69.2 landed nnue as a directory module (engine/src/nnue/mod.rs + format.rs with Network/Parameters and INPUT_DIM); the approved target added engine/src/nnue.rs, so Rust rejects the tree (E0761) and INPUT_DIM is duplicated.
+1. Merge current master (097854d) into the task branch to bring in 69.2's nnue directory module.
+2. Remove engine/src/nnue.rs; re-home the encoding + accumulator into engine/src/nnue/accumulator.rs, declared from nnue/mod.rs and re-exported.
+3. Reconcile duplication: drop the module-local INPUT_DIM/HIDDEN_MULTIPLE and the standalone FeatureTransformer container. The Accumulator borrows the loaded Network directly (feature_transformer_weights/bias, hidden_width) so first-layer weights are stored once and Network's load-time invariant is reused; tests build a Network via Network::new.
+4. Keep feature_index and all incremental/from-scratch equivalence tests (subtree walk, make/unmake bit-for-bit, bijection, clone) intact, retargeted onto Network.
+5. Fix engine/src/lib.rs so nnue is declared exactly once.
+6. Run cargo fmt --check, clippy -D warnings, cargo test --workspace; hand off for fresh review. Scope unchanged: no forward pass/scoring, no Search wiring (TASK-69.4).
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
