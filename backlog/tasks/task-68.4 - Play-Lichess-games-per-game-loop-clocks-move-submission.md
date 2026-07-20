@@ -1,11 +1,11 @@
 ---
 id: TASK-68.4
 title: 'Play Lichess games: per-game loop, clocks, move submission'
-status: In Review
+status: Ready to Merge
 assignee:
   - '@george'
 created_date: '2026-07-19 22:34'
-updated_date: '2026-07-20 10:24'
+updated_date: '2026-07-20 11:27'
 labels: []
 dependencies:
   - TASK-68.3
@@ -34,13 +34,13 @@ Out of scope: reconnect/backoff, rate-limit handling, chat commands, proactive c
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 On gameStart the bot streams the game and, on its turn, submits a legal UCI move via the bot move endpoint
-- [ ] #2 Search time per move is derived from the Lichess clock (wtime/btime/winc/binc) through engine/src/time.rs with a safety margin, and the bot does not lose on time under normal network conditions
-- [ ] #3 The Position is reconstructed from the streamed move list and stays in sync with the server for the whole game
-- [ ] #4 Games are played to completion and terminal states (win/loss/draw/abort/timeout) are handled, freeing the concurrency slot
-- [ ] #5 The max-concurrent-games cap is enforced
-- [ ] #6 The per-game loop has unit coverage against recorded game-stream NDJSON fixtures (no network)
-- [ ] #7 cargo fmt --check, clippy (workspace, all-targets, all-features, -D warnings), and cargo test --workspace all pass
+- [x] #1 On gameStart the bot streams the game and, on its turn, submits a legal UCI move via the bot move endpoint
+- [x] #2 Search time per move is derived from the Lichess clock (wtime/btime/winc/binc) through engine/src/time.rs with a safety margin, and the bot does not lose on time under normal network conditions
+- [x] #3 The Position is reconstructed from the streamed move list and stays in sync with the server for the whole game
+- [x] #4 Games are played to completion and terminal states (win/loss/draw/abort/timeout) are handled, freeing the concurrency slot
+- [x] #5 The max-concurrent-games cap is enforced
+- [x] #6 The per-game loop has unit coverage against recorded game-stream NDJSON fixtures (no network)
+- [x] #7 cargo fmt --check, clippy (workspace, all-targets, all-features, -D warnings), and cargo test --workspace all pass
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -127,4 +127,39 @@ Verification:
 - cargo test --workspace: pass (lichess 50, engine 272 [2 ignored], core 45, plus workspace suites; 0 failures)
 Known failures: none
 ---
+
+author: @george
+created: 2026-07-20 11:27
+---
+Review attempt: 1
+Reviewed branch: task-68.4-lichess-game-play
+Reviewed implementation: 617a4b5
+Verdict: approved
+
+Reviewed the full base f84b6d8 -> target 617a4b5 diff (target is an ancestor of tip 3928ada; the only later commit is task-metadata handoff). Scope is confined to the lichess crate: GameController is not reused, SearchEngine is; no move-gen/search hot path is touched, so benchmarks are not required.
+
+Acceptance criteria:
+- #1 gameStart -> stream -> legal UCI submission: play_game submits to /api/bot/game/{id}/move/{uci}; plays_a_legal_move_on_each_of_its_turns and plays_immediately_with_the_white_pieces assert legality against the reconstructed position; the run.rs gameStart->start_game seam is asserted by event_loop_accepts_and_declines_by_policy.
+- #2 clock-derived budget with margin: search_limit holds move_overhead_ms back from the clock before engine time::TimeControl slices it (TimeControl also holds its own 30ms, a conservative combined margin); covered by search_budget_holds_back_the_overhead_and_stays_under_the_clock and ..._saturates_rather_than_underflowing_on_a_tiny_clock.
+- #3 position stays in sync: replay rebuilds from the authoritative move list each state; illegal_move_in_the_stream_is_an_error and the per-turn legality assertions prove sync; divergence surfaces as Decode error rather than silent desync.
+- #4 completion + terminal handling + slot freed: on_state stops on any non-ongoing status; the concurrency count is released by the event loop's GameFinish handler (event_loop_accepts_and_declines_by_policy).
+- #5 cap enforced: policy::evaluate gates on active_games vs max_concurrent_games; event_loop_declines_when_at_game_cap.
+- #6 fixture coverage, no network: FakeTransport drives recorded NDJSON across game_stream and game-loop tests.
+- #7 required checks pass (below).
+
+No new #[allow], no comments referencing task IDs/ACs/finding IDs.
+
+Verification (run on the worktree at 3928ada, code-identical to target 617a4b5):
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass, no warnings (confirmed with a clean CARGO_TARGET_DIR)
+- cargo test --workspace: pass (core 45, engine 272 [2 ignored], lichess 50, 0 failures)
+
+Non-blocking observations (not defects): the real-FEN branch of base_position has no dedicated lichess test (from_fen is covered in core); a transient play_move failure ends the worker, which is acceptable as reconnect/backoff is explicitly deferred to TASK-68.5.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Implemented per-game Lichess play on the 68.3 scaffold: game_stream.rs (NDJSON wire types + parse), client.game_stream/play_move over the existing Transport, game.rs play_game (rebuilds Position from the authoritative move list each state, finds the bot's side, derives the search budget from the clock via engine time::TimeControl with a held-back overhead, and submits UCI through a MoveChooser wrapping SearchEngine), and run.rs spawning a per-game std::thread on gameStart while the event loop keeps the cap from account-stream game lifecycle events. Verified on implementation target 617a4b5: cargo fmt --check pass; cargo clippy --workspace --all-targets --all-features -D warnings pass with no warnings (confirmed on a clean CARGO_TARGET_DIR); cargo test --workspace pass (core 45, engine 272 [2 ignored], lichess 50, 0 failures). All seven acceptance criteria proven by the crate's fixture-driven tests (legal move per turn, position sync, illegal-stream-move error, terminal-status stop, clock-derived budget, cap enforcement).
+<!-- SECTION:FINAL_SUMMARY:END -->
