@@ -1,7 +1,7 @@
 ---
 id: TASK-70
 title: Raise default log level to Info for the lichess subcommand
-status: In Progress
+status: In Review
 assignee:
   - '@george'
 created_date: '2026-07-20 20:06'
@@ -38,3 +38,26 @@ The logger is initialised with `LevelFilter::Error` as its default in `src/main.
 <!-- SECTION:NOTES:BEGIN -->
 Raised SimpleLogger default from LevelFilter::Error to LevelFilter::Info in src/main.rs, preserving the .env() override so RUST_LOG still adjusts the level. Downgraded the startup 'logger initialized' line from info! to debug! so it stays suppressed at the default level and UCI mode emits no log output. Verified: engine UCI path contains no log macro calls (only startup log was the main.rs line). Manual UCI check ('uci\nquit'): stdout is clean UCI traffic; stderr contains only the pre-existing human banner from engine.rs:115 (a deliberate writeln! to stderr, not a log message, present on master). lichess crate emits log::info!/warn! for connection ('connected to Lichess as bot ...'), challenges, and game lifecycle events, now visible at the Info default.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @george
+created: 2026-07-20 20:13
+---
+Implementation handoff
+Branch: task-70-lichess-default-log-info
+Worktree: /Users/seabo/seaborg-worktrees/task-70-lichess-default-log-info
+Base: 02e3ba54808be16a5b6d4d0cf80e54459df29867
+Implementation target: 43d54e38100c99bd19e751ff0419262e134bf5c6
+Resolved findings: none
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (no warnings)
+- cargo test --workspace: pass (all suites, 0 failed)
+- Manual UCI silence check (printf 'uci\nquit' | seaborg): stdout clean UCI handshake; stderr has only the pre-existing engine banner (engine.rs:115), no log lines
+Known failures: none
+
+Note for reviewer: the single stderr line in UCI mode is the human startup banner intentionally written to stderr in engine.rs:115; it exists on master and is not a log message, so it does not conflict with AC#3 (which concerns log output). No log output is emitted in UCI mode after this change.
+---
+<!-- COMMENTS:END -->
