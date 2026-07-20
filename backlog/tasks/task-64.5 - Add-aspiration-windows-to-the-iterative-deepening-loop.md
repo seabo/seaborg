@@ -1,11 +1,11 @@
 ---
 id: TASK-64.5
 title: Add aspiration windows to the iterative deepening loop
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-19 13:31'
-updated_date: '2026-07-19 23:58'
+updated_date: '2026-07-20 10:06'
 labels:
   - search
   - strength
