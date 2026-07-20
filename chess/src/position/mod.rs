@@ -499,6 +499,92 @@ impl Position {
         }
     }
 
+    /// Passes the turn to the opponent without moving a piece.
+    ///
+    /// This is the primitive behind null-move pruning: the side to move forfeits its move, and the
+    /// resulting position is searched at reduced depth to see whether even a free move for the
+    /// opponent fails to hurt. It changes only whose turn it is — no piece leaves or arrives on any
+    /// square — so every placement-derived quantity (material, piece-square score, bitboards) is
+    /// left untouched and a search accumulator simply carries across it.
+    ///
+    /// The en-passant right is cleared: after a pass the double push that created it is no longer
+    /// the immediately preceding move, so the capture is no longer available and must not stay in
+    /// the key. The halfmove clock advances like any reversible move, and the full-move number
+    /// advances when Black passes, so that [`Self::unmake_null_move`] restores both symmetrically.
+    /// Castling rights are unaffected. The check-and-pin state is recomputed for the new side to
+    /// move.
+    ///
+    /// A null move is only sound when the side to move is not in check — passing while in check
+    /// would leave the king capturable and the position illegal. Callers must establish that; it is
+    /// asserted in debug builds rather than checked here, because the search already knows the check
+    /// status at the point it decides to try a null move.
+    ///
+    /// Every [`Self::make_null_move`] must be paired with exactly one [`Self::unmake_null_move`],
+    /// like the ordinary make/unmake pair.
+    pub fn make_null_move(&mut self) {
+        debug_assert!(
+            self.state.checkers.is_empty(),
+            "a null move is illegal while in check"
+        );
+
+        // A null move has no origin, destination, moving piece, or capture. Only the state needed
+        // to restore the position on unmake is meaningful; the placement fields are inert markers.
+        self.history.push(UndoableMove {
+            orig: Square::A1,
+            dest: Square::A1,
+            piece: Piece::None,
+            promo_piece_type: None,
+            captured: PieceType::None,
+            ty: MoveType::NULL,
+            prev_castling_rights: self.castling_rights,
+            prev_ep_square: self.ep_square,
+            prev_half_move_clock: self.half_move_clock,
+            state: self.state,
+            zobrist: self.zobrist,
+        });
+
+        self.zobrist.update_ep_square(self.ep_square, None);
+        self.ep_square = None;
+
+        self.half_move_clock += 1;
+        if self.turn == Player::BLACK {
+            self.move_number += 1;
+        }
+
+        self.zobrist.toggle_side_to_move();
+        self.turn = !self.turn;
+        self.state = State::from_position(self);
+    }
+
+    /// Restores the position saved by the matching [`Self::make_null_move`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if there is no move to unmake, and in debug builds if the most recent move was not a
+    /// null move.
+    pub fn unmake_null_move(&mut self) {
+        let undoable_move = self
+            .history
+            .pop()
+            .expect("unmake_null_move without a matching make_null_move");
+        debug_assert!(
+            undoable_move.is_null(),
+            "unmake_null_move called when the last move was not a null move"
+        );
+
+        self.turn = !self.turn;
+        if self.turn == Player::BLACK {
+            // Undoing Black's pass, so the full-move number that make advanced comes back down.
+            self.move_number -= 1;
+        }
+
+        self.zobrist = undoable_move.zobrist;
+        self.half_move_clock = undoable_move.prev_half_move_clock;
+        self.ep_square = undoable_move.prev_ep_square;
+        self.castling_rights = undoable_move.prev_castling_rights;
+        self.state = undoable_move.state;
+    }
+
     /// Replays the board changes of the most recently made move onto `sink`.
     ///
     /// Must be called immediately after [`Position::make_move`] or
@@ -516,9 +602,9 @@ impl Position {
     ///
     /// This must not be called for a null move. A null move changes only the side to move, so it
     /// leaves every placement-derived quantity untouched and has no deltas to replay; a consumer that
-    /// stores its quantity from one side's perspective simply carries the same value across it. Null
-    /// moves do not exist in this engine yet, and defining that carry-across is a constraint on
-    /// whichever change introduces them.
+    /// stores its quantity from one side's perspective simply carries the same value across it. See
+    /// [`Position::make_null_move`], whose accumulator carry-across is exactly that: the value is left
+    /// unchanged rather than replayed.
     ///
     /// # Panics
     ///
@@ -919,6 +1005,20 @@ impl Position {
         piece_type_2: PieceType,
     ) -> Bitboard {
         self.piece_bb_both_players(piece_type_1) | self.piece_bb_both_players(piece_type_2)
+    }
+
+    /// Whether `player` has at least one piece that is neither a king nor a pawn.
+    ///
+    /// This is the zugzwang proxy that guards null-move pruning: with only a king and pawns, a side
+    /// forced to move can be strictly worse off than if it could pass, so a null move overstates how
+    /// well it stands and the pruning becomes unsound. A side that still has a knight, bishop, rook,
+    /// or queen almost always has a non-losing move available, so the null move is a safe
+    /// approximation.
+    #[inline]
+    pub fn has_non_pawn_material(&self, player: Player) -> bool {
+        (self.piece_two_bb(PieceType::Knight, PieceType::Bishop, player)
+            | self.piece_two_bb(PieceType::Rook, PieceType::Queen, player))
+        .is_not_empty()
     }
     /// Returns the `Piece` at the given `Square`
     #[inline]
@@ -1364,6 +1464,94 @@ mod tests {
     #[should_panic(expected = "cannot make a null move")]
     fn position_rejects_null_move() {
         Position::blank().make_move(&Move::null());
+    }
+
+    /// A null move followed by its unmake must restore the position exactly, including the Zobrist
+    /// key, halfmove clock, castling rights, and check state — the same round-trip contract as an
+    /// ordinary make/unmake pair.
+    #[test]
+    fn null_move_round_trip_restores_position() {
+        init_globals();
+
+        for fen in [
+            "r3k2r/pppq1ppp/2np1n2/2b1p1B1/2B1P1b1/2NP1N2/PPPQ1PPP/R3K2R w KQkq - 4 8",
+            "rnbqkbnr/ppp1pppp/8/8/3pP3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1",
+            "8/2k5/8/8/8/5K2/6Q1/8 w - - 10 40",
+        ] {
+            let mut position = Position::from_fen(fen).unwrap();
+            let original = position.clone();
+
+            position.make_null_move();
+            position.unmake_null_move();
+
+            assert_eq!(position, original, "null-move round trip changed {fen}");
+        }
+    }
+
+    /// Making a null move passes the turn, discards the en-passant right, and leaves the Zobrist key
+    /// equal to a from-scratch hash of the resulting position — the incremental update must agree
+    /// with a full recomputation.
+    #[test]
+    fn null_move_flips_turn_clears_ep_and_keeps_zobrist_consistent() {
+        init_globals();
+
+        // Black to move with a legal en-passant capture available on e3.
+        let mut position =
+            Position::from_fen("rnbqkbnr/ppp1pppp/8/8/3pP3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1")
+                .unwrap();
+        assert_eq!(position.ep_square(), Some(Square::E3));
+        let clock_before = position.half_move_clock();
+
+        position.make_null_move();
+
+        assert_eq!(position.turn(), Player::WHITE);
+        assert_eq!(position.ep_square(), None);
+        assert_eq!(position.half_move_clock(), clock_before + 1);
+        assert_eq!(
+            position.zobrist(),
+            Zobrist::from_position(&position),
+            "incremental null-move hash disagrees with from-scratch recomputation"
+        );
+    }
+
+    /// Two null moves in succession return to the original side to move and round-trip cleanly, and
+    /// the intermediate key differs from both the start and a from-scratch recomputation agrees at
+    /// every step.
+    #[test]
+    fn double_null_move_round_trips() {
+        init_globals();
+
+        let mut position = Position::from_fen(
+            "r2q1rk1/ppp2ppp/2np1n2/2b1p3/2B1P3/2NP1N2/PPP2PPP/R2Q1RK1 w - - 0 9",
+        )
+        .unwrap();
+        let original = position.clone();
+
+        position.make_null_move();
+        assert_ne!(position.zobrist(), original.zobrist());
+        position.make_null_move();
+        assert_eq!(position.turn(), original.turn());
+        assert_eq!(position.zobrist(), Zobrist::from_position(&position));
+
+        position.unmake_null_move();
+        position.unmake_null_move();
+        assert_eq!(position, original);
+    }
+
+    /// The zugzwang proxy reports non-pawn material precisely: present when a side still has a
+    /// minor, rook, or queen, and absent in a king-and-pawn ending.
+    #[test]
+    fn has_non_pawn_material_detects_king_and_pawn_endings() {
+        init_globals();
+
+        let king_and_pawns =
+            Position::from_fen("4k3/pppppppp/8/8/8/8/PPPPPPPP/4K3 w - - 0 1").unwrap();
+        assert!(!king_and_pawns.has_non_pawn_material(Player::WHITE));
+        assert!(!king_and_pawns.has_non_pawn_material(Player::BLACK));
+
+        let with_rook = Position::from_fen("4k3/pppppppp/8/8/8/8/PPPPPPPP/R3K3 w - - 0 1").unwrap();
+        assert!(with_rook.has_non_pawn_material(Player::WHITE));
+        assert!(!with_rook.has_non_pawn_material(Player::BLACK));
     }
 
     #[test]
