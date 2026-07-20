@@ -1,11 +1,11 @@
 ---
 id: TASK-68.4
 title: 'Play Lichess games: per-game loop, clocks, move submission'
-status: Ready to Merge
+status: Done
 assignee:
   - '@george'
 created_date: '2026-07-19 22:34'
-updated_date: '2026-07-20 11:27'
+updated_date: '2026-07-20 11:38'
 labels: []
 dependencies:
   - TASK-68.3
