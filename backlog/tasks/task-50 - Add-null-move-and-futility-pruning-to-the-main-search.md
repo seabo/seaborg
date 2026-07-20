@@ -1,11 +1,11 @@
 ---
 id: TASK-50
 title: Add null move and futility pruning to the main search
-status: In Review
+status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-18 18:30'
-updated_date: '2026-07-20 19:28'
+updated_date: '2026-07-20 19:37'
 labels: []
 dependencies:
   - TASK-46
@@ -35,12 +35,12 @@ TODO sites: engine/src/search.rs:595 (futility), engine/src/search.rs:598 (null 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Futility pruning is implemented at step 8 and is disabled in PV nodes and when in check
-- [ ] #2 Null move pruning with a verification search is implemented at step 9 and is disabled in PV nodes, when in check, and in likely-zugzwang positions
-- [ ] #3 Both techniques are measured with the TASK-27 strength-regression script and show no strength loss, with results recorded in the implementation notes
-- [ ] #4 A fixed-depth search on a known position set returns the same best moves as before where pruning is inactive, confirming the guards
-- [ ] #5 The evaluation-quality assessment is recorded, including the decision to proceed or to defer
-- [ ] #6 The step 8 and step 9 TODO markers are replaced by implementations, with the numbered step comments retained
+- [x] #1 Futility pruning is implemented at step 8 and is disabled in PV nodes and when in check
+- [x] #2 Null move pruning with a verification search is implemented at step 9 and is disabled in PV nodes, when in check, and in likely-zugzwang positions
+- [x] #3 Both techniques are measured with the TASK-27 strength-regression script and show no strength loss, with results recorded in the implementation notes
+- [x] #4 A fixed-depth search on a known position set returns the same best moves as before where pruning is inactive, confirming the guards
+- [x] #5 The evaluation-quality assessment is recorded, including the decision to proceed or to defer
+- [x] #6 The step 8 and step 9 TODO markers are replaced by implementations, with the numbered step comments retained
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -93,3 +93,46 @@ Known failures: none
 
 Scope note for review: implementing null-move pruning required a null-move primitive on core Position (make_null_move/unmake_null_move). This was anticipated by the codebase — replay_last_move_deltas already documented the null-move carry-across as 'a constraint on whichever change introduces them' — so it is treated as in-scope additive work, not a structural change. The one non-obvious tuning decision (NULL_MOVE_MIN_DEPTH=5 to preserve exact shallow-mate detection) is documented at the constant and in the design note above.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @codex
+created: 2026-07-20 19:37
+---
+## Review verdict: APPROVED
+
+Reviewer: independent review per TASK_LIFECYCLE.md
+Base: ba6aec1
+Implementation target (code SHA): e6acc56
+Branch: task-50-null-move-futility-pruning
+
+### Verification (run on e6acc56 in the task worktree)
+- cargo fmt --check: PASS
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: PASS (fresh CARGO_TARGET_DIR, no warnings)
+- cargo test --workspace: PASS (engine 294 passed / 2 pre-existing ignored; all crates green)
+
+### Acceptance criteria
+- AC#1 futility (non-PV, not in check): implemented at Step 8, guards verified in code and by forward_pruning_does_not_change_sound_search_results.
+- AC#2 null move + verification (non-PV, not in check, zugzwang via has_non_pawn_material): implemented at Step 9; reduced-depth verification search suppresses NMP at the verifying ply via nmp_min_ply.
+- AC#3 strength: TASK-27 node-limited runs candidate vs base ba6aec1 recorded in notes; no strength loss, 0 crashes/forfeits (authoritative timed-self-play gate not runnable per docs, honestly caveated).
+- AC#4 fixed-depth equivalence: forward_pruning_does_not_change_sound_search_results asserts identical score+best move with pruning on vs off across 5 positions.
+- AC#5 eval-quality assessment recorded (tapered material+PST -> PROCEED).
+- AC#6 both TODO markers replaced; numbered Step 8/9/10 comments retained.
+
+### Notes checked
+- Null-window bounds mirror the Step 19 convention (width-1 window around beta); return path clamps unproven mate to the beta bound.
+- Temporary Move::null() marker in stack[ply].mov is overwritten per move in the loop, so it cannot leak into loop children.
+- Depth is i16, so reduction subtraction cannot underflow-panic; verification search terminates (reduced depth, no self-recursion at the verifying ply).
+- Movegen/make-unmake/perft hot paths are byte-identical (position changes are purely additive); perft/movegen speed benches are not applicable to this diff.
+- No code comment cites a task ID, AC, or finding ID.
+
+Verdict: all acceptance criteria proven, no blocking findings. Approving e6acc56 as the immutable code target. Moving to Ready to Merge.
+---
+<!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Implemented step 8 futility pruning and step 9 null-move pruning with verification in engine/src/search.rs, backed by a new make_null_move/unmake_null_move primitive and a has_non_pawn_material zugzwang proxy on core Position, plus Score::dec_one for the null window. All guards match the ACs: futility is non-PV / not-in-check / cp-alpha / near-horizon; null move adds eval>=beta, non-pawn material, and no-consecutive-null, with a reduced-depth verification search (NMP suppressed at the verifying ply) above NULL_MOVE_VERIFY_DEPTH. NULL_MOVE_MIN_DEPTH=5 preserves exact shallow-mate detection (documented at the constant). Verified on target e6acc56: cargo fmt --check PASS; cargo clippy --workspace --all-targets --all-features -- -D warnings PASS with a clean CARGO_TARGET_DIR; cargo test --workspace PASS (engine 294 passed, 2 pre-existing ignored). Guard-equivalence and tree-reduction tests confirm the pruning fires yet leaves sound-position results unchanged; TASK-27 node-limited strength runs (candidate vs base ba6aec1) show no loss.
+<!-- SECTION:FINAL_SUMMARY:END -->
