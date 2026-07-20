@@ -1,9 +1,11 @@
 ---
 id: TASK-69.1
 title: 'NNUE design contract: feature set, topology, quantization, file format, loss'
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-20 19:39'
+updated_date: '2026-07-20 21:07'
 labels:
   - nnue
   - design
@@ -29,3 +31,12 @@ This subtask is a decision record, not code. It is the contract subtasks .2 thro
 - [ ] #2 The file format section defines a version header sufficient for a loader to reject unknown or mismatched architectures deterministically
 - [ ] #3 The document states the self-play purity boundary: what internal priors are permitted and what external inputs are forbidden
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Research existing eval infrastructure: tapered eval score type/units, EvalState + eval_stack, PieceDeltaSink trait, board representation (square/piece/color indexing), workspace crate layout, docs conventions.
+2. Author docs/nnue-design-contract.md as a decision record covering: (a) input feature set — perspective-doubled 768x2 piece-square, no king buckets, with rationale; (b) network topology and the parameterizable dimensions (hidden width, activation, output scaling); (c) quantization scheme — integer types, scale factors, clipped-activation semantics, saturation/overflow, tying Rust and PyTorch paths; (d) on-disk file format — versioned header carrying architecture params + quant scales, deterministic rejection of unknown/mismatched files; (e) training target — blended search-score/game-WDL with a scheduled lambda; (f) self-play purity boundary in concrete terms (permitted internal priors, forbidden external inputs).
+3. Cross-check the contract against the real repo seam (square/piece/color conventions, eval units, PieceDeltaSink signature) so subtasks .2-.12 implement against accurate facts.
+4. Verify each acceptance criterion against the document; run repo-required checks (no code change, but confirm no regressions); hand off for review.
+<!-- SECTION:PLAN:END -->
