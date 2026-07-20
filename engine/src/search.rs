@@ -6,7 +6,7 @@ use super::ordering::{Loader, OrderedMoves, Phase, ScoredMoveList, Scorer};
 use super::pv_table::PVTable;
 use super::score::Score;
 use super::trace::Tracer;
-use super::tt::{Bound, Table};
+use super::tt::{Bound, Snapshot, Table};
 
 use core::mono_traits::{All as AllGen, Captures, Legal, QueenPromotions, Quiets};
 use core::mov::Move;
@@ -130,8 +130,46 @@ fn aspiration_bound(centre: Score, delta: i16) -> Score {
 /// A node either completed with a usable score or aborted before establishing one.
 type NodeResult = Option<Score>;
 
-fn should_razor(depth: Depth, eval: Score, alpha: Score) -> bool {
-    depth <= 6 && alpha.is_cp() && eval + Score::cp(426 + 252 * depth * depth) < alpha
+/// Extra razoring margin, in centipawns, demanded when the side to move is improving.
+///
+/// Razoring gives up on a node whose static evaluation sits so far below alpha that a quiescence
+/// check is unlikely to rescue it. When the side to move is *improving* — doing better than it was
+/// two plies ago — that verdict is less trustworthy, because the trend is upward, so the margin is
+/// widened and the node is razored less readily. Razoring only fires at `depth <= 6`, where the
+/// base margin is still small enough for this adjustment to change the decision; at higher draft
+/// the depth-squared term dominates and razoring effectively never triggers anyway.
+const RAZOR_IMPROVING_MARGIN: i16 = 64;
+
+fn should_razor(depth: Depth, eval: Score, alpha: Score, improving: bool) -> bool {
+    // The `depth <= 6` guard must be evaluated first: the depth-squared term overflows an `i16` at
+    // the drafts a real search reaches, and only the short-circuit keeps it from being computed
+    // there. The improving margin widens the threshold, razoring the node less readily.
+    depth <= 6
+        && alpha.is_cp()
+        && eval
+            + Score::cp(
+                426 + 252 * depth * depth + if improving { RAZOR_IMPROVING_MARGIN } else { 0 },
+            )
+            < alpha
+}
+
+/// Whether the side to move is doing better than the last time it was on move.
+///
+/// The *improving* signal compares this node's static evaluation against the static evaluation two
+/// plies earlier — the same side's previous turn. A rising evaluation means the position is
+/// consolidating and margin-based pruning can afford to be more cautious; a falling one means it is
+/// deteriorating. Margin-based techniques are conventionally widened or narrowed on this basis.
+///
+/// It is deliberately conservative when the comparison cannot be made. The root and its immediate
+/// child have no ply two steps back, and a node in check computes no static evaluation, so either
+/// operand may be absent; in every such case the position is treated as *not* improving, which
+/// applies the tighter margins rather than the more generous ones.
+#[inline]
+fn is_improving(current: Option<Score>, two_plies_ago: Option<Score>) -> bool {
+    match (current, two_plies_ago) {
+        (Some(now), Some(then)) => now > then,
+        _ => false,
+    }
 }
 
 /// Per-ply state for the node currently occupying that ply of the search path.
@@ -1023,6 +1061,10 @@ impl<'engine> Search<'engine> {
         // collision. Move legality is not part of that proof and never was — it filters some wrong
         // entries by accident, but says nothing about a move-less one. See the `tt` module docs.
         let tt_entry = self.tt.probe(self.pos.zobrist().0);
+        // Captured before the entry is consumed by the Step 4 cutoff filter below. The static
+        // evaluation is position-intrinsic, so a full-key hit supplies it directly and Step 6 skips
+        // recomputation — see [`Snapshot::eval`] for why this needs no clock gate, unlike the score.
+        let tt_eval = tt_entry.as_ref().and_then(Snapshot::eval);
         let mut tt_mov = None;
         match tt_entry.as_ref() {
             Some(entry) => {
@@ -1084,13 +1126,33 @@ impl<'engine> Search<'engine> {
         }
 
         // Step 6. Static evaluation.
-        let eval = self.evaluate();
+        //
+        // A verified hit already carries this position's static evaluation, which is intrinsic to
+        // the position, so it is reused directly instead of recomputed. In debug builds the reused
+        // value is checked against a fresh computation; the two can only differ under a genuine
+        // Zobrist collision, which the debug assertion would surface and which no test position
+        // produces.
+        let eval = match tt_eval {
+            Some(stored) => {
+                debug_assert_eq!(
+                    stored,
+                    self.evaluate(),
+                    "cached static evaluation disagrees with recomputation"
+                );
+                stored
+            }
+            None => self.evaluate(),
+        };
         self.stack[ply].eval = Some(eval);
+
+        // Whether the side to move is doing better than two plies ago. Read below by razoring, and
+        // available to every later margin-based technique from the per-ply stack.
+        let improving = is_improving(Some(eval), self.eval_two_plies_ago(ply));
 
         // Step 7. Razoring.
         // When eval is very low, check with quiescence whether it has any hope of raising alpha. If
         // not, return a fail low.
-        if should_razor(depth, eval, alpha) {
+        if should_razor(depth, eval, alpha, improving) {
             let value = self.quiesce::<Master, NonPv>(alpha - Score::cp(1), alpha, ply)?;
             if value < alpha {
                 return Some(value);
@@ -1323,6 +1385,7 @@ impl<'engine> Search<'engine> {
             self.tt.store(
                 self.pos.zobrist().0,
                 best_value,
+                self.stack[ply].eval,
                 Self::tt_draft(depth),
                 if best_value >= beta {
                     debug_assert!(
@@ -1494,6 +1557,15 @@ impl<'engine> Search<'engine> {
     fn clock_permits_tt_reuse(&self, entry_depth: u8) -> bool {
         self.pos.half_move_clock() + entry_depth as u32 + Self::HORIZON_SLACK
             < Position::FIFTY_MOVE_RULE_PLIES
+    }
+
+    /// The static evaluation recorded two plies before `ply`, i.e. at the same side's previous
+    /// turn. `None` at the root and its immediate child, which have no such ancestor, and `None`
+    /// when that ancestor was in check and computed no evaluation. This is the earlier operand of
+    /// the improving comparison; see [`is_improving`].
+    #[inline(always)]
+    fn eval_two_plies_ago(&self, ply: usize) -> Option<Score> {
+        ply.checked_sub(2).and_then(|p| self.stack[p].eval)
     }
 
     /// Returns the static evaluation, from the perspective of the side to move.
@@ -1671,6 +1743,9 @@ impl<'engine> Search<'engine> {
 
         // Step 3. Load transposition table entry.
         let tt_entry = self.tt.probe(self.pos.zobrist().0);
+        // Captured before the entry is consumed by the Step 4 cutoff filter. Reused as the stand-pat
+        // value at Step 5, which is what the static evaluation is here; see [`Snapshot::eval`].
+        let tt_eval = tt_entry.as_ref().and_then(Snapshot::eval);
         match tt_entry {
             Some(_) => self.trace.hash_hit(),
             None => self.trace.hash_miss(),
@@ -1713,9 +1788,24 @@ impl<'engine> Search<'engine> {
 
         let in_check = self.pos.in_check();
 
-        // Step 5. Static evaluation. Stand pat is not a legal option while in check.
-        if !in_check {
-            let stand_pat = self.evaluate();
+        // Step 5. Static evaluation. Stand pat is not a legal option while in check, so a node in
+        // check carries no static evaluation to publish. Otherwise a verified hit's cached
+        // evaluation is the stand-pat value directly — it is position-intrinsic, so there is no need
+        // to recompute it (see [`Snapshot::eval`]).
+        let eval = if in_check {
+            None
+        } else {
+            let stand_pat = match tt_eval {
+                Some(stored) => {
+                    debug_assert_eq!(
+                        stored,
+                        self.evaluate(),
+                        "cached static evaluation disagrees with recomputation"
+                    );
+                    stored
+                }
+                None => self.evaluate(),
+            };
 
             if stand_pat >= beta {
                 // The value returned is the hard-fail `beta`, but what is *known* is the stronger
@@ -1723,6 +1813,7 @@ impl<'engine> Search<'engine> {
                 // bound lets a later visit with a higher beta still cut off here.
                 self.store_quiescence(
                     stand_pat,
+                    Some(stand_pat),
                     Bound::Lower,
                     &Move::null(),
                     history_draws_on_entry,
@@ -1733,7 +1824,9 @@ impl<'engine> Search<'engine> {
             if alpha < stand_pat {
                 alpha = stand_pat;
             }
-        }
+
+            Some(stand_pat)
+        };
 
         if in_check {
             let moves = self.pos.generate::<BasicMoveList, AllGen, Legal>();
@@ -1768,7 +1861,7 @@ impl<'engine> Search<'engine> {
                 let score = child?.neg().inc_mate();
 
                 if score >= beta {
-                    self.store_quiescence(score, Bound::Lower, &mov, history_draws_on_entry);
+                    self.store_quiescence(score, eval, Bound::Lower, &mov, history_draws_on_entry);
                     return Some(beta);
                 }
 
@@ -1787,6 +1880,7 @@ impl<'engine> Search<'engine> {
 
         self.store_quiescence(
             alpha,
+            eval,
             self.quiescence_bound(alpha, alpha_on_entry),
             &best_move,
             history_draws_on_entry,
@@ -1812,6 +1906,7 @@ impl<'engine> Search<'engine> {
             // searches are gated on the score alone.
             self.store_quiescence(
                 Score::mate(0),
+                None,
                 Bound::Exact,
                 &Move::null(),
                 history_draws_on_entry,
@@ -1832,7 +1927,7 @@ impl<'engine> Search<'engine> {
             let score = child?.neg().inc_mate();
 
             if score >= beta {
-                self.store_quiescence(score, Bound::Lower, mov, history_draws_on_entry);
+                self.store_quiescence(score, None, Bound::Lower, mov, history_draws_on_entry);
                 return Some(beta);
             }
 
@@ -1844,6 +1939,7 @@ impl<'engine> Search<'engine> {
 
         self.store_quiescence(
             alpha,
+            None,
             self.quiescence_bound(alpha, alpha_on_entry),
             &best_move,
             history_draws_on_entry,
@@ -1877,6 +1973,7 @@ impl<'engine> Search<'engine> {
     fn store_quiescence(
         &self,
         score: Score,
+        eval: Option<Score>,
         bound: Bound,
         mov: &Move,
         history_draws_on_entry: u64,
@@ -1885,6 +1982,7 @@ impl<'engine> Search<'engine> {
             self.tt.store(
                 self.pos.zobrist().0,
                 score,
+                eval,
                 Self::QUIESCENCE_DRAFT,
                 bound,
                 mov,
@@ -2219,9 +2317,65 @@ mod tests {
     /// Razoring relies on a static centipawn evaluation, so mate and infinity bounds are excluded.
     #[test]
     fn razoring_only_applies_to_centipawn_bounds() {
-        assert!(should_razor(1, Score::cp(-1_000), Score::cp(0)));
-        assert!(!should_razor(1, Score::cp(-1_000), Score::mate(5)));
-        assert!(!should_razor(1, Score::cp(-1_000), Score::INF_P));
+        assert!(should_razor(1, Score::cp(-1_000), Score::cp(0), false));
+        assert!(!should_razor(1, Score::cp(-1_000), Score::mate(5), false));
+        assert!(!should_razor(1, Score::cp(-1_000), Score::INF_P, false));
+    }
+
+    /// The improving signal widens the razoring margin, so a node that would be razored when the
+    /// side is stagnating survives when it is improving. A deficit is chosen that sits between the
+    /// two margins: below the base margin it razors, but the extra [`RAZOR_IMPROVING_MARGIN`] lifts
+    /// `eval + margin` back above alpha when improving.
+    #[test]
+    fn razoring_is_more_reluctant_when_improving() {
+        let alpha = Score::cp(0);
+        // Base depth-1 margin is 426 + 252 = 678. A 700cp deficit clears it, razoring, but not the
+        // 678 + RAZOR_IMPROVING_MARGIN widened margin.
+        let eval = Score::cp(-700);
+        assert!(should_razor(1, eval, alpha, false));
+        assert!(!should_razor(1, eval, alpha, true));
+
+        // A deficit past even the widened margin razors regardless of the trend.
+        let deep = Score::cp(-2_000);
+        assert!(should_razor(1, deep, alpha, false));
+        assert!(should_razor(1, deep, alpha, true));
+    }
+
+    /// The improving signal is true exactly when this ply's static evaluation exceeds the same
+    /// side's evaluation two plies earlier, and false whenever either value is missing. Following
+    /// a per-side evaluation that rises and then falls, the signal is true through the ascent and
+    /// false through the descent, and it is false at the first two plies, which have no ancestor to
+    /// compare against.
+    #[test]
+    fn improving_tracks_a_rising_then_falling_evaluation() {
+        // Static evaluation by ply. Even plies (one side) climb 10, 20, 30 then fall to 15; odd
+        // plies (the other side) climb 5, 15 then fall to 8, 3.
+        let evals = [
+            Some(Score::cp(10)), // ply 0
+            Some(Score::cp(5)),  // ply 1
+            Some(Score::cp(20)), // ply 2  vs ply 0: 20 > 10 -> improving
+            Some(Score::cp(15)), // ply 3  vs ply 1: 15 > 5  -> improving
+            Some(Score::cp(30)), // ply 4  vs ply 2: 30 > 20 -> improving
+            Some(Score::cp(8)),  // ply 5  vs ply 3: 8  < 15 -> not
+            Some(Score::cp(15)), // ply 6  vs ply 4: 15 < 30 -> not
+            Some(Score::cp(3)),  // ply 7  vs ply 5: 3  < 8  -> not
+        ];
+        let expected = [false, false, true, true, true, false, false, false];
+
+        for ply in 0..evals.len() {
+            let two_back = ply.checked_sub(2).and_then(|p| evals[p]);
+            assert_eq!(
+                is_improving(evals[ply], two_back),
+                expected[ply],
+                "improving mismatched at ply {ply}"
+            );
+        }
+
+        // A node in check computes no evaluation, so the signal is false whether the missing value
+        // is the current ply or the earlier one.
+        assert!(!is_improving(None, Some(Score::cp(10))));
+        assert!(!is_improving(Some(Score::cp(10)), None));
+        assert!(!is_improving(None, None));
     }
 
     #[test]
@@ -2364,7 +2518,7 @@ mod tests {
             (Bound::Upper, Score::cp(-70), Score::cp(-70)),
         ] {
             let table = Table::new(1);
-            table.store(position.zobrist().0, stored, 0, bound, &Move::null());
+            table.store(position.zobrist().0, stored, None, 0, bound, &Move::null());
             let mut search = Search::new(position.clone(), &flag, None, &table);
 
             assert_eq!(
@@ -2581,6 +2735,7 @@ mod tests {
             table.store(
                 position.zobrist().0,
                 seeded_score,
+                None,
                 seeded_depth,
                 Bound::Exact,
                 &mov,
@@ -2620,6 +2775,7 @@ mod tests {
             table.store(
                 position.zobrist().0,
                 Score::cp(300),
+                None,
                 8,
                 Bound::Exact,
                 &Move::null(),
@@ -2826,6 +2982,7 @@ mod tests {
         table.store(
             position.zobrist().0,
             Score::cp(300),
+            None,
             8,
             Bound::Exact,
             &Move::null(),
@@ -2851,7 +3008,7 @@ mod tests {
         let position = Position::from_fen("k7/8/8/8/8/8/8/K7 w - - 0 1").unwrap();
         let flag = AtomicBool::new(false);
         let table = Table::new(1);
-        table.store(position.zobrist().0, seeded, depth, bound, mov);
+        table.store(position.zobrist().0, seeded, None, depth, bound, mov);
 
         let mut search = Search::new(position, &flag, None, &table);
         search.pvt = PVTable::new(4);
@@ -2946,6 +3103,7 @@ mod tests {
         seeded.store(
             position.zobrist().0,
             Score::cp(300),
+            None,
             Search::QUIESCENCE_DRAFT,
             Bound::Exact,
             &Move::null(),
@@ -3077,6 +3235,7 @@ mod tests {
         table.store(
             clashing_position.zobrist().0,
             Score::cp(300),
+            None,
             8,
             Bound::Exact,
             &Move::null(),
@@ -3146,6 +3305,7 @@ mod tests {
         engine.table.store(
             marker.zobrist().0,
             Score::cp(17),
+            None,
             1,
             Bound::Exact,
             &Move::null(),
@@ -3191,6 +3351,7 @@ mod tests {
         engine.table.store(
             marker.zobrist().0,
             Score::cp(17),
+            None,
             1,
             Bound::Exact,
             &Move::null(),

@@ -202,27 +202,40 @@ impl Default for PackedMove {
 // Packed data-word layout. The word is the second half of a slot; see [`Slot`].
 //
 //   bit 63      | occupied flag: 1 for a live entry, 0 for an empty slot
-//   bits 48..63 | reserved, always zero
+//   bits 48..63 | static evaluation: a 15-bit two's-complement centipawn value, or EVAL_NONE
 //   bits 42..48 | age
 //   bits 40..42 | bound
 //   bits 32..40 | depth
 //   bits 16..32 | score, as the little-endian bit pattern of an i16
 //   bits  0..16 | packed move
 //
-// Two invariants hold for every word ever written by [`Table::store`], and both are asserted in
-// `Snapshot::from_data`:
+// One invariant holds for every word ever written by [`Table::store`], asserted in
+// `Snapshot::from_data`: a live entry has the occupied flag set. That is what makes zeroed memory
+// empty by construction, so allocation and [`Table::clear`] need only write zeroes.
 //
-// 1. The reserved bits are zero. They are the only spare capacity in the entry, so leaving them
-//    provably zero is what lets a future field be added without a migration.
-// 2. A live entry has the occupied flag set. That is what makes zeroed memory empty by
-//    construction, so allocation and [`Table::clear`] need only write zeroes.
+// The static-evaluation field fills what used to be spare capacity in the word. A position's static
+// evaluation is intrinsic to the position, so caching it here lets a verified hit hand the value
+// back instead of recomputing it, and the improving heuristic read it against an earlier ply. There
+// is no spare bit left: a further field would need a wider entry rather than a migration into unused
+// bits.
 const MOVE_SHIFT: u32 = 0;
 const SCORE_SHIFT: u32 = 16;
 const DEPTH_SHIFT: u32 = 32;
 const BOUND_SHIFT: u32 = 40;
 const AGE_SHIFT: u32 = 42;
-const RESERVED_MASK: u64 = 0x7FFF << 48;
+const EVAL_SHIFT: u32 = 48;
 const OCCUPIED: u64 = 1 << 63;
+
+/// The width of the static-evaluation field, as a mask of its low bits before shifting.
+const EVAL_MASK: u16 = 0x7FFF;
+
+/// Sentinel stored in the static-evaluation field when an entry is written without one.
+///
+/// Some nodes store a result without ever computing a static evaluation — most obviously a node in
+/// check, which has no stand-pat value. Decoded as a 15-bit two's-complement number this pattern is
+/// -16384, which lies outside the centipawn range any real static evaluation occupies, so it can
+/// never be confused with a stored value.
+const EVAL_NONE: u16 = 0x4000;
 
 /// The number of distinct ages. Six bits, wrapping.
 const AGE_MODULUS: u8 = 64;
@@ -243,13 +256,13 @@ pub struct Snapshot {
     depth: u8,
     bound: Bound,
     age: u8,
+    eval: Option<Score>,
 }
 
 impl Snapshot {
     /// Decode a data word that has already been verified against `key`.
     #[inline(always)]
     fn from_data(key: u64, data: u64) -> Self {
-        debug_assert_eq!(data & RESERVED_MASK, 0, "reserved entry bits must be zero");
         debug_assert_ne!(data & OCCUPIED, 0, "snapshot decoded from an empty slot");
 
         Self {
@@ -259,6 +272,7 @@ impl Snapshot {
             depth: (data >> DEPTH_SHIFT) as u8,
             bound: Bound::from_bits(data >> BOUND_SHIFT),
             age: ((data >> AGE_SHIFT) as u8) & AGE_MASK,
+            eval: decode_eval((data >> EVAL_SHIFT) as u16 & EVAL_MASK),
         }
     }
 
@@ -299,6 +313,18 @@ impl Snapshot {
     #[inline(always)]
     pub fn age(&self) -> u8 {
         self.age
+    }
+
+    /// The cached static evaluation, or `None` if the entry was stored without one.
+    ///
+    /// Unlike [`Snapshot::score`], this value is safe to reuse from any verified hit without a
+    /// clock check. A static evaluation depends only on state the Zobrist key covers, so a full-key
+    /// match proves it is the evaluation of *this* position. The score carries the additional
+    /// fifty-move and repetition dependence that the score-reuse gate exists to contain; the static
+    /// evaluation does not, so a hit can always supply it in place of recomputation.
+    #[inline(always)]
+    pub fn eval(&self) -> Option<Score> {
+        self.eval
     }
 }
 
@@ -358,7 +384,6 @@ impl Slot {
     #[inline(always)]
     fn store(&self, key: u64, data: u64) {
         debug_assert_ne!(data & OCCUPIED, 0, "stored entry must be marked occupied");
-        debug_assert_eq!(data & RESERVED_MASK, 0, "reserved entry bits must be zero");
 
         self.data.store(data, Ordering::Relaxed);
         self.key_xor_data.store(key ^ data, Ordering::Relaxed);
@@ -611,7 +636,9 @@ impl Table {
     ///   search produced its result. The exact bonus therefore improves a candidate's effective
     ///   depth instead of overriding depth altogether. Ties refresh the entry. A store without a
     ///   move keeps the move already recorded, which is otherwise a common way for a fail-low
-    ///   re-search to erase a usable ordering hint.
+    ///   re-search to erase a usable ordering hint. A store without a static evaluation likewise
+    ///   keeps the evaluation already recorded: the evaluation is a property of the position, so an
+    ///   earlier node that computed it holds information a later move-less or in-check store lacks.
     /// * **Clash.** Otherwise a victim is chosen from the whole cluster by quality: shallower is
     ///   more replaceable, an exact bound is worth [`EXACT_BONUS`] plies of depth, and each step of
     ///   relative age costs [`AGE_PENALTY`] plies. Empty slots are always taken first. So a shallow
@@ -626,7 +653,15 @@ impl Table {
     /// Bounded and lock-free: one cluster scan and two relaxed stores, with no compare-exchange and
     /// no retry.
     #[inline]
-    pub fn store(&self, key: u64, score: Score, depth: u8, bound: Bound, mov: &Move) {
+    pub fn store(
+        &self,
+        key: u64,
+        score: Score,
+        eval: Option<Score>,
+        depth: u8,
+        bound: Bound,
+        mov: &Move,
+    ) {
         let cluster = self.cluster(key);
         let age = self.current_age();
         let mut packed = PackedMove::from_move(mov);
@@ -651,7 +686,10 @@ impl Table {
                     packed = existing.mov;
                 }
 
-                slot.store(key, pack(packed, score, depth, bound, age));
+                slot.store(
+                    key,
+                    pack(packed, score, eval.or(existing.eval), depth, bound, age),
+                );
                 return;
             }
 
@@ -668,7 +706,7 @@ impl Table {
             }
         }
 
-        cluster.slots[victim].store(key, pack(packed, score, depth, bound, age));
+        cluster.slots[victim].store(key, pack(packed, score, eval, depth, bound, age));
     }
 
     /// An estimate of table occupancy, in per mille, for UCI `hashfull` reporting.
@@ -706,13 +744,59 @@ impl Table {
 
 /// Build a data word. The inverse of [`Snapshot::from_data`].
 #[inline(always)]
-fn pack(mov: PackedMove, score: Score, depth: u8, bound: Bound, age: u8) -> u64 {
+fn pack(
+    mov: PackedMove,
+    score: Score,
+    eval: Option<Score>,
+    depth: u8,
+    bound: Bound,
+    age: u8,
+) -> u64 {
     OCCUPIED
         | ((mov.0 as u64) << MOVE_SHIFT)
         | (((score.to_i16() as u16) as u64) << SCORE_SHIFT)
         | ((depth as u64) << DEPTH_SHIFT)
         | ((bound as u64) << BOUND_SHIFT)
         | (((age & AGE_MASK) as u64) << AGE_SHIFT)
+        | ((encode_eval(eval) as u64) << EVAL_SHIFT)
+}
+
+/// Pack a static evaluation into the fifteen bits reserved for it, or the [`EVAL_NONE`] sentinel.
+///
+/// A static evaluation is a centipawn score bounded to `±10_000`, which fits fifteen bits of two's
+/// complement with room to spare, so the low fifteen bits of the `i16` are exactly its 15-bit
+/// representation. The sentinel occupies one otherwise-unreachable pattern, so no real evaluation
+/// can collide with it.
+#[inline(always)]
+fn encode_eval(eval: Option<Score>) -> u16 {
+    match eval {
+        Some(score) => {
+            let value = score.to_i16();
+            debug_assert!(
+                (-10_000..=10_000).contains(&value),
+                "static evaluation outside the fifteen-bit centipawn range"
+            );
+            (value as u16) & EVAL_MASK
+        }
+        None => EVAL_NONE,
+    }
+}
+
+/// Recover a static evaluation from its fifteen-bit field. The inverse of [`encode_eval`].
+///
+/// The `raw` argument is already masked to fifteen bits. The [`EVAL_NONE`] sentinel decodes to
+/// `None`; any other pattern is sign-extended from bit fourteen back into an `i16`. A torn read of
+/// an unverified slot can land here with an arbitrary in-range pattern, so the reconstruction must
+/// stay total: it uses [`Score::from_i16`] rather than a checked constructor, and replacement — the
+/// only caller that decodes unverified data — reads only depth, bound and age, never this field.
+#[inline(always)]
+fn decode_eval(raw: u16) -> Option<Score> {
+    debug_assert_eq!(raw & !EVAL_MASK, 0, "eval field decoded with high bits set");
+    if raw == EVAL_NONE {
+        None
+    } else {
+        Some(Score::from_i16(((raw << 1) as i16) >> 1))
+    }
 }
 
 /// How many ages ago `entry` was stored, relative to `current`.
@@ -744,7 +828,7 @@ mod tests {
     }
 
     fn store(table: &Table, key: u64, score: i16, depth: u8, bound: Bound) {
-        table.store(key, Score::cp(score), depth, bound, &Move::null());
+        table.store(key, Score::cp(score), None, depth, bound, &Move::null());
     }
 
     #[test]
@@ -850,7 +934,14 @@ mod tests {
             MoveType::PROMOTION,
         );
 
-        table.store(key, Score::mate(-7), 250, Bound::Lower, &mov);
+        table.store(
+            key,
+            Score::mate(-7),
+            Some(Score::cp(-1234)),
+            250,
+            Bound::Lower,
+            &mov,
+        );
 
         let snapshot = table.probe(key).expect("stored entry should be found");
         assert_eq!(snapshot.key(), key);
@@ -859,6 +950,69 @@ mod tests {
         assert_eq!(snapshot.bound(), Bound::Lower);
         assert_eq!(snapshot.age(), 0);
         assert_eq!(snapshot.mov(), Some(PackedMove::from_move(&mov)));
+        assert_eq!(snapshot.eval(), Some(Score::cp(-1234)));
+    }
+
+    /// The static-evaluation field survives a store-probe cycle across its whole range, and the
+    /// absent-evaluation sentinel round-trips to `None` rather than to a spurious score. The
+    /// extremes exercise the sign bit of the 15-bit two's-complement encoding in both directions.
+    #[test]
+    fn round_trips_the_static_evaluation_including_its_extremes() {
+        let table = Table::new(1);
+
+        for (i, eval) in [
+            Some(Score::cp(10_000)),
+            Some(Score::cp(-10_000)),
+            Some(Score::cp(1)),
+            Some(Score::cp(-1)),
+            Some(Score::zero()),
+            None,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let key = 0xe7a1_0000_0000_0000 | i as u64;
+            table.store(key, Score::cp(5), eval, 7, Bound::Exact, &Move::null());
+            assert_eq!(table.probe(key).unwrap().eval(), eval);
+        }
+    }
+
+    /// A store carrying no evaluation must not erase an evaluation an earlier store recorded for the
+    /// same key: the evaluation is intrinsic to the position, so the informed value is kept just as
+    /// a usable move would be. Conversely a store that does carry one refreshes it.
+    #[test]
+    fn a_move_less_or_eval_less_update_keeps_the_evaluation_already_recorded() {
+        let table = Table::new(1);
+        let key = 0x6e_u64;
+
+        table.store(
+            key,
+            Score::cp(10),
+            Some(Score::cp(55)),
+            5,
+            Bound::Exact,
+            &Move::null(),
+        );
+        table.store(key, Score::cp(-10), None, 10, Bound::Upper, &Move::null());
+        assert_eq!(
+            table.probe(key).unwrap().eval(),
+            Some(Score::cp(55)),
+            "an eval-less update discarded a stored evaluation"
+        );
+
+        table.store(
+            key,
+            Score::cp(-10),
+            Some(Score::cp(-40)),
+            11,
+            Bound::Upper,
+            &Move::null(),
+        );
+        assert_eq!(
+            table.probe(key).unwrap().eval(),
+            Some(Score::cp(-40)),
+            "a store carrying an evaluation did not refresh it"
+        );
     }
 
     #[test]
@@ -871,22 +1025,25 @@ mod tests {
             Score::cp(42),
             Score::zero(),
         ] {
-            table.store(1, score, 8, Bound::Exact, &Move::null());
+            table.store(1, score, None, 8, Bound::Exact, &Move::null());
             assert_eq!(table.probe(1).unwrap().score(), score);
         }
     }
 
     #[test]
-    fn reserved_bits_stay_zero_and_empty_slots_are_all_zero() {
+    fn a_live_entry_is_occupied_and_empty_slots_are_all_zero() {
         let table = Table::new(1);
         store(&table, 7, 100, 9, Bound::Upper);
 
         let (key_xor_data, data) = table.clusters[table.cluster_index(7)].slots[0].load();
-        assert_eq!(data & RESERVED_MASK, 0);
         assert_ne!(data & OCCUPIED, 0);
         assert_eq!(key_xor_data ^ data, 7);
 
-        // Untouched slots are exactly zero, which is what makes zeroed memory empty.
+        // Untouched slots are exactly zero, which is what makes zeroed memory empty. A zero data
+        // word decodes to an empty slot precisely because the occupied flag is clear, and its
+        // all-zero eval field is the `Score::cp(0)` pattern, never the [`EVAL_NONE`] sentinel — so
+        // an empty slot is never mistaken for an entry stored without an evaluation.
+        assert_ne!(0, EVAL_NONE);
         for slot in &table.clusters[table.cluster_index(7)].slots[1..] {
             assert_eq!(slot.load(), (0, 0));
         }
@@ -1205,8 +1362,8 @@ mod tests {
         let key = 0x8b_u64;
         let mov = Move::build(Square::G1, Square::F3, None, MoveType::QUIET);
 
-        table.store(key, Score::cp(10), 5, Bound::Exact, &mov);
-        table.store(key, Score::cp(-10), 10, Bound::Upper, &Move::null());
+        table.store(key, Score::cp(10), None, 5, Bound::Exact, &mov);
+        table.store(key, Score::cp(-10), None, 10, Bound::Upper, &Move::null());
 
         let snapshot = table.probe(key).unwrap();
         assert_eq!(snapshot.depth(), 10);
@@ -1418,6 +1575,7 @@ mod tests {
                             table.store(
                                 key,
                                 Score::cp(expected(key)),
+                                None,
                                 (round % 200) as u8,
                                 Bound::Exact,
                                 &Move::null(),
@@ -1459,6 +1617,7 @@ mod tests {
                         table.store(
                             key,
                             Score::cp(thread as i16),
+                            None,
                             20,
                             Bound::Exact,
                             &Move::null(),

@@ -3,9 +3,11 @@ id: TASK-64.12
 title: >-
   Store static evaluation in the transposition table and derive an improving
   signal
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-19 13:33'
+updated_date: '2026-07-20 15:11'
 labels:
   - search
   - transposition-table
@@ -45,3 +47,13 @@ A design question to settle: whether a stored evaluation should be trusted after
 - [ ] #5 A test asserts the improving signal is correct across a sequence where the evaluation rises and then falls
 - [ ] #6 Measured with the TASK-27 strength-regression script, with results recorded in the implementation notes
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. tt.rs: consume the 15 reserved data-word bits for a static-eval field (bits 48..63). Store the eval as Option<Score>: a 15-bit two's-complement centipawn value, with a dedicated sentinel for 'no eval'. Update pack/Snapshot::from_data, Snapshot::eval(), Table::store signature, layout docs, and the reserved-bit invariant. Add round-trip/none-sentinel tests.
+2. search.rs: capture the probed entry's stored eval before the entry is consumed. In Step 6 use the verified hit's stored eval instead of recomputing (position-intrinsic, so trusted from any full-key hit regardless of the clock gate); document the soundness argument beside the existing score-reuse rules. Pass the node's eval to the Step 24 store and to store_quiescence.
+3. Improving signal: add a pure is_improving(current, two_plies_ago) helper plus eval_two_plies_ago(ply), computed at every main-search node from the per-ply stack. Feed it into razoring (the one existing margin-based technique) by widening the razor margin when improving.
+4. Tests: unit-test is_improving across a rising-then-falling eval sequence; add tt eval round-trip and none tests; keep quiescence/search tt tests compiling with the new store signature.
+5. Run cargo fmt/clippy/test and the TASK-27 strength-regression script; record results in notes.
+<!-- SECTION:PLAN:END -->

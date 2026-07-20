@@ -46,7 +46,7 @@ fn lifecycle(c: &mut Criterion) {
     group.bench_function("clear 256MB", |b| {
         let mut table = Table::new(LIFECYCLE_MB);
         for i in 0..1_000_000 {
-            table.store(key(i), Score::cp(1), 1, Bound::Exact, &Move::null());
+            table.store(key(i), Score::cp(1), None, 1, Bound::Exact, &Move::null());
         }
         b.iter(|| table.clear())
     });
@@ -64,6 +64,7 @@ fn hot_path(c: &mut Criterion) {
         table.store(
             key(i),
             Score::cp(1),
+            None,
             (i % 64) as u8,
             Bound::Exact,
             &Move::null(),
@@ -95,6 +96,7 @@ fn hot_path(c: &mut Criterion) {
             table.store(
                 black_box(key(i)),
                 Score::cp(7),
+                None,
                 (i % 64) as u8,
                 Bound::Exact,
                 &Move::null(),
@@ -132,6 +134,7 @@ fn multi_worker(c: &mut Criterion) {
                                     table.store(
                                         k,
                                         Score::cp(3),
+                                        None,
                                         (i % 64) as u8,
                                         Bound::Exact,
                                         &Move::null(),
