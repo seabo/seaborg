@@ -1,9 +1,11 @@
 ---
 id: TASK-68.4
 title: 'Play Lichess games: per-game loop, clocks, move submission'
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@george'
 created_date: '2026-07-19 22:34'
+updated_date: '2026-07-20 10:10'
 labels: []
 dependencies:
   - TASK-68.3
@@ -40,3 +42,14 @@ Out of scope: reconnect/backoff, rate-limit handling, chat commands, proactive c
 - [ ] #6 The per-game loop has unit coverage against recorded game-stream NDJSON fixtures (no network)
 - [ ] #7 cargo fmt --check, clippy (workspace, all-targets, all-features, -D warnings), and cargo test --workspace all pass
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Add game-stream wire types + NDJSON parsing (game_stream.rs): GameEvent enum (gameFull/gameState/chatLine/opponentGone/other), GameFull, GameState, Side, ChatLine, OpponentGone, parse_game_line. Unit tests over recorded lines.
+2. Client methods: game_stream(game_id) -> iterator of GameEvent; play_move(game_id, uci) via post_empty to /api/bot/game/{id}/move/{uci}.
+3. Game runner (game.rs): reconstruct Position from initialFen(or startpos)+move list; detect our side via bot account id vs white/black id; on our turn derive SearchLimit from wtime/btime/winc/binc through engine time::TimeControl with config move_overhead_ms safety margin; choose move via a MoveChooser trait (EngineMoveChooser wraps SearchEngine; tests use a deterministic first-legal-move chooser); submit UCI; stop on terminal status / no legal move. Pure search_limit fn tested directly.
+4. Wire into run.rs: require_bot_account helper; run() shares Arc<LichessClient<HttpTransport>>+Arc<Config>+bot_id and, on GameStart, spawns a std::thread per game that runs play_game. run_event_loop keeps cap accounting from GameStart/GameFinish and takes a start_game callback. Update existing tests.
+5. Unit coverage: full-game NDJSON fixture drives play_game end-to-end asserting legal moves posted, position sync, terminal handling; cap enforcement at event-loop level.
+6. Run fmt/clippy/test.
+<!-- SECTION:PLAN:END -->
