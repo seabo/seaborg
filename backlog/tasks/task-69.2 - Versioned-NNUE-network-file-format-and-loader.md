@@ -1,11 +1,11 @@
 ---
 id: TASK-69.2
 title: Versioned NNUE network file format and loader
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:40'
-updated_date: '2026-07-20 23:28'
+updated_date: '2026-07-20 23:44'
 labels:
   - nnue
   - inference
