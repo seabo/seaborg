@@ -1,4 +1,4 @@
-use super::options::EngineOpt;
+use super::options::{EngineConfig, EngineOpt};
 use super::time::{TimeControl, TimingMode};
 
 /// A UCI message sent by the GUI to the engine.
@@ -437,10 +437,10 @@ impl<'a> Parser<'a> {
     fn parse_hash(&mut self) -> PResult {
         self.expect_kw(Keyword::Value)?;
 
+        // Range-check against the same bounds the handshake advertises and the engine applies, so a
+        // value outside them is rejected here rather than reaching the driver.
         let v = self.parse_integer()?;
-        if !(1..=1024).contains(&v) {
-            return Err(Error::ExpectedNumber);
-        }
+        EngineConfig::validate_hash_mb(v).map_err(|_| Error::ExpectedNumber)?;
 
         self.expect_end(Ok(Command::SetOption(EngineOpt::Hash(v))))
     }
