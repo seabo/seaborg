@@ -1,11 +1,11 @@
 ---
 id: TASK-50
 title: Add null move and futility pruning to the main search
-status: Changes Requested
+status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-18 18:30'
-updated_date: '2026-07-20 20:12'
+updated_date: '2026-07-20 20:15'
 labels: []
 dependencies:
   - TASK-46
@@ -46,13 +46,12 @@ TODO sites: engine/src/search.rs:595 (futility), engine/src/search.rs:598 (null 
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Evaluation assessment: confirm eval is tapered material+PST (MG/EG by phase), not material-only, so futility/null-move margins are meaningful. Record decision to proceed.
-2. Core: add Position::make_null_move/unmake_null_move (flip side to move, clear ep, bump halfmove clock + move number, recompute State, push/pop a NULL UndoableMove). No piece placement changes. Debug-assert not-in-check precondition and make/unmake symmetry. Unit-test zobrist round-trip, state restore, and repetition-scan parity.
-3. Search: add make_null_move/unmake_null_move wrappers carrying the White-relative eval accumulator across unchanged.
-4. Step 8 futility pruning: shared guards (non-PV, not in check, usable cp eval). Near horizon, skip quiet moves whose eval + depth-scaled margin cannot reach alpha; keep best_value as the futility bound. Never near mate scores. Decision computed at the Step 8 site, applied in the move loop.
-5. Step 9 null-move pruning with verification: guards (non-PV, not in check, eval >= beta, side has non-pawn material to avoid zugzwang, not already a null-move reply). Reduced-depth null search; on fail-high, run a verification search at reduced depth and prune only if it also fails high. Retain numbered step comments; replace only the TODO markers.
-6. Tests: node/depth-fixed best-move equivalence where guards disable pruning; unit tests for margins and zugzwang guard.
-7. Verification: cargo fmt --check, clippy -D warnings, cargo test --workspace. Run node-limited fastchess match (base ba6aec1 vs candidate) for a strength signal; record W/D/L and Elo estimate in notes with the timed-self-play caveat.
+1. Reuse this Changes-Requested branch/worktree; integrate current master (pinned 02e3ba5, which carries TASK-20's core->chess rename) into the branch via merge.
+2. Resolve merge conflicts, letting git relocate core/src/position/mod.rs changes onto chess/src/position/mod.rs.
+3. Fix the two NEW test functions in engine/src/search.rs to call chess::init::init_globals() instead of core::init::init_globals(); sweep for any other core:: paths the diff introduced.
+4. Re-run required checks: cargo fmt --check, cargo clippy --workspace --all-targets --all-features -- -D warnings, cargo test --workspace.
+5. Commit the integrated result; record rework notes and a fresh handoff (base pinned 02e3ba5, new implementation target SHA). Prior approval of e6acc56 is invalidated.
+6. Move to In Review for a fresh independent review.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
