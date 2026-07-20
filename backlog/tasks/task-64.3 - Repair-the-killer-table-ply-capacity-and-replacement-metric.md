@@ -1,11 +1,11 @@
 ---
 id: TASK-64.3
 title: Repair the killer table ply capacity and replacement metric
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-19 13:31'
-updated_date: '2026-07-20 11:46'
+updated_date: '2026-07-20 12:00'
 labels:
   - search
   - move-ordering
@@ -40,15 +40,15 @@ This task retains the current staged-ordering architecture rather than requiring
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The killer table uses MAX_PLY, or another single authoritative main-search ply bound justified by measurement, and a killer stored at the deepest supported main-search ply is retrievable there
-- [ ] #2 Probe is observationally read-only and slot replacement does not use legality, probe frequency or another exposure metric as a proxy for cutoff usefulness
-- [ ] #3 Distinct quiet beta cutoffs use a documented deterministic replacement policy; by default the newest successful killer occupies slot one and the previous distinct slot-one move shifts to slot two
-- [ ] #4 Tests cover deep-ply retrieval, neighbouring-ply isolation, duplicate stores, deterministic returned order, replacement after three distinct cutoffs and the exact supported boundary
-- [ ] #5 Killer legality validation and hash/killer/quiet duplicate suppression remain intact before unsafe move execution
-- [ ] #6 Killer reset and persistence semantics are documented and tested across iterative-deepening iterations, separate Search::run calls and the ownership model expected for Lazy SMP workers
-- [ ] #7 Telemetry distinguishes killer attempts and beta cutoffs by slot after duplicate suppression rather than reporting availability alone
-- [ ] #8 Fixed-depth node counts and search throughput are recorded for killers disabled, one recency slot and two recency slots, with the selected policy justified by the results
-- [ ] #9 The selected design is measured with the TASK-27 strength-regression script and results are recorded in implementation notes
+- [x] #1 The killer table uses MAX_PLY, or another single authoritative main-search ply bound justified by measurement, and a killer stored at the deepest supported main-search ply is retrievable there
+- [x] #2 Probe is observationally read-only and slot replacement does not use legality, probe frequency or another exposure metric as a proxy for cutoff usefulness
+- [x] #3 Distinct quiet beta cutoffs use a documented deterministic replacement policy; by default the newest successful killer occupies slot one and the previous distinct slot-one move shifts to slot two
+- [x] #4 Tests cover deep-ply retrieval, neighbouring-ply isolation, duplicate stores, deterministic returned order, replacement after three distinct cutoffs and the exact supported boundary
+- [x] #5 Killer legality validation and hash/killer/quiet duplicate suppression remain intact before unsafe move execution
+- [x] #6 Killer reset and persistence semantics are documented and tested across iterative-deepening iterations, separate Search::run calls and the ownership model expected for Lazy SMP workers
+- [x] #7 Telemetry distinguishes killer attempts and beta cutoffs by slot after duplicate suppression rather than reporting availability alone
+- [x] #8 Fixed-depth node counts and search throughput are recorded for killers disabled, one recency slot and two recency slots, with the selected policy justified by the results
+- [x] #9 The selected design is measured with the TASK-27 strength-regression script and results are recorded in implementation notes
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -131,4 +131,40 @@ Verification:
 - AC#9 TASK-27 strength SPRT (candidate 18e647f == engine code of target 9413b64, vs baseline f84b6d8, tc=8+0.08, 200 games): AUTHORITATIVE INCONCLUSIVE, LLR=-0.26, 0 forfeits; recorded in notes
 Known failures: none
 ---
+
+author: @claude
+created: 2026-07-20 12:00
+---
+Review attempt: 1
+Reviewed branch: task-64.3-killer-table-repair
+Reviewed implementation: 9413b64
+Verdict: approved
+
+All nine acceptance criteria are proven by objective evidence against the immutable base f84b6d8 -> target 9413b64 diff (post-target commit 8de3429 touches only the task file).
+
+Findings: none blocking.
+
+AC evidence:
+- AC#1: KillerTable::new(MAX_PLY, KILLER_SLOTS); deepest main-search ply running a move loop is 254 (node hands to quiescence at ply+1 >= MAX_PLY, search.rs:944), inside the 256-row table. probe/store share the same rows.len() boundary (killer.rs test the_last_supported_ply_stores_and_the_next_is_dropped).
+- AC#2: probe(&self) is read-only; replacement is pure recency with no legality/exposure metric.
+- AC#3: documented deterministic recency policy; tests returned_order_is_newest_first, a_third_distinct_cutoff_evicts_the_oldest.
+- AC#4: deep-ply, neighbouring-ply isolation, duplicate/no-op/promotion stores, deterministic order, three-cutoff eviction, exact boundary all covered by killer.rs tests.
+- AC#5: probe still validates pseudo-legality; staged hash/killer/quiet duplicate suppression unchanged; slot_of attribution does not alter execution.
+- AC#6: run() resets kt alongside history; tests killers_persist_across_iterative_deepening_iterations, a_new_search_run_starts_from_an_empty_killer_table, separate_searches_own_independent_killer_tables, reset_clears_every_ply.
+- AC#7: trace killer_attempt/killer_cutoff indexed by slot, attributed via Phase::Killers + slot_of after duplicate suppression; report_telemetry prints per-slot rates.
+- AC#8: fixed-depth node counts + throughput for KILLER_SLOTS 0/1/2 recorded in notes with policy justification.
+- AC#9: TASK-27 SPRT recorded (INCONCLUSIVE, 200 games, LLR=-0.26, 0 forfeits); candidate 18e647f verified engine-identical to 9413b64 (diff is only example formatting + a test-local mut).
+
+Verification (run on the target):
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (fresh CARGO_TARGET_DIR, no warnings)
+- cargo test --workspace: pass (engine 284 passed / 2 pre-existing ignored; all suites 0 failed)
+- Scope: only killer.rs, search.rs, trace.rs, new examples/killer_ablation.rs, and the task file; no new #[allow]; perft/movegen hot paths untouched so those benches are not the relevant gate.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Replaced the killer table's 21-ply cap and exposure-counter replacement with a fixed two-slot recency table over the full MAX_PLY range. Probe is now observationally read-only (`&self`, no counters, no legality/exposure feedback); a distinct quiet beta cutoff installs the newest killer in slot one and shifts the previous distinct move to slot two (re-store of slot one is a no-op, lower-slot promotion never duplicates). Killer width is a compile-time KILLER_SLOTS const (0/1/2, shipped 2) so the ablation runs one search path. Telemetry now records per-slot killer attempts and beta cutoffs after duplicate suppression instead of availability. Killers are search-scoped: retained across iterative-deepening iterations, reset at the end of each Search::run, owned per worker. Verified on implementation target 9413b64: cargo fmt --check pass; cargo clippy --workspace --all-targets --all-features -- -D warnings pass (clean CARGO_TARGET_DIR); cargo test --workspace pass (engine 284 passed/2 pre-existing ignored, all suites 0 failed). AC#8 node-count/throughput ablation (KILLER_SLOTS 0/1/2) and AC#9 TASK-27 SPRT (candidate 18e647f verified engine-identical to 9413b64: only example formatting and a test-local mut differ) recorded in implementation notes; SPRT INCONCLUSIVE at 200 games with no evidence of a >5 Elo regression.
+<!-- SECTION:FINAL_SUMMARY:END -->
