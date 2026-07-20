@@ -4,6 +4,8 @@
 use std::ops::AddAssign;
 use std::time::{Duration, Instant};
 
+use super::killer::MAX_KILLER_SLOTS;
+
 /// Object responsible for tracing data about the search.
 pub struct Tracer {
     /// The time the search commenced.
@@ -27,7 +29,18 @@ pub struct Tracer {
     /// Records the duration between start and end of search. Only populated with `Some(duration)`
     /// when `end_search` is called.
     elapsed: Option<Duration>,
-    pub killers_per_node: Averager<u32>,
+    /// Killer moves searched, indexed by the recency slot they came from, counted after staged
+    /// ordering has suppressed any killer that duplicated the hash move.
+    ///
+    /// This is effectiveness data, not availability: a slot is charged an attempt only when a killer
+    /// from it was actually searched as a distinct move, and [`killer_cutoffs`](Self::killer_cutoffs)
+    /// records how many of those attempts produced a beta cutoff. The ratio measures whether a slot
+    /// earns its place in the ordering. Counting how often a killer was merely legal or offered would
+    /// measure exposure instead, which is what this deliberately replaces.
+    killer_attempts: [u64; MAX_KILLER_SLOTS],
+    /// Beta cutoffs caused by a searched killer, indexed by the recency slot it came from, counted on
+    /// the same post-suppression basis as [`killer_attempts`](Self::killer_attempts).
+    killer_cutoffs: [u64; MAX_KILLER_SLOTS],
     pub hash_found: Averager<u32>,
 }
 
@@ -50,9 +63,32 @@ impl Tracer {
             hash_collisions: 0,
             hash_misses: 0,
             elapsed: None,
-            killers_per_node: Averager::new(0),
+            killer_attempts: [0; MAX_KILLER_SLOTS],
+            killer_cutoffs: [0; MAX_KILLER_SLOTS],
             hash_found: Averager::new(0),
         }
+    }
+
+    /// Record that a killer from recency `slot` was searched as a distinct move.
+    #[inline(always)]
+    pub fn killer_attempt(&mut self, slot: usize) {
+        self.killer_attempts[slot] += 1;
+    }
+
+    /// Record that a searched killer from recency `slot` produced a beta cutoff.
+    #[inline(always)]
+    pub fn killer_cutoff(&mut self, slot: usize) {
+        self.killer_cutoffs[slot] += 1;
+    }
+
+    /// Killers searched per recency slot, after duplicate suppression.
+    pub fn killer_attempts(&self) -> [u64; MAX_KILLER_SLOTS] {
+        self.killer_attempts
+    }
+
+    /// Beta cutoffs caused by a searched killer per recency slot, after duplicate suppression.
+    pub fn killer_cutoffs(&self) -> [u64; MAX_KILLER_SLOTS] {
+        self.killer_cutoffs
     }
 
     /// To be called immediately before a new search commences. Used for timing of NPS measurements.
