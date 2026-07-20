@@ -1,11 +1,11 @@
 ---
 id: TASK-69.3
 title: NNUE feature encoding and accumulator as a PieceDeltaSink
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:40'
-updated_date: '2026-07-20 22:58'
+updated_date: '2026-07-20 23:23'
 labels:
   - nnue
   - inference
@@ -42,6 +42,22 @@ The accumulator plugs into the existing seam: Position::replay_last_move_deltas 
 6. Run cargo fmt --check, clippy -D warnings, cargo test --workspace. Hand off for review. No forward pass/scoring and no Search wiring (deferred to TASK-69.4).
 <!-- SECTION:PLAN:END -->
 
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented the NNUE feature encoding and accumulator in a new engine/src/nnue.rs module (sibling of eval, per the design contract), registered as pub mod nnue in engine/src/lib.rs.
+
+- feature_index(perspective, piece, square) implements the contract's normative formula: oriented = perspective.relative_square(square).index(); piece_type_0 = PieceType - 1 (Pawn=0..King=5); side = 0 (friendly) or 384 (enemy); index = oriented + 64*piece_type_0 + side, in 0..768. Reuses relative_square and PieceType ordinals exactly as the contract specifies.
+- FeatureTransformer: in-memory i16 first-layer weights (INPUT_DIM x H, feature-major so a feature's H-column is contiguous, matching the on-disk blob layout) plus i16 bias. Constructor enforces H a positive multiple of 16 and correct lengths. Kept minimal to what the accumulator needs; the TASK-69.2 loader will construct one from a file.
+- Accumulator: two per-perspective i16 activation vectors (White slot 0, Black slot 1), seeded to bias. Implements PieceDeltaSink: add/remove fold one weight column into each perspective. from_position rebuilds from scratch and is the equivalence reference, driving the same add path (single source of the per-piece arithmetic), mirroring EvalState::from_position. PartialEq compares activations only; Debug prints the two vectors.
+
+Scope: no forward pass, scoring, or Search wiring in this task (deferred to TASK-69.4, which owns the Search::evaluate selection seam per the design contract). The at-every-node incremental-vs-from-scratch guarantee is validated by the subtree-walk test, the pattern EvalState uses.
+
+Design note: activations use i16 arithmetic (plain +=/-=), so a debug build panics on overflow rather than silently wrapping, matching the contract's 'i16 overflow is a defect, not a wrap'. Both incremental and from-scratch paths use identical commutative/associative integer addition, so they agree bit-for-bit. Test weights are bounded (|w|<=7, |bias|<=2) so the <=32 active features per perspective stay far inside i16.
+
+Note for the reviewer/integrator: TASK-69.2 (file format/loader) is being implemented in parallel and will also touch the nnue module; a merge-time collision on the module is possible and is an integration concern, not a defect here.
+<!-- SECTION:NOTES:END -->
+
 ## Comments
 
 <!-- COMMENTS:BEGIN -->
@@ -49,5 +65,21 @@ author: @claude
 created: 2026-07-20 22:58
 ---
 Claiming for implementation on task-69.3-nnue-accumulator.
+---
+
+author: @claude
+created: 2026-07-20 23:23
+---
+Implementation handoff
+Branch: task-69.3-nnue-accumulator
+Worktree: /Users/seabo/seaborg-worktrees/task-69.3-nnue-accumulator
+Base: 6d3d4ac98a40a455959b4cea18d0b0a82b0c7867
+Implementation target: 9d2096a5f5b8f418a760f9b76af636ebb2e4bd98
+Resolved findings: none
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean, exit 0)
+- cargo test --workspace: pass (engine 308 passed / 0 failed / 2 ignored, incl. 5 new nnue tests; workspace suites all green)
+Known failures: none
 ---
 <!-- COMMENTS:END -->
