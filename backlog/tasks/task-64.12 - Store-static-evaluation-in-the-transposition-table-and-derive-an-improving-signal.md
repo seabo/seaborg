@@ -3,11 +3,11 @@ id: TASK-64.12
 title: >-
   Store static evaluation in the transposition table and derive an improving
   signal
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-19 13:33'
-updated_date: '2026-07-20 16:47'
+updated_date: '2026-07-20 16:55'
 labels:
   - search
   - transposition-table
