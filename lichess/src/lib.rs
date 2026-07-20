@@ -18,6 +18,7 @@ pub mod error;
 pub mod event;
 pub mod game;
 pub mod game_stream;
+pub mod matchmaking;
 pub mod policy;
 pub mod run;
 pub mod shutdown;

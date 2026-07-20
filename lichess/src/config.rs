@@ -22,6 +22,8 @@ pub struct Config {
     pub challenge: ChallengePolicy,
     /// Engine tuning applied to each game.
     pub engine: EngineSettings,
+    /// Proactive matchmaking: whether and how to challenge other bots when idle.
+    pub matchmaking: MatchmakingConfig,
     /// The most games to play at once. Challenges that would exceed this are
     /// declined until a game finishes.
     pub max_concurrent_games: u32,
@@ -32,6 +34,7 @@ impl Default for Config {
         Config {
             challenge: ChallengePolicy::default(),
             engine: EngineSettings::default(),
+            matchmaking: MatchmakingConfig::default(),
             max_concurrent_games: 1,
         }
     }
@@ -99,6 +102,128 @@ impl Config {
         if c.min_rating > c.max_rating {
             return Err(Error::Config(
                 "challenge.min_rating exceeds max_rating".into(),
+            ));
+        }
+        self.matchmaking.validate(self.max_concurrent_games)?;
+        Ok(())
+    }
+}
+
+/// Which of rated/casual to seek when issuing a matchmaking challenge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MatchmakingMode {
+    /// Always challenge for a rated game.
+    Rated,
+    /// Always challenge for a casual game.
+    Casual,
+    /// Alternate between rated and casual across successive challenges.
+    Random,
+}
+
+/// Configuration for proactive matchmaking.
+///
+/// When [`enabled`](MatchmakingConfig::enabled) is false (the default) the bot is
+/// purely reactive and none of the other fields have any effect: it never issues
+/// an outgoing challenge and behaves exactly as a build without matchmaking. The
+/// remaining fields describe who to challenge, with what time control, and how
+/// often, and only come into play once matchmaking is turned on.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MatchmakingConfig {
+    /// Master switch. Off by default so existing reactive behaviour is unchanged.
+    pub enabled: bool,
+    /// Variant keys to draw from when composing a challenge (e.g. `standard`).
+    pub variants: Vec<String>,
+    /// Initial clock times, in seconds, to draw from.
+    pub initial_seconds: Vec<u32>,
+    /// Clock increments, in seconds, to draw from.
+    pub increment_seconds: Vec<u32>,
+    /// Inclusive lower bound on a candidate opponent's rating for the chosen
+    /// time control's speed.
+    pub min_rating: u32,
+    /// Inclusive upper bound on a candidate opponent's rating for the chosen
+    /// time control's speed.
+    pub max_rating: u32,
+    /// Whether issued challenges are rated, casual, or alternating.
+    pub mode: MatchmakingMode,
+    /// How long the bot must be idle (no games in progress) before it starts
+    /// seeking an opponent, in seconds.
+    pub idle_timeout_seconds: u64,
+    /// Minimum gap between successive outgoing challenges, in seconds, so a run
+    /// of declines or cancellations does not spam the pool.
+    pub min_challenge_interval_seconds: u64,
+    /// Concurrent-game slots held back from matchmaking so a human can always
+    /// still challenge the bot. Matchmaking treats the cap as
+    /// `max_concurrent_games - reserved_human_slots`.
+    pub reserved_human_slots: u32,
+    /// Account ids never to challenge, however eligible they otherwise look.
+    pub block_list: Vec<String>,
+    /// After a bot declines a challenge, how long to avoid re-challenging that
+    /// same bot, in seconds.
+    pub decline_backoff_seconds: u64,
+}
+
+impl Default for MatchmakingConfig {
+    fn default() -> Self {
+        MatchmakingConfig {
+            enabled: false,
+            variants: vec!["standard".to_string()],
+            // 1+0, 3+2, 5+3: a spread of bullet and blitz controls other bots
+            // commonly accept.
+            initial_seconds: vec![60, 180, 300],
+            increment_seconds: vec![0, 2, 3],
+            min_rating: 0,
+            max_rating: 4000,
+            mode: MatchmakingMode::Random,
+            idle_timeout_seconds: 30,
+            min_challenge_interval_seconds: 30,
+            reserved_human_slots: 0,
+            block_list: Vec::new(),
+            decline_backoff_seconds: 3600,
+        }
+    }
+}
+
+impl MatchmakingConfig {
+    /// Reject a matchmaking configuration that could never issue a sensible
+    /// challenge, so a mistake surfaces at startup rather than as a bot that
+    /// silently never seeks a game.
+    ///
+    /// The pool and slot checks only apply when matchmaking is enabled: a
+    /// disabled section is inert, so an empty pool there is harmless and left
+    /// alone. The rating-bound ordering is always checked because an inverted
+    /// bound is a mistake regardless.
+    fn validate(&self, max_concurrent_games: u32) -> Result<()> {
+        if self.min_rating > self.max_rating {
+            return Err(Error::Config(
+                "matchmaking.min_rating exceeds max_rating".into(),
+            ));
+        }
+        if !self.enabled {
+            return Ok(());
+        }
+        if self.variants.is_empty() {
+            return Err(Error::Config(
+                "matchmaking.variants is empty but matchmaking is enabled".into(),
+            ));
+        }
+        if self.initial_seconds.is_empty() {
+            return Err(Error::Config(
+                "matchmaking.initial_seconds is empty but matchmaking is enabled".into(),
+            ));
+        }
+        if self.increment_seconds.is_empty() {
+            return Err(Error::Config(
+                "matchmaking.increment_seconds is empty but matchmaking is enabled".into(),
+            ));
+        }
+        // Every game slot reserved for humans is a slot matchmaking can never
+        // use, so reserving the whole cap would leave matchmaking permanently
+        // unable to start a game.
+        if self.reserved_human_slots >= max_concurrent_games {
+            return Err(Error::Config(
+                "matchmaking.reserved_human_slots leaves no slot for matchmaking games".into(),
             ));
         }
         Ok(())
@@ -256,6 +381,96 @@ mod tests {
         // No path given and the default file is absent in this working dir.
         let config = Config::load(None).unwrap();
         assert_eq!(config, Config::default());
+    }
+
+    #[test]
+    fn matchmaking_is_disabled_by_default() {
+        let m = &Config::default().matchmaking;
+        assert!(!m.enabled);
+        assert_eq!(m.mode, MatchmakingMode::Random);
+        assert_eq!(m.variants, vec!["standard".to_string()]);
+        assert!(m.block_list.is_empty());
+    }
+
+    #[test]
+    fn matchmaking_section_parses_and_rejects_unknown_keys() {
+        let config = Config::parse(
+            r#"
+                max_concurrent_games = 4
+                [matchmaking]
+                enabled = true
+                mode = "rated"
+                initial_seconds = [60, 120]
+                increment_seconds = [0]
+                block_list = ["evilbot"]
+                reserved_human_slots = 1
+            "#,
+        )
+        .unwrap();
+        assert!(config.matchmaking.enabled);
+        assert_eq!(config.matchmaking.mode, MatchmakingMode::Rated);
+        assert_eq!(config.matchmaking.initial_seconds, vec![60, 120]);
+        assert_eq!(config.matchmaking.block_list, vec!["evilbot".to_string()]);
+
+        let err = Config::parse("[matchmaking]\nno_such_key = 1").unwrap_err();
+        assert!(matches!(err, Error::Config(_)));
+    }
+
+    #[test]
+    fn enabled_matchmaking_with_empty_pool_is_rejected() {
+        let err = Config::parse(
+            r#"
+                [matchmaking]
+                enabled = true
+                variants = []
+            "#,
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::Config(_)));
+    }
+
+    #[test]
+    fn disabled_matchmaking_tolerates_empty_pools() {
+        // A section left disabled is inert, so an empty pool is not an error.
+        let config = Config::parse(
+            r#"
+                [matchmaking]
+                enabled = false
+                variants = []
+                initial_seconds = []
+            "#,
+        )
+        .unwrap();
+        assert!(!config.matchmaking.enabled);
+    }
+
+    #[test]
+    fn reserving_every_slot_for_humans_is_rejected() {
+        // With one game slot and one reserved for humans, matchmaking could never
+        // start a game, so enabling it that way is a configuration error.
+        let err = Config::parse(
+            r#"
+                max_concurrent_games = 1
+                [matchmaking]
+                enabled = true
+                reserved_human_slots = 1
+            "#,
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::Config(_)));
+    }
+
+    #[test]
+    fn inverted_matchmaking_rating_bounds_are_rejected_even_when_disabled() {
+        let err = Config::parse(
+            r#"
+                [matchmaking]
+                min_rating = 2000
+                max_rating = 1000
+            "#,
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::Config(_)));
     }
 
     #[test]

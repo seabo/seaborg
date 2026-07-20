@@ -8,6 +8,7 @@ use crate::account::Account;
 use crate::error::{Error, Result};
 use crate::event::{parse_line, Event};
 use crate::game_stream::{parse_game_line, GameEvent};
+use crate::matchmaking::{parse_bot_line, BotInfo, ChallengeSpec};
 use crate::policy::DeclineReason;
 use crate::transport::Transport;
 
@@ -49,6 +50,40 @@ impl<T: Transport> LichessClient<T> {
             .post_form(
                 &format!("/api/challenge/{id}/decline"),
                 &[("reason", reason.as_str())],
+            )
+            .map(drop)
+    }
+
+    /// Fetch up to `count` currently-online bots for matchmaking.
+    ///
+    /// `GET /api/bot/online` is an NDJSON stream of one bot per line; this reads it
+    /// to completion (bounded by `count`) into typed [`BotInfo`]s. Blank keepalive
+    /// lines carry no bot and are skipped.
+    pub fn online_bots(&self, count: u32) -> Result<Vec<BotInfo>> {
+        let body = self.transport.get(&format!("/api/bot/online?nb={count}"))?;
+        body.lines()
+            .filter_map(|line| parse_bot_line(line).transpose())
+            .collect()
+    }
+
+    /// Issue an outgoing challenge to `username` for the game described by `spec`.
+    ///
+    /// Sends the challenge with a random color so the bot does not always take the
+    /// same side; the clock and rated flag come from the composed spec.
+    pub fn create_challenge(&self, username: &str, spec: &ChallengeSpec) -> Result<()> {
+        let limit = spec.initial_seconds.to_string();
+        let increment = spec.increment_seconds.to_string();
+        let rated = spec.rated.to_string();
+        self.transport
+            .post_form(
+                &format!("/api/challenge/{username}"),
+                &[
+                    ("rated", rated.as_str()),
+                    ("clock.limit", limit.as_str()),
+                    ("clock.increment", increment.as_str()),
+                    ("variant", spec.variant.as_str()),
+                    ("color", "random"),
+                ],
             )
             .map(drop)
     }
