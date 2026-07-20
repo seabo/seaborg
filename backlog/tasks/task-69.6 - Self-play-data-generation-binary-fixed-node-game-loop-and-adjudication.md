@@ -1,11 +1,11 @@
 ---
 id: TASK-69.6
 title: 'Self-play data generation binary: fixed-node game loop and adjudication'
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:41'
-updated_date: '2026-07-20 23:44'
+updated_date: '2026-07-20 23:56'
 labels:
   - nnue
   - datagen
