@@ -1,9 +1,11 @@
 ---
 id: TASK-71
 title: 'Lichess bot matchmaking: issue outgoing challenges to other bots'
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@george'
 created_date: '2026-07-20 23:23'
+updated_date: '2026-07-20 23:42'
 labels: []
 dependencies: []
 references:
@@ -34,3 +36,15 @@ Reference behaviour worth mirroring from the Python config: opt-in `allow_matchm
 - [ ] #7 The example config file (`lichess/seaborg-lichess.example.toml`) documents every new setting with its default.
 - [ ] #8 Tests cover config parsing/validation of the new section and the opponent-eligibility/decline-backoff decision logic; workspace fmt, clippy (-D warnings), and tests pass.
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. config.rs: add opt-in [matchmaking] section (enabled=false default) with variant/initial/increment pools, min/max rating bounds, mode (rated|casual|random), idle_timeout, min interval, reserved human slots, block_list, decline_backoff. deny_unknown_fields + validation (pools non-empty when enabled, rating bounds ordered, mode valid, reserved<max_concurrent). Byte-identical default behaviour (AC#2/#3).
+2. matchmaking.rs (new, pure/testable like policy.rs): BotInfo + perfs parsing, speed classification from (initial,increment), Matchmaker state (last_issued, idle_since, outstanding challenge, per-bot decline backoff, rotation counters). Pure methods: choose(now, active_games)->Idle|Seek (idle-timeout, min-interval, concurrency+human-reservation gating), select_opponent(candidates, spec) filtering by pool/rating/blocklist/decline-backoff, record_issued/declined/game_started/game_finished.
+3. client.rs: online_bots(nb) via GET /api/bot/online (NDJSON), create_challenge(user, spec) via POST /api/challenge/{user}.
+4. event.rs: add ChallengeDeclined variant capturing destUser id (was swallowed by Other), for decline backoff.
+5. run.rs: thread Matchmaker (disabled=inert when off) into event loop + handle_event; tick on keepalive/after events using Instant::now; feed gameStart/gameFinish/challengeDeclined to matchmaker state. Default-config path unchanged.
+6. example toml + docs for every new key (AC#7).
+7. Tests: config parse/validate, speed classify, opponent eligibility, decline backoff, idle/interval/concurrency gating; fmt+clippy(-D)+tests (AC#8). NOTE: rating targeting via min/max bounds only (AC#3 'and/or'); rating-difference deliberately omitted to avoid fragile self-rating/speed machinery.
+<!-- SECTION:PLAN:END -->
