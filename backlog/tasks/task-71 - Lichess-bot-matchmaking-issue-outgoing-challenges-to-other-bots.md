@@ -1,11 +1,11 @@
 ---
 id: TASK-71
 title: 'Lichess bot matchmaking: issue outgoing challenges to other bots'
-status: In Progress
+status: In Review
 assignee:
   - '@george'
 created_date: '2026-07-20 23:23'
-updated_date: '2026-07-20 23:42'
+updated_date: '2026-07-20 23:59'
 labels: []
 dependencies: []
 references:
@@ -48,3 +48,37 @@ Reference behaviour worth mirroring from the Python config: opt-in `allow_matchm
 6. example toml + docs for every new key (AC#7).
 7. Tests: config parse/validate, speed classify, opponent eligibility, decline backoff, idle/interval/concurrency gating; fmt+clippy(-D)+tests (AC#8). NOTE: rating targeting via min/max bounds only (AC#3 'and/or'); rating-difference deliberately omitted to avoid fragile self-rating/speed machinery.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented opt-in matchmaking as one modular slice (per implementer split decision). All decision logic is pure and unit-tested in matchmaking.rs (mirroring policy.rs); the event-loop change is a single idle tick at the existing keepalive/event boundary, so the loop's blocking model is unchanged and the reactive-only path is byte-for-byte identical when matchmaking is disabled (verified by disabled_matchmaking_issues_no_challenge_on_a_keepalive).
+
+Design notes for review:
+- reserved_human_slots is meaningful: matchmaking's cap is max_concurrent_games - reserved_human_slots, so it can stack games up to that reduced cap while leaving room for humans. (An earlier draft that blocked on any active game made the knob dead; fixed.)
+- idle timeout is measured from the last game START (record_game_started), not continuously, so multiple matchmaking games can stack without dogpiling.
+- Rating targeting is by min/max bounds on the opponent's rating for the chosen time control's speed (AC#3 'and/or'). rating_difference was deliberately NOT added: it needs our own per-speed rating and reliable speed classification of our side, which is fragile machinery I did not want to half-ship. Flagging for reviewer to decide if a follow-up is wanted.
+- A candidate with no rating for the chosen speed is skipped (cannot confirm bounds).
+- Decline backoff is per-bot and time-based (decline_backoff_seconds); the map is pruned on record.
+- Pool/mode selection is deterministic (rotating cursors, alternating rated/casual) to keep tests reproducible without an rng dependency.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @george
+created: 2026-07-20 23:59
+---
+Implementation handoff
+Branch: task-71-lichess-matchmaking
+Worktree: /Users/seabo/seaborg-worktrees/task-71-lichess-matchmaking
+Base: 8674a8c582f063af71cd3a4c7ea79904685cc774
+Implementation target: 0c9f192fb77267757237ed218b33951a7da0ca6b
+Resolved findings: none (new work)
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (exit 0, no warnings)
+- cargo test --workspace: pass (8 suites ok, 0 failed; lichess 93 tests)
+Known failures: none
+---
+<!-- COMMENTS:END -->
