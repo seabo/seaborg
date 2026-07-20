@@ -1,9 +1,10 @@
 ---
 id: TASK-68
 title: Lichess bot integration
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-07-19 22:32'
+updated_date: '2026-07-20 17:52'
 labels: []
 dependencies: []
 references:
@@ -33,6 +34,12 @@ Reference: https://lichess.org/api (Bot tag), spec at https://github.com/lichess
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 All subtasks are completed and merged
-- [ ] #2 `seaborg lichess` connects to a bot account, accepts challenges per policy, plays full games to completion, and submits legal moves under the game clock
+- [x] #1 All subtasks are completed and merged
+- [x] #2 `seaborg lichess` connects to a bot account, accepts challenges per policy, plays full games to completion, and submits legal moves under the game clock
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+All five subtasks (TASK-68.1 through TASK-68.5) implemented, reviewed, and merged: CLI restructured into subcommands, serde adopted workspace-wide, lichess crate scaffolded with transport and event loop, per-game loop with clock management and move submission built, and bot hardened with reconnect, rate-limit back-off, and graceful shutdown. The complete Lichess bot integration programme is done.
+<!-- SECTION:FINAL_SUMMARY:END -->
