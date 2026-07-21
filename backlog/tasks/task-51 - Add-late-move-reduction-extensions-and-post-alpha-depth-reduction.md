@@ -1,11 +1,11 @@
 ---
 id: TASK-51
 title: 'Add late move reduction, extensions, and post-alpha depth reduction'
-status: Ready to Merge
+status: Done
 assignee:
   - '@george'
 created_date: '2026-07-18 18:30'
-updated_date: '2026-07-21 00:51'
+updated_date: '2026-07-21 01:18'
 labels: []
 dependencies:
   - TASK-50
