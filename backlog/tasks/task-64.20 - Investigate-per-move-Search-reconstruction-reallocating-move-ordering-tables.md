@@ -1,9 +1,11 @@
 ---
 id: TASK-64.20
 title: Investigate per-move Search reconstruction reallocating move-ordering tables
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-21 04:36'
+updated_date: '2026-07-21 16:34'
 labels:
   - search
   - move-ordering
@@ -35,3 +37,14 @@ Distinct from TASK-64.19, which reuses the per-node OrderedMoves buffer inside a
 - [ ] #4 Fixed-depth node counts are identical before and after any change, confirming cheap clearing is behaviourally equivalent to fresh allocation
 - [ ] #5 A before/after measurement (per-move construction cost, and a fast-TC throughput or strength sanity check) is recorded showing the overhead removed or demonstrated immaterial
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Baseline = b3fd63c (master + task-64.8 merge, per user). Tables present: HistoryTable 32KB inline, KillerTable ~2KB, CounterMoveTable ~3KB boxed, ContinuationHistory 4.72MB boxed. All built fresh per Search::build (once per 'go'/move).
+2. Measure the per-move Search reconstruction cost in ISOLATION from search work (AC#1): time Search::new construction (fresh alloc of all four tables + EvalState + stack Box) and the four-table reset()/fill path, in release mode, on representative positions. Compare against a realistic per-move search budget at fast TC.
+3. Note current architecture already calls history/kt/counter/cont_hist reset() at the END of run() (search.rs:1116-1119) immediately before drop(search) in start_inner -- redundant full memset in the per-move-construction model. Quantify it.
+4. Decide (AC#2): if construction cost is immaterial vs per-move search time, record figures and close with NO code change. If material, escalate scope decision (user directed: investigation, no code).
+5. Record before/after / attribution figures in task notes (and BENCHMARKS.md if a durable figure). Confirm fixed-depth node counts are unaffected by construction path (AC#4 is trivially satisfied if no code change).
+6. Handoff for independent review; do not self-approve.
+<!-- SECTION:PLAN:END -->
