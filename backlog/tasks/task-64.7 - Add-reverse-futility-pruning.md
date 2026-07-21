@@ -1,11 +1,11 @@
 ---
 id: TASK-64.7
 title: Add reverse futility pruning
-status: In Progress
+status: In Review
 assignee:
   - '@george'
 created_date: '2026-07-19 13:32'
-updated_date: '2026-07-21 02:15'
+updated_date: '2026-07-21 02:16'
 labels:
   - search
   - pruning
@@ -119,3 +119,25 @@ depth 2 only because, without a verification search, it would mask forced wins;
 a positional evaluation would let a future revision trust it (and a higher
 max-depth) far more, which is where the larger gains would come from.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @george
+created: 2026-07-21 02:16
+---
+Implementation handoff
+Branch: task-64.7-reverse-futility-pruning
+Worktree: /Users/seabo/seaborg-worktrees/task-64.7-reverse-futility-pruning
+Base: 0f73ec88f5e22bb0db44839e4599077f5d4b1593
+Implementation target: 1ddd6cc94ce16639756c5a5e3c70ea3e1817ed68
+Resolved findings: none (new work)
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass
+- cargo test --workspace: pass
+- strength (fastchess, nodes=200000, 200 games): +47.19 +/- 33.68 Elo, LOS 99.74%
+Known failures: none
+Note: strength wrapper script's UCI preflight cannot handshake seaborg (stdout block-buffered under a pipe; reproduces on baseline 0f73ec8), so the measurement was run through its fastchess runner directly. See implementation notes.
+---
+<!-- COMMENTS:END -->
