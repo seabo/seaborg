@@ -30,9 +30,25 @@ pub const FOLD_COUNTER_INTO_QUIETS: bool = false;
 /// in, not which move each phase owns.
 pub const EQUAL_CAPTURES_AFTER_REFUTATIONS: bool = false;
 
+/// Fixed capacity of the ordering buffer, in moves.
+///
+/// The buffer accumulates, across all phases, the hash move, every queen promotion, every capture,
+/// the killers, the counter, every quiet, and three underpromotions per queen promotion, so its
+/// worst-case occupancy is about `L + 3P + 3` for `L` legal moves and `P` queen promotions. That
+/// stays under this bound because the two extremes are mutually exclusive: a high promotion count
+/// needs pawns on the seventh rank, which displaces the sliding-piece mobility that produces a high
+/// legal-move count. The argument is unenforced arithmetic, though, so a push past this bound trips
+/// a debug assertion in [`ScoredMoveList::push`] rather than silently dropping a legal move, and
+/// `ordering_buffer_worst_case_occupancy_stays_within_capacity` pins the measured extremes so a
+/// later phase addition that invalidates the arithmetic is caught. See [`push_val`] for why the
+/// release path drops instead of panicking.
+///
+/// [`push_val`]: chess::movelist::ArrayVec::push_val
+pub(crate) const ORDERING_BUFFER_CAPACITY: usize = 254;
+
 /// An `ArrayVec` containing `ScoredMoves`.
 #[derive(Debug)]
-pub struct ScoredMoveList(ArrayVec<ScoredMove, 254>);
+pub struct ScoredMoveList(ArrayVec<ScoredMove, ORDERING_BUFFER_CAPACITY>);
 
 /// An iterator over a `ScoredMoveList` which allows the `Move`s to be inspected and scores mutated.
 pub struct Scorer<'a> {
@@ -62,6 +78,14 @@ impl MoveList for ScoredMoveList {
     }
 
     fn push(&mut self, mv: Move) {
+        // `push_val` silently ignores a push once the backing array is full, so an overflow of the
+        // ordering buffer would drop legal moves from the search without any signal. Fail loudly in
+        // debug builds instead; the capacity is sized so this can never fire in a legal position
+        // (see `ORDERING_BUFFER_CAPACITY`).
+        debug_assert!(
+            self.0.len() < ORDERING_BUFFER_CAPACITY,
+            "ordering buffer overflow: capacity {ORDERING_BUFFER_CAPACITY} exceeded",
+        );
         self.0.push_val((mv, 0));
     }
 
@@ -384,10 +408,6 @@ impl OrderedMoves {
         }
     }
 
-    pub fn next_phase(&self) -> Phase {
-        self.phase
-    }
-
     /// Close the segment that was just appended to the buffer and return its range, assuming that
     /// it starts at `self.segment_start` and ends at `self.buf.len()`. This therefore assumes that
     /// it is being called immediately after the relevant moves have been loaded.
@@ -556,8 +576,18 @@ impl OrderedMoves {
         res
     }
 
+    /// The phase whose moves were most recently loaded into the buffer.
     pub fn phase(&self) -> Phase {
         self.phase
+    }
+
+    /// The number of entries currently held in the ordering buffer. Every move loaded across every
+    /// phase occupies one slot — including duplicates a later phase segregates out but does not
+    /// remove — so once all phases are loaded this is the worst-case occupancy the fixed capacity
+    /// must accommodate.
+    #[cfg(test)]
+    pub fn buffer_occupancy(&self) -> usize {
+        self.buf.len()
     }
 
     /// Append the rook, knight and bishop promotions corresponding to each queen promotion in
