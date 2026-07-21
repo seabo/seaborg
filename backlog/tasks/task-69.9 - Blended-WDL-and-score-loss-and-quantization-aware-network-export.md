@@ -1,11 +1,11 @@
 ---
 id: TASK-69.9
 title: Blended WDL-and-score loss and quantization-aware network export
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:41'
-updated_date: '2026-07-21 06:03'
+updated_date: '2026-07-21 06:20'
 labels:
   - nnue
   - training
