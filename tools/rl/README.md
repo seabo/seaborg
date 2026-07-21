@@ -17,7 +17,9 @@ Generation `g` runs four steps:
 1. **Generate** self-play data with the current best network as the evaluator.
    Generation 0 has no network and bootstraps from the hand-crafted evaluation
    (`seaborg datagen` with no `--network`); each later generation evaluates with
-   the network the previous generation promoted (`--network best.sbnn`).
+   the current best network (`--network best.sbnn`), which is the last candidate
+   that passed the gate — not necessarily the immediately preceding generation,
+   since a rejected candidate promotes nothing.
 2. **Train** a candidate on that data (`train.py --generation g`, so the lambda
    schedule advances across generations) and **export** it to the `SBNN` file the
    engine loads (`export.py`).

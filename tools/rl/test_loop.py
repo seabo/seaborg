@@ -47,9 +47,16 @@ class FakeBackend(rl.Backend):
         self._exports += 1
         network.write_bytes(f"fake-network-{self._exports}".encode())
 
-    def gate(self, baseline_network, candidate_network, output_dir, generation):
+    def gate(
+        self, baseline_network, baseline_generation, candidate_network, output_dir, generation
+    ):
         self.gate_calls.append(
-            {"baseline": baseline_network, "candidate": candidate_network, "gen": generation}
+            {
+                "baseline": baseline_network,
+                "baseline_gen": baseline_generation,
+                "candidate": candidate_network,
+                "gen": generation,
+            }
         )
         verdict = self.verdict_for(generation)
         exit_code = next(code for code, name in rl.VERDICT_BY_EXIT.items() if name == verdict)
@@ -162,6 +169,35 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(record["gate"]["elo"], 3.5)
         self.assertEqual(record["gate"]["games_played"], 200)
         self.assertEqual(record["gate"]["verdict"], "PASS")
+
+    def test_baseline_id_names_the_generation_that_produced_the_best(self):
+        # A candidate can be rejected — a normal outcome — leaving an older
+        # network as the current best. Its recorded baseline id (in both the
+        # ledger and the gate's --baseline-id) must name the generation that
+        # actually produced it, from best.json, not the previous iteration
+        # number. Otherwise the same bytes are labelled with a different, and
+        # non-existent, generation each iteration.
+        verdicts = {0: "PASS", 1: "FAIL", 2: "FAIL"}
+        backend = FakeBackend(lambda generation: verdicts[generation])
+        loop = rl.ReinforcementLoop(self.config(), backend)
+        for generation in range(3):
+            loop.run_iteration(generation)
+
+        manifest = json.loads((self.state / rl.BEST_MANIFEST).read_text())
+        self.assertEqual(manifest["generation"], 0)
+        best_id = manifest["network_id"]
+
+        records = self.ledger_records()
+        # Generations 1 and 2 both gated against the surviving generation-0
+        # network, so its baseline id is that one stable id — never gen-001 or
+        # gen-002, which promoted nothing.
+        for generation in (1, 2):
+            self.assertEqual(records[generation]["baseline"]["network_id"], best_id)
+            self.assertTrue(
+                records[generation]["baseline"]["network_id"].startswith("nnue:gen-000:")
+            )
+            # The gate saw the same true producing generation for its baseline id.
+            self.assertEqual(backend.gate_calls[generation]["baseline_gen"], 0)
 
     def test_evaluator_is_never_external(self):
         # The purity invariant: the only evaluator any step plays with is the

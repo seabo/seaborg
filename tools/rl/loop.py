@@ -196,6 +196,7 @@ class Backend:
     def gate(
         self,
         baseline_network: Optional[Path],
+        baseline_generation: Optional[int],
         candidate_network: Path,
         output_dir: Path,
         generation: int,
@@ -289,16 +290,19 @@ class SubprocessBackend(Backend):
     def gate(
         self,
         baseline_network: Optional[Path],
+        baseline_generation: Optional[int],
         candidate_network: Path,
         output_dir: Path,
         generation: int,
     ) -> GateResult:
         candidate_id = network_id(candidate_network, generation)
-        # The baseline is the previous generation's network, or the hand-crafted
-        # evaluation at generation 0 — expressed by giving the baseline side no
-        # EvalFile option at all, so it runs the default evaluation.
+        # The baseline is the current best network — labelled with the generation
+        # that actually produced it (``baseline_generation``), which is not in
+        # general the previous one, since a rejected candidate promotes nothing.
+        # A baseline of ``None`` is generation 0's hand-crafted bootstrap, expressed
+        # by giving the baseline side no EvalFile option so it runs the default.
         baseline_id = (
-            network_id(baseline_network, generation - 1)
+            network_id(baseline_network, baseline_generation)
             if baseline_network is not None
             else "handcrafted"
         )
@@ -400,6 +404,13 @@ class ReinforcementLoop:
         iteration_dir.mkdir(parents=True, exist_ok=True)
 
         best = self._current_best()
+        # The generation that actually produced ``best`` — read from its manifest,
+        # not assumed to be ``generation - 1``. A generation whose candidate is
+        # rejected promotes nothing, so after a rejection the current best is an
+        # older network; labelling it with the previous iteration number would name
+        # a generation that produced no network and give the same bytes a different
+        # id each iteration. ``None`` at the bootstrap, before any promotion.
+        baseline_generation = self._best_generation()
 
         samples = iteration_dir / "samples.bin"
         generated = self.backend.generate(
@@ -417,6 +428,7 @@ class ReinforcementLoop:
 
         gate = self.backend.gate(
             baseline_network=best,
+            baseline_generation=baseline_generation,
             candidate_network=candidate,
             output_dir=iteration_dir / "strength",
             generation=generation,
@@ -425,7 +437,9 @@ class ReinforcementLoop:
         promoted = gate.passed
         promoted_path = self._promote(generation, candidate) if promoted else None
 
-        attribution = self._attribution(generation, best, candidate, generated, gate, promoted)
+        attribution = self._attribution(
+            generation, best, baseline_generation, candidate, generated, gate, promoted
+        )
         self._append_ledger(attribution)
 
         return IterationResult(
@@ -446,6 +460,20 @@ class ReinforcementLoop:
         """
         best = self.config.state_dir / BEST_NETWORK
         return best if best.is_file() else None
+
+    def _best_generation(self) -> Optional[int]:
+        """The generation whose passing candidate became the current best.
+
+        Read from ``best.json`` (written by [`_promote`]), this is the network's
+        true origin — the identity ``network_id`` and the gate's ``--baseline-id``
+        must name so the same bytes keep one stable id across iterations and agree
+        with the manifest. ``None`` before any promotion, matching the hand-crafted
+        bootstrap that has no producing generation.
+        """
+        manifest = self.config.state_dir / BEST_MANIFEST
+        if not manifest.is_file():
+            return None
+        return json.loads(manifest.read_text())["generation"]
 
     def _next_generation(self) -> int:
         """One past the highest generation the ledger records, or 0 if empty."""
@@ -493,6 +521,7 @@ class ReinforcementLoop:
         self,
         generation: int,
         best: Optional[Path],
+        baseline_generation: Optional[int],
         candidate: Path,
         generated: GenerateResult,
         gate: GateResult,
@@ -519,7 +548,7 @@ class ReinforcementLoop:
                 "path": str(candidate),
             },
             "baseline": {
-                "network_id": network_id(best, generation - 1)
+                "network_id": network_id(best, baseline_generation)
                 if best is not None
                 else "handcrafted",
                 "sha256": sha256(best) if best is not None else None,
