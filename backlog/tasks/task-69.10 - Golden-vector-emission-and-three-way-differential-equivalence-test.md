@@ -1,11 +1,11 @@
 ---
 id: TASK-69.10
 title: Golden-vector emission and three-way differential equivalence test
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:41'
-updated_date: '2026-07-21 15:53'
+updated_date: '2026-07-21 16:37'
 labels:
   - nnue
   - training
