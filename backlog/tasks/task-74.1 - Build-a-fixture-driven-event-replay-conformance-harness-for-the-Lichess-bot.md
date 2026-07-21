@@ -3,10 +3,11 @@ id: TASK-74.1
 title: >-
   Fix self-authored (from_self) Lichess challenges and build the event-replay
   conformance harness
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-21 03:54'
-updated_date: '2026-07-21 04:02'
+updated_date: '2026-07-21 04:12'
 labels:
   - lichess
   - conformance
@@ -40,3 +41,13 @@ References: lichess-bot lib/lichess_bot.py (handle_challenge, accept_challenges)
 - [ ] #6 Pinned scenarios cover: (a) a self/outgoing challenge echoed on the stream is ignored, (b) an incoming human challenge that passes policy is accepted once and starts one game, (c) a self challenge with direction absent is still ignored
 - [ ] #7 cargo fmt --check, cargo clippy --workspace --all-targets --all-features -D warnings, and cargo test --workspace all pass
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. event.rs: add optional Direction enum (in/out) and parse it as an optional `direction` field on Challenge; add Challenge::is_from_self(own_id) using challenger.id as the primary signal and direction==Out as corroboration (works when direction absent).
+2. run.rs: thread the bot's own id (account.id) through run_event_loop -> run_event_stream_once -> handle_event; in handle_event, ignore a Challenge whose is_from_self(bot_id) is true (no accept, no decline) before policy::evaluate.
+3. run.rs tests: build a fixture-driven replay harness over the existing FakeTransport — classify recorded POSTs into typed OutboundCall {Accept/Decline/Create/Cancel} and assert the ordered calls plus final active-slot count for a table of scenarios.
+4. Pin scenarios: (a) self/outgoing echo ignored, (b) incoming human challenge accepted -> one active game, (c) self challenge with direction absent ignored; use captured Lichess JSON with unparsed fields (direction/destUser/speed/perf/color/finalColor) to exercise unknown-field tolerance.
+5. Update the one Challenge struct literal (policy.rs acceptable()) for the new field; run fmt/clippy/test.
+<!-- SECTION:PLAN:END -->
