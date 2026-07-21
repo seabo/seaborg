@@ -1,0 +1,4 @@
+# Python training project for the Seaborg NNUE network.
+# CPU wheels are sufficient; a CUDA build is a drop-in replacement for --device cuda.
+numpy>=1.24
+torch>=2.0
