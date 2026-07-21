@@ -3,11 +3,11 @@ id: TASK-76
 title: >-
   Graceful drain mode for the lichess bot: finish current games, stop starting
   new ones
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-21 13:20'
-updated_date: '2026-07-21 14:01'
+updated_date: '2026-07-21 14:07'
 labels:
   - lichess
 dependencies: []
