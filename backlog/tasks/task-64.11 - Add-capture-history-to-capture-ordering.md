@@ -1,11 +1,11 @@
 ---
 id: TASK-64.11
 title: Add capture history to capture ordering
-status: Ready to Merge
+status: Done
 assignee:
   - '@george'
 created_date: '2026-07-19 13:33'
-updated_date: '2026-07-21 17:35'
+updated_date: '2026-07-21 18:45'
 labels:
   - search
   - move-ordering
