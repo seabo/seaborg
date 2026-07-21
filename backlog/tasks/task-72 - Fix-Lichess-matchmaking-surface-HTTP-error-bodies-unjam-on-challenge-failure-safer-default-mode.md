@@ -3,11 +3,11 @@ id: TASK-72
 title: >-
   Fix Lichess matchmaking: surface HTTP error bodies, unjam on challenge
   failure, safer default mode
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-21 02:05'
-updated_date: '2026-07-21 02:22'
+updated_date: '2026-07-21 02:30'
 labels: []
 dependencies: []
 type: bug
