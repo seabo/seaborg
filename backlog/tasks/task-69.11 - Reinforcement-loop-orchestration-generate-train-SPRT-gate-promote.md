@@ -1,11 +1,11 @@
 ---
 id: TASK-69.11
 title: 'Reinforcement loop orchestration: generate, train, SPRT-gate, promote'
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:42'
-updated_date: '2026-07-21 20:44'
+updated_date: '2026-07-21 20:48'
 labels:
   - nnue
   - training
@@ -79,6 +79,11 @@ Rework (review attempt 2):
 Resolved REV-2-01: baseline network id no longer assumes the current best was promoted at generation - 1. A new ReinforcementLoop._best_generation reads the producing generation from best.json (written by _promote); run_iteration threads it as baseline_generation into both Backend.gate (used for --baseline-id) and _attribution (used for the ledger's baseline.network_id). After a rejected candidate the surviving best now keeps one stable id that agrees with best.json, instead of being relabelled with a nonexistent generation each iteration. Backend.gate / SubprocessBackend.gate gained a baseline_generation parameter; FakeBackend updated to match and to record it.
 Regression: test_baseline_id_names_the_generation_that_produced_the_best drives a {0:PASS,1:FAIL,2:FAIL} run and asserts the gen-1 and gen-2 ledger baselines both carry the gen-000 network id from best.json, and that the gate received baseline_generation 0. Also tightened tools/rl/README.md step 1, which had restated the same "previous generation promoted" misconception.
 Verification: cargo fmt --check pass; cargo clippy --workspace --all-targets --all-features -D warnings clean; cargo test --workspace green (chess 50, engine 397/2 ignored, lichess 131, integration green); python3 -m unittest tools/rl 12 pass (11 prior + 1 new); tools/strength 21 pass.
+
+Rework (review attempt 3):
+Resolved REV-3-01: baseline attribution no longer describes the just-promoted candidate. run_iteration now builds the attribution dict before _promote overwrites best.sbnn (the ledger append still follows promotion), so _attribution hashes the network that actually played as the gate baseline rather than the candidate copied over best.sbnn moments earlier. On a passing generation > 0 the ledger's baseline.sha256 and baseline.network_id now describe the pre-promotion best; on an improving (consecutive-PASS) run the baseline identity stays recoverable and internally consistent (correct producing generation paired with the matching hash).
+Regression: test_baseline_attribution_describes_the_network_that_played drives {0:PASS,1:PASS} — the overwrite-before-read path REV-2-01's {0:PASS,1:FAIL,2:FAIL} fixture never exercised — and asserts generation 1's ledger baseline sha256/network_id equal the archived gen-000 network, not generation 1's own bytes. Verified it fails against the pre-fix ordering.
+Verification: cargo fmt --check pass; cargo clippy --workspace --all-targets --all-features -D warnings clean; cargo test --workspace green (chess 50, engine 397/2 ignored, lichess 131, integration + build_metadata green); python3 -m unittest tools/rl 13 pass (12 prior + 1 new); tools/strength 21 pass.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -319,5 +324,24 @@ Verification:
 - Empirical: with all-PASS verdicts, gen-1 ledger baseline.sha256 = a9c85bab53687d3a (gen-1
   candidate bytes) and network_id = nnue:gen-000:sha256=a9c85bab53687d3a, instead of the
   archived gen-000 network fdb672691da570e7 that the gate baseline used.
+---
+
+author: @claude
+created: 2026-07-21 20:48
+---
+Implementation handoff
+Branch: task-69.11-reinforcement-loop-orchestration
+Worktree: /Users/seabo/seaborg-worktrees/task-69.11-reinforcement-loop-orchestration
+Base: daa79cb8a19d635702e894927f44064e76480f95
+Implementation target: 5bef621407d5bc46557fd77b3dbf33b6ee9b48d5
+Resolved findings: REV-3-01
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean)
+- cargo test --workspace: pass (chess 50, engine 397/2 ignored, lichess 131, integration + build_metadata green)
+- python3 -m unittest (tools/rl): 13 pass (12 prior + 1 new baseline-attribution regression)
+- python3 -m unittest (tools/strength): 21 pass
+- Empirical: with two consecutive PASSes, gen-1 ledger baseline.sha256 = archived gen-000 network (fdb672691da570e7) and network_id = nnue:gen-000:sha256=fdb672691da570e7, instead of the gen-1 candidate bytes recorded before the fix; the new regression fails against the pre-fix ordering.
+Known failures: none
 ---
 <!-- COMMENTS:END -->
