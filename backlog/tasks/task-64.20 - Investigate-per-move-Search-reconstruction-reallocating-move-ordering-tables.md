@@ -1,11 +1,11 @@
 ---
 id: TASK-64.20
 title: Investigate per-move Search reconstruction reallocating move-ordering tables
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-21 04:36'
-updated_date: '2026-07-21 17:00'
+updated_date: '2026-07-21 17:09'
 labels:
   - search
   - move-ordering
