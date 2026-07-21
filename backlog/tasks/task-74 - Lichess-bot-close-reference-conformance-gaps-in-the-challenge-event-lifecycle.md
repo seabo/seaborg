@@ -1,9 +1,10 @@
 ---
 id: TASK-74
 title: 'Lichess bot: close reference-conformance gaps in the challenge/event lifecycle'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-07-21 03:54'
+updated_date: '2026-07-21 20:44'
 labels:
   - lichess
   - conformance

@@ -4,7 +4,7 @@ title: Run the bootstrap programme and measure per-iteration strength
 status: To Do
 assignee: []
 created_date: '2026-07-20 19:42'
-updated_date: '2026-07-20 20:28'
+updated_date: '2026-07-21 20:43'
 labels:
   - nnue
   - rl
@@ -12,7 +12,10 @@ labels:
 dependencies:
   - TASK-69.11
   - TASK-69.5
-  - TASK-64
+  - TASK-64.4
+  - TASK-64.13
+  - TASK-64.19
+  - TASK-64.21
 parent_task_id: TASK-69
 priority: medium
 ordinal: 114000
