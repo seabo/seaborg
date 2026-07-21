@@ -83,11 +83,15 @@ equal-time contract. Smoke mode may also use `depth=N` or `nodes=N` for speed.
 reports INFRASTRUCTURE ERROR, guarding against a hung runner or engine.
 
 Engines must return a legal move within the configured limit and stay
-responsive under the runner. As of this writing seaborg does not manage its
-clock well enough to play fast timed self-play (it can return an illegal null
-move or hang); this is tracked separately in the backlog and does not affect the
-orchestrator. Use `--mode smoke --limit depth=4` to exercise the full path
-against seaborg quickly.
+responsive under the runner. seaborg satisfies this at fast timed controls: the
+allocation policy in `engine/src/time.rs` never asks for more than the clock
+holds, and the search honours a guaranteed-first-ply contract that always
+produces a legal `bestmove` and cannot hang under a depleted clock. The earlier
+illegal-null-move and hang failures (backlog task-32 and task-34) are fixed and
+pinned by the `timed_selfplay` integration fixture, which plays whole games at
+fast controls and asserts every move is legal and every game terminates. Use
+`--mode smoke --limit depth=4` to exercise the full path against seaborg
+quickly, or `--limit tc=...` for a timed run.
 
 ## Pairing, inputs, and failures
 
