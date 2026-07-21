@@ -1,11 +1,11 @@
 ---
 id: TASK-71
 title: 'Lichess bot matchmaking: issue outgoing challenges to other bots'
-status: Ready to Merge
+status: Done
 assignee:
   - '@george'
 created_date: '2026-07-20 23:23'
-updated_date: '2026-07-21 00:13'
+updated_date: '2026-07-21 00:52'
 labels: []
 dependencies: []
 references:
