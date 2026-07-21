@@ -5,7 +5,7 @@ status: In Review
 assignee:
   - '@george'
 created_date: '2026-07-19 13:32'
-updated_date: '2026-07-21 02:16'
+updated_date: '2026-07-21 02:31'
 labels:
   - search
   - pruning
@@ -118,6 +118,30 @@ so even a material-only evaluation benefits. The technique is currently held at
 depth 2 only because, without a verification search, it would mask forced wins;
 a positional evaluation would let a future revision trust it (and a higher
 max-depth) far more, which is where the larger gains would come from.
+
+## Correction to the AC#4 note above
+
+An earlier follow-up traced the wrapper-script failure precisely, and the
+buffering explanation above is WRONG — retract it. Findings:
+
+- The only real, reproducible blocker was the stale `--engine-arg=-u` in
+  docs/strength-testing.md. The current CLI (src/cmdline.rs: command defaults to
+  `Commands::Uci`) has no `-u` flag and enters UCI mode by default, so passing
+  `-u` makes both engines error at startup. This is now fixed on master
+  (commit 032cc7d), independent of this task branch.
+- seaborg is NOT stdout-block-buffered: driven interactively it flushes
+  uciok/readyok/bestmove in ~0.02s, and the script's UCI preflight succeeds
+  against both binaries. The earlier "preflight timed out" was transient
+  (contention from the concurrent release builds), not reproducible.
+- With `-u` dropped the script runs end to end; smoke mode returns
+  NON-AUTHORITATIVE INCONCLUSIVE as designed.
+
+The strength MEASUREMENT itself stands and is unchanged: +47.19 +/- 33.68 Elo,
+LOS 99.74%, 200 games. It was run through fastchess (the runner the script
+wraps) directly rather than through the script because smoke mode caps at 20
+games — too few for a usable interval — and authoritative mode requires a
+time-based limit seaborg cannot yet sustain; a node-based limit over 200 games
+was the tractable way to a tight interval.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
