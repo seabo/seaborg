@@ -1,11 +1,11 @@
 ---
 id: TASK-69.5
 title: AVX2 SIMD NNUE inference with runtime dispatch and a distributable build
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:40'
-updated_date: '2026-07-21 03:27'
+updated_date: '2026-07-21 03:54'
 labels:
   - nnue
   - inference
@@ -28,9 +28,9 @@ A differential test asserts the SIMD path is bit-identical to the scalar path ov
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The AVX2 forward pass is bit-identical to the scalar path over the golden vectors and a randomized position set
-- [ ] #2 The inference path is chosen at runtime by CPU feature detection and falls back to scalar when the wide path is unavailable
-- [ ] #3 The blanket target-cpu=native default is replaced by a distributable baseline plus runtime dispatch, and the workspace MSRV is declared
+- [x] #1 The AVX2 forward pass is bit-identical to the scalar path over the golden vectors and a randomized position set
+- [x] #2 The inference path is chosen at runtime by CPU feature detection and falls back to scalar when the wide path is unavailable
+- [x] #3 The blanket target-cpu=native default is replaced by a distributable baseline plus runtime dispatch, and the workspace MSRV is declared
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -87,4 +87,45 @@ Verification:
 - cargo test --target x86_64-apple-darwin -p engine: pass; AVX2 differential tests skip gracefully under Rosetta (no AVX2 via CPUID) — they execute on x86_64 AVX2 hardware (CI ubuntu-latest)
 Known failures: none. Note: the AVX2 kernel itself cannot be executed on this aarch64 host; it is verified locally by x86_64 compilation + manual intrinsic review and is executed by the differential tests on CI. A reviewer on x86_64 AVX2 hardware can run `cargo test -p engine nnue::inference::tests::avx2` to exercise it directly.
 ---
+
+author: @claude
+created: 2026-07-21 03:54
+---
+Review attempt: 1
+Reviewed branch: task-69.5-avx2-simd-nnue-inference
+Reviewed implementation: 1f54c227f022c9bb46c5375f61212a351af66dbb
+Base: 05880a59a02a47f388fafad164e482fb764c7ccc
+Verdict: approved
+
+Immutability/scope: target descends from base; the only commit after the target (93e8b59) touches solely the task file; the full base-to-target diff is on-topic (AVX2 kernel + dispatch + differential tests in inference.rs, .cargo/config.toml + ci.yml comment, MSRV declaration). No #[allow] introduced.
+
+Kernel review: clip via _mm256_max_epi16(.,0) then _mm256_min_epi16(., min(qa,i16::MAX)) reproduces scalar clamp(0,qa) for every reachable i16 activation; _mm256_madd_epi16 over non-negative clipped activations cannot overflow a madd pair; the horizontal reduction folds all 8 i32 lanes correctly; bit-identity holds because i32 addition is associative/commutative within the contract's no-overflow regime. SAFETY comments on the target_feature fn and the runtime-gated call are accurate.
+
+AC#1 (bit-identical AVX2 forward over golden + randomized positions): PROVEN by execution, not code inspection. The review host is aarch64 and neither native, Rosetta (x86_64-apple-darwin), nor Rosetta-backed Docker amd64 exposes AVX2, so the differential tests skip there. I therefore executed them under genuine AVX2: an amd64 rust:slim container on QEMU (Docker Rosetta emulation disabled) where is_x86_feature_detected!("avx2")==true (rustc 1.97.1). Both tests ran (no skip) and passed:
+  test nnue::inference::tests::avx2_dot_product_is_bit_identical_to_the_scalar_oracle ... ok
+  test nnue::inference::tests::avx2_forward_matches_the_scalar_path_over_golden_and_random_positions ... ok
+Command: docker run --platform linux/amd64 -v <worktree>:/w:ro -w /w -e CARGO_TARGET_DIR=/tmp/t rust:slim cargo test --locked -p engine --lib nnue::inference::tests::avx2 -- --nocapture
+
+AC#2 (runtime detection + scalar fallback): PROVEN via both branches. AVX2 path executes when detected (container run above); scalar fallback executes when AVX2 is absent (cargo test --target x86_64-apple-darwin -p engine under Rosetta: 375 pass, the two AVX2 tests skip gracefully with the documented note).
+
+AC#3 (distributable baseline + MSRV): PROVEN. .cargo/config.toml replaces target-cpu=native with per-arch x86-64-v2 (retains POPCNT, stays below AVX2 so AVX2 remains the runtime-detected path) and toolchain defaults elsewhere; rust-version=1.93 declared in [workspace.package] and inherited by all members. A clean cross-target clippy (fresh CARGO_TARGET_DIR, x86_64-apple-darwin) compiles the AVX2 code and enforces incompatible_msrv against 1.93.
+
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings (native aarch64): pass
+- cargo clippy ... --target x86_64-apple-darwin (clean CARGO_TARGET_DIR): pass — compiles AVX2 code, enforces MSRV 1.93 lint
+- cargo test --workspace (native aarch64): pass
+- cargo test --target x86_64-apple-darwin -p engine (Rosetta): 375 pass; AVX2 tests skip gracefully (no AVX2)
+- AVX2 differential tests under real AVX2 (QEMU amd64 container, rustc 1.97.1, --locked): 2 passed, 0 skipped
+
+Benchmarks: not run. The eval-path change is a #[inline] dispatch that cfg-compiles to the original scalar call on this aarch64 host (identical codegen); the x86-64-v2 baseline change applies only to x86 builds (unmeasurable here) and deliberately retains hardware POPCNT for movegen. No observable hot-path delta exists on the review hardware.
+
+No blocking findings. Approving at 1f54c22.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Added a hand-written AVX2 clipped-dot-product kernel for NNUE inference, dispatched at runtime by is_x86_feature_detected!("avx2") with the scalar reference as fallback, plus a distributable build story (per-arch x86-64-v2 baseline replacing target-cpu=native) and a declared workspace MSRV (rust-version=1.93). Reviewed at implementation SHA 1f54c22. AC#1 proven by executing the two differential tests under genuine AVX2 (amd64 container on QEMU, avx2 detected, rustc 1.97.1, --locked): both passed with no skip, confirming the AVX2 forward pass is bit-identical to the scalar oracle over the golden vectors and randomized positions. AC#2 proven by both dispatch branches: the AVX2 path executes when detected (container run) and the scalar path runs when AVX2 is absent (x86_64-apple-darwin under Rosetta: 375 engine tests pass, AVX2 tests skip gracefully). AC#3 proven by the .cargo/config.toml/ci.yml diff and MSRV declaration, with a clean cross-target clippy enforcing incompatible_msrv against 1.93. fmt/clippy/test all clean.
+<!-- SECTION:FINAL_SUMMARY:END -->
