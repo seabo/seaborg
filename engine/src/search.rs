@@ -4,9 +4,11 @@ use crate::history::{HistoryTable, HISTORY_MAX};
 use super::eval::{EvalState, Evaluation};
 use super::killer::KillerTable;
 use super::nnue::{self, Accumulator, Network};
-use super::ordering::{
-    Loader, OrderedMoves, Phase, ScoredMoveList, Scorer, FOLD_COUNTER_INTO_QUIETS,
-};
+use super::ordering::{Loader, OrderedMoves, Phase, ScoredMoveList, Scorer};
+
+// Re-exported so the ordering-ablation harness can label each build with the quiet-ordering design
+// it was compiled against, exactly as [`KILLER_SLOTS`] labels the killer ablation.
+pub use super::ordering::{EQUAL_CAPTURES_AFTER_REFUTATIONS, FOLD_COUNTER_INTO_QUIETS};
 use super::pv_table::PVTable;
 use super::score::Score;
 use super::trace::Tracer;
