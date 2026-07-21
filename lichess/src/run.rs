@@ -59,9 +59,11 @@ pub fn load_token() -> Result<String> {
 /// hung the challenger's UI.
 ///
 /// The event stream and per-game streams drop routinely; both reconnect with
-/// exponential backoff rather than ending the bot. On Ctrl-C the bot stops
-/// accepting new challenges and waits for its in-flight games to resign and exit
-/// cleanly instead of dropping their connections mid-move.
+/// exponential backoff rather than ending the bot. Shutdown is two-stage: the
+/// first Ctrl-C drains — the bot stops seeking and accepting games but lets every
+/// in-flight game play to completion, exiting on its own once none remain — and a
+/// second Ctrl-C winds down immediately, resigning in-flight games rather than
+/// dropping their connections mid-move.
 ///
 /// Fails fast when the token is missing or rejected, or when the authenticated
 /// account is not a BOT account (which needs [`upgrade`] first).
@@ -379,6 +381,12 @@ impl GameSlots {
     fn len(&self) -> usize {
         self.0.lock().unwrap().len()
     }
+
+    /// Whether no slot is held — no game reserved or running. This going true
+    /// while draining is what lets the bot exit cleanly with no forfeits.
+    fn is_empty(&self) -> bool {
+        self.0.lock().unwrap().is_empty()
+    }
 }
 
 /// Read the account event stream and forward each decoded event, reconnecting
@@ -528,7 +536,24 @@ where
     // for the span of one drain-and-process pass so they can be sorted against one
     // another before any slot is claimed.
     let mut pending: Vec<Challenge> = Vec::new();
+    // The drain-entry message is logged once, the first time this loop observes
+    // that the bot has begun draining.
+    let mut drain_announced = false;
     while !shutdown.is_requested() {
+        if shutdown.is_draining() {
+            if !drain_announced {
+                log::info!("{}", drain_message(slots.len()));
+                drain_announced = true;
+            }
+            // Draining reaches zero when the last in-flight game's worker frees
+            // its slot. With no game left to protect, escalate to an immediate
+            // shutdown so the loop exits and every thread joins — a clean exit
+            // with no forfeits.
+            if slots.is_empty() {
+                shutdown.request();
+                break;
+            }
+        }
         match events.recv_timeout(CONSUMER_POLL) {
             Ok(event) => {
                 handle_event(
@@ -537,6 +562,7 @@ where
                     bot_id,
                     slots,
                     matchmaker,
+                    shutdown,
                     &mut start_game,
                     &mut pending,
                     event,
@@ -550,6 +576,7 @@ where
                         bot_id,
                         slots,
                         matchmaker,
+                        shutdown,
                         &mut start_game,
                         &mut pending,
                         event,
@@ -557,7 +584,8 @@ where
                 }
                 process_accept_queue(client, config, slots, &mut pending)?;
             }
-            // No event this interval: loop to re-check the shutdown flag.
+            // No event this interval: loop to re-check the shutdown flag and the
+            // drain-to-zero condition.
             Err(RecvTimeoutError::Timeout) => {}
             // The reader thread has ended and closed the channel; nothing more
             // will arrive, so stop.
@@ -567,13 +595,17 @@ where
     Ok(())
 }
 
-/// Periodically seek a matchmaking game until shutdown.
+/// Periodically seek a matchmaking game until shutdown or drain.
 ///
 /// Runs on its own thread so a rate-limit backoff incurred while listing bots or
 /// creating a challenge cannot delay the event consumer. `sleep` performs the
 /// inter-poll wait, injected so tests can drive it without real delays. A
 /// non-recoverable error surfaces; a transient one is logged inside the seek and
 /// swallowed.
+///
+/// Seeking stops as soon as the bot begins draining: draining means "start no new
+/// games", so there is nothing left for this thread to do and it exits, letting
+/// the in-flight games it already started play out under their own workers.
 fn run_matchmaking<T, P>(
     client: &LichessClient<T>,
     slots: &GameSlots,
@@ -586,10 +618,10 @@ where
     P: FnMut(Duration),
 {
     loop {
-        if shutdown.is_requested() {
+        if shutdown.is_draining() {
             return Ok(());
         }
-        seek_matchmaking_game(client, slots, matchmaker)?;
+        seek_matchmaking_game(client, slots, matchmaker, shutdown)?;
         sleep(MATCHMAKING_POLL);
     }
 }
@@ -608,7 +640,13 @@ fn seek_matchmaking_game<T: Transport>(
     client: &LichessClient<T>,
     slots: &GameSlots,
     matchmaker: &Mutex<Matchmaker>,
+    shutdown: &Shutdown,
 ) -> Result<()> {
+    // Once draining, issue nothing further even if the poll thread was already
+    // mid-loop when the drain began, so no new challenge goes out during shutdown.
+    if shutdown.is_draining() {
+        return Ok(());
+    }
     let now = Instant::now();
     // Read the slots count before locking the matchmaker so the two mutexes are
     // never held at once.
@@ -678,9 +716,9 @@ fn seek_matchmaking_game<T: Transport>(
 /// failure to decline is logged and swallowed so one bad request does not end the
 /// bot; a non-recoverable error (a rejected token) still surfaces.
 // The handler touches every collaborator an event may reach (client, config, own
-// identity, slot set, matchmaker, the spawn closure, and the accept buffer) plus
-// the event itself; the closure prevents folding these into one struct, so the
-// argument count is inherent rather than a missing abstraction.
+// identity, slot set, matchmaker, shutdown, the spawn closure, and the accept
+// buffer) plus the event itself; the closure prevents folding these into one
+// struct, so the argument count is inherent rather than a missing abstraction.
 #[allow(clippy::too_many_arguments)]
 fn handle_event<T, S>(
     client: &LichessClient<T>,
@@ -688,6 +726,7 @@ fn handle_event<T, S>(
     bot_id: &str,
     slots: &GameSlots,
     matchmaker: &Mutex<Matchmaker>,
+    shutdown: &Shutdown,
     start_game: &mut S,
     pending: &mut Vec<Challenge>,
     event: Event,
@@ -704,6 +743,22 @@ where
             // challenge it issued itself.
             if challenge.is_from_self(bot_id) {
                 log::debug!("ignoring own outgoing challenge {}", challenge.id);
+                return Ok(());
+            }
+            // While draining, start no new game: decline every incoming challenge
+            // so the challenger is answered rather than left waiting on a bot that
+            // is shutting down. Already-running games are untouched — they are
+            // tracked by their workers, not this buffer.
+            if shutdown.is_draining() {
+                log::info!(
+                    "declining challenge {} from {} (draining)",
+                    challenge.id,
+                    challenge.challenger.name
+                );
+                tolerate_recoverable(
+                    client.decline_challenge(&challenge.id, DeclineReason::Generic),
+                    || format!("declining challenge {}", challenge.id),
+                )?;
                 return Ok(());
             }
             match policy::classify(&challenge, &config.challenge) {
@@ -861,6 +916,17 @@ fn process_accept_queue<T: Transport>(
     Ok(())
 }
 
+/// The operator-facing message logged when the bot enters drain mode, stating how
+/// many in-flight games will still be played to completion and that another
+/// interrupt quits immediately. Kept as a pure function so the wording — the
+/// count and the second-interrupt hint an operator relies on — is asserted
+/// directly, without capturing log output.
+fn drain_message(remaining: usize) -> String {
+    format!(
+        "draining: finishing {remaining} in-flight game(s) and starting no new ones; interrupt again to quit immediately"
+    )
+}
+
 /// Swallow a recoverable error from a challenge action, logging it with a context
 /// message built lazily by `context`; propagate anything non-recoverable.
 fn tolerate_recoverable(result: Result<()>, context: impl FnOnce() -> String) -> Result<()> {
@@ -1016,6 +1082,7 @@ mod tests {
     fn handle_one_stream(client: &LichessClient<FakeTransport>, bot_id: &str) -> Vec<String> {
         let slots = GameSlots::new();
         let matchmaker = Mutex::new(Matchmaker::disabled());
+        let shutdown = Shutdown::new();
         let config = Config::default();
         let mut pending = Vec::new();
         let mut started = Vec::new();
@@ -1028,6 +1095,7 @@ mod tests {
                     bot_id,
                     &slots,
                     &matchmaker,
+                    &shutdown,
                     &mut |id: &str| started.push(id.to_string()),
                     &mut pending,
                     event,
@@ -1047,8 +1115,11 @@ mod tests {
         matchmaker: &Mutex<Matchmaker>,
         times: usize,
     ) {
+        // A running (non-draining) handle: these scenarios exercise seeking under
+        // normal operation.
+        let shutdown = Shutdown::new();
         for _ in 0..times {
-            seek_matchmaking_game(client, slots, matchmaker).unwrap();
+            seek_matchmaking_game(client, slots, matchmaker, &shutdown).unwrap();
         }
     }
 
@@ -1123,6 +1194,7 @@ mod tests {
     ) -> (Vec<OutboundCall>, usize) {
         let slots = GameSlots::new();
         let matchmaker = Mutex::new(Matchmaker::disabled());
+        let shutdown = Shutdown::new();
         let mut pending = Vec::new();
         for batch in batches {
             for line in *batch {
@@ -1133,6 +1205,7 @@ mod tests {
                         bot_id,
                         &slots,
                         &matchmaker,
+                        &shutdown,
                         &mut |_id: &str| {},
                         &mut pending,
                         event,
@@ -1949,6 +2022,215 @@ mod tests {
             }
             other => panic!("expected UpgradeIneligible, got {other:?}"),
         }
+    }
+
+    /// A trivial [`Transport`] that returns empty responses and never streams. It
+    /// holds no interior mutability, so it is `Send + Sync` and can back a client
+    /// shared with the consumer thread — unlike [`FakeTransport`]. The drain tests
+    /// send no events, so its methods are never actually exercised.
+    struct SilentTransport;
+
+    impl Transport for SilentTransport {
+        fn get(&self, _path: &str) -> Result<String> {
+            Ok("{}".to_string())
+        }
+
+        fn post_empty(&self, _path: &str) -> Result<String> {
+            Ok(String::new())
+        }
+
+        fn post_form(&self, _path: &str, _form: &[(&str, &str)]) -> Result<String> {
+            Ok(String::new())
+        }
+
+        fn open_stream(&self, _path: &str) -> Result<Box<dyn Iterator<Item = Result<String>>>> {
+            Ok(Box::new(std::iter::empty()))
+        }
+    }
+
+    /// Spawn [`run_event_consumer`] on its own thread with a disabled matchmaker,
+    /// returning the event sender (kept alive by the caller so the channel does not
+    /// disconnect) and the join handle carrying the consumer's result. The slots
+    /// and shutdown handles are shared, so a test can mutate them and observe the
+    /// consumer react on its next poll.
+    fn spawn_consumer(
+        client: Arc<LichessClient<SilentTransport>>,
+        slots: GameSlots,
+        shutdown: Shutdown,
+    ) -> (Sender<Event>, std::thread::JoinHandle<Result<()>>) {
+        let (events_tx, events_rx) = mpsc::channel::<Event>();
+        let handle = std::thread::spawn(move || {
+            let matchmaker = Mutex::new(Matchmaker::disabled());
+            run_event_consumer(
+                &client,
+                &Config::default(),
+                SELF_ID,
+                &slots,
+                &matchmaker,
+                &shutdown,
+                events_rx,
+                |_id: &str| {},
+            )
+        });
+        (events_tx, handle)
+    }
+
+    #[test]
+    fn draining_with_a_game_still_running_keeps_the_consumer_alive_until_it_ends() {
+        // The core drain-to-zero transition: one game is in flight when the first
+        // interrupt arrives. Draining must not stop the consumer — the game plays
+        // on — and only once its worker frees the slot does the consumer escalate
+        // to an immediate shutdown and return, a clean exit with no forfeit.
+        let client = Arc::new(LichessClient::new(SilentTransport));
+        let slots = GameSlots::new();
+        assert!(slots.start("g1"), "seed one in-flight game");
+        let shutdown = Shutdown::new();
+        let (_events_tx, handle) =
+            spawn_consumer(Arc::clone(&client), slots.clone(), shutdown.clone());
+
+        // First interrupt: enter drain. The consumer keeps running because a game
+        // is still active, so it does not join yet.
+        assert!(shutdown.begin_drain());
+        std::thread::sleep(CONSUMER_POLL * 3);
+        assert!(
+            !handle.is_finished(),
+            "the consumer must keep running while a game is in flight"
+        );
+        assert!(
+            !shutdown.is_requested(),
+            "draining alone must not request an immediate shutdown"
+        );
+
+        // The game's worker finishes and frees its slot. Draining now sees zero
+        // active games and shuts down cleanly on its own.
+        slots.remove("g1");
+        let result = handle.join().expect("consumer thread panicked");
+        assert!(result.is_ok(), "the consumer exits cleanly: {result:?}");
+        assert!(
+            shutdown.is_requested(),
+            "reaching zero active games while draining escalates to shutdown"
+        );
+    }
+
+    #[test]
+    fn a_second_interrupt_while_draining_shuts_down_immediately() {
+        // Normal -> drain -> immediate shutdown. A game is in flight, so drain does
+        // not exit on its own; a second interrupt (an explicit shutdown request)
+        // must end the consumer at once, without waiting for the game to finish.
+        let client = Arc::new(LichessClient::new(SilentTransport));
+        let slots = GameSlots::new();
+        assert!(slots.start("g1"), "seed one in-flight game");
+        let shutdown = Shutdown::new();
+        let (_events_tx, handle) =
+            spawn_consumer(Arc::clone(&client), slots.clone(), shutdown.clone());
+
+        assert!(shutdown.begin_drain());
+        std::thread::sleep(CONSUMER_POLL * 2);
+        assert!(
+            !handle.is_finished(),
+            "a still-running game keeps the draining consumer alive"
+        );
+
+        // Second interrupt: immediate shutdown while the game is still active.
+        shutdown.request();
+        let result = handle.join().expect("consumer thread panicked");
+        assert!(result.is_ok(), "the consumer returns cleanly: {result:?}");
+        assert_eq!(
+            slots.len(),
+            1,
+            "the consumer does not touch the in-flight slot; its worker resigns it"
+        );
+    }
+
+    #[test]
+    fn draining_declines_an_incoming_challenge_instead_of_accepting_it() {
+        // While draining, a fresh incoming challenge the policy would normally
+        // accept must be declined rather than started as a new game, and no slot
+        // may be reserved for it.
+        let client = LichessClient::new(FakeTransport::new("{}", ""));
+        let slots = GameSlots::new();
+        let matchmaker = Mutex::new(Matchmaker::disabled());
+        let shutdown = Shutdown::new();
+        assert!(shutdown.begin_drain());
+        let mut pending = Vec::new();
+        let event = crate::event::parse_line(INCOMING_HUMAN_CHALLENGE)
+            .unwrap()
+            .unwrap();
+        handle_event(
+            &client,
+            &Config::default(),
+            SELF_ID,
+            &slots,
+            &matchmaker,
+            &shutdown,
+            &mut |_id: &str| panic!("no game may start while draining"),
+            &mut pending,
+            event,
+        )
+        .unwrap();
+        // The challenge was declined outright, none was buffered for acceptance,
+        // and no slot was taken.
+        let calls: Vec<OutboundCall> = client_transport(&client)
+            .posts
+            .borrow()
+            .iter()
+            .map(classify_post)
+            .collect();
+        assert_eq!(
+            calls,
+            vec![OutboundCall::Decline {
+                id: "human99".to_string(),
+                reason: "generic".to_string(),
+            }]
+        );
+        assert!(pending.is_empty(), "a draining bot buffers no challenge");
+        assert_eq!(slots.len(), 0, "no slot is reserved while draining");
+    }
+
+    #[test]
+    fn draining_matchmaker_seeks_no_new_game() {
+        use crate::config::{MatchmakingConfig, MatchmakingMode};
+
+        // An eligible idle bot is available and matchmaking is immediately due, so
+        // a running bot would challenge it. Draining must suppress the seek so no
+        // outgoing challenge is issued.
+        let mut transport = FakeTransport::new("{}", "");
+        transport.bots_json =
+            r#"{"id":"maia","title":"BOT","perfs":{"blitz":{"rating":1600}}}"#.to_string();
+        let client = LichessClient::new(transport);
+        let config = MatchmakingConfig {
+            enabled: true,
+            variants: vec!["standard".to_string()],
+            initial_seconds: vec![300],
+            increment_seconds: vec![0],
+            mode: MatchmakingMode::Casual,
+            idle_timeout_seconds: 0,
+            min_challenge_interval_seconds: 0,
+            ..MatchmakingConfig::default()
+        };
+        let matchmaker = Mutex::new(Matchmaker::new(config, 1, "me", Instant::now()));
+        let slots = GameSlots::new();
+        let shutdown = Shutdown::new();
+        assert!(shutdown.begin_drain());
+        // Even though a seek would otherwise be due, draining makes it a no-op.
+        seek_matchmaking_game(&client, &slots, &matchmaker, &shutdown).unwrap();
+        assert!(
+            client_transport(&client).post_paths().is_empty(),
+            "a draining matchmaker issues no challenge"
+        );
+    }
+
+    #[test]
+    fn drain_message_states_the_count_and_the_second_interrupt() {
+        // The operator message must name how many games remain and make clear a
+        // second interrupt quits immediately, so an operator knows what draining
+        // is doing and how to escalate.
+        let message = drain_message(3);
+        assert!(message.contains('3'), "states the remaining game count");
+        assert!(
+            message.contains("again") && message.contains("immediately"),
+            "tells the operator a second interrupt quits now: {message}"
+        );
     }
 
     /// Borrow the transport back out of a client for assertions.
