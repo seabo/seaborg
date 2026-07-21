@@ -1,9 +1,12 @@
+use crate::continuation::{ContinuationHistory, CounterMoveTable, CONTINUATION_DISTANCES};
 use crate::history::{HistoryTable, HISTORY_MAX};
 
 use super::eval::{EvalState, Evaluation};
 use super::killer::KillerTable;
 use super::nnue::{self, Accumulator, Network};
-use super::ordering::{Loader, OrderedMoves, Phase, ScoredMoveList, Scorer};
+use super::ordering::{
+    Loader, OrderedMoves, Phase, ScoredMoveList, Scorer, FOLD_COUNTER_INTO_QUIETS,
+};
 use super::pv_table::PVTable;
 use super::score::Score;
 use super::trace::Tracer;
@@ -12,7 +15,7 @@ use super::tt::{Bound, Snapshot, Table};
 use chess::mono_traits::{All as AllGen, Captures, Legal, QueenPromotions, Quiets};
 use chess::mov::Move;
 use chess::movelist::{BasicMoveList, MoveList};
-use chess::position::{Player, Position};
+use chess::position::{Piece, Player, Position, Square};
 
 use separator::Separatable;
 
@@ -45,10 +48,20 @@ fn history_bonus(depth: Depth) -> i32 {
     i32::from(depth.max(1)).pow(2).min(HISTORY_MAX)
 }
 
-/// Preserve history ordering when the bounded table extends beyond the move list's compact score.
+/// Preserve history ordering when the combined contextual score extends beyond the move list's
+/// compact `i16`. The sum of plain and continuation history can exceed `i16`, so it is clamped
+/// rather than wrapped; the clamp only bites when several tables agree strongly, where the exact
+/// magnitude no longer changes which move is tried first.
 fn history_ordering_score(value: i32) -> i16 {
     value.clamp(i16::MIN.into(), i16::MAX.into()) as i16
 }
+
+/// Score bonus added to the counter move when it is folded into the combined quiet ranking rather
+/// than staged (see [`FOLD_COUNTER_INTO_QUIETS`]). Sized to a fully trained history entry so the
+/// counter ranks highly among quiets without being placed unconditionally first — the distinction
+/// the dedicated [`Phase::Counter`](super::ordering::Phase::Counter) stage makes and this fold does
+/// not. Applied only in the folded measurement build; the shipped staged design never reads it.
+const COUNTER_FOLD_BONUS: i32 = HISTORY_MAX;
 
 /// The greatest ply from the root that per-ply state is kept for.
 ///
@@ -319,6 +332,11 @@ pub struct StackEntry {
     /// The move this node is currently searching, i.e. the move played to reach the child at
     /// `ply + 1`. Null before the move loop starts.
     pub mov: Move,
+    /// The piece that made [`mov`](Self::mov), captured before the move is played so that the child
+    /// and grandchild can key their continuation history on this move's *(piece, to)* context. The
+    /// piece includes its colour. `Piece::None` when `mov` is null or unset, which reads as "no
+    /// continuation context" and suppresses any continuation update or lookup keyed on this ply.
+    pub moved_piece: Piece,
     /// A move this node must not search.
     ///
     /// Singular extensions establish that a move is the only good one by re-searching the node
@@ -334,6 +352,7 @@ impl Default for StackEntry {
         Self {
             eval: None,
             mov: Move::null(),
+            moved_piece: Piece::None,
             excluded: None,
         }
     }
@@ -800,6 +819,10 @@ pub struct Search<'engine> {
     kt: KillerTable,
     /// The history table.
     history: HistoryTable,
+    /// One recorded quiet reply per preceding move — the counter-move heuristic.
+    counter: CounterMoveTable,
+    /// Bounded continuation-history evidence for the moves one and two plies back.
+    cont_hist: ContinuationHistory,
     /// Counts every history-sensitive draw short-circuit taken during this search.
     ///
     /// A draw claimed by repetition or by the fifty-move rule is a property of how the position was
@@ -944,6 +967,8 @@ impl<'engine> Search<'engine> {
             tt,
             kt: KillerTable::new(MAX_PLY, KILLER_SLOTS),
             history: HistoryTable::new(),
+            counter: CounterMoveTable::new(),
+            cont_hist: ContinuationHistory::new(),
             pvt: PVTable::new(8),
             trace: Tracer::new(),
             history_draws: 0,
@@ -1012,6 +1037,8 @@ impl<'engine> Search<'engine> {
         // worker's state.
         self.history.reset();
         self.kt.reset();
+        self.counter.reset();
+        self.cont_hist.reset();
 
         result
     }
@@ -1428,6 +1455,7 @@ impl<'engine> Search<'engine> {
             // Record the pass as this node's current move so the child can see it arrived through a
             // null move and decline to pass straight back.
             self.stack[ply].mov = Move::null();
+            self.stack[ply].moved_piece = Piece::None;
             self.make_null_move();
             self.tt.prefetch(self.pos.zobrist().0);
             let child = self.search::<T, NonPv>(
@@ -1527,6 +1555,9 @@ impl<'engine> Search<'engine> {
                 }
 
                 self.stack[ply].mov = mov;
+                // Captured before the move is played, while the mover still sits on its origin, so a
+                // child can key continuation history on this move's (piece, to) context.
+                self.stack[ply].moved_piece = self.pos.piece_at_sq(mov.orig());
 
                 // Step 16. Reductions & extensions.
                 //
@@ -1715,13 +1746,7 @@ impl<'engine> Search<'engine> {
                                 if ply > 0 {
                                     self.kt.store(mov, ply);
                                 }
-                                let bonus = history_bonus(depth);
-                                let side = self.pos.turn();
-                                self.history.update(mov.orig(), mov.dest(), bonus, side);
-                                for failed in &failed_quiets {
-                                    self.history
-                                        .update(failed.orig(), failed.dest(), -bonus, side);
-                                }
+                                self.update_quiet_histories(mov, &failed_quiets, depth, ply);
                             }
 
                             break 'move_loop;
@@ -1962,6 +1987,88 @@ impl<'engine> Search<'engine> {
     #[inline(always)]
     fn eval_two_plies_ago(&self, ply: usize) -> Option<Score> {
         ply.checked_sub(2).and_then(|p| self.stack[p].eval)
+    }
+
+    /// The *(piece, to)* contexts of the moves preceding the node at `ply`, for each continuation
+    /// distance: index 0 is the move one ply back, index 1 the move two plies back.
+    ///
+    /// A distance is `None` where there is no preceding move to condition on — near the root, or
+    /// where that ancestor passed with a null move — which suppresses that distance's contribution
+    /// to both scoring and updates. The mover is read from [`StackEntry::moved_piece`], captured at
+    /// make time, rather than from the current board, because the piece two plies back may since have
+    /// moved again.
+    #[inline]
+    fn continuation_contexts(
+        &self,
+        ply: usize,
+    ) -> [Option<(Piece, Square)>; CONTINUATION_DISTANCES] {
+        std::array::from_fn(|i| {
+            let back = i + 1;
+            let entry = &self.stack[ply.checked_sub(back)?];
+            if entry.mov.is_null() || entry.moved_piece.is_none() {
+                None
+            } else {
+                Some((entry.moved_piece, entry.mov.dest()))
+            }
+        })
+    }
+
+    /// Reward the quiet move that produced a beta cutoff and penalise the quiet moves tried before
+    /// it, across every quiet-move table: plain from-to history, continuation history at each
+    /// tracked distance, and the counter move. All updates share the bounded gravity rule, so no
+    /// table accumulates an independent unbounded count.
+    ///
+    /// The position here is the node's own — the cutoff move has already been unmade — so the mover
+    /// of each quiet is read from its origin square. Continuation updates are keyed on the preceding
+    /// moves via [`Self::continuation_contexts`]; a distance with no preceding move is skipped.
+    fn update_quiet_histories(
+        &mut self,
+        cutoff: Move,
+        failed_quiets: &BasicMoveList,
+        depth: Depth,
+        ply: usize,
+    ) {
+        let bonus = history_bonus(depth);
+        let side = self.pos.turn();
+        let contexts = self.continuation_contexts(ply);
+
+        self.history
+            .update(cutoff.orig(), cutoff.dest(), bonus, side);
+        for failed in failed_quiets {
+            self.history
+                .update(failed.orig(), failed.dest(), -bonus, side);
+        }
+
+        let cutoff_piece = self.pos.piece_at_sq(cutoff.orig());
+        for (dist, ctx) in contexts.iter().enumerate() {
+            let Some((prev_piece, prev_to)) = *ctx else {
+                continue;
+            };
+            self.cont_hist.update(
+                dist,
+                prev_piece,
+                prev_to,
+                cutoff_piece,
+                cutoff.dest(),
+                bonus,
+            );
+            for failed in failed_quiets {
+                let failed_piece = self.pos.piece_at_sq(failed.orig());
+                self.cont_hist.update(
+                    dist,
+                    prev_piece,
+                    prev_to,
+                    failed_piece,
+                    failed.dest(),
+                    -bonus,
+                );
+            }
+        }
+
+        // The reply to the move one ply back is now this cutoff.
+        if let Some((prev_piece, prev_to)) = contexts[0] {
+            self.counter.store(prev_piece, prev_to, cutoff);
+        }
     }
 
     /// Returns the static evaluation, from the perspective of the side to move.
@@ -2658,6 +2765,17 @@ impl<'a, 'search> Loader for MoveLoader<'a, 'search> {
         }
     }
 
+    fn load_counter(&mut self, movelist: &mut ScoredMoveList) {
+        // When folded, the counter contributes as a score bonus in `score_quiets` and has no stage.
+        if FOLD_COUNTER_INTO_QUIETS {
+            return;
+        }
+        let contexts = self.search.continuation_contexts(self.ply);
+        if let Some(counter) = self.counter_move(contexts[0]) {
+            movelist.push(counter);
+        }
+    }
+
     fn load_quiets(&mut self, movelist: &mut ScoredMoveList) {
         self.search.pos.generate_in::<_, Quiets, Legal>(movelist);
     }
@@ -2680,16 +2798,56 @@ impl<'a, 'search> Loader for MoveLoader<'a, 'search> {
 
     fn score_quiets(&mut self, quiets: Scorer) {
         let turn = self.search.pos.turn();
+        let contexts = self.search.continuation_contexts(self.ply);
+        // The counter move only influences scoring when it is folded rather than staged; otherwise
+        // its own stage yields it and it is suppressed from the quiets entirely.
+        let folded_counter = if FOLD_COUNTER_INTO_QUIETS {
+            self.counter_move(contexts[0])
+        } else {
+            None
+        };
+
         for (mov, score) in quiets {
-            // SAFETY: these are legal moves, so both squares are valid.
-            unsafe {
-                *score = history_ordering_score(self.search.history.get_unchecked(
-                    mov.orig(),
-                    mov.dest(),
-                    turn,
-                ));
+            // SAFETY: these are legal quiet moves, so both squares are valid and the mover is a real
+            // piece on its origin square.
+            let cur_piece = self.search.pos.piece_at_sq(mov.orig());
+            let mut raw = unsafe {
+                self.search
+                    .history
+                    .get_unchecked(mov.orig(), mov.dest(), turn)
+            };
+            for (dist, ctx) in contexts.iter().enumerate() {
+                if let Some((prev_piece, prev_to)) = *ctx {
+                    // SAFETY: `dist` is a tracked continuation distance and every piece is real.
+                    raw += unsafe {
+                        self.search.cont_hist.get_unchecked(
+                            dist,
+                            prev_piece,
+                            prev_to,
+                            cur_piece,
+                            mov.dest(),
+                        )
+                    };
+                }
             }
+            if folded_counter == Some(*mov) {
+                raw += COUNTER_FOLD_BONUS;
+            }
+            *score = history_ordering_score(raw);
         }
+    }
+}
+
+impl MoveLoader<'_, '_> {
+    /// The recorded counter move for the one-ply-back context, if one exists and is a legal move in
+    /// this position. Returns `None` when there is no preceding move, no reply has been stored, or
+    /// the stored reply is not legal here — the legality check that keeps an externally stored move
+    /// from being executed unsafely.
+    #[inline]
+    fn counter_move(&self, one_ply_back: Option<(Piece, Square)>) -> Option<Move> {
+        let (prev_piece, prev_to) = one_ply_back?;
+        let counter = self.search.counter.get(prev_piece, prev_to);
+        (!counter.is_null() && self.search.pos.valid_move(&counter)).then_some(counter)
     }
 }
 
@@ -2928,6 +3086,101 @@ mod tests {
         let before = deep.get(from, to, side);
         deep.update(from, to, -history_bonus(8), side);
         assert!(deep.get(from, to, side) < before);
+    }
+
+    /// Drive staged ordering with a real [`MoveLoader`] at `ply` and return what each phase yields,
+    /// so tests can observe the combined contextual quiet order and the counter stage directly.
+    fn ordered_phases(search: &mut Search<'_>, ply: usize) -> Vec<(Phase, Vec<Move>)> {
+        let mut moves = OrderedMoves::new();
+        let mut out = Vec::new();
+        while moves.load_next_phase(MoveLoader::from(search, None, ply)) {
+            let phase = moves.phase();
+            out.push((phase, (&mut moves).into_iter().collect()));
+        }
+        out
+    }
+
+    fn phase_yield(phases: &[(Phase, Vec<Move>)], wanted: Phase) -> Vec<Move> {
+        phases
+            .iter()
+            .find(|(phase, _)| *phase == wanted)
+            .map(|(_, moves)| moves.clone())
+            .unwrap_or_default()
+    }
+
+    /// Continuation history conditions a quiet on the preceding move, so a move that is a strong
+    /// reply to what was just played is ordered ahead of one with more plain from-to history but no
+    /// such contextual evidence. This is the whole point of the table: plain history alone cannot
+    /// distinguish a generally useful move from a specifically good reply.
+    #[test]
+    fn continuation_history_orders_a_reply_ahead_of_a_higher_plain_history_move() {
+        chess::init::init_globals();
+        let position = Position::start_pos();
+        let flag = AtomicBool::new(false);
+        let table = Table::new(1);
+        let mut search = Search::new(position, &flag, None, &table);
+
+        // The node at ply 1 was reached by a black pawn move to e5; that is the one-ply continuation
+        // context every quiet here is scored against.
+        let ply = 1;
+        search.stack[0].mov = Move::build(Square::E7, Square::E5, None, MoveType::QUIET);
+        search.stack[0].moved_piece = Piece::BlackPawn;
+
+        // g1f3 has no plain history but strong continuation evidence as a reply to ...e5; e2e4 has
+        // stronger plain history and no continuation evidence. The tables are keyed on the piece each
+        // move's origin square carries in the start position.
+        let reply = Move::build(Square::G1, Square::F3, None, MoveType::QUIET);
+        let plain = Move::build(Square::E2, Square::E4, None, MoveType::QUIET);
+        search
+            .history
+            .update(plain.orig(), plain.dest(), 5_000, Player::WHITE);
+        search.cont_hist.update(
+            0,
+            Piece::BlackPawn,
+            Square::E5,
+            Piece::WhiteKnight,
+            Square::F3,
+            10_000,
+        );
+
+        let quiets = phase_yield(&ordered_phases(&mut search, ply), Phase::Quiet);
+        let reply_at = quiets.iter().position(|m| *m == reply);
+        let plain_at = quiets.iter().position(|m| *m == plain);
+        assert!(
+            reply_at < plain_at,
+            "the continuation reply should precede the higher-plain-history move: {quiets:?}"
+        );
+    }
+
+    /// A counter move is stored against a preceding move but probed at a possibly different
+    /// position, so it must be legality-validated before it can be handed to the unsafe move loop.
+    /// An illegal stored counter is silently dropped; a legal one is yielded by the counter stage.
+    #[test]
+    fn a_stored_counter_is_legality_validated_before_it_is_yielded() {
+        chess::init::init_globals();
+        let position = Position::start_pos();
+        let flag = AtomicBool::new(false);
+        let table = Table::new(1);
+        let mut search = Search::new(position, &flag, None, &table);
+
+        let ply = 1;
+        search.stack[0].mov = Move::build(Square::E7, Square::E5, None, MoveType::QUIET);
+        search.stack[0].moved_piece = Piece::BlackPawn;
+
+        // A rook slide blocked by its own pawn: impossible in the start position.
+        let illegal = Move::build(Square::A1, Square::A5, None, MoveType::QUIET);
+        search.counter.store(Piece::BlackPawn, Square::E5, illegal);
+        let counter = phase_yield(&ordered_phases(&mut search, ply), Phase::Counter);
+        assert!(
+            counter.is_empty(),
+            "an illegal stored counter must not reach the move loop: {counter:?}"
+        );
+
+        // A legal quiet in the start position is validated and yielded by the counter stage.
+        let legal = Move::build(Square::G1, Square::F3, None, MoveType::QUIET);
+        search.counter.store(Piece::BlackPawn, Square::E5, legal);
+        let counter = phase_yield(&ordered_phases(&mut search, ply), Phase::Counter);
+        assert_eq!(counter, vec![legal]);
     }
 
     #[test]

@@ -42,6 +42,7 @@ pub mod ui;
 
 // Implementation detail: reachable throughout the crate but not part of the
 // supported API, so kept private to the crate.
+mod continuation;
 mod engine;
 mod game;
 mod history;

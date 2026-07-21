@@ -66,6 +66,22 @@ where
 /// history value rather than silently wrapping a well-trained move below an untrained one.
 pub const HISTORY_MAX: i32 = 32_768;
 
+/// Apply one bounded, self-decaying history update to `entry`.
+///
+/// The gravity term `entry * |bonus| / HISTORY_MAX` makes repeated evidence progressively less
+/// influential near either boundary and pulls stale evidence back toward zero when the sign of new
+/// evidence changes. Clamping the requested bonus before the arithmetic keeps every intermediate
+/// within `i32`, and the resulting entry is always in `-HISTORY_MAX..=HISTORY_MAX`.
+///
+/// This is the single bounded bonus/malus/aging rule shared by every quiet-move history table —
+/// plain butterfly history, continuation history and any other contextual evidence — so that no
+/// table accumulates unbounded or exposure-based counters of its own.
+#[inline(always)]
+pub fn gravity_update(entry: &mut i32, bonus: i32) {
+    let bonus = bonus.clamp(-HISTORY_MAX, HISTORY_MAX);
+    *entry += bonus - *entry * bonus.abs() / HISTORY_MAX;
+}
+
 /// A structure storing two butterfly tables of `i32`s, used to record the history value of moves
 /// during search.
 ///
@@ -90,20 +106,13 @@ impl HistoryTable {
         }
     }
 
-    /// Apply a bounded history update.
-    ///
-    /// The gravity term `value * |bonus| / HISTORY_MAX` makes repeated evidence progressively less
-    /// influential near either boundary and pulls stale evidence back toward zero when the sign of
-    /// new evidence changes. Clamping the requested bonus before the arithmetic keeps every
-    /// intermediate within `i32`, and the resulting entry is always in
-    /// `-HISTORY_MAX..=HISTORY_MAX`.
+    /// Apply a bounded history update through the shared [`gravity_update`] rule.
     pub fn update(&mut self, from: Square, to: Square, bonus: i32, side: Player) {
         let entry = match side {
             Player::WHITE => &mut self.white.data[from.index() as usize][to.index() as usize],
             Player::BLACK => &mut self.black.data[from.index() as usize][to.index() as usize],
         };
-        let bonus = bonus.clamp(-HISTORY_MAX, HISTORY_MAX);
-        *entry += bonus - *entry * bonus.abs() / HISTORY_MAX;
+        gravity_update(entry, bonus);
     }
 
     /// Read a history score with bounds-checked square indexing. Only the tests
