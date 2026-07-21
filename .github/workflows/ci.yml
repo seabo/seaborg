@@ -16,13 +16,16 @@ env:
   # turns into a CI failure on an unrelated pull request. Bump this
   # deliberately, alongside whatever formatting or lint fallout it causes.
   RUST_VERSION: "1.97.1"
-  # `.cargo/config.toml` builds with `-C target-cpu=native` for engine speed.
-  # Hosted runners are a heterogeneous fleet, so "native" resolves to a
-  # different microarchitecture from run to run while Cargo's fingerprint sees
-  # an unchanged flag string -- a restored cache can therefore contain objects
-  # using instructions the current host does not implement. Build with portable
-  # defaults instead. Nothing in this workspace is conditional on CPU features,
-  # so this affects speed only, and CI measures correctness rather than speed.
+  # `.cargo/config.toml` sets a distributable per-architecture baseline (for
+  # x86-64, `-C target-cpu=x86-64-v2`). Emptying RUSTFLAGS here overrides that
+  # file so CI builds with the toolchain's portable defaults instead. Hosted
+  # runners are a heterogeneous fleet: a fixed `target-cpu` would let a restored
+  # cache carry objects using instructions the current host does not implement,
+  # while Cargo's fingerprint sees an unchanged flag string. The one CPU-specific
+  # path in the workspace, the NNUE AVX2 kernel, is selected at run time by
+  # feature detection rather than by the build baseline, so it is compiled
+  # unconditionally and simply not executed on a runner without AVX2 -- the
+  # baseline affects speed only, and CI measures correctness rather than speed.
   RUSTFLAGS: ""
   CARGO_TERM_COLOR: always
 

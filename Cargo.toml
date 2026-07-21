@@ -11,6 +11,14 @@ version = "0.1.0"
 authors = ["George Seabridge <georgeseabridge@gmail.com>"]
 edition = "2021"
 license = "MIT"
+# Minimum supported Rust version for the whole workspace. The floor is set by the
+# newest standard-library item the code relies on: `MaybeUninit::assume_init_ref`
+# and `assume_init_mut` (used in the move list) stabilized in Rust 1.93. Building
+# with an older toolchain fails at those calls, so this is the honest minimum.
+# Clippy's `incompatible_msrv` lint enforces it, failing the build if any code
+# uses a std item newer than this — so raising a dependency's floor shows up here
+# rather than as a surprise on a contributor's older toolchain.
+rust-version = "1.93"
 
 # Only dependencies used by more than one member live here, so a single version
 # bump keeps them aligned. Single-member and internal path dependencies stay in
@@ -31,6 +39,7 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 chess = { path = "./chess" }
