@@ -107,6 +107,30 @@ trained fixture, and a Rust integration test
 (`engine/tests/loads_exported_network.rs`) loads an exported fixture to confirm
 the two languages agree on the byte layout.
 
+### Golden vectors (the cross-language sync check)
+
+Byte-layout agreement is not the same as *arithmetic* agreement: the two
+languages must also compute the same integer score from the same weights. The
+exporter emits a golden-vector fixture to pin that down — a network plus a set of
+`(category, FEN, expected-centipawn)` triples, where the expected score is this
+exporter's integer forward pass:
+
+```sh
+.venv/bin/python export.py --emit-golden ../../engine/tests/fixtures
+# writes golden_v1.sbnn and golden_v1.vectors
+```
+
+The positions span tactical, endgame, king-safety, and near-overflow (maximally
+dense) boards, so the check exercises the clip and the wide-value regime, not just
+quiet middlegames. The engine's differential test
+(`engine/src/nnue/inference.rs`) loads the pair and asserts its scalar forward
+pass — and, on a CPU with AVX2, its SIMD forward pass — reproduces every expected
+integer exactly, a three-way equality across the language boundary. Pass
+`--golden <dir>` alongside `--checkpoint/--out` to emit the same vectors for a real
+trained network. `test_export.py` derives the golden features from a FEN
+independently of the packed-record decoder and checks the two agree, and asserts
+the committed fixture still matches what the exporter emits.
+
 ## Measured throughput
 
 The network is tiny (~197k parameters at H=256), so training is dataloader-bound:
@@ -164,5 +188,7 @@ identically (an architectural property that holds without training), the target
 blend, and that a short run converges. `test_train.py` pins the `LambdaSchedule`
 arithmetic and its effect on the blended target. `test_export.py` checks the
 quantization rounding, the accumulator bound, the `SBNN` serialization (with a
-reader written independently of the writer), and that the exported integer
-network reproduces a trained model within tolerance.
+reader written independently of the writer), that the exported integer network
+reproduces a trained model within tolerance, and the golden-vector emission — the
+FEN feature derivation against the packed decoder, the category coverage, and that
+the committed fixture matches the current export.

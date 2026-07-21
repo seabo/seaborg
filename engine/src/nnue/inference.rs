@@ -66,6 +66,25 @@ const EVAL_CP_MAX: i64 = 10_000;
 /// accumulator with a foreign network is a programming error, and the mismatch
 /// is caught rather than silently reading past a block.
 pub fn forward(network: &Network, accumulator: &Accumulator, side_to_move: Player) -> i32 {
+    forward_with(network, accumulator, side_to_move, dot_clipped_selected)
+}
+
+/// The forward pass parameterized by the clipped dot product used for each
+/// perspective block. [`forward`] passes [`dot_clipped_selected`], the runtime
+/// dispatcher, so production always runs the widest path the CPU supports. The
+/// cross-language differential test passes the scalar [`dot_clipped`] and the AVX2
+/// kernel explicitly, so it can assert both land on the identical score rather than
+/// running whichever one dispatch happens to pick. Everything but the dot product —
+/// the bias seed, the i64 widen, the rounded divide, and the clamp — is shared
+/// here, so a chosen `dot` changes only how each block sum is formed and never how
+/// the result is rounded.
+#[inline]
+fn forward_with(
+    network: &Network,
+    accumulator: &Accumulator,
+    side_to_move: Player,
+    dot: impl Fn(&[i16], &[i16], i32) -> i32,
+) -> i32 {
     let hidden = network.hidden_width() as usize;
     let qa = i32::from(network.qa());
     let weights = network.output_weights();
@@ -81,8 +100,8 @@ pub fn forward(network: &Network, accumulator: &Accumulator, side_to_move: Playe
 
     // Output bias seeds the i32 accumulator; `OUTPUT_DIM` is 1, so there is one.
     let mut s: i32 = network.output_bias()[0];
-    s += dot_clipped_selected(own, own_weights, qa);
-    s += dot_clipped_selected(enemy, enemy_weights, qa);
+    s += dot(own, own_weights, qa);
+    s += dot(enemy, enemy_weights, qa);
 
     // Widen to i64 before scaling: `s` fits i32 but `s · SCALE` need not.
     let numerator = i64::from(s) * i64::from(network.scale());
@@ -405,6 +424,101 @@ mod tests {
                 reference, expected,
                 "independent dense reference mismatch on {fen}"
             );
+        }
+    }
+
+    /// The exporter-emitted golden-vector fixture: the quantized network the engine
+    /// loads (`GOLDEN_NET_BYTES`) and the `(category, FEN, expected-centipawn)`
+    /// triples the exporter's own integer forward pass produced for it
+    /// (`GOLDEN_VECTORS`). Both are committed so the cross-language agreement is
+    /// checked in every `cargo test` run without invoking Python. Regenerate them
+    /// together with `python export.py --emit-golden engine/tests/fixtures`.
+    const GOLDEN_NET_BYTES: &[u8] = include_bytes!("../../tests/fixtures/golden_v1.sbnn");
+    const GOLDEN_VECTORS: &str = include_str!("../../tests/fixtures/golden_v1.vectors");
+
+    /// The four position kinds the golden set must span. The differential test
+    /// asserts each is present so a regenerated fixture cannot silently drop one.
+    const GOLDEN_CATEGORIES: [&str; 4] = ["tactical", "endgame", "king-safety", "near-overflow"];
+
+    /// Parses the committed vectors file into `(category, FEN, expected)` triples,
+    /// skipping the `#` comment header. Each line is three tab-separated fields; a
+    /// FEN contains spaces but no tab, so the split is unambiguous.
+    fn parse_golden_vectors() -> Vec<(&'static str, &'static str, i32)> {
+        GOLDEN_VECTORS
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(|line| {
+                let mut fields = line.split('\t');
+                let category = fields.next().expect("golden line has a category");
+                let fen = fields.next().expect("golden line has a FEN");
+                let expected = fields
+                    .next()
+                    .expect("golden line has an expected score")
+                    .parse::<i32>()
+                    .expect("golden expected score is an integer");
+                assert!(
+                    fields.next().is_none(),
+                    "golden line has exactly three tab-separated fields"
+                );
+                (category, fen, expected)
+            })
+            .collect()
+    }
+
+    /// The cross-language sync guarantee as a differential test: for every golden
+    /// position the score the Python exporter emitted, the Rust scalar forward pass,
+    /// and — on a CPU with AVX2 — the Rust SIMD forward pass are the identical
+    /// integer. The expected values in `GOLDEN_VECTORS` were produced by the
+    /// exporter's integer forward pass over the same network committed in
+    /// `GOLDEN_NET_BYTES`, so equality here is exact agreement across the language
+    /// boundary — on the feature encoding, the clipped quantized arithmetic, and the
+    /// rounded read-out — over tactical, endgame, king-safety, and near-overflow
+    /// positions. The scalar and AVX2 kernels are driven explicitly through the
+    /// shared forward tail, so where the instructions exist the third check is a real
+    /// one rather than the same runtime dispatch counted twice.
+    #[test]
+    fn golden_vectors_agree_across_python_scalar_and_simd() {
+        init_globals();
+        let net =
+            Network::read(&mut &GOLDEN_NET_BYTES[..]).expect("the exporter's golden network loads");
+        let vectors = parse_golden_vectors();
+        assert!(!vectors.is_empty(), "the golden fixture has vectors");
+        for category in GOLDEN_CATEGORIES {
+            assert!(
+                vectors.iter().any(|&(c, _, _)| c == category),
+                "golden set covers the {category} category"
+            );
+        }
+
+        for (category, fen, expected) in vectors {
+            let pos = Position::from_fen(fen).expect("golden FEN is valid");
+            let stm = pos.turn();
+            let acc = Accumulator::from_position(&net, &pos);
+
+            // The Rust scalar forward pass reproduces the exporter's emitted integer.
+            let scalar = forward_with(&net, &acc, stm, dot_clipped);
+            assert_eq!(
+                scalar, expected,
+                "scalar forward vs exporter on {category} {fen}"
+            );
+
+            // Where AVX2 exists, the SIMD forward pass is included: a three-way check.
+            #[cfg(target_arch = "x86_64")]
+            {
+                if is_x86_feature_detected!("avx2") {
+                    // SAFETY: AVX2 presence was just confirmed; each perspective
+                    // block and its weight slice are equal-length H (a multiple of
+                    // 16), read in bounds by the kernel.
+                    let simd = forward_with(&net, &acc, stm, |a, w, q| unsafe {
+                        dot_clipped_avx2(a, w, q)
+                    });
+                    assert_eq!(
+                        simd, expected,
+                        "SIMD forward vs exporter on {category} {fen}"
+                    );
+                }
+            }
         }
     }
 

@@ -1,15 +1,17 @@
 """Tests for quantization and the SBNN export.
 
-They pin down the three things export must get right: the quantization rounds each
-weight onto the engine's integer grid, the serialized bytes are the exact format
-the engine loader reads (checked with a reader written independently of the
-writer, mirroring the loader's rejections), and -- the point of quantization-aware
-training -- the exported integer network reproduces the trained model's own
-evaluation to within the final rounding step."""
+They pin down the things export must get right: the quantization rounds each weight
+onto the engine's integer grid, the serialized bytes are the exact format the
+engine loader reads (checked with a reader written independently of the writer,
+mirroring the loader's rejections), the exported integer network reproduces the
+trained model's own evaluation to within the final rounding step, and the
+golden-vector fixture the engine's differential test consumes is emitted from a FEN
+the same way the engine derives its features -- the cross-language sync check."""
 
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -17,9 +19,32 @@ import torch
 import data
 import export
 import train
-from export import ExportError, QuantizedNetwork, integer_eval_cp, quantize
+from export import (
+    GOLDEN_POSITIONS,
+    ExportError,
+    QuantizedNetwork,
+    features_from_fen,
+    golden_vectors,
+    integer_eval_cp,
+    quantize,
+)
 from model import PERSPECTIVE_768_DIM, NnueConfig, NnueModel
-from testsupport import BLACK_KING, WHITE_KING, WHITE_PAWN, encode_record
+from testsupport import (
+    BLACK_KING,
+    BLACK_PAWN,
+    BLACK_ROOK,
+    WHITE_KING,
+    WHITE_PAWN,
+    WHITE_QUEEN,
+    WHITE_ROOK,
+    encode_record,
+)
+
+# The committed golden fixture the engine's differential test loads; this suite
+# checks it stays in sync with what the exporter currently emits.
+_GOLDEN_VECTORS_PATH = (
+    Path(__file__).resolve().parents[2] / "engine" / "tests" / "fixtures" / "golden_v1.vectors"
+)
 
 # The exported integer network reproduces the quantization-aware model's own
 # centipawn output to within the dequantizing divide's rounding: with the same
@@ -259,6 +284,176 @@ class ReproductionTest(unittest.TestCase):
             got = integer_eval_cp(net, batch.stm_indices[start:end], batch.nstm_indices[start:end])
             worst = max(worst, abs(got - float_cp[k]))
         self.assertLessEqual(worst, _REPRODUCTION_TOLERANCE_CP, f"max reproduction error {worst:.3f}cp")
+
+
+# Piece code -> FEN letter, the inverse of the exporter's FEN parse table, so a
+# placement can be rendered back to the FEN the parser reads.
+_CODE_TO_FEN = {code: letter for letter, code in export._FEN_PIECE_CODES.items()}
+
+
+def _pieces_to_fen(pieces: dict[int, int], black_to_move: bool = False) -> str:
+    """Render a ``{square: code}`` placement (square A1 = 0) as a full six-field
+    FEN, so a position built for the packed-record path can be handed to
+    :func:`features_from_fen` as the same board."""
+    ranks = []
+    for rank in range(7, -1, -1):  # FEN lists rank 8 first
+        row, empty = "", 0
+        for file in range(8):
+            code = pieces.get(rank * 8 + file)
+            if code is None:
+                empty += 1
+                continue
+            if empty:
+                row += str(empty)
+                empty = 0
+            row += _CODE_TO_FEN[code]
+        if empty:
+            row += str(empty)
+        ranks.append(row or "8")
+    return "/".join(ranks) + (" b" if black_to_move else " w") + " - - 0 1"
+
+
+def _parse_vectors_file(path: Path) -> list[tuple[str, str, int]]:
+    """Parse a committed ``.vectors`` file into ``(category, FEN, cp)`` triples the
+    same way the engine's differential test does: skip ``#`` comments, split each
+    line on tabs."""
+    triples = []
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        category, fen, cp = line.split("\t")
+        triples.append((category, fen, int(cp)))
+    return triples
+
+
+class FeaturesFromFenTest(unittest.TestCase):
+    """``features_from_fen`` is a second, FEN-based derivation of the feature
+    indices; it must agree with the packed-record decode path (:func:`data.decode`),
+    the way the engine's own board derivation must agree with both."""
+
+    def _placements(self):
+        # A middlegame-ish scatter, an endgame, and a queen on a central square,
+        # each also tried with black to move so the perspective swap is exercised.
+        return [
+            {4: WHITE_KING, 60: BLACK_KING, 12: WHITE_PAWN, 51: BLACK_PAWN, 0: WHITE_ROOK, 63: BLACK_ROOK},
+            {6: WHITE_KING, 58: BLACK_KING, 8: WHITE_PAWN},
+            {4: WHITE_KING, 60: BLACK_KING, 27: WHITE_QUEEN, 35: BLACK_PAWN, 24: BLACK_ROOK},
+        ]
+
+    def test_agrees_with_the_packed_record_decode(self):
+        for pieces in self._placements():
+            for black_to_move in (False, True):
+                record = encode_record(pieces, black_to_move=black_to_move)
+                batch = data.decode(record[None, :])  # one record: all indices are its own
+                fen = _pieces_to_fen(pieces, black_to_move)
+                fen_stm, fen_nstm = features_from_fen(fen)
+                # Compare as multisets: both paths list one index per piece, but the
+                # square order they emit need not match.
+                self.assertEqual(
+                    sorted(fen_stm.tolist()), sorted(batch.stm_indices.tolist()), fen
+                )
+                self.assertEqual(
+                    sorted(fen_nstm.tolist()), sorted(batch.nstm_indices.tolist()), fen
+                )
+
+    def test_indices_stay_in_range(self):
+        for cat, fen in GOLDEN_POSITIONS:
+            stm, nstm = features_from_fen(fen)
+            for arr in (stm, nstm):
+                self.assertTrue(arr.size)
+                self.assertGreaterEqual(int(arr.min()), 0)
+                self.assertLess(int(arr.max()), PERSPECTIVE_768_DIM)
+
+    def test_rejects_malformed_placements(self):
+        for bad in (
+            "8/8/8/8/8/8/8/4X3 w - - 0 1",  # unknown piece letter
+            "8/8/8 w - - 0 1",  # too few ranks
+            "7/8/8/8/8/8/8/8 w - - 0 1",  # a rank that does not fill eight files
+            "9/8/8/8/8/8/8/8 w - - 0 1",  # a rank that overflows eight files
+            "4k2pp/8/8/8/8/8/8/4K3 w - - 0 1",  # a piece past the eighth file
+        ):
+            with self.assertRaises(ExportError, msg=bad):
+                features_from_fen(bad)
+
+
+class GoldenVectorTest(unittest.TestCase):
+    """The golden-vector emission: the curated set spans the required position
+    kinds, the near-overflow set genuinely stresses the wide integer regime, and
+    the committed fixture matches what the exporter emits now."""
+
+    def test_positions_span_every_category(self):
+        self.assertEqual(
+            {category for category, _ in GOLDEN_POSITIONS},
+            {"tactical", "endgame", "king-safety", "near-overflow"},
+        )
+
+    def test_golden_network_is_bounded_and_uses_contract_dimensions(self):
+        # Constructing it runs the exporter's accumulator-overflow guard, so this
+        # asserts no legal position can overflow the i16 accumulator.
+        net = export._golden_network()
+        self.assertEqual((net.hidden, net.qa, net.qb, net.scale), (16, 255, 64, 400))
+        export._assert_accumulator_fits_i16(net)
+
+    def test_near_overflow_positions_drive_the_widest_accumulators(self):
+        # The point of the near-overflow category: those positions push an
+        # accumulator entry to a large fraction of the i16 it is held in (here past
+        # 0.7 of i16::MAX), further than any other category reaches, while still
+        # fitting -- exactly the regime a too-narrow intermediate type would break.
+        net = export._golden_network()
+        columns = net.w_ft.reshape(PERSPECTIVE_768_DIM, net.hidden).astype(np.int64)
+        bias = net.b_ft.astype(np.int64)
+
+        def peak_accumulator(fen: str) -> int:
+            stm, nstm = features_from_fen(fen)
+            own = bias + columns[stm].sum(axis=0)
+            enemy = bias + columns[nstm].sum(axis=0)
+            return int(max(np.abs(own).max(), np.abs(enemy).max()))
+
+        near = [peak_accumulator(fen) for cat, fen in GOLDEN_POSITIONS if cat == "near-overflow"]
+        others = [peak_accumulator(fen) for cat, fen in GOLDEN_POSITIONS if cat != "near-overflow"]
+        i16_max = 32767
+        self.assertTrue(near, "there are near-overflow positions")
+        for peak in near:
+            self.assertGreater(peak, 0.7 * i16_max)
+            self.assertLessEqual(peak, i16_max)  # fits: the guard forbids an overflow
+        self.assertGreaterEqual(min(near), max(others))
+
+    def test_committed_fixture_matches_current_export(self):
+        # The committed expected scores are the exporter's integer forward pass over
+        # the committed network; if either drifts, the engine's differential test
+        # would compare against stale values, so this fails first and asks for a
+        # regeneration. Mirrors `--emit-golden`.
+        net = export._golden_network()
+        committed_net = (_GOLDEN_VECTORS_PATH.parent / "golden_v1.sbnn").read_bytes()
+        self.assertEqual(net.to_bytes(), committed_net, "golden_v1.sbnn is stale; re-emit")
+        self.assertEqual(
+            golden_vectors(net),
+            _parse_vectors_file(_GOLDEN_VECTORS_PATH),
+            "golden_v1.vectors is stale; re-emit",
+        )
+
+    def test_golden_network_round_trips_through_the_reader(self):
+        net = export._golden_network()
+        reloaded = QuantizedNetwork.from_bytes(net.to_bytes())
+        self.assertEqual((reloaded.hidden, reloaded.qa, reloaded.qb, reloaded.scale), (16, 255, 64, 400))
+        np.testing.assert_array_equal(reloaded.w_ft, net.w_ft)
+        np.testing.assert_array_equal(reloaded.b_ft, net.b_ft)
+        np.testing.assert_array_equal(reloaded.w_out, net.w_out)
+        np.testing.assert_array_equal(reloaded.b_out, net.b_out)
+
+    def test_write_golden_fixture_emits_a_loadable_pair(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            net_path = Path(tmp) / "golden.sbnn"
+            vectors_path = Path(tmp) / "golden.vectors"
+            vectors = export.write_golden_fixture(net_path, vectors_path)
+            # The written network round-trips and the written vectors reparse to the
+            # returned triples.
+            QuantizedNetwork.from_bytes(net_path.read_bytes())
+            self.assertEqual(vectors, _parse_vectors_file(vectors_path))
+            self.assertEqual([category for category, _, _ in vectors], [c for c, _ in GOLDEN_POSITIONS])
 
 
 if __name__ == "__main__":
