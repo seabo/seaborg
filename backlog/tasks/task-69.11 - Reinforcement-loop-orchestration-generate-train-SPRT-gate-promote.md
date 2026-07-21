@@ -1,11 +1,11 @@
 ---
 id: TASK-69.11
 title: 'Reinforcement loop orchestration: generate, train, SPRT-gate, promote'
-status: Changes Requested
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:42'
-updated_date: '2026-07-21 19:01'
+updated_date: '2026-07-21 20:08'
 labels:
   - nnue
   - training
@@ -74,6 +74,11 @@ Rework (review attempt 1):
 Resolved REV-1-01: _gate_result_from_report now reads the harness's actual report shape — the "results" block (was "result"), "elo_error" for the ± margin (was a nonexistent "elo_interval"/"elo_ci"), and "games". A real gate now records the measured Elo delta, ± margin, and game count in the ledger and CLI summary instead of nulls. GateResult.elo_interval is retyped Optional[float] (the harness emits a scalar ± margin, not a pair) and the FakeBackend fixture updated to match.
 Added GateReportParsingTests in test_loop.py driving _gate_result_from_report against a report.json built from strength_test.Result via asdict — pinning the producer/consumer contract that the FakeBackend path never exercised — plus the absent-report case (verdict from exit code preserved, delta None).
 Verification: rl unittest 11 pass (9 prior + 2 new); strength unittest 21 pass; cargo fmt/clippy clean; cargo test --workspace green (engine 397, chess 50).
+
+Rework (review attempt 2):
+Resolved REV-2-01: baseline network id no longer assumes the current best was promoted at generation - 1. A new ReinforcementLoop._best_generation reads the producing generation from best.json (written by _promote); run_iteration threads it as baseline_generation into both Backend.gate (used for --baseline-id) and _attribution (used for the ledger's baseline.network_id). After a rejected candidate the surviving best now keeps one stable id that agrees with best.json, instead of being relabelled with a nonexistent generation each iteration. Backend.gate / SubprocessBackend.gate gained a baseline_generation parameter; FakeBackend updated to match and to record it.
+Regression: test_baseline_id_names_the_generation_that_produced_the_best drives a {0:PASS,1:FAIL,2:FAIL} run and asserts the gen-1 and gen-2 ledger baselines both carry the gen-000 network id from best.json, and that the gate received baseline_generation 0. Also tightened tools/rl/README.md step 1, which had restated the same "previous generation promoted" misconception.
+Verification: cargo fmt --check pass; cargo clippy --workspace --all-targets --all-features -D warnings clean; cargo test --workspace green (chess 50, engine 397/2 ignored, lichess 131, integration green); python3 -m unittest tools/rl 12 pass (11 prior + 1 new); tools/strength 21 pass.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -224,5 +229,24 @@ Verification:
 - python3 -m unittest (tools/rl): 11 pass; (tools/strength): 21 pass
 - Empirical: with verdicts {0:PASS,1:FAIL,2:FAIL}, best.json records generation 0 while
   the gen-2 ledger line labels the identical baseline bytes nnue:gen-001
+---
+
+author: @claude
+created: 2026-07-21 20:08
+---
+Implementation handoff
+Branch: task-69.11-reinforcement-loop-orchestration
+Worktree: /Users/seabo/seaborg-worktrees/task-69.11-reinforcement-loop-orchestration
+Base: daa79cb8a19d635702e894927f44064e76480f95
+Implementation target: a2b727d82633fb203e1874988a2b9c800ea01ee0
+Resolved findings: REV-2-01
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean)
+- cargo test --workspace: pass (chess 50, engine 397/2 ignored, lichess 131, integration + doc-tests green)
+- python3 -m unittest (tools/rl): 12 pass (11 prior + 1 new baseline-id regression)
+- python3 -m unittest (tools/strength): 21 pass
+- Empirical: with verdicts {0:PASS,1:FAIL,2:FAIL}, best.json records generation 0 and the gen-1/gen-2 ledger baselines both carry the gen-000 id (was gen-001/gen-002)
+Known failures: none
 ---
 <!-- COMMENTS:END -->
