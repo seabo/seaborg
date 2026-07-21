@@ -1,11 +1,11 @@
 ---
 id: TASK-69.11
 title: 'Reinforcement loop orchestration: generate, train, SPRT-gate, promote'
-status: Changes Requested
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:42'
-updated_date: '2026-07-21 17:34'
+updated_date: '2026-07-21 18:47'
 labels:
   - nnue
   - training
@@ -69,6 +69,11 @@ What changed:
 Design note surfaced during implementation: swapping the evaluator invalidates the TT's cached static evals, so EvalFile changes clear the hash like ucinewgame. Pinned by a driver test.
 
 Constraint: EvalFile paths must be whitespace-free (the UCI parser takes the value as a single token); the loop resolves to absolute paths and the README documents it.
+
+Rework (review attempt 1):
+Resolved REV-1-01: _gate_result_from_report now reads the harness's actual report shape — the "results" block (was "result"), "elo_error" for the ± margin (was a nonexistent "elo_interval"/"elo_ci"), and "games". A real gate now records the measured Elo delta, ± margin, and game count in the ledger and CLI summary instead of nulls. GateResult.elo_interval is retyped Optional[float] (the harness emits a scalar ± margin, not a pair) and the FakeBackend fixture updated to match.
+Added GateReportParsingTests in test_loop.py driving _gate_result_from_report against a report.json built from strength_test.Result via asdict — pinning the producer/consumer contract that the FakeBackend path never exercised — plus the absent-report case (verdict from exit code preserved, delta None).
+Verification: rl unittest 11 pass (9 prior + 2 new); strength unittest 21 pass; cargo fmt/clippy clean; cargo test --workspace green (engine 397, chess 50).
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -136,5 +141,24 @@ Verification:
 - python3 -m unittest (tools/rl): 9 pass; (tools/strength): 21 pass
 - Empirical: _gate_result_from_report on a harness-shaped report.json returns
   elo=None, elo_interval=None, games_played=None
+---
+
+author: @claude
+created: 2026-07-21 18:47
+---
+Implementation handoff
+Branch: task-69.11-reinforcement-loop-orchestration
+Worktree: /Users/seabo/seaborg-worktrees/task-69.11-reinforcement-loop-orchestration
+Base: daa79cb8a19d635702e894927f44064e76480f95
+Implementation target: 64950f9
+Resolved findings: REV-1-01
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean)
+- cargo test --workspace: pass (engine 397/2 ignored, chess 50, integration + doc-tests green)
+- python3 -m unittest (tools/rl): 11 pass (9 prior + 2 new GateReportParsingTests)
+- python3 -m unittest (tools/strength): 21 pass
+- Empirical: _gate_result_from_report on a harness-shaped report.json now returns elo=12.3, elo_interval=8.1, games_played=240 (was None/None/None)
+Known failures: none
 ---
 <!-- COMMENTS:END -->
