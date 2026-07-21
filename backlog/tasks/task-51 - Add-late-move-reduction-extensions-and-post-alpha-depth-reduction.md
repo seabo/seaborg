@@ -1,11 +1,11 @@
 ---
 id: TASK-51
 title: 'Add late move reduction, extensions, and post-alpha depth reduction'
-status: In Review
+status: Changes Requested
 assignee:
   - '@george'
 created_date: '2026-07-18 18:30'
-updated_date: '2026-07-21 00:01'
+updated_date: '2026-07-21 00:41'
 labels: []
 dependencies:
   - TASK-50
@@ -108,5 +108,42 @@ Verification:
 - cargo test --workspace: pass (engine lib 306 passed / 2 ignored; workspace 0 failures)
 - Strength (fastchess, nodes=100000, base 6d3d4ac vs target): +188.5 +/- 51.5 Elo over 200 games (137W/38L/25D), LOS 100%, no illegal moves or crashes
 Known failures: none
+---
+
+author: @reviewer
+created: 2026-07-21 00:41
+---
+Review attempt: 1
+Reviewed branch: task-51-lmr-extensions-post-alpha-reduction
+Reviewed implementation: 356c776bc8897be983e54f18e733a9aebcdbd699
+Base: 6d3d4ac98a40a455959b4cea18d0b0a82b0c7867
+Verdict: changes_requested
+
+Scope of review: full base..target diff (engine/src/search.rs only, plus task file). Immutability confirmed: target is an ancestor of the branch tip and the only later commit (39a4bb5) touches the task markdown alone.
+
+What passes:
+- AC#1 LMR with full-depth re-search on an alpha-raising reduced scout: implemented (search.rs:1540-1552).
+- AC#2 extensions/reductions at Step 16, PV never truncated: the check-evasion extension only adds depth; reduced scouts that beat alpha are re-searched at full new_depth before the Step 20 PV search writes the PV table.
+- AC#3 remaining moves reduced after an alpha raise: did_raise_alpha gates the LMR condition (search.rs:1511, 1609-1613).
+- AC#4 PV legality: reported_principal_variations_are_legal and a_node_searched_past_the_nominal_horizon_still_reports_a_legal_pv pass with LMR/extensions active.
+- AC#6 the three TODO markers (Step 16, Step 17, former :692) are replaced with implementations and all numbered step comments are retained. Remaining TODOs at Steps 10/11/13/14 are unrelated future techniques, out of scope.
+- No new #[allow]. Test hooks lmr_disabled/extensions_disabled are #[cfg(test)] only.
+- The two shifted suite expectations (2q4k... depth 6->7; r5k1... upper bound cp955->cp985) preserve the best move and are legitimate consequences of the reduction/extension.
+
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings (clean CARGO_TARGET_DIR): pass, no warnings
+- cargo test --workspace: pass (engine lib 306 passed / 2 ignored; workspace 0 failures)
+
+Blocking findings:
+
+REV-1-01 [P2] AC#5 strength result is recorded against a no-op commit, not the implementation target
+Location: task-51 Implementation Notes, "Strength measurement (AC #5)" section.
+Impact: AC#5 requires the strength results recorded in the notes. The notes name the candidate as "(this branch, cbdfe4c)". cbdfe4c ("claim and plan") changes only the task markdown: `git diff 6d3d4ac cbdfe4c` touches no code, so cbdfe4c is byte-identical in engine behaviour to base 6d3d4ac. A match of cbdfe4c vs 6d3d4ac would compare two identical engines and score ~0 Elo, which contradicts the recorded +188.5. The recorded provenance is self-contradictory and, as written, does not attribute the measured gain to the implementation under review (356c776). This record merges to master.
+Reproduction: `git diff --stat 6d3d4ac cbdfe4c` -> only the task .md changes; no engine sources.
+Expected: Correct the candidate identity in the notes to the reviewed implementation target 356c776 (the +188.5 figure and the smoke / 200-game descriptions are otherwise consistent with a 356c776-vs-6d3d4ac match). No code change is required.
+
+Verification (independent confirmation that 356c776 is the strong commit and the fix direction is unambiguous):
+- Controlled node-limited match, target 356c776 vs base 6d3d4ac, fastchess nodes=100000, option.Hash=16, openings-v1.epd, 100 games: Elo +186.25 +/- 74.13, nElo +211.19, LOS 100.00%, 74.5% (68W/19L/13D), Ptnml [0,7,12,6,25]. Reproduces the reported gain and confirms 356c776 (not cbdfe4c) is the measured candidate.
 ---
 <!-- COMMENTS:END -->
