@@ -2,12 +2,18 @@
 //! budget per move and report throughput.
 //!
 //! The engine owns the game loop, adjudication, and parallel orchestration
-//! (`engine::selfplay`); this module only parses configuration and prints a
-//! summary. The generated samples are dropped rather than written: the packed
-//! on-disk format that persists them is a separate concern, so today's binary
-//! measures throughput and adjudication behaviour, which is what validates the
-//! training-cost estimates.
+//! (`engine::selfplay`); this module parses configuration, optionally writes the
+//! packed on-disk samples, and prints a summary. With no `--out` path the
+//! samples are dropped and the run just measures throughput and adjudication
+//! behaviour, which is what validates the training-cost estimates.
 
+use std::fs::File;
+use std::io::{self, BufWriter};
+use std::path::PathBuf;
+
+use engine::selfplay::filter::PositionFilter;
+use engine::selfplay::format::SampleWriter;
+use engine::selfplay::openings::OpeningConfig;
 use engine::selfplay::{self, Adjudication, GameResult, SelfPlayConfig, Termination};
 
 /// Arguments for `seaborg datagen`.
@@ -52,6 +58,31 @@ pub struct DatagenArgs {
     /// Earliest ply at which a draw may be adjudicated
     #[clap(long, default_value_t = 40)]
     draw_min_ply: usize,
+
+    /// Write packed training samples to this file (samples are dropped if unset)
+    #[clap(long)]
+    out: Option<PathBuf>,
+
+    /// Random legal plies played from the initial position to diversify each
+    /// game's opening (defaults to the engine's built-in setting)
+    #[clap(long)]
+    opening_plies: Option<usize>,
+
+    /// Seed for opening diversification (defaults to the engine's built-in seed)
+    #[clap(long)]
+    opening_seed: Option<u64>,
+
+    /// Keep positions whose side to move is in check (dropped by default)
+    #[clap(long)]
+    keep_in_check: bool,
+
+    /// Keep positions whose best move is a capture (dropped by default)
+    #[clap(long)]
+    keep_captures: bool,
+
+    /// Drop the first this-many plies of each game as near-book
+    #[clap(long, default_value_t = 0)]
+    filter_opening_plies: usize,
 }
 
 /// Running counts over the games of a run, so the summary can show the result
@@ -96,6 +127,12 @@ pub fn datagen(args: &DatagenArgs) {
         .workers
         .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()));
 
+    let default_opening = OpeningConfig::default();
+    let opening = OpeningConfig {
+        plies: args.opening_plies.unwrap_or(default_opening.plies),
+        seed: args.opening_seed.unwrap_or(default_opening.seed),
+    };
+
     let config = SelfPlayConfig {
         node_budget: args.nodes,
         workers,
@@ -109,6 +146,25 @@ pub fn datagen(args: &DatagenArgs) {
             draw_plies: args.draw_plies,
             draw_min_ply: args.draw_min_ply,
         },
+        opening,
+    };
+
+    let filter = PositionFilter {
+        skip_in_check: !args.keep_in_check,
+        skip_best_move_capture: !args.keep_captures,
+        skip_opening_plies: args.filter_opening_plies,
+    };
+
+    // Open the output stream up front so a bad path fails before any games run.
+    let mut writer = match args.out.as_ref() {
+        Some(path) => match open_writer(path) {
+            Ok(writer) => Some(writer),
+            Err(e) => {
+                eprintln!("Could not open {}: {e}", path.display());
+                return;
+            }
+        },
+        None => None,
     };
 
     println!(
@@ -117,15 +173,58 @@ pub fn datagen(args: &DatagenArgs) {
     );
 
     let mut tally = Tally::default();
+    // The sink runs on the calling thread, so writing needs no synchronisation.
+    // A write failure is latched and stops further writes; the run still drains
+    // so worker threads are always joined cleanly.
+    let mut retained = 0u64;
+    let mut write_err: Option<io::Error> = None;
     let report = selfplay::run(&config, |record| {
         tally.record(record.result, record.termination);
+        for sample in filter.retained(&record) {
+            retained += 1;
+            if let Some(writer) = writer.as_mut() {
+                if write_err.is_none() {
+                    if let Err(e) = writer.write_sample(sample) {
+                        write_err = Some(e);
+                    }
+                }
+            }
+        }
     });
+
+    if let Some(writer) = writer {
+        if write_err.is_none() {
+            // `BufWriter::into_inner` flushes the buffer; surface a flush failure
+            // rather than dropping buffered samples silently.
+            if let Err(e) = writer.into_inner().into_inner() {
+                write_err = Some(e.into_error());
+            }
+        }
+    }
 
     let seconds = report.elapsed.as_secs_f64();
     println!(
         "Played {} games ({} positions) in {seconds:.1}s: {:.0} positions/s",
         report.games, report.positions, report.positions_per_second
     );
+    if let Some(path) = args.out.as_ref() {
+        match &write_err {
+            None => println!(
+                "Wrote {retained} filtered samples ({} dropped) to {}",
+                report.positions as u64 - retained,
+                path.display()
+            ),
+            Some(e) => eprintln!(
+                "Write to {} failed after {retained} samples: {e}",
+                path.display()
+            ),
+        }
+    } else {
+        println!(
+            "Retained {retained} of {} positions after filtering (not written)",
+            report.positions
+        );
+    }
     println!(
         "Results: {} white wins, {} black wins, {} draws",
         tally.white_wins, tally.black_wins, tally.draws
@@ -142,4 +241,11 @@ pub fn datagen(args: &DatagenArgs) {
         tally.draw_adjudication,
         tally.max_plies,
     );
+}
+
+/// Open `path` for writing and start a sample stream, buffering the file so each
+/// small fixed-size record is not its own write syscall.
+fn open_writer(path: &PathBuf) -> io::Result<SampleWriter<BufWriter<File>>> {
+    let file = File::create(path)?;
+    SampleWriter::new(BufWriter::new(file))
 }
