@@ -3,10 +3,11 @@ id: TASK-64.22
 title: >-
   Refine late move reduction with a log-based table, history modulation, and
   node-type adjustments
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-21 21:22'
-updated_date: '2026-07-21 22:23'
+updated_date: '2026-07-21 22:35'
 labels:
   - search
   - strength
@@ -41,6 +42,21 @@ Measurement discipline: each refinement must be individually gated so its streng
 - [ ] #6 Each refinement is independently toggleable so its individual effect can be measured
 - [ ] #7 Net strength is confirmed by a round-robin base-vs-target match at a fixed time control showing no regression, with results and attribution recorded in BENCHMARKS.md
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Add a process-global log-based reduction table (LazyLock) indexed by [remaining depth][move count], milliplies fixed-point (x1024), growing ~ LMR_BASE + ln(depth)*ln(move_count)/LMR_DIVISOR; monotonic in both. Expose base() for tests.
+2. Rework lmr_reduction into a pure free function taking (depth, move_count, pv, improving, favoured, quiet_history) and returning plies, reading the table plus per-refinement compile-time toggles.
+3. Refinements, each behind a pub const bool so its strength contribution is isolable (release ablation, matching the FOLD_COUNTER_INTO_QUIETS/KILLER_SLOTS pattern):
+   - LMR_LOG_TABLE: log table base vs old step function.
+   - LMR_HISTORY_MODULATION: subtract a clamped term proportional to combined main+continuation quiet history (strong quiets reduce less, weak reduce more).
+   - LMR_IMPROVING_MODULATION: +1 ply when the side to move is not improving.
+   - LMR_FAVOURED_MODULATION: subtract at PV nodes and for killer/counter moves.
+4. Call site (engine/src/search.rs move loop): compute quiet_history and favoured (killer_slot or counter) before make_move; pass improving and Node::pv(); keep every TASK-51 guard (move 1 / checking / extended never reduced; clamp to [0, new_depth-1] so the scout keeps >=1 ply; alpha-raising reduced scout re-searched at full depth).
+5. Unit tests: table monotonicity (AC1); history direction (AC2); improving +ply (AC3); pv/favoured less reduction (AC4); reuse existing TASK-36 PV-legality and TASK-51 soundness/tree-reduction tests (AC5); toggle coverage (AC6).
+6. Required checks (fmt/clippy/test), then round-robin base-vs-target fastchess match at a real TC; record Elo + per-refinement attribution in BENCHMARKS.md (AC7).
+<!-- SECTION:PLAN:END -->
 
 ## Comments
 
