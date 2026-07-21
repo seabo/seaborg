@@ -1,11 +1,11 @@
 ---
 id: TASK-64.10
 title: Add counter-move and continuation history
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-19 13:32'
-updated_date: '2026-07-21 05:18'
+updated_date: '2026-07-21 05:23'
 labels:
   - search
   - move-ordering
