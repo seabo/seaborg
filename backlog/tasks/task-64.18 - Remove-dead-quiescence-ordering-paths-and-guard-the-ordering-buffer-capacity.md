@@ -1,9 +1,11 @@
 ---
 id: TASK-64.18
 title: Remove dead quiescence ordering paths and guard the ordering buffer capacity
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-19 13:44'
+updated_date: '2026-07-21 13:42'
 labels:
   - search
   - move-ordering
@@ -42,3 +44,13 @@ Also in the same module, `next_phase` and `phase` are two names for one accessor
 - [ ] #4 The duplicated phase accessor is reduced to one name
 - [ ] #5 Node counts at fixed depth are unchanged, confirming no behavioural change
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. AC#1: Remove the dead quiet paths from QMoveLoader (load_quiets in_check branch and score_quiets). Quiescence's staged loop is only reached when not in check, so quiets never load; check evasions route to quiesce_evasions before the loop. Document this on the QMoveLoader type so it is evident without tracing the caller.
+2. AC#2: Introduce an ORDERING_BUFFER_CAPACITY const (254) and add a debug_assert in ScoredMoveList::push so exceeding capacity fails loudly instead of silently dropping legal moves via push_val.
+3. AC#3: Add a test that drives the real MoveLoader through every phase for the 218-move maximum-mobility position and the most promotion-heavy positions, pinning the measured buffer occupancy so a future phase addition that invalidates the L + 3P + 3 argument is caught.
+4. AC#4: Remove the unused next_phase accessor; keep phase().
+5. AC#5: Confirm node counts at fixed depth are unchanged (release behaviour is untouched; the assertions are debug-only and the removed paths were dead).
+<!-- SECTION:PLAN:END -->
