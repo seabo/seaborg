@@ -2,6 +2,7 @@ use crate::history::{HistoryTable, HISTORY_MAX};
 
 use super::eval::{EvalState, Evaluation};
 use super::killer::KillerTable;
+use super::nnue::{self, Accumulator, Network};
 use super::ordering::{Loader, OrderedMoves, Phase, ScoredMoveList, Scorer};
 use super::pv_table::PVTable;
 use super::score::Score;
@@ -739,6 +740,18 @@ pub struct Search<'engine> {
     /// evaluation on unmake is an O(1) copy rather than a recomputation or a reverse-delta. It grows
     /// and shrinks in lockstep with the position's own move history.
     eval_stack: Vec<EvalState>,
+    /// The selected NNUE network, or `None` to use the hand-crafted evaluation.
+    ///
+    /// This is the evaluation selector the design contract places at the single consumption point
+    /// [`Search::evaluate`]: while it is `None` the search evaluates leaves with the tapered
+    /// hand-crafted score exactly as before, and when a network is set it evaluates them through the
+    /// scalar quantized forward pass instead. It stays `None` by default so the hand-crafted path
+    /// remains the engine's evaluation until a trained network exists and passes its strength gate.
+    ///
+    /// The accumulator is rebuilt from the position at each evaluated leaf rather than maintained
+    /// incrementally through make and unmake; the incremental accumulator seam is a later
+    /// performance concern and is not needed for the correctness this scalar path provides.
+    network: Option<Network>,
     /// Table for tracking the principal variation of the search.
     pvt: PVTable,
     /// Tracer to track search stats.
@@ -884,6 +897,7 @@ impl<'engine> Search<'engine> {
             pos,
             eval_state,
             eval_stack: Vec::with_capacity(MAX_PLY),
+            network: None,
             tt,
             kt: KillerTable::new(MAX_PLY, KILLER_SLOTS),
             history: HistoryTable::new(),
@@ -910,6 +924,16 @@ impl<'engine> Search<'engine> {
             #[cfg(test)]
             extensions_disabled: false,
         }
+    }
+
+    /// Selects the evaluation the search uses at its leaves: a network enables the scalar quantized
+    /// NNUE forward pass, and `None` restores the default hand-crafted tapered evaluation.
+    ///
+    /// Selection takes effect at [`Search::evaluate`]; nothing else in the search changes, so a
+    /// search configured with a network still makes and unmakes moves and maintains the hand-crafted
+    /// accumulator exactly as before — the network is consulted only when a leaf is scored.
+    pub fn set_network(&mut self, network: Option<Network>) {
+        self.network = network;
     }
 
     pub fn run<T: Thread>(&mut self, d: u8) -> Option<SearchResult> {
@@ -1893,6 +1917,19 @@ impl<'engine> Search<'engine> {
     /// [`Self::clock_permits_tt_reuse`] and the write suppression at Step 24 exist to contain.
     #[inline(always)]
     fn evaluate(&mut self) -> Score {
+        // The evaluation selector lives here, at the single point a leaf value is produced. With a
+        // network selected the leaf is scored by the scalar quantized forward pass; otherwise the
+        // hand-crafted tapered evaluation runs, unchanged.
+        if let Some(network) = &self.network {
+            // The forward pass already returns the score from the side to move's perspective (the
+            // two accumulators are concatenated side-to-move first), so unlike the hand-crafted
+            // score below it takes no `pov()` flip. The accumulator is rebuilt from the position
+            // here rather than maintained incrementally through the search.
+            let accumulator = Accumulator::from_position(network, &self.pos);
+            let cp = nnue::forward(network, &accumulator, self.pos.turn());
+            return Score::cp(cp as i16);
+        }
+
         // The incremental accumulator is the working value; the from-scratch evaluation is only its
         // debug-build reference. The per-make assertion in `sync_eval_after_make` already guards the
         // accumulator at every node, and this reasserts it at the point the value is actually
@@ -2907,6 +2944,79 @@ mod tests {
                 search.quiesce::<Master, NonPv>(Score::cp(-50), Score::cp(-49), 0),
                 Some(expected)
             );
+        }
+    }
+
+    /// A small deterministic NNUE network with a spread of weights kept within the accumulator's
+    /// i16 domain, for exercising the selectable evaluation seam.
+    fn test_network() -> Network {
+        let hidden = 16u32;
+        let h = hidden as usize;
+        let mut w_ft = vec![0i16; 768 * h];
+        for (feature, column) in w_ft.chunks_mut(h).enumerate() {
+            for (unit, w) in column.iter_mut().enumerate() {
+                *w = ((feature * 31 + unit * 7) % 41) as i16 - 20;
+            }
+        }
+        let b_ft: Vec<i16> = (0..h).map(|u| (u as i16 % 7) - 3).collect();
+        let w_out: Vec<i16> = (0..2 * h).map(|j| ((j * 13) % 49) as i16 - 24).collect();
+        Network::new(
+            hidden,
+            255,
+            64,
+            400,
+            nnue::Parameters {
+                w_ft,
+                b_ft,
+                w_out,
+                b_out: vec![0],
+            },
+        )
+        .expect("test network satisfies the build invariant")
+    }
+
+    /// The evaluation is selectable at the single consumption point `Search::evaluate`: setting a
+    /// network scores leaves through the scalar quantized forward pass, and leaving it unset keeps
+    /// the hand-crafted tapered evaluation. Selecting the network changes only what `evaluate`
+    /// returns; clearing it restores the hand-crafted value exactly, so the default path is
+    /// undisturbed.
+    #[test]
+    fn evaluate_selects_the_nnue_forward_pass_when_a_network_is_set() {
+        chess::init::init_globals();
+        let net = test_network();
+
+        for fen in [
+            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+            "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 b - - 0 1",
+        ] {
+            let pos = Position::from_fen(fen).unwrap();
+            let flag = AtomicBool::new(false);
+            let tt = Table::new(1);
+            let mut search = Search::new(pos.clone(), &flag, None, &tt);
+
+            // Default: the hand-crafted tapered evaluation, from the side to move.
+            let handcrafted = search.evaluate();
+            assert_eq!(handcrafted, Score::cp(pos.static_eval() * search.pov()));
+
+            // Selected: the scalar quantized forward pass, computed independently here and
+            // returned already from the side to move's perspective (no `pov` flip).
+            search.set_network(Some(net.clone()));
+            let acc = Accumulator::from_position(&net, &pos);
+            let expected = Score::cp(nnue::forward(&net, &acc, pos.turn()) as i16);
+            assert_eq!(
+                search.evaluate(),
+                expected,
+                "NNUE path not selected on {fen}"
+            );
+            assert_ne!(
+                search.evaluate(),
+                handcrafted,
+                "the two evaluations should differ so the selection is observable on {fen}"
+            );
+
+            // Clearing the network restores the hand-crafted path exactly.
+            search.set_network(None);
+            assert_eq!(search.evaluate(), handcrafted);
         }
     }
 
