@@ -3,11 +3,11 @@ id: TASK-74.4
 title: >-
   Lichess accept path: cap accounting at accept-time, challengeCanceled, benign
   404, and human-slot priority
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-21 03:55'
-updated_date: '2026-07-21 13:24'
+updated_date: '2026-07-21 13:33'
 labels:
   - lichess
   - conformance
