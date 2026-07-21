@@ -3,9 +3,11 @@ id: TASK-76
 title: >-
   Graceful drain mode for the lichess bot: finish current games, stop starting
   new ones
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-21 13:20'
+updated_date: '2026-07-21 13:44'
 labels:
   - lichess
 dependencies: []
@@ -32,3 +34,12 @@ The intended integration points already exist: the signal handler and shutdown a
 - [ ] #5 Entering drain mode logs a clear operator-facing message stating how many active games remain and that a second interrupt quits immediately
 - [ ] #6 Tests cover the state transitions: normal -> drain -> immediate shutdown, and drain -> auto-exit when active games reach zero
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. shutdown.rs: replace the single AtomicBool with a three-value stage machine (Running/Draining/ShuttingDown) backed by an AtomicU8. Keep is_requested()==ShuttingDown so workers/reader/transport are unchanged. Add is_draining() (>=Draining) and begin_drain() (Running->Draining only). request() sets ShuttingDown. The signal handler escalates one stage per interrupt: first SIGINT/SIGTERM enters Draining, any later one goes to ShuttingDown.
+2. run.rs matchmaking: stop seeking while draining (run_matchmaking exits its loop on is_draining; seek_matchmaking_game guards early) so no new outgoing challenge is issued.
+3. run.rs consumer: keep the reader/consumer running during drain so in-flight games play out; announce drain once with the remaining active-game count and the second-interrupt note; when draining and slots reach zero, escalate to full shutdown and exit cleanly. Pass shutdown into handle_event; decline any incoming challenge while draining instead of accepting it into a new game (GameStart/GameFinish still handled). Add GameSlots::is_empty().
+4. Tests: stage transitions in shutdown.rs (normal->drain->immediate, begin_drain idempotency); consumer drain auto-exit at zero and drain->immediate escalation; draining declines an incoming challenge; matchmaker seeks nothing while draining.
+<!-- SECTION:PLAN:END -->
