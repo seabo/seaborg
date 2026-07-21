@@ -1,11 +1,11 @@
 ---
 id: TASK-69.11
 title: 'Reinforcement loop orchestration: generate, train, SPRT-gate, promote'
-status: In Review
+status: Changes Requested
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:42'
-updated_date: '2026-07-21 17:19'
+updated_date: '2026-07-21 17:34'
 labels:
   - nnue
   - training
@@ -91,5 +91,50 @@ Verification:
 - python3 -m unittest (tools/rl): pass (9 loop tests: bootstrap, promote-only-on-PASS, non-PASS no-promote, prior-best survival, attribution fields, purity, resume, broken-step abort)
 - Real-binary smoke (release): 'datagen' hand-crafted vs '--network golden_v1.sbnn' produce different self-play; bad --network path reported; UCI advertises 'option name EvalFile type string default <empty>' and a search with EvalFile set returns a bestmove
 Known failures: none
+---
+
+author: @claude
+created: 2026-07-21 17:34
+---
+Review attempt: 1
+Reviewed branch: task-69.11-reinforcement-loop-orchestration
+Reviewed implementation: 7e0ae8d677952170e3a28a8b8a04387494063ce7
+Base: daa79cb8a19d635702e894927f44064e76480f95
+Verdict: changes_requested
+
+REV-1-01 [P1] Gate attribution never records the measured Elo delta (wrong report keys)
+Location: tools/rl/loop.py:353-356 (_gate_result_from_report)
+Impact: Blocks AC #2. The task requires each iteration's attribution to record the
+  measured strength delta ("Record attribution for every iteration (data volume, node
+  budget, network id, measured delta)"; AC #2 "the decision plus attribution are
+  recorded"). _gate_result_from_report reads report.get("result", {}), but
+  strength_test.py writes the block under the key "results"
+  (strength_test.py:407: report.update({"results": asdict(result), ...})), and it reads
+  "elo_interval"/"elo_ci" for the interval although the harness emits only "elo_error"
+  (Result.elo_error, strength_test.py:58). For every real gate that produces a report the
+  ledger therefore records gate.elo=null, gate.elo_interval=null, and gate.games_played=null,
+  and the CLI summary prints no Elo. The measured delta AC #2 requires is never captured.
+  The FakeBackend tests construct GateResult directly and never call
+  _gate_result_from_report, so this producer/consumer contract is untested and the defect
+  passed CI.
+Reproduction:
+  cd tools/rl && python3 -c "
+  import json, tempfile; from pathlib import Path; import loop as rl
+  d=Path(tempfile.mkdtemp())
+  (d/'report.json').write_text(json.dumps({'results':{'games':240,'elo':12.3,'elo_error':8.1}}))
+  r=rl._gate_result_from_report('PASS',0,d); print(r.elo, r.elo_interval, r.games_played)"
+  # prints: None None None   (expected: 12.3 8.1 240)
+Expected: Parse the harness's actual report shape — the "results" block, "elo",
+  "elo_error" (interval), and "games" — so a real gate records the measured delta and game
+  count. Add a test that drives _gate_result_from_report with a realistic report.json (not
+  the FakeBackend path) to pin the producer/consumer contract.
+
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean)
+- cargo test --workspace: pass (chess 50, engine 397/2 ignored, integration + others green)
+- python3 -m unittest (tools/rl): 9 pass; (tools/strength): 21 pass
+- Empirical: _gate_result_from_report on a harness-shaped report.json returns
+  elo=None, elo_interval=None, games_played=None
 ---
 <!-- COMMENTS:END -->
