@@ -3,11 +3,11 @@ id: TASK-74.4
 title: >-
   Lichess accept path: cap accounting at accept-time, challengeCanceled, benign
   404, and human-slot priority
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-21 03:55'
-updated_date: '2026-07-21 12:44'
+updated_date: '2026-07-21 13:04'
 labels:
   - lichess
   - conformance
@@ -55,3 +55,35 @@ References: lichess-bot lib/lichess_bot.py (accept_challenges, sort_challenges, 
 7. Extend the replay harness to drive batches so priority/reservation scenarios are pinnable; pin over-cap decline, challengeCanceled release, benign 404, human-ahead-of-bot, bot-held-out-of-reserved-slot. Update fixtures so challenge id == game id.
 8. cargo fmt/clippy/test.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implementation decisions:
+- Slot reconciliation relies on Lichess reusing the challenge id as the resulting game id (reference lichess-bot depends on the same). GameSlots is a Reserved/Active state map keyed by that id: reserve() on accept, start() promotes Reserved->Active in place (or records a fresh Active for an accepted outgoing matchmaking challenge that was never reserved), release_reservation() frees a still-reserved slot on cancel/accept-failure, remove() on finish. len() counts reserved+active, so the cap sees reserved-but-not-started games. Updated the harness gameStart fixture id to equal the challenge id to reflect this.
+- Acceptance is deferred to a short-lived queue drained once per event burst (the consumer drains all immediately-available events, then processes). Unsuitable challenges are still declined immediately; suitable ones are buffered so a burst can be sorted (humans first when challenge.prefer_human_challenges is set; stable) and checked against an effective cap: bots below max_concurrent_games - reserved_human_slots, humans below max_concurrent_games. Over-cap challenges are declined generic.
+- reserved_human_slots (in [matchmaking]) now also gates acceptance, per the task; it takes effect whether or not matchmaking is enabled. Documented in config.rs.
+- 404 on accept maps to a new Error::NotFound (is_recoverable() stays true so unrelated call sites are unchanged); the accept site matches it explicitly to release the reservation and log at debug, not warn.
+- policy::evaluate split into cap-free policy::classify; the cap/reservation/priority decision moved to run.rs::process_accept_queue.
+- Replay harness generalised to drive event batches (&[&[&str]]); handle_one_stream processes per-event. Added new deferred tool: FakeTransport can 404 a configured accept id.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @claude
+created: 2026-07-21 13:03
+---
+Implementation handoff
+Branch: task-74.4-lichess-accept-path
+Worktree: /Users/seabo/seaborg-worktrees/task-74.4-lichess-accept-path
+Base: c9bca2a7bfe33e7bd7d74358f5562512f29ba141
+Implementation target: f68d429
+Resolved findings: none (initial implementation)
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean)
+- cargo test --workspace: pass on rerun (lichess 110/110; workspace all green)
+Known failures: engine/tests/timed_selfplay.rs::fast_timed_self_play_never_forfeits_or_hangs failed once under the parallel full-suite run (CPU contention), then passed 3/3 in isolation and on a full-suite rerun. It is a load-sensitive timing flake in the engine crate; the diff touches only lichess/src and does not touch engine, so it is unrelated to this change.
+---
+<!-- COMMENTS:END -->
