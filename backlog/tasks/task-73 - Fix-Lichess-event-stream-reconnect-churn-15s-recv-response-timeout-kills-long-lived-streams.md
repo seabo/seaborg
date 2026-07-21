@@ -3,11 +3,11 @@ id: TASK-73
 title: >-
   Fix Lichess event-stream reconnect churn: 15s recv-response timeout kills
   long-lived streams
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-21 03:03'
-updated_date: '2026-07-21 03:12'
+updated_date: '2026-07-21 03:18'
 labels: []
 dependencies: []
 priority: high
@@ -29,12 +29,12 @@ The fix must keep the 15s header timeout for ordinary request/response calls (ge
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A healthy Lichess event stream stays connected well beyond 15s (no "event stream disconnected; reconnecting" on a live stream); streaming endpoints (open_stream) are not subject to the 15s recv-response timeout
-- [ ] #2 Ordinary non-streaming request/response calls (get, post_empty, post_form) retain a bounded response-header timeout so a hung server does not block them indefinitely
-- [ ] #3 A genuinely dropped/dead stream still triggers reconnect with the existing exponential backoff, and terminal (non-recoverable) errors are still surfaced
-- [ ] #4 The misleading comment on RESPONSE_TIMEOUT in transport.rs is corrected to reflect that ureq applies recv-response to streaming bodies
-- [ ] #5 Regression coverage exists (unit/integration) demonstrating the streaming path does not impose the 15s response-receive deadline, without requiring live network access
-- [ ] #6 cargo fmt --check, clippy (workspace, all-targets, all-features, -D warnings), and cargo test --workspace all pass
+- [x] #1 A healthy Lichess event stream stays connected well beyond 15s (no "event stream disconnected; reconnecting" on a live stream); streaming endpoints (open_stream) are not subject to the 15s recv-response timeout
+- [x] #2 Ordinary non-streaming request/response calls (get, post_empty, post_form) retain a bounded response-header timeout so a hung server does not block them indefinitely
+- [x] #3 A genuinely dropped/dead stream still triggers reconnect with the existing exponential backoff, and terminal (non-recoverable) errors are still surfaced
+- [x] #4 The misleading comment on RESPONSE_TIMEOUT in transport.rs is corrected to reflect that ureq applies recv-response to streaming bodies
+- [x] #5 Regression coverage exists (unit/integration) demonstrating the streaming path does not impose the 15s response-receive deadline, without requiring live network access
+- [x] #6 cargo fmt --check, clippy (workspace, all-targets, all-features, -D warnings), and cargo test --workspace all pass
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -88,4 +88,35 @@ Verification:
 - cargo test --workspace: pass (all suites; lichess 100 passed, incl. 2 new transport tests)
 Known failures: none
 ---
+
+author: @claude
+created: 2026-07-21 03:17
+---
+Review attempt: 1
+Reviewed branch: task-73-lichess-stream-recv-timeout
+Reviewed implementation: c8954cbdade6f44e87d2c3c23937a9c71165abfa
+Verdict: approved
+
+All six acceptance criteria proven against the immutable base(05880a5)->target(c8954cb) diff, which touches only lichess/src/transport.rs plus the task file. No #[allow] added; not a movegen/search hot path, so no perft/movegen benchmark required.
+
+AC#1: open_stream clears timeout_recv_response(None) per request; streaming_ignores_the_response_timeout_across_a_body_gap proves a stream survives a 600ms gap under a 200ms bound.
+AC#2: get/post_empty/post_form unchanged, retain the shared agent's 15s recv-response bound; a_non_streaming_get_still_times_out_when_the_body_stalls proves a stalled body surfaces as Error::Http.
+AC#3: run_event_loop/play_game_reconnecting unchanged; a dead stream surfaces as an iterator error and reconnects with the existing exponential backoff; terminal errors still surfaced via check_status.
+AC#4: RESPONSE_TIMEOUT comment corrected to state recv-response also caps body reception; comments carry reasoning, no task-ID/AC citations.
+AC#5: two loopback TcpListener regression tests, no live network.
+AC#6: verified on target.
+
+Verification (run in the task worktree on target code):
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean (fresh CARGO_TARGET_DIR)
+- cargo test --workspace: pass (lichess 100 passed, incl. streaming_ignores_the_response_timeout_across_a_body_gap and a_non_streaming_get_still_times_out_when_the_body_stalls)
+
+Implementation SHA c8954cb is the code target; this approval commit is task-file only.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Exempted the Lichess streaming path from the shared ureq agent's recv-response timeout while retaining it for ordinary calls. open_stream now clears timeout_recv_response(None) per request (the ureq 3.3.0 deadline stays active as a preceding phase during body reads, so it otherwise fires mid-stream and tears down healthy long-lived NDJSON streams); get/post_empty/post_form keep the 15s bound via the shared agent. Reconnect backoff and terminal-error surfacing in run_event_loop/play_game_reconnecting are unchanged, so a genuinely dead stream still ends via TCP failure and reconnects. Verified by two loopback TcpListener regression tests (no network): a stream survives a 600ms body gap under a 200ms recv-response bound, and a non-streaming get still times out on an 800ms body stall under the same bound. Checks on target c8954cb: cargo fmt --check pass; cargo clippy --workspace --all-targets --all-features -- -D warnings clean (fresh CARGO_TARGET_DIR); cargo test --workspace pass (lichess 100 passed incl. both new transport tests).
+<!-- SECTION:FINAL_SUMMARY:END -->
