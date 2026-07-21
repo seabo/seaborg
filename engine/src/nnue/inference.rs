@@ -1,13 +1,22 @@
-//! The portable scalar quantized forward pass: from the two per-perspective
-//! accumulators through the clipped activation and the output layer to a single
-//! centipawn score.
+//! The quantized forward pass: from the two per-perspective accumulators through
+//! the clipped activation and the output layer to a single centipawn score.
 //!
-//! This is the reference implementation of the network's arithmetic. It runs on
-//! every target, including those without the AVX2 path, and it is the oracle the
-//! SIMD path and the PyTorch quantized forward are both checked against, so its
-//! integer arithmetic is normative: the scale factors, the clipped-ReLU domain,
-//! the accumulation widths, and the rounding mode all follow
-//! `docs/nnue-design-contract.md` exactly and must not drift from it.
+//! Two implementations of the output layer's clipped dot product live here — a
+//! portable scalar loop and a hand-written AVX2 kernel — behind a runtime
+//! selector. The scalar loop is the reference implementation of the network's
+//! arithmetic: it runs on every target, including those without AVX2, and it is
+//! the oracle the SIMD path and the PyTorch quantized forward are both checked
+//! against, so its integer arithmetic is normative — the scale factors, the
+//! clipped-ReLU domain, the accumulation widths, and the rounding mode all follow
+//! `docs/nnue-design-contract.md` exactly and must not drift from it. The AVX2
+//! kernel is a pure optimization: it is defined to produce the identical i32 sum
+//! the scalar loop does, never a re-derived one, and the differential tests below
+//! assert that bit-for-bit.
+//!
+//! Everything after the dot product — seeding the bias, widening to i64, scaling,
+//! the rounded divide, and the centipawn clamp — is cheap scalar tail work shared
+//! by both paths, so the two can differ only in how the dot product is summed and
+//! not in how the result is rounded.
 //!
 //! The accumulators hold the first linear layer's output for both perspectives
 //! (see [`Accumulator`]). This module performs only the steps after them:
@@ -72,8 +81,8 @@ pub fn forward(network: &Network, accumulator: &Accumulator, side_to_move: Playe
 
     // Output bias seeds the i32 accumulator; `OUTPUT_DIM` is 1, so there is one.
     let mut s: i32 = network.output_bias()[0];
-    s += dot_clipped(own, own_weights, qa);
-    s += dot_clipped(enemy, enemy_weights, qa);
+    s += dot_clipped_selected(own, own_weights, qa);
+    s += dot_clipped_selected(enemy, enemy_weights, qa);
 
     // Widen to i64 before scaling: `s` fits i32 but `s · SCALE` need not.
     let numerator = i64::from(s) * i64::from(network.scale());
@@ -82,9 +91,34 @@ pub fn forward(network: &Network, accumulator: &Accumulator, side_to_move: Playe
     eval_cp.clamp(EVAL_CP_MIN, EVAL_CP_MAX) as i32
 }
 
+/// The clipped dot product of one perspective block, dispatched to the widest
+/// path this CPU supports and falling back to the scalar reference.
+///
+/// The AVX2 kernel is selected by runtime feature detection, not by the build's
+/// baseline, so one binary runs the wide path on a CPU that has AVX2 and the
+/// portable path on one that does not. On a non-x86-64 target only the scalar
+/// path exists. Every path returns the identical i32 the scalar [`dot_clipped`]
+/// would, so which one runs is invisible to the score.
+#[inline]
+fn dot_clipped_selected(activations: &[i16], weights: &[i16], qa: i32) -> i32 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") {
+            // SAFETY: `dot_clipped_avx2` requires the AVX2 target feature, which
+            // the runtime check on this line has just confirmed is present. Its
+            // pointer arguments are the two equal-length input slices, read
+            // in-bounds below.
+            return unsafe { dot_clipped_avx2(activations, weights, qa) };
+        }
+    }
+    dot_clipped(activations, weights, qa)
+}
+
 /// The clipped-ReLU-weighted dot product of one perspective block: for each unit,
 /// clamp the activation to `[0, QA]` and multiply by its output weight, summing in
 /// i32.
+///
+/// This is the normative reference the AVX2 kernel reproduces exactly.
 #[inline]
 fn dot_clipped(activations: &[i16], weights: &[i16], qa: i32) -> i32 {
     activations
@@ -92,6 +126,85 @@ fn dot_clipped(activations: &[i16], weights: &[i16], qa: i32) -> i32 {
         .zip(weights)
         .map(|(&a, &w)| i32::from(a).clamp(0, qa) * i32::from(w))
         .sum()
+}
+
+/// AVX2 implementation of [`dot_clipped`], computing the bit-identical i32 sum
+/// sixteen i16 units at a time.
+///
+/// The scalar reference sums `clamp(a, 0, qa) · w` over the block in i32.
+/// Integer addition is associative and commutative, so as long as no partial sum
+/// overflows i32 — which the contract's bound on `|s|` guarantees, activations
+/// being clamped to `[0, QA]` and the output weights bounded — any summation
+/// order yields the same total. This kernel therefore clips and multiplies in
+/// vector lanes and reduces at the end, and the result equals the scalar loop's
+/// exactly rather than approximately.
+///
+/// The clip's upper bound is `min(qa, i16::MAX)`: activations come from the i16
+/// accumulator, so `a ≤ i16::MAX`, and when `qa` exceeds `i16::MAX` the upper
+/// clamp can never bind — capping the vector bound at `i16::MAX` makes it
+/// representable as an i16 lane while leaving `clamp(a, 0, qa)` unchanged for
+/// every reachable `a`. `_mm256_madd_epi16` multiplies signed i16 lanes and
+/// horizontally adds adjacent pairs into i32; the clipped activations are
+/// non-negative, matching the scalar `i32::from(a).clamp(0, qa)`.
+///
+/// The block length is a multiple of 16 (the hidden width invariant), so the
+/// whole block is processed by full 256-bit loads with no scalar remainder.
+///
+/// # Safety
+///
+/// The caller must ensure the AVX2 target feature is available on the running
+/// CPU. `activations` and `weights` must have equal length and that length must
+/// be a multiple of 16.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn dot_clipped_avx2(activations: &[i16], weights: &[i16], qa: i32) -> i32 {
+    use std::arch::x86_64::{
+        __m256i, _mm256_add_epi32, _mm256_castsi256_si128, _mm256_extracti128_si256,
+        _mm256_loadu_si256, _mm256_madd_epi16, _mm256_max_epi16, _mm256_min_epi16,
+        _mm256_set1_epi16, _mm256_setzero_si256, _mm_add_epi32, _mm_cvtsi128_si32,
+        _mm_shuffle_epi32, _mm_unpackhi_epi64,
+    };
+
+    debug_assert_eq!(
+        activations.len(),
+        weights.len(),
+        "clipped dot product needs equal-length inputs"
+    );
+    debug_assert_eq!(
+        activations.len() % 16,
+        0,
+        "hidden width is a multiple of 16, so the block has no i16 remainder"
+    );
+
+    let zero = _mm256_setzero_si256();
+    // `qa` fits an i16 lane after capping at `i16::MAX`; see the doc comment for
+    // why this leaves the clip unchanged for every reachable activation.
+    let qa_cap = _mm256_set1_epi16(qa.min(i32::from(i16::MAX)) as i16);
+
+    let mut acc = _mm256_setzero_si256();
+    let len = activations.len();
+    let mut offset = 0;
+    while offset < len {
+        // SAFETY: `offset` steps by 16 and stops at `len`, so both loads read a
+        // full 16-lane vector wholly inside the equal-length slices. The loads
+        // are unaligned; the slices carry no alignment guarantee.
+        let a = _mm256_loadu_si256(activations.as_ptr().add(offset) as *const __m256i);
+        let w = _mm256_loadu_si256(weights.as_ptr().add(offset) as *const __m256i);
+        // Clipped ReLU into [0, qa], then multiply by the weights and accumulate
+        // the pairwise products in i32 lanes.
+        let clipped = _mm256_min_epi16(_mm256_max_epi16(a, zero), qa_cap);
+        acc = _mm256_add_epi32(acc, _mm256_madd_epi16(clipped, w));
+        offset += 16;
+    }
+
+    // Horizontal sum of the eight i32 lanes: fold the high 128 bits into the low,
+    // then reduce the four remaining lanes to one.
+    let lo = _mm256_castsi256_si128(acc);
+    let hi = _mm256_extracti128_si256::<1>(acc);
+    let sum128 = _mm_add_epi32(lo, hi);
+    let sum64 = _mm_add_epi32(sum128, _mm_unpackhi_epi64(sum128, sum128));
+    let sum32 = _mm_add_epi32(sum64, _mm_shuffle_epi32::<0b01>(sum64));
+    _mm_cvtsi128_si32(sum32)
 }
 
 /// Divides `numerator` by a positive `denominator`, rounding a half away from
@@ -118,6 +231,17 @@ mod tests {
     use crate::nnue::{feature_index, Parameters, INPUT_DIM, OUTPUT_DIM};
     use chess::init::init_globals;
     use chess::position::{PieceType, Position};
+
+    // The AVX2 differential tests need move generation to reach random positions
+    // and an RNG to draw networks and activations. These imports and the tests
+    // that use them exist only on x86-64, where the AVX2 kernel is compiled; on
+    // any other target the kernel does not exist and there is nothing to compare.
+    #[cfg(target_arch = "x86_64")]
+    use chess::mono_traits::{All, Legal};
+    #[cfg(target_arch = "x86_64")]
+    use chess::movelist::BasicMoveList;
+    #[cfg(target_arch = "x86_64")]
+    use rand::{rngs::SmallRng, RngExt, SeedableRng};
 
     const QA: u16 = 255;
     const QB: u16 = 64;
@@ -493,5 +617,170 @@ mod tests {
     #[test]
     fn output_dimension_is_a_single_scalar() {
         assert_eq!(OUTPUT_DIM, 1);
+    }
+
+    /// Runs `body` only when the running CPU has AVX2, printing a skip note
+    /// otherwise. The AVX2 kernel's correctness is bit-identity with the scalar
+    /// oracle, which can only be observed on hardware that has the instructions;
+    /// CI runs these on an AVX2 host, and an x86-64 CPU without AVX2 skips rather
+    /// than silently reporting a pass it never checked.
+    #[cfg(target_arch = "x86_64")]
+    fn with_avx2(name: &str, body: impl FnOnce()) {
+        if is_x86_feature_detected!("avx2") {
+            body();
+        } else {
+            eprintln!("skipping {name}: AVX2 not available on this CPU");
+        }
+    }
+
+    /// Builds a random network whose weight magnitudes stay within the contract's
+    /// bounds, so for any reachable position the i16 accumulator and the i32
+    /// output sum both stay far from overflow. Comparing the scalar and AVX2 paths
+    /// is only meaningful where neither overflows — a wrap would be a defect both
+    /// paths inherit differently — so the bounds here keep the comparison inside
+    /// the regime the paths are defined to agree on. `|acc| ≤ 500 + 32·200 = 6900`
+    /// and `|s| ≤ 2H·QA·300 + |b_out|` both sit well inside their integer types.
+    #[cfg(target_arch = "x86_64")]
+    fn random_contract_network(rng: &mut SmallRng, hidden: u32) -> Network {
+        let h = hidden as usize;
+        let w_ft: Vec<i16> = (0..INPUT_DIM as usize * h)
+            .map(|_| rng.random_range(-200..=200))
+            .collect();
+        let b_ft: Vec<i16> = (0..h).map(|_| rng.random_range(-500..=500)).collect();
+        let w_out: Vec<i16> = (0..2 * h).map(|_| rng.random_range(-300..=300)).collect();
+        let b_out: i32 = rng.random_range(-100_000..=100_000);
+        network(hidden, w_ft, b_ft, w_out, b_out)
+    }
+
+    /// Reaches a random legal position by walking up to `plies` random legal moves
+    /// from the initial position, restarting the walk if a line ends so the result
+    /// is always a real, non-terminal position rather than depending on how a
+    /// checkmate or stalemate truncates.
+    #[cfg(target_arch = "x86_64")]
+    fn random_position(rng: &mut SmallRng, plies: usize) -> Position {
+        const START: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+        let mut pos = Position::from_fen(START).expect("start position is valid");
+        for _ in 0..plies {
+            let moves = pos.generate::<BasicMoveList, All, Legal>();
+            if moves.is_empty() {
+                pos = Position::from_fen(START).expect("start position is valid");
+                continue;
+            }
+            let choices: Vec<&_> = (&moves).into_iter().collect();
+            let mov = choices[rng.random_range(0..choices.len())];
+            pos.make_move(mov);
+        }
+        pos
+    }
+
+    /// The AVX2 clipped dot product returns exactly the integer the scalar
+    /// [`dot_clipped`] does across randomized blocks. Activations span the whole
+    /// i16 range so the clip is exercised at both ends — negatives clamp to zero,
+    /// values above `qa` clamp to `qa` — and `qa` includes values above `i16::MAX`
+    /// so the kernel's cap at `i16::MAX` is exercised while leaving the clip
+    /// unchanged. Weight magnitudes are bounded per block so the scalar `i32` sum
+    /// cannot overflow, keeping the comparison inside the agreement regime.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn avx2_dot_product_is_bit_identical_to_the_scalar_oracle() {
+        with_avx2(
+            "avx2_dot_product_is_bit_identical_to_the_scalar_oracle",
+            || {
+                let mut rng = SmallRng::seed_from_u64(0x5EAB_0695);
+                let qa_choices: [i32; 8] = [1, 2, 63, 64, 255, 256, 32_767, 40_000];
+                for _ in 0..2_000 {
+                    let hidden = 16 * rng.random_range(1..=16usize);
+                    let qa = qa_choices[rng.random_range(0..qa_choices.len())];
+                    // Bound the weights so no partial sum can leave i32: with the clip
+                    // capping each activation at `min(qa, i16::MAX)`, the largest term
+                    // is `clip · w_max`, and `hidden` of them must stay inside i32.
+                    let clip = qa.min(i32::from(i16::MAX)) as i64;
+                    let w_max = (1_000_000_000 / (hidden as i64 * clip)).clamp(1, 4096) as i16;
+
+                    let activations: Vec<i16> = (0..hidden)
+                        .map(|_| rng.random_range(i16::MIN..=i16::MAX))
+                        .collect();
+                    let weights: Vec<i16> = (0..hidden)
+                        .map(|_| rng.random_range(-w_max..=w_max))
+                        .collect();
+
+                    let scalar = dot_clipped(&activations, &weights, qa);
+                    // SAFETY: guarded by the AVX2 detection in `with_avx2`; the slices
+                    // are equal-length and `hidden` is a multiple of 16.
+                    let simd = unsafe { dot_clipped_avx2(&activations, &weights, qa) };
+                    assert_eq!(
+                        simd, scalar,
+                        "AVX2 dot product diverged at H={hidden}, qa={qa}"
+                    );
+                }
+            },
+        );
+    }
+
+    /// The full AVX2 forward pass reproduces the scalar path and the independent
+    /// dense reference bit for bit, over the golden vectors and a randomized
+    /// position set. `forward` dispatches to the AVX2 kernel on this host, so its
+    /// agreement with both the forced-scalar dot product and the from-the-board
+    /// `reference_forward` exercises the SIMD path end to end — the accumulator,
+    /// the perspective ordering, the clip, and the rounded read-out.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn avx2_forward_matches_the_scalar_path_over_golden_and_random_positions() {
+        with_avx2(
+            "avx2_forward_matches_the_scalar_path_over_golden_and_random_positions",
+            || {
+                init_globals();
+
+                // Golden vectors: the AVX2 forward pass must land on the fixed
+                // expected integers, not merely on the scalar path's output.
+                let golden_net = patterned_network(16);
+                for &(fen, expected) in GOLDEN_H16 {
+                    let pos = Position::from_fen(fen).expect("golden FEN is valid");
+                    let stm = pos.turn();
+                    let acc = Accumulator::from_position(&golden_net, &pos);
+                    assert_eq!(
+                        forward(&golden_net, &acc, stm),
+                        expected,
+                        "AVX2 golden {fen}"
+                    );
+                }
+
+                // Randomized positions against randomized contract-valid networks.
+                let mut rng = SmallRng::seed_from_u64(0x9E37_79B9);
+                for hidden in [16u32, 32, 256] {
+                    let net = random_contract_network(&mut rng, hidden);
+                    for _ in 0..40 {
+                        let plies = rng.random_range(1..=40);
+                        let pos = random_position(&mut rng, plies);
+                        let stm = pos.turn();
+                        let acc = Accumulator::from_position(&net, &pos);
+
+                        // Full forward (AVX2) equals the independent dense oracle.
+                        assert_eq!(
+                            forward(&net, &acc, stm),
+                            reference_forward(&net, &pos, stm),
+                            "AVX2 forward vs dense reference at H={hidden}"
+                        );
+
+                        // And the kernel matches the scalar oracle on each real
+                        // perspective block the forward pass reads.
+                        let own = acc.perspective(stm);
+                        let enemy = acc.perspective(stm.other_player());
+                        let (own_w, enemy_w) = net.output_weights().split_at(hidden as usize);
+                        let qa = i32::from(net.qa());
+                        for (block, weights) in [(own, own_w), (enemy, enemy_w)] {
+                            // SAFETY: guarded by AVX2 detection in `with_avx2`;
+                            // block and weights are equal-length H (a multiple of 16).
+                            let simd = unsafe { dot_clipped_avx2(block, weights, qa) };
+                            assert_eq!(
+                                simd,
+                                dot_clipped(block, weights, qa),
+                                "block kernel mismatch"
+                            );
+                        }
+                    }
+                }
+            },
+        );
     }
 }

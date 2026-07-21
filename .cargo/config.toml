@@ -1,2 +1,31 @@
-[build]
-rustflags = "-C target-cpu=native"
+# Build configuration for a distributable binary.
+#
+# The engine used to compile with `-C target-cpu=native`, which tunes the binary
+# to whatever CPU built it: any SIMD the compiler emitted was then silently
+# specific to that machine and could fault (SIGILL) on an older one, so a binary
+# built on one host was not safe to ship to another. That is replaced here by an
+# explicit baseline that every supported CPU of the target architecture can run,
+# with the wider NNUE inference path (AVX2) selected at run time by CPU feature
+# detection instead of being baked into the baseline (see
+# `engine/src/nnue/inference.rs`).
+#
+# The flags are per-architecture because `[build] rustflags` applies to whatever
+# target is being compiled: an x86-64-only `target-cpu` would break a build for
+# aarch64 or any other host.
+
+# x86-64-v2 (SSE3/SSSE3/SSE4.1/SSE4.2 and POPCNT) is supported by essentially
+# every x86-64 CPU since ~2009, so it is safe to distribute, and it keeps
+# `u64::count_ones` — hot throughout move generation — a single hardware POPCNT
+# rather than a software fallback. It deliberately stops below AVX2: AVX2 is the
+# "wider path" this build detects at run time, so it must not be in the baseline,
+# or the runtime dispatch would be pointless and the binary would fault on a
+# pre-AVX2 CPU.
+[target.'cfg(target_arch = "x86_64")']
+rustflags = ["-C", "target-cpu=x86-64-v2"]
+
+# Other architectures (for example the aarch64 development machines) keep the
+# toolchain's default baseline, which already includes their broadly-available
+# SIMD (NEON and hardware popcount on armv8-a) and is itself distributable.
+#
+# A developer who wants a maximally-tuned local build can still opt back in with
+# `RUSTFLAGS="-C target-cpu=native" cargo build`, which overrides this file.
