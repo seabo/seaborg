@@ -7,11 +7,20 @@
 //! the on-disk sample encoding, position filtering, or opening diversification:
 //! those are a separate concern so the label definitions here — a side-to-move
 //! search score plus a win/draw/loss outcome — can be packed and filtered
-//! without disturbing the game loop. Every generated game starts from the
-//! initial position, so under a reproducible node-budget search the games are
-//! identical to one another; the starting position is a parameter of
-//! [`play_game`] precisely so that opening diversification can later supply
-//! varied starts without touching this loop.
+//! without disturbing the game loop. The starting position is a parameter of
+//! [`play_game`], so a reproducible node-budget search played from one fixed
+//! start would reproduce a single game; [`run`] instead draws a diversified
+//! start per game from [`openings`], and the loop itself needs no knowledge of
+//! how that start was chosen.
+//!
+//! The concerns the game loop deliberately excludes live in sibling modules:
+//! [`format`] is the compact on-disk encoding of a labelled position,
+//! [`filter`] decides which positions are worth keeping, and [`openings`]
+//! supplies the varied starting positions this loop plays out.
+
+pub mod filter;
+pub mod format;
+pub mod openings;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
@@ -59,6 +68,12 @@ pub struct Sample {
     pub score: Score,
     /// The eventual game outcome, from `position`'s side to move.
     pub outcome: Wdl,
+    /// The move the search chose here, or `None` when the search returned no
+    /// move (a terminal-adjacent position under a tiny budget). This is not a
+    /// training label; it is retained so a filter can drop tactically unsettled
+    /// positions — the ones whose best move is a capture — before the encoder
+    /// discards it. The on-disk sample format does not store it.
+    pub best_move: Option<Move>,
 }
 
 /// The result of a completed self-play game.
@@ -147,6 +162,9 @@ pub struct SelfPlayConfig {
     pub max_plies: usize,
     /// Early-termination thresholds.
     pub adjudication: Adjudication,
+    /// How each game's starting position is diversified away from the initial
+    /// position, so the generated games do not all repeat one opening.
+    pub opening: openings::OpeningConfig,
 }
 
 impl Default for SelfPlayConfig {
@@ -158,6 +176,7 @@ impl Default for SelfPlayConfig {
             hash_size_mb: 16,
             max_plies: 800,
             adjudication: Adjudication::default(),
+            opening: openings::OpeningConfig::default(),
         }
     }
 }
@@ -302,9 +321,9 @@ fn outcome_for(result: GameResult, side: Player) -> Wdl {
 /// given build.
 pub fn play_game(engine: &SearchEngine, start: Position, config: &SelfPlayConfig) -> GameRecord {
     let mut position = start;
-    // Positions searched, with their side-to-move scores; the outcome label is
-    // filled in once the game result is known.
-    let mut scored: Vec<(Position, Score)> = Vec::new();
+    // Positions searched, with their side-to-move scores and chosen moves; the
+    // outcome label is filled in once the game result is known.
+    let mut scored: Vec<(Position, Score, Option<Move>)> = Vec::new();
     let mut adjudicator = Adjudicator::new(config.adjudication);
 
     let (result, termination) = loop {
@@ -326,7 +345,7 @@ pub fn play_game(engine: &SearchEngine, start: Position, config: &SelfPlayConfig
 
         // Record the scored position before playing on: the label belongs to
         // this position, with its own side to move.
-        scored.push((position.clone(), score));
+        scored.push((position.clone(), score, best_move));
 
         let white_cp = {
             let stm_cp = i32::from(score.to_i16());
@@ -349,12 +368,13 @@ pub fn play_game(engine: &SearchEngine, start: Position, config: &SelfPlayConfig
 
     let samples = scored
         .into_iter()
-        .map(|(position, score)| {
+        .map(|(position, score, best_move)| {
             let outcome = outcome_for(result, position.turn());
             Sample {
                 position,
                 score,
                 outcome,
+                best_move,
             }
         })
         .collect();
@@ -410,7 +430,10 @@ where
                 // A fresh table per game keeps the games independent of one
                 // another and reproducible in isolation.
                 engine.new_game();
-                let record = play_game(&engine, Position::start_pos(), &config);
+                // The start is chosen from the game index alone, so which games
+                // a worker happens to pull never changes their openings.
+                let start = config.opening.start_for(index);
+                let record = play_game(&engine, start, &config);
                 if tx.send(record).is_err() {
                     break;
                 }
