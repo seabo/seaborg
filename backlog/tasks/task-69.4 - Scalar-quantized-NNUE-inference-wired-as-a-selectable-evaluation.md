@@ -1,11 +1,11 @@
 ---
 id: TASK-69.4
 title: Scalar quantized NNUE inference wired as a selectable evaluation
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:40'
-updated_date: '2026-07-21 02:02'
+updated_date: '2026-07-21 02:17'
 labels:
   - nnue
   - inference
@@ -43,6 +43,22 @@ This scalar path is the permanent correctness oracle: it is what runs on targets
 6. Run cargo fmt --check, clippy -D warnings, cargo test --workspace; hand off for review.
 <!-- SECTION:PLAN:END -->
 
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented the scalar quantized NNUE forward pass and wired it behind Search::evaluate as a selectable evaluation, keeping the hand-crafted tapered evaluation the default.
+
+- engine/src/nnue/inference.rs (new): forward(network, &Accumulator, side_to_move) -> i32 centipawns. Implements the contract's normative arithmetic exactly: concat the two accumulators side-to-move first, clip each entry to [0, QA], accumulate the output dot product in i32 seeded by b_out, widen to i64 for the multiply by SCALE, round-half-away-from-zero divide by QA*QB, then clamp to the centipawn band [-10000, 10000]. The result is already from the side to move's perspective, so it takes no pov() flip. round_div and the i32/i64 widths are private and factored so the SIMD path (.5) and the PyTorch forward (.10) check against this oracle. Re-exported as nnue::forward.
+- engine/src/search.rs: Search gains network: Option<Network> (None by default) and set_network(). evaluate() branches on it at the single leaf-scoring point the contract designates: with a network it rebuilds Accumulator::from_position for the leaf and runs forward(); otherwise the hand-crafted path is byte-for-byte unchanged. make/make_null/unmake and the eval_stack are untouched.
+
+Scope decision (confirmed with the user before implementation): the accumulator is rebuilt from scratch at each evaluated leaf. Incremental accumulator threading through make/unmake (with an at-every-node debug assertion mirroring EvalState) is deferred: doing it cleanly needs either a network lifetime on Search (ripples through ~40 call sites) or a change to TASK-69.3's approved Accumulator<'net> API, and it is a performance concern with no benefit while no trained network runs. This scalar path is the correctness oracle; the incremental+SIMD work is TASK-69.5. AC#1 ('Search evaluates positions through the scalar quantized forward pass ... selectable without disturbing the default hand-crafted path') is met without it.
+
+Tests:
+- Golden-vector harness (AC#2): golden_vectors_match_the_scalar_forward_pass_exactly loads (FEN, expected-cp) pairs for a hand-seeded H=16 network and asserts exact integer equality against both forward() and an independent dense reference forward pass (materializes the full 768-input vector and multiplies densely, sharing no accumulation structure with forward). The king-only golden value (-19) was additionally hand-computed end-to-end (per-unit accumulator, clip, both output blocks, rounded dequant) to anchor the constants. forward_agrees_with_the_dense_reference_over_many_positions cross-checks the two paths over more positions and two hidden widths. The harness structure is what TASK-69.10 reuses with trainer-emitted vectors.
+- Arithmetic (AC#3): round_div_rounds_half_away_from_zero (both signs, odd/even denominators); activations_saturate_at_the_clip_bounds (i16::MAX -> QA, i16::MIN -> 0); output_accumulation_does_not_overflow_near_the_i32_ceiling (H=256, s just under i32::MAX so s*SCALE exceeds i32, proving the i64 widen); evaluation_is_clamped_into_the_centipawn_band; mirrored_positions_score_identically_from_the_mover (perspective symmetry).
+- Selectability (AC#1): search::tests::evaluate_selects_the_nnue_forward_pass_when_a_network_is_set confirms evaluate() returns the independently-computed forward score when a network is set, differs from the hand-crafted score, and restores the hand-crafted value exactly when cleared.
+<!-- SECTION:NOTES:END -->
+
 ## Comments
 
 <!-- COMMENTS:BEGIN -->
@@ -50,5 +66,22 @@ author: @claude
 created: 2026-07-21 02:02
 ---
 Claiming for implementation on task-69.4-scalar-nnue-inference (worktree /Users/seabo/seaborg-worktrees/task-69.4-scalar-nnue-inference, base 0f73ec8). Integration depth confirmed with the user: from-scratch accumulator at the evaluated leaf; incremental threading deferred.
+---
+
+author: @claude
+created: 2026-07-21 02:17
+---
+Implementation handoff
+Branch: task-69.4-scalar-nnue-inference
+Worktree: /Users/seabo/seaborg-worktrees/task-69.4-scalar-nnue-inference
+Base: 0f73ec88f5e22bb0db44839e4599077f5d4b1593
+Implementation target: 1278acfab0c5df4540c3a6f890f62eadfab59ef5
+Resolved findings: none (new work)
+Verification (on 1278acf):
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (0 warnings/errors)
+- cargo test --workspace: pass (chess 49, engine 352 / 2 ignored incl. 8 new nnue::inference tests + 1 new search selectability test, lichess 93, build_metadata 19, doctest 1; 0 failed)
+Known failures: none
+Scope note: from-scratch accumulator at the evaluated leaf; incremental accumulator threading through search deferred to the SIMD/perf track (TASK-69.5). Confirmed with the user before implementation. Not a movegen hot path; the NNUE branch runs only when a network is selected, which no default search does, so hot-path benchmarks are not applicable.
 ---
 <!-- COMMENTS:END -->
