@@ -3,11 +3,11 @@ id: TASK-74.3
 title: >-
   Decouple Lichess event-stream ingestion from blocking HTTP so a 429 cannot
   stall challenge handling
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-21 03:55'
-updated_date: '2026-07-21 05:21'
+updated_date: '2026-07-21 05:59'
 labels:
   - lichess
   - conformance
