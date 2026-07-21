@@ -1,11 +1,11 @@
 ---
 id: TASK-69.9
 title: Blended WDL-and-score loss and quantization-aware network export
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:41'
-updated_date: '2026-07-21 05:48'
+updated_date: '2026-07-21 06:03'
 labels:
   - nnue
   - training
@@ -28,9 +28,9 @@ The WDL term is the only signal in the whole loop that comes from the rules of c
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The loss combines search-score and WDL targets with a configurable, schedulable lambda, covered by a test on a small fixture
-- [ ] #2 Training accounts for quantization so exported integer weights reproduce the trained model behaviour within the contract tolerance
-- [ ] #3 The exporter writes a versioned network file that the engine loader (TASK-69.2) accepts
+- [x] #1 The loss combines search-score and WDL targets with a configurable, schedulable lambda, covered by a test on a small fixture
+- [x] #2 Training accounts for quantization so exported integer weights reproduce the trained model behaviour within the contract tolerance
+- [x] #3 The exporter writes a versioned network file that the engine loader (TASK-69.2) accepts
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -78,4 +78,36 @@ Verification:
 Known failures: none
 Notes for the reviewer: only tools/trainer changed plus one engine integration test (engine/tests/loads_exported_network.rs) and its committed fixture (engine/tests/fixtures/exported_v1.sbnn, 25 KB, regenerable via 'python export.py --emit-fixture ...'). No engine/src changed. The Python suite needs the venv deps (tools/trainer/requirements.txt); create tools/trainer/.venv and pip install -r requirements.txt. The .venv, checkpoints, and datasets are gitignored.
 ---
+
+author: @claude
+created: 2026-07-21 06:03
+---
+Review attempt: 1
+Reviewed branch: task-69.9-blended-loss-quantized-export
+Reviewed implementation: fb11aa41b13abec8539794bc09d43475a4129dba
+Verdict: approved
+
+Full diff 027d20f..fb11aa4 reviewed against docs/nnue-design-contract.md and engine/src/nnue/{format,inference}.rs. All three acceptance criteria proven by automated tests:
+- AC#1 lambda schedule + blended target: test_train.py (constant/ramp arithmetic, endpoints, clamping, schedule-changes-target) on a small fixture; blend matches the contract.
+- AC#2 quantization-aware reproduction: QAT rounds onto the exact QA/QB grids the exporter writes; export.py checks per-weight and i16-accumulator overflow; integer_eval_cp mirrors engine::nnue::forward; test_export.py asserts <=1 cp reproduction on a trained model (measured 0.49).
+- AC#3 engine loads the file: byte-for-byte SBNN header+blob+FNV-1a per format.rs; independent Python reader mirrors every LoadError; engine/tests/loads_exported_network.rs loads the committed fixture and asserts full weight/metadata equality; fixture regenerates identically.
+
+Scope: no engine/src changes; only tools/trainer, one engine integration test, its fixture, and the task file. No new #[allow].
+
+Verification (implementation target fb11aa4, in-worktree):
+- cargo fmt --check: pass (clean)
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass, 0 warnings (confirmed with a clean CARGO_TARGET_DIR)
+- cargo test --workspace: pass (49 chess + 379 engine + loads_exported_network + timed_selfplay + 104 lichess + 19 build_metadata; 0 failed, 2 ignored)
+- tools/trainer: .venv/bin/python -m unittest discover -p 'test_*.py': pass (42 tests)
+- Fixture regeneration: export.py --emit-fixture cmp-equal to engine/tests/fixtures/exported_v1.sbnn
+
+No hot-path benchmark run: the diff touches no engine movegen/search code.
+Non-blocking observation (not gating any AC, out of scope for this task): the exporter enforces the i16 accumulator bound the contract assigns it, but does not independently verify the i32 output-accumulator bound; the contract treats that as a training-side property of bounded W_out, and realistic QB=64 output weights keep it far inside i32.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Adds the blended WDL/score training target with a schedulable lambda, quantization-aware training, and the SBNN exporter, all in tools/trainer, plus one engine integration test and its fixture. AC#1: train.py LambdaSchedule (constant or per-generation linear ramp) + resolve_lambda drive the contract blend y = lambda*r + (1-lambda)*sigmoid(cp/SCALE); test_train.py pins the arithmetic, endpoints, clamping, and that the schedule changes the target. AC#2: model.py fake-quantizes weights/activations onto the engine's integer grids under a straight-through gradient and clamps the feature transformer so the i16 accumulator cannot overflow; export.py rounds the trained weights onto the same grids (round-half-to-even), refuses per-weight and accumulator overflow, and integer_eval_cp mirrors engine::nnue::forward; test_export.py trains a QAT model and asserts the integer export reproduces its centipawn output within 1 cp (measured 0.49). AC#3: export.py serialises the 64-byte SBNN header + blob + FNV-1a hash byte-for-byte per engine/src/nnue/format.rs, an independent Python reader mirrors every LoadError rejection, and engine/tests/loads_exported_network.rs loads the exporter's committed fixture via Network::read and asserts full weight/metadata equality; the fixture regenerates identically from export.py --emit-fixture. Verified with cargo fmt --check, cargo clippy (clean isolated target dir, 0 warnings), cargo test --workspace (all pass), and the tools/trainer unittest suite (42 pass).
+<!-- SECTION:FINAL_SUMMARY:END -->
