@@ -153,6 +153,44 @@ fn should_razor(depth: Depth, eval: Score, alpha: Score, improving: bool) -> boo
             < alpha
 }
 
+/// Largest remaining depth at which reverse futility pruning is considered.
+///
+/// Reverse futility pruning — also called static null move pruning — is the beta-side mirror of
+/// razoring: when the static evaluation already stands a depth-scaled margin *above* beta, it bets
+/// that no quiet reply will drag the score back below beta before the horizon, so the whole node
+/// fails high without a move ever being generated. Like razoring the bet is only safe close to the
+/// leaves; with more depth remaining the opponent has room to build a threat the static evaluation
+/// cannot see, so the technique is switched off above this draft.
+///
+/// The bound is set lower than razoring's because this prune has no safety net. Razoring confirms
+/// its verdict with a quiescence search and null-move pruning re-searches deep cutoffs, so both
+/// refuse to fire on a node that actually holds a forced mate for the side to move: a free move
+/// there lets the opponent escape and the verification fails. Reverse futility pruning searches
+/// nothing — it returns on the static evaluation alone — so it cannot tell a quiet won position from
+/// one hiding a mate, and above this draft it masks forced wins the full search would prove. The
+/// shallow forced wins in the search regression suite are what pin it here: at depth three a
+/// king-and-pawn win and the suite's short mates begin reporting a bare material score instead.
+const REVERSE_FUTILITY_MAX_DEPTH: Depth = 2;
+
+/// The reverse futility margin at a given remaining depth, in centipawns.
+///
+/// How far above beta the static evaluation must stand before the node is discarded unsearched. The
+/// allowance grows with remaining depth because a deeper subtree gives the opponent more room to
+/// claw the score back below beta, keeping the prune conservative exactly where the horizon is
+/// further away.
+///
+/// The fixed base term matters as much as the slope. `evaluate` is material-only, so the signal
+/// being compared ignores king safety, activity and pawn structure entirely; a thin margin would
+/// prune whenever the evaluation drifts a little above beta, including where beta is low only
+/// because the parent is probing with a pessimistic window rather than because the side to move
+/// truly stands better. Demanding a multi-pawn surplus keeps the prune to positions where the
+/// material edge is large enough to survive what the evaluation cannot see.
+#[inline]
+fn reverse_futility_margin(depth: Depth) -> Score {
+    debug_assert!(depth >= 1);
+    Score::cp(300 + 100 * depth)
+}
+
 /// Largest remaining depth at which futility pruning is considered.
 ///
 /// Futility pruning bets that a quiet move cannot lift a static evaluation that already sits a
@@ -827,6 +865,11 @@ pub struct Search<'engine> {
     /// unchanged while still shrinking the tree.
     #[cfg(test)]
     lmr_disabled: bool,
+    /// Test hook that disables reverse futility pruning so a test can search the same position with
+    /// and without it and confirm the guards leave sound positions unchanged while it still shrinks
+    /// the tree where it fires.
+    #[cfg(test)]
+    rfp_disabled: bool,
     /// Test hook that disables the search extensions so a test can search a position at exactly its
     /// nominal depth. Used where a test pins an exact fixed-depth score to an evaluation property and
     /// the deeper effective search an extension produces would otherwise move that score.
@@ -907,6 +950,8 @@ impl<'engine> Search<'engine> {
             forward_pruning_disabled: false,
             #[cfg(test)]
             lmr_disabled: false,
+            #[cfg(test)]
+            rfp_disabled: false,
             #[cfg(test)]
             extensions_disabled: false,
         }
@@ -1285,14 +1330,35 @@ impl<'engine> Search<'engine> {
         // available to every later margin-based technique from the per-ply stack.
         let improving = is_improving(Some(eval), self.eval_two_plies_ago(ply));
 
-        // Step 7. Razoring.
-        // When eval is very low, check with quiescence whether it has any hope of raising alpha. If
-        // not, return a fail low.
+        // Step 7. Razoring and reverse futility pruning.
+        //
+        // These are mirror images across the search window, each discarding a node from its static
+        // evaluation alone near the horizon, and they share the same guards: non-PV node, not in
+        // check — a forcing position has no trustworthy static evaluation — and a centipawn window
+        // bound, since a mate bound makes a centipawn margin meaningless.
+        //
+        // Razoring works the alpha side. When the evaluation sits far below alpha, a quiescence
+        // search checks whether captures can still rescue it; if not, the node fails low.
         if should_razor(depth, eval, alpha, improving) {
             let value = self.quiesce::<Master, NonPv>(alpha - Score::cp(1), alpha, ply)?;
             if value < alpha {
                 return Some(value);
             }
+        }
+
+        // Reverse futility pruning works the beta side. When the evaluation stands a depth-scaled
+        // margin above beta, the node is assumed to hold above beta against any quiet reply to the
+        // horizon and fails high at once, without a move ever being generated. `eval` is returned as
+        // the fail-soft lower bound; `evaluate` is material-only, so it is always a centipawn score
+        // and never fabricates a mate distance the search has not proven.
+        if self.rfp_enabled()
+            && !Node::pv()
+            && !self.pos.in_check()
+            && depth <= REVERSE_FUTILITY_MAX_DEPTH
+            && beta.is_cp()
+            && eval - reverse_futility_margin(depth) >= beta
+        {
+            return Some(eval);
         }
 
         // Step 8. Futility pruning.
@@ -1988,6 +2054,20 @@ impl<'engine> Search<'engine> {
         #[cfg(test)]
         {
             !self.forward_pruning_disabled
+        }
+        #[cfg(not(test))]
+        {
+            true
+        }
+    }
+
+    /// Whether reverse futility pruning is active. Always true in normal builds; a test can switch it
+    /// off to search a position with the whole-node prune bypassed and compare against it.
+    #[inline(always)]
+    fn rfp_enabled(&self) -> bool {
+        #[cfg(test)]
+        {
+            !self.rfp_disabled
         }
         #[cfg(not(test))]
         {
@@ -3706,6 +3786,105 @@ mod tests {
         assert!(
             pruned_nodes < plain_nodes,
             "forward pruning did not reduce the tree: {pruned_nodes} pruned vs {plain_nodes} plain"
+        );
+    }
+
+    /// The reverse futility margin must widen with remaining depth and stay a centipawn quantity, so
+    /// a deeper node demands a larger surplus above beta before it is pruned and the comparison never
+    /// straddles the centipawn/mate boundary the pruning guard relies on.
+    #[test]
+    fn reverse_futility_margin_grows_with_depth() {
+        let mut previous = reverse_futility_margin(1);
+        assert!(previous.is_cp());
+        for depth in 2..=REVERSE_FUTILITY_MAX_DEPTH {
+            let margin = reverse_futility_margin(depth);
+            assert!(
+                margin.is_cp(),
+                "depth {depth}: margin left the centipawn band"
+            );
+            assert!(
+                margin > previous,
+                "depth {depth}: margin {margin:?} did not exceed shallower {previous:?}"
+            );
+            previous = margin;
+        }
+    }
+
+    /// Reverse futility pruning must not change the result of a search on a sound position: with the
+    /// whole-node prune switched off, a fixed-depth search of each position returns exactly the score
+    /// and best move it returns with the prune on. These are forced mates and decisive material wins,
+    /// where the guards — non-PV, not in check, shallow draft, non-mate beta bound — keep the prune to
+    /// nodes the full search would have failed high on anyway, so the known answer is identical either
+    /// way and the toggle is confirmed to reach the step.
+    #[test]
+    fn reverse_futility_pruning_does_not_change_sound_search_results() {
+        chess::init::init_globals();
+
+        let positions = [
+            ("8/2R2pp1/k3p3/8/5Bn1/6P1/5r1r/1R4K1 w - - 4 3", 6),
+            ("6rk/p7/1pq1p2p/4P3/5BrP/P3Qp2/1P1R1K1P/5R2 b - - 0 34", 8),
+            ("6k1/8/3q4/8/8/3B4/2P5/1K1R4 w - - 0 1", 5),
+            ("r5k1/p1P5/8/8/8/8/3RK3/8 w - - 0 1", 6),
+            (
+                "2kr3r/ppp1qpb1/5n2/5b1p/6p1/1PNP4/PBPQBPPP/2KRR3 b - - 6 14",
+                5,
+            ),
+        ];
+
+        for (fen, depth) in positions {
+            let position = Position::from_fen(fen).unwrap();
+            let flag = AtomicBool::new(false);
+
+            let pruned_table = Table::new(16);
+            let mut pruned = Search::new(position.clone(), &flag, None, &pruned_table);
+            let pruned_result = pruned.run::<Master>(depth).unwrap();
+
+            let plain_table = Table::new(16);
+            let mut plain = Search::new(position, &flag, None, &plain_table);
+            plain.rfp_disabled = true;
+            let plain_result = plain.run::<Master>(depth).unwrap();
+
+            assert_eq!(
+                pruned_result.score, plain_result.score,
+                "{fen}: reverse futility pruning changed the score"
+            );
+            assert_eq!(
+                pruned_result.best_move, plain_result.best_move,
+                "{fen}: reverse futility pruning changed the best move"
+            );
+        }
+    }
+
+    /// Reverse futility pruning must earn its keep: on a quiet position where one side stands clearly
+    /// ahead — so its shallow non-PV nodes clear beta by the margin — the pruned search visits
+    /// strictly fewer nodes than the same fixed-depth search with the prune switched off. This
+    /// confirms the step actually fires rather than being dead code behind its guards.
+    #[test]
+    fn reverse_futility_pruning_reduces_the_search_tree() {
+        chess::init::init_globals();
+
+        // A quiet position a clean piece up for White, with the material edge the static evaluation
+        // can see and pieces still on the board so shallow nodes recur throughout the tree.
+        let position =
+            Position::from_fen("r3k2r/pppq1ppp/2np1n2/4p3/2B1P3/2NP1N2/PPP2PPP/R2Q1RK1 w kq - 0 1")
+                .unwrap();
+        let flag = AtomicBool::new(false);
+        let depth = 6;
+
+        let pruned_table = Table::new(16);
+        let mut pruned = Search::new(position.clone(), &flag, None, &pruned_table);
+        pruned.run::<Master>(depth).unwrap();
+        let pruned_nodes = pruned.trace.all_nodes_visited();
+
+        let plain_table = Table::new(16);
+        let mut plain = Search::new(position, &flag, None, &plain_table);
+        plain.rfp_disabled = true;
+        plain.run::<Master>(depth).unwrap();
+        let plain_nodes = plain.trace.all_nodes_visited();
+
+        assert!(
+            pruned_nodes < plain_nodes,
+            "reverse futility pruning did not reduce the tree: {pruned_nodes} pruned vs {plain_nodes} plain"
         );
     }
 
