@@ -199,6 +199,29 @@ class LoopTests(unittest.TestCase):
             # The gate saw the same true producing generation for its baseline id.
             self.assertEqual(backend.gate_calls[generation]["baseline_gen"], 0)
 
+    def test_baseline_attribution_describes_the_network_that_played(self):
+        # Consecutive promotions: generations 0 and 1 both PASS. Generation 1
+        # gates its candidate against the generation-0 network, then promotes its
+        # own candidate over best.sbnn. The baseline record must still describe the
+        # generation-0 network that actually played the gate — not the candidate
+        # that replaced it moments later — so an improving run's baseline identity
+        # stays recoverable from the ledger.
+        backend = FakeBackend(lambda generation: "PASS")
+        loop = rl.ReinforcementLoop(self.config(), backend)
+        loop.run_iteration(0)
+        loop.run_iteration(1)
+
+        gen0_network = self.state / rl.NETWORKS_DIR / "gen-000.sbnn"
+        gen1_network = self.state / rl.NETWORKS_DIR / "gen-001.sbnn"
+        gen0_sha = rl.sha256(gen0_network)
+        # The two generations produce distinct networks, so a baseline mislabelled
+        # with the candidate's bytes is observably different.
+        self.assertNotEqual(gen0_sha, rl.sha256(gen1_network))
+
+        gen1 = self.ledger_records()[1]
+        self.assertEqual(gen1["baseline"]["sha256"], gen0_sha)
+        self.assertEqual(gen1["baseline"]["network_id"], rl.network_id(gen0_network, 0))
+
     def test_evaluator_is_never_external(self):
         # The purity invariant: the only evaluator any step plays with is the
         # hand-crafted default (None) or a network under the run's own state

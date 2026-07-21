@@ -435,11 +435,17 @@ class ReinforcementLoop:
         )
 
         promoted = gate.passed
-        promoted_path = self._promote(generation, candidate) if promoted else None
 
+        # Build the attribution before promoting. _promote overwrites best.sbnn
+        # with the candidate's bytes, and the baseline record hashes ``best`` (the
+        # state/best.sbnn path); computing it afterwards would describe the
+        # just-promoted candidate instead of the network that actually played as
+        # the baseline in this gate.
         attribution = self._attribution(
             generation, best, baseline_generation, candidate, generated, gate, promoted
         )
+
+        promoted_path = self._promote(generation, candidate) if promoted else None
         self._append_ledger(attribution)
 
         return IterationResult(
