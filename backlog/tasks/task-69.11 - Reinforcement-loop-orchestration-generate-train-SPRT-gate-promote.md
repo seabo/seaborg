@@ -1,11 +1,11 @@
 ---
 id: TASK-69.11
 title: 'Reinforcement loop orchestration: generate, train, SPRT-gate, promote'
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:42'
-updated_date: '2026-07-21 20:48'
+updated_date: '2026-07-21 20:57'
 labels:
   - nnue
   - training
@@ -30,9 +30,9 @@ This orchestration composes the datagen (TASK-69.6), training/export (TASK-69.9)
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A single command runs one full iteration: generate, train, export, load into the engine, and SPRT-gate the candidate against the current best
-- [ ] #2 A candidate is promoted to current-best only when it passes the strength gate, and the decision plus attribution are recorded
-- [ ] #3 Iteration 0 bootstraps from the hand-crafted evaluation, and the self-play purity constraint is preserved end to end
+- [x] #1 A single command runs one full iteration: generate, train, export, load into the engine, and SPRT-gate the candidate against the current best
+- [x] #2 A candidate is promoted to current-best only when it passes the strength gate, and the decision plus attribution are recorded
+- [x] #3 Iteration 0 bootstraps from the hand-crafted evaluation, and the self-play purity constraint is preserved end to end
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -344,4 +344,38 @@ Verification:
 - Empirical: with two consecutive PASSes, gen-1 ledger baseline.sha256 = archived gen-000 network (fdb672691da570e7) and network_id = nnue:gen-000:sha256=fdb672691da570e7, instead of the gen-1 candidate bytes recorded before the fix; the new regression fails against the pre-fix ordering.
 Known failures: none
 ---
+
+author: @claude
+created: 2026-07-21 20:57
+---
+Review attempt: 4
+Reviewed branch: task-69.11-reinforcement-loop-orchestration
+Reviewed implementation: 5bef621407d5bc46557fd77b3dbf33b6ee9b48d5
+Base: daa79cb8a19d635702e894927f44064e76480f95
+Verdict: approved
+
+All prior blocking findings resolved and pinned by regression tests:
+- REV-1-01: _gate_result_from_report reads the harness's real report shape ("results" block, "elo"/"elo_error"/"games"); GateReportParsingTests drive a harness-shaped report.json.
+- REV-2-01: baseline id/--baseline-id name the producing generation from best.json, not generation-1; regression drives {0:PASS,1:FAIL,2:FAIL}.
+- REV-3-01: _attribution is built from the pre-promotion best and baseline_generation before _promote overwrites best.sbnn, so the ledger baseline sha256/network_id describe the network that actually played; regression drives consecutive PASSes and asserts gen-1's baseline equals the archived gen-000 network.
+
+Acceptance criteria (all proven):
+- AC#1 single command runs generate/train/export/load/gate: run_iteration composes the four Backend steps; the gate loads networks via EvalFile. Rust EvalFile load-and-search test + Python promote-on-PASS test; real-binary release smoke in handoff #1.
+- AC#2 promote only on PASS with decision+attribution recorded: test_promotes_and_records_best_only_on_pass, test_non_pass_verdicts_do_not_promote, attribution/baseline-attribution tests.
+- AC#3 generation-0 bootstrap + purity end to end: test_generation_zero_bootstraps_from_handcrafted_evaluation, test_evaluator_is_never_external; datagen --network absent = hand-crafted; evaluator is only None or a loop-promoted network by construction.
+
+Scope: engine (EvalFile option, Arc<Network> threading, hash clear on evaluator change), datagen --network, strength_test.py per-side options, tools/rl orchestration + tests + README, docs. No new #[allow]; comments self-contained; only the approval touches non-implementation files.
+
+Verification on immutable target 5bef621 (clean worktree, target is an ancestor of tip; the single commit above it is handoff metadata touching only the task file):
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean, exit 0)
+- cargo test --workspace: pass (exit 0; chess 50, engine 397/2 ignored, lichess, integration, watcher, doc-tests green)
+- python3 -m unittest (tools/rl): 13 pass; (tools/strength): 21 pass
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Reinforcement-loop orchestration (mechanism; the authoritative programme run is TASK-69.12). One command runs a full iteration — datagen with the current best network (generation 0 bootstraps hand-crafted), train, export, and SPRT-gate the candidate against the best via one seaborg binary told apart only by per-side EvalFile — promoting only on PASS and recording an append-only attribution ledger (data volume, node budget, network ids, verdict, measured Elo delta). Engine: SearchEngine holds Option<Arc<Network>> threaded into each per-move Search (Arc avoids per-move deep copy); new UCI EvalFile string option loads/validates an SBNN at a quiescent boundary and clears the hash, <empty> restores hand-crafted, a load failure changes nothing and is reported. datagen --network selects the self-play evaluator. strength_test.py gains per-side --baseline-option/--candidate-option recorded in report.json. Verified on immutable target 5bef621: cargo fmt --check pass; cargo clippy --workspace --all-targets --all-features -D warnings clean; cargo test --workspace green; python3 -m unittest tools/rl 13 pass, tools/strength 21 pass.
+<!-- SECTION:FINAL_SUMMARY:END -->
