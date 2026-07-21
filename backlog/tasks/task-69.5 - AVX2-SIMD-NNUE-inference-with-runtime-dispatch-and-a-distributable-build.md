@@ -1,9 +1,11 @@
 ---
 id: TASK-69.5
 title: AVX2 SIMD NNUE inference with runtime dispatch and a distributable build
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-20 19:40'
+updated_date: '2026-07-21 03:06'
 labels:
   - nnue
   - inference
