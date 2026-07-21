@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:40'
-updated_date: '2026-07-20 23:55'
+updated_date: '2026-07-21 00:01'
 labels:
   - nnue
   - inference
@@ -57,6 +57,15 @@ Scope: no forward pass, scoring, or Search wiring in this task (deferred to TASK
 Design note: activations use i16 arithmetic (plain +=/-=), so a debug build panics on overflow rather than silently wrapping, matching the contract's 'i16 overflow is a defect, not a wrap'. Both incremental and from-scratch paths use identical commutative/associative integer addition, so they agree bit-for-bit. Test weights are bounded (|w|<=7, |bias|<=2) so the <=32 active features per perspective stay far inside i16.
 
 Note for the reviewer/integrator: TASK-69.2 (file format/loader) is being implemented in parallel and will also touch the nnue module; a merge-time collision on the module is possible and is an integration concern, not a defect here.
+
+Rework of the ejected target (integration collision, comment #4), not a code-correctness change. Merged current master (097854d, which carries TASK-69.2's nnue directory module) into the task branch, then resolved the collision structurally:
+
+- Removed engine/src/nnue.rs and re-homed the encoding + accumulator into engine/src/nnue/accumulator.rs, declared as 'mod accumulator;' and re-exported (feature_index, Accumulator) from nnue/mod.rs. lib.rs now declares nnue exactly once (git tracks the move as a rename).
+- Reconciled the duplicated INPUT_DIM: the module-local 'pub const INPUT_DIM: usize' and the standalone FeatureTransformer container are gone. The Accumulator borrows the loaded Network directly (feature_transformer_weights/bias, hidden_width). Consequences: first-layer weights are stored once (Network owns them; .4's forward pass will use the same instance), and Network::new's load-time invariant (hidden width a positive multiple of 16, block lengths) is reused instead of re-implemented. Accumulator is now Accumulator<'net> borrowing &'net Network.
+- Encoding and equivalence guarantees are unchanged. feature_index is the contract formula verbatim; add/remove fold one weight column per perspective; from_position is the from-scratch reference driving the same add path. Tests retargeted onto a Network built via Network::new with a bounded synthetic feature-transformer block (zero output layer, which the accumulator ignores): subtree walk asserts incremental == from-scratch at every node (opening, Kiwipete, en passant, dual promotion), plus bit-for-bit make/unmake restore, feature-index bijection onto 0..768, and clone equivalence.
+- Updated the nnue/mod.rs and lib.rs module docs to state the accumulator now lives in this module.
+
+Scope unchanged from the approved target: no forward pass, scoring, or Search wiring (TASK-69.4 owns the Search::evaluate seam). i16 accumulator arithmetic (plain +=/-=) still panics on overflow in debug rather than wrapping, per the contract.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -127,5 +136,22 @@ Cause: TASK-69.2 (versioned NNUE file format/loader) landed on master after this
 The review verdict stands — the approved code is correct in isolation against its base. This is a forward-integration conflict introduced by 69.2 landing first, so it is ejected to Changes Requested rather than Done. No implementation file was changed by $merge; primary remains at 097854d.
 
 Rework guidance for $implement (not performed here): re-home the accumulator into the existing nnue/ directory module (e.g. engine/src/nnue/accumulator.rs + encoding, declared from nnue/mod.rs) and reconcile the duplicated INPUT_DIM (69.2's format.rs already defines/re-exports it) rather than re-adding engine/src/nnue.rs and a second 'pub mod nnue;'. Re-verify fmt/clippy/test on the rebased result and hand back for a fresh review.
+---
+
+author: @claude
+created: 2026-07-21 00:01
+---
+Implementation handoff (rework after integration eject)
+Branch: task-69.3-nnue-accumulator
+Worktree: /Users/seabo/seaborg-worktrees/task-69.3-nnue-accumulator
+Base: 097854d4ce43827fa003ee907e8bcd7935b9e50c (current master; merged into the branch so the target integrates onto the live primary tip)
+Implementation target: 329830e (descends from 097854d; branch tip after this comment adds only task metadata)
+Resolved findings: integration eject in comment #4 (E0761 module collision + duplicated INPUT_DIM) — resolved by re-homing the accumulator into engine/src/nnue/accumulator.rs and borrowing the Network's feature-transformer weights instead of a second container. No REV-N-NN review findings were outstanding; review attempt #1 approved the code in isolation.
+Verification (on 329830e):
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (exit 0, no warnings)
+- cargo test --workspace: pass (chess 49, engine 325 / 2 ignored incl. 5 nnue::accumulator tests, lichess 68, build_metadata 19, doctest 1; 0 failed)
+- Trial integration confirmed: engine builds and the whole tree compiles with nnue as a single directory module (the E0761 that caused the eject no longer reproduces).
+Known failures: none
 ---
 <!-- COMMENTS:END -->
