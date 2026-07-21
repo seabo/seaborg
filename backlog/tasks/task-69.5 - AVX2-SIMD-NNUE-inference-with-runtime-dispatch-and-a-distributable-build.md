@@ -1,11 +1,11 @@
 ---
 id: TASK-69.5
 title: AVX2 SIMD NNUE inference with runtime dispatch and a distributable build
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:40'
-updated_date: '2026-07-21 03:54'
+updated_date: '2026-07-21 04:15'
 labels:
   - nnue
   - inference
