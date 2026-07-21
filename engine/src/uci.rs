@@ -1,4 +1,6 @@
-use super::options::{EngineConfig, EngineOpt};
+use std::path::PathBuf;
+
+use super::options::{EngineConfig, EngineOpt, EMPTY_STRING_OPTION};
 use super::time::{TimeControl, TimingMode};
 
 /// A UCI message sent by the GUI to the engine.
@@ -424,8 +426,28 @@ impl<'a> Parser<'a> {
 
         match self.parse_string()? {
             "Hash" => self.parse_hash(),
+            "EvalFile" => self.parse_eval_file(),
             _ => Err(Error::InvalidOption),
         }
+    }
+
+    /// Parse `setoption name EvalFile value <path>`.
+    ///
+    /// The value is a filesystem path taken verbatim as a single whitespace-free token; the UCI
+    /// `<empty>` sentinel selects no network, which the driver applies as clearing back to the
+    /// hand-crafted evaluation. The path is not opened here — the driver loads and validates the
+    /// file when it applies the option, so a missing or malformed network surfaces there with a
+    /// diagnostic rather than as a parse error.
+    fn parse_eval_file(&mut self) -> PResult {
+        self.expect_kw(Keyword::Value)?;
+
+        let value = self.parse_string()?;
+        let option = if value == EMPTY_STRING_OPTION {
+            EngineOpt::EvalFile(None)
+        } else {
+            EngineOpt::EvalFile(Some(PathBuf::from(value)))
+        };
+        self.expect_end(Ok(Command::SetOption(option)))
     }
 
     fn parse_hash(&mut self) -> PResult {
@@ -612,6 +634,32 @@ mod tests {
             Parser::parse("ucinewgame"),
             Ok(Command::UciNewGame)
         ));
+    }
+
+    #[test]
+    fn parses_eval_file_path_and_the_empty_sentinel() {
+        // A path value selects that network file; the driver, not the parser, opens it.
+        match Parser::parse("setoption name EvalFile value networks/gen-001.sbnn") {
+            Ok(Command::SetOption(EngineOpt::EvalFile(Some(path)))) => {
+                assert_eq!(path, PathBuf::from("networks/gen-001.sbnn"));
+            }
+            other => panic!("expected an EvalFile path, got {other:?}"),
+        }
+
+        // The UCI `<empty>` sentinel clears the selection back to the hand-crafted evaluation.
+        assert!(matches!(
+            Parser::parse("setoption name EvalFile value <empty>"),
+            Ok(Command::SetOption(EngineOpt::EvalFile(None)))
+        ));
+    }
+
+    #[test]
+    fn eval_file_requires_a_value() {
+        // `value` with nothing after it is not a way to clear the option; `<empty>` is.
+        assert!(Parser::parse("setoption name EvalFile").is_err());
+        assert!(Parser::parse("setoption name EvalFile value").is_err());
+        // A multi-token (whitespace-containing) path is rejected rather than silently truncated.
+        assert!(Parser::parse("setoption name EvalFile value some net.sbnn").is_err());
     }
 
     #[test]

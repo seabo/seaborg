@@ -8,9 +8,11 @@
 //! behaviour, which is what validates the training-cost estimates.
 
 use std::fs::File;
-use std::io::{self, BufWriter};
+use std::io::{self, BufReader, BufWriter};
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use engine::nnue::Network;
 use engine::selfplay::filter::PositionFilter;
 use engine::selfplay::format::SampleWriter;
 use engine::selfplay::openings::OpeningConfig;
@@ -83,6 +85,13 @@ pub struct DatagenArgs {
     /// Drop the first this-many plies of each game as near-book
     #[clap(long, default_value_t = 0)]
     filter_opening_plies: usize,
+
+    /// Evaluate self-play with this `SBNN` network instead of the hand-crafted
+    /// evaluation. Unset is the reinforcement loop's generation-0 bootstrap, and
+    /// each later generation passes the previous generation's promoted network so
+    /// the games are labelled by the engine playing with it.
+    #[clap(long)]
+    network: Option<PathBuf>,
 }
 
 /// Running counts over the games of a run, so the summary can show the result
@@ -133,6 +142,20 @@ pub fn datagen(args: &DatagenArgs) {
         seed: args.opening_seed.unwrap_or(default_opening.seed),
     };
 
+    // Load the evaluator network before any games run so a bad path or malformed file fails the
+    // whole run up front rather than after generating samples. Absent means generation-0 bootstrap:
+    // the engine plays with its hand-crafted evaluation.
+    let network = match args.network.as_ref() {
+        Some(path) => match load_network(path) {
+            Ok(network) => Some(Arc::new(network)),
+            Err(e) => {
+                eprintln!("Could not load network {}: {e}", path.display());
+                return;
+            }
+        },
+        None => None,
+    };
+
     let config = SelfPlayConfig {
         node_budget: args.nodes,
         workers,
@@ -147,6 +170,7 @@ pub fn datagen(args: &DatagenArgs) {
             draw_min_ply: args.draw_min_ply,
         },
         opening,
+        network,
     };
 
     let filter = PositionFilter {
@@ -168,8 +192,14 @@ pub fn datagen(args: &DatagenArgs) {
     };
 
     println!(
-        "Self-play: {} games, {} workers, {} nodes/move",
-        config.games, config.workers, config.node_budget
+        "Self-play: {} games, {} workers, {} nodes/move, evaluator: {}",
+        config.games,
+        config.workers,
+        config.node_budget,
+        match args.network.as_ref() {
+            Some(path) => path.display().to_string(),
+            None => "hand-crafted".to_string(),
+        }
     );
 
     let mut tally = Tally::default();
@@ -248,4 +278,14 @@ pub fn datagen(args: &DatagenArgs) {
 fn open_writer(path: &PathBuf) -> io::Result<SampleWriter<BufWriter<File>>> {
     let file = File::create(path)?;
     SampleWriter::new(BufWriter::new(file))
+}
+
+/// Load and validate an `SBNN` network file for the self-play evaluator.
+///
+/// Buffered because the loader reads the header and parameter blob in many small reads. A
+/// filesystem failure and a rejected file are surfaced as one error so the caller can report either
+/// cause identically.
+fn load_network(path: &PathBuf) -> Result<Network, Box<dyn std::error::Error>> {
+    let mut reader = BufReader::new(File::open(path)?);
+    Ok(Network::read(&mut reader)?)
 }

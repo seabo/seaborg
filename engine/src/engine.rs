@@ -1,4 +1,5 @@
 use super::info::{format_search_event, format_search_outcome};
+use super::nnue::Network;
 use super::options::{advertised_uci_options, EngineConfig, EngineOpt};
 use super::search::{SearchEngine, SearchEvent, SearchHandle, SearchLimit};
 use super::time::{self, TimingMode};
@@ -7,7 +8,10 @@ use chess::position::Position;
 
 use crossbeam_channel::{select, unbounded, Receiver};
 
+use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Write};
+use std::path::Path;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -160,6 +164,41 @@ where
                 // Debug is a mode flag rather than a resource: it allocates nothing and must not
                 // disturb a running search, so it is recorded without a quiescent boundary.
                 EngineOpt::DebugMode(on) => config.set_debug(on),
+                // Selecting a network changes what every subsequent leaf evaluates to. A running
+                // search keeps the handle it started with, but the change is applied at a quiescent
+                // boundary anyway — stopping first — so the switch is unambiguous and the loaded
+                // weights never race a worker mid-search. A file that will not load leaves the
+                // current selection untouched and reports the reason, exactly as a rejected hash
+                // does.
+                EngineOpt::EvalFile(path) => {
+                    if let Some(search) = active_search.take() {
+                        stop_search(search, &mut output);
+                    }
+                    // The transposition table caches each position's static evaluation, which is a
+                    // property of the evaluation function, not the position. Swapping evaluators
+                    // therefore invalidates those cached values, so a successful change clears the
+                    // hash — as `ucinewgame` does — before the next search can read a stale eval. A
+                    // file that fails to load changes nothing and leaves the hash intact.
+                    match path {
+                        None => {
+                            search_engine.set_network(None);
+                            search_engine.new_game();
+                        }
+                        Some(path) => match load_network(&path) {
+                            Ok(network) => {
+                                search_engine.set_network(Some(Arc::new(network)));
+                                search_engine.new_game();
+                            }
+                            Err(err) => {
+                                let _ = writeln!(
+                                    errors,
+                                    "error: could not load EvalFile {}: {err}",
+                                    path.display()
+                                );
+                            }
+                        },
+                    }
+                }
             },
             DriverEvent::Input(Ok(Input::Command(Command::Go(timing)))) => {
                 if let Some(search) = active_search.take() {
@@ -201,6 +240,16 @@ where
             }
         }
     }
+}
+
+/// Load and validate an `SBNN` network file for the `EvalFile` option.
+///
+/// Buffered because the loader reads the header and parameter blob in many small reads. Both a
+/// filesystem failure and a rejected file are surfaced as one error so the driver can report either
+/// cause without inspecting which happened.
+fn load_network(path: &Path) -> Result<Network, Box<dyn std::error::Error>> {
+    let mut reader = BufReader::new(File::open(path)?);
+    Ok(Network::read(&mut reader)?)
 }
 
 fn read_commands<R: BufRead>(mut input: R, sender: crossbeam_channel::Sender<Input>) {
@@ -549,6 +598,35 @@ mod tests {
     }
 
     #[test]
+    fn eval_file_option_loads_a_valid_network_and_keeps_searching() {
+        // The committed golden network is a valid SBNN file. Selecting it must be accepted silently
+        // (no diagnostics beyond the banner) and leave the engine able to search and report a move,
+        // proving the load reached the search path rather than merely being parsed. The path is
+        // relative to the package directory, the working directory of a cargo test binary.
+        let (output, errors) = run_script(
+            "setoption name EvalFile value tests/fixtures/golden_v1.sbnn\n\
+             go depth 4\nisready\nquit\n",
+        );
+        assert!(output.contains("bestmove "));
+        assert!(output.contains("readyok"));
+        assert_eq!(diagnostics_after_banner(&errors), "");
+    }
+
+    #[test]
+    fn eval_file_load_failure_is_reported_without_stopping_the_engine() {
+        // A path that does not resolve to a loadable network reports the reason on the diagnostic
+        // channel and changes nothing: the engine stays on its previous evaluation and keeps
+        // running, so a later `isready` still answers and a search still returns a move.
+        let (output, errors) = run_script(
+            "setoption name EvalFile value does/not/exist.sbnn\n\
+             go depth 2\nisready\nquit\n",
+        );
+        assert!(output.contains("bestmove "));
+        assert!(output.contains("readyok"));
+        assert!(diagnostics_after_banner(&errors).contains("could not load EvalFile"));
+    }
+
+    #[test]
     fn config_command_reflects_the_authoritative_configuration() {
         // The `config` command reads the one owner of the runtime settings, so it must show the
         // defaults first and then the values a `setoption`/`debug` sequence applied — evidence that
@@ -584,6 +662,7 @@ mod tests {
             "id name seaborg 9.9.9\n\
              id author George Seabridge\n\
              option name Hash type spin default 16 min 1 max 1024\n\
+             option name EvalFile type string default <empty>\n\
              uciok\n"
         );
         assert_eq!(diagnostics_after_banner(&errors), "");

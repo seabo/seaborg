@@ -7,6 +7,7 @@
 //! reason the settings live here rather than as ad hoc locals in the driver.
 
 use std::fmt;
+use std::path::PathBuf;
 
 /// A requested configuration value fell outside the bounds the engine advertises for it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -165,14 +166,25 @@ impl fmt::Display for EngineConfig {
 /// deliberately absent: the search runs a single worker, and advertising a worker count would
 /// promise Lazy SMP parallelism the engine does not yet provide. It joins this list when a real
 /// multi-worker search consumes [`EngineConfig::threads`].
+///
+/// `EvalFile` is a string option naming an `SBNN` network file to evaluate with; its `<empty>`
+/// default is the UCI convention for an empty string, and selecting it leaves the engine on its
+/// hand-crafted evaluation. A GUI or the strength harness points the engine at a specific network
+/// by setting this per engine.
 pub fn advertised_uci_options() -> String {
     format!(
-        "option name Hash type spin default {} min {} max {}",
+        "option name Hash type spin default {} min {} max {}\n\
+         option name EvalFile type string default <empty>",
         EngineConfig::HASH_DEFAULT_MB,
         EngineConfig::HASH_MIN_MB,
         EngineConfig::HASH_MAX_MB,
     )
 }
+
+/// The UCI sentinel a GUI sends, and this engine renders as its default, for an empty string
+/// option value. Receiving it for `EvalFile` clears any selected network back to the hand-crafted
+/// evaluation, matching the advertised `default <empty>`.
+pub const EMPTY_STRING_OPTION: &str = "<empty>";
 
 /// Possible options which can be set via the UCI protocol.
 #[derive(Clone, Debug)]
@@ -181,6 +193,12 @@ pub enum EngineOpt {
     Hash(usize),
     /// Whether debug mode is turned on.
     DebugMode(bool),
+    /// The `SBNN` network file to evaluate with, or `None` to use the hand-crafted evaluation.
+    ///
+    /// `None` carries the advertised `<empty>` default: an operator clears a previously loaded
+    /// network by setting `EvalFile` to the empty value. The driver loads and validates the file
+    /// when it applies this option, so a bad path fails there rather than at parse time.
+    EvalFile(Option<PathBuf>),
 }
 
 #[cfg(test)]
@@ -204,12 +222,15 @@ mod tests {
         assert_eq!(
             advert,
             format!(
-                "option name Hash type spin default {} min {} max {}",
+                "option name Hash type spin default {} min {} max {}\n\
+                 option name EvalFile type string default <empty>",
                 EngineConfig::HASH_DEFAULT_MB,
                 EngineConfig::HASH_MIN_MB,
                 EngineConfig::HASH_MAX_MB,
             )
         );
+        // EvalFile is a string option whose empty default keeps the hand-crafted evaluation.
+        assert!(advert.contains("option name EvalFile type string default <empty>"));
         // The advertised bounds are exactly the acceptance boundaries: just inside is valid, just
         // outside is not.
         assert!(EngineConfig::validate_hash_mb(EngineConfig::HASH_MIN_MB).is_ok());
