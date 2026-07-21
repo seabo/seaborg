@@ -10,7 +10,6 @@ python3 tools/strength/strength_test.py \
   --candidate /absolute/builds/seaborg-candidate \
   --candidate-id 'git:CANDIDATE_SHA target-cpu=native release locked' \
   --build-settings 'cargo build --release; rustc ...; target-cpu=native' \
-  --engine-arg=-u \
   --output artifacts/strength-BASE_SHA-CANDIDATE_SHA
 ```
 
@@ -26,8 +25,11 @@ evidence, but this first version deliberately reruns rather than statistically
 resuming an interrupted SPRT.
 
 `--engine-arg` passes a command-line flag identically to both engine
-executables; seaborg needs `--engine-arg=-u` to enter UCI mode. Use the
-`=`-prefixed form for dash arguments so they are not mistaken for options.
+executables. seaborg needs no argument: it runs in UCI mode by default when
+invoked with no subcommand, which is how the tool launches it. (Passing the old
+`-u` flag now fails, because the current CLI has no such flag and rejects the
+unknown argument at startup.) Use the `=`-prefixed form for any dash arguments a
+future engine does need, so they are not mistaken for options.
 
 ## Installing FastChess
 

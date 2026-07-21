@@ -125,9 +125,10 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--engine-arg", action="append", default=[],
                    metavar="ARG",
                    help="command-line argument passed identically to both "
-                        "engine executables; repeatable. Use =-prefixed form "
-                        "for dash arguments, e.g. --engine-arg=-u for seaborg "
-                        "UCI mode")
+                        "engine executables; repeatable. seaborg needs none "
+                        "(it runs UCI by default with no subcommand). Use the "
+                        "=-prefixed form for any dash argument, e.g. "
+                        "--engine-arg=-x, so it is not mistaken for an option")
     p.add_argument("--engine-option", action="append", default=[],
                    metavar="NAME=VALUE")
     p.add_argument("--preflight-timeout", type=positive, default=10)
