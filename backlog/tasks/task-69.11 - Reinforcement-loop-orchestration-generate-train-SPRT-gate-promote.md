@@ -1,11 +1,11 @@
 ---
 id: TASK-69.11
 title: 'Reinforcement loop orchestration: generate, train, SPRT-gate, promote'
-status: Changes Requested
+status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:42'
-updated_date: '2026-07-21 20:40'
+updated_date: '2026-07-21 20:44'
 labels:
   - nnue
   - training
