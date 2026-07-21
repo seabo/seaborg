@@ -1,11 +1,11 @@
 ---
 id: TASK-69.7
 title: 'Packed training-sample format, position filtering, and opening diversification'
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:41'
-updated_date: '2026-07-21 02:08'
+updated_date: '2026-07-21 02:36'
 labels:
   - nnue
   - datagen
