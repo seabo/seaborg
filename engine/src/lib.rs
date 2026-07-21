@@ -14,7 +14,7 @@
 //! - [`search`] — the search driver and its limits.
 //! - [`selfplay`] — self-play data generation for network training.
 //! - [`eval`] — static position evaluation.
-//! - [`nnue`] — the NNUE network file format and its loader.
+//! - [`nnue`] — the NNUE network file format, its loader, and the incremental accumulator.
 //! - [`tt`] — the shared transposition table.
 //! - [`score`] — search score representation.
 //! - [`time`] — time-control models.
