@@ -109,15 +109,16 @@ class GateResult:
 
     ``verdict`` is the harness's SPRT decision; ``exit_code`` is its raw status
     (the source of the verdict). The measured strength delta — the point Elo and
-    its interval — is carried when the harness produced a report, and is absent
-    when it could not (for example an infrastructure error before any games).
+    its ± error margin — is carried when the harness produced a report, and is
+    absent when it could not (for example an infrastructure error before any
+    games).
     """
 
     verdict: str
     exit_code: int
     output_dir: Path
     elo: Optional[float] = None
-    elo_interval: Optional[list] = None
+    elo_interval: Optional[float] = None
     games_played: Optional[int] = None
 
     @property
@@ -350,9 +351,13 @@ def _gate_result_from_report(verdict: str, code: int, output_dir: Path) -> GateR
             report = json.loads(report_path.read_text())
         except (OSError, json.JSONDecodeError):
             report = {}
-        result = report.get("result", {}) if isinstance(report, dict) else {}
+        # The harness writes its parsed Result under "results" (strength_test.py:
+        # report.update({"results": asdict(result), ...})); the ± Elo margin is
+        # "elo_error", not an "elo_interval"/"elo_ci" pair. Reading the wrong keys
+        # silently drops the measured delta the ledger exists to record.
+        result = report.get("results", {}) if isinstance(report, dict) else {}
         elo = result.get("elo")
-        interval = result.get("elo_interval") or result.get("elo_ci")
+        interval = result.get("elo_error")
         games = result.get("games")
     return GateResult(
         verdict=verdict,

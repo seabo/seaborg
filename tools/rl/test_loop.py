@@ -7,6 +7,7 @@ the [`loop.Backend`] seam precisely so this coverage needs none of them.
 """
 
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -57,7 +58,7 @@ class FakeBackend(rl.Backend):
             exit_code=exit_code,
             output_dir=output_dir,
             elo=3.5 if verdict == "PASS" else -4.0,
-            elo_interval=[0.2, 6.8],
+            elo_interval=6.8,
             games_played=200,
         )
 
@@ -200,6 +201,59 @@ class LoopTests(unittest.TestCase):
         # ledger entry, no best network.
         self.assertFalse((self.state / rl.LEDGER).exists())
         self.assertFalse((self.state / rl.BEST_NETWORK).exists())
+
+
+class GateReportParsingTests(unittest.TestCase):
+    """Pin the contract between the strength harness's report.json and the loop.
+
+    The FakeBackend builds a [`GateResult`] directly, so it never exercises
+    ``_gate_result_from_report`` — the code that reads a real harness report.
+    These tests drive that reader against a report shaped exactly as
+    ``strength_test.py`` writes one, so a key rename on either side is caught
+    here rather than silently zeroing the ledger's measured delta.
+    """
+
+    def _harness_report(self, **overrides) -> dict:
+        """A report.json exactly as ``strength_test.py`` emits it.
+
+        Built from the harness's own ``Result`` dataclass so this test tracks
+        the producer: the results block is ``asdict(Result)`` under the key the
+        harness actually uses, not a hand-copied guess that can drift.
+        """
+        strength_dir = Path(__file__).resolve().parents[1] / "strength"
+        sys.path.insert(0, str(strength_dir))
+        try:
+            import strength_test
+        finally:
+            sys.path.remove(str(strength_dir))
+        result = strength_test.Result(
+            games=240, wins=90, draws=100, losses=50,
+            llr=2.9, lower_bound=-2.94, upper_bound=2.94,
+            elo=12.3, elo_error=8.1,
+        )
+        report = {"results": strength_test.asdict(result), "verdict": "PASS"}
+        report.update(overrides)
+        return report
+
+    def test_reads_measured_delta_from_a_real_harness_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            (output / "report.json").write_text(json.dumps(self._harness_report()))
+            gate = rl._gate_result_from_report("PASS", 0, output)
+        self.assertEqual(gate.verdict, "PASS")
+        self.assertEqual(gate.elo, 12.3)
+        self.assertEqual(gate.elo_interval, 8.1)
+        self.assertEqual(gate.games_played, 240)
+
+    def test_absent_report_preserves_verdict_without_a_delta(self):
+        # The harness can exit before writing a report (infrastructure error);
+        # the exit-code verdict still stands, only the delta is unavailable.
+        with tempfile.TemporaryDirectory() as tmp:
+            gate = rl._gate_result_from_report("INFRASTRUCTURE_ERROR", 3, Path(tmp))
+        self.assertEqual(gate.verdict, "INFRASTRUCTURE_ERROR")
+        self.assertIsNone(gate.elo)
+        self.assertIsNone(gate.elo_interval)
+        self.assertIsNone(gate.games_played)
 
 
 if __name__ == "__main__":
