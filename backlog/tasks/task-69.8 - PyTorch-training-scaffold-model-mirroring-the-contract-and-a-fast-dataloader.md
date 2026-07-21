@@ -1,11 +1,11 @@
 ---
 id: TASK-69.8
 title: 'PyTorch training scaffold: model mirroring the contract and a fast dataloader'
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:41'
-updated_date: '2026-07-21 03:09'
+updated_date: '2026-07-21 03:21'
 labels:
   - nnue
   - training
@@ -43,3 +43,42 @@ This task delivers a training run that consumes generated data and produces an f
 5. Generate a small real self-play dataset with the engine datagen CLI; run a training run that shows loss converging on train and val; record the throughput figure and losses in the README.
 6. Tests: decode correctness against hand-computed feature indices for known positions and against engine-generated records; model shape/parameterization; target formula. Run cargo fmt/clippy/test (no Rust source changed, guard against regressions) and the Python tests; write the review handoff.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented tools/trainer, the Python/PyTorch training project (sibling of tools/strength), covering the float side of the NNUE design contract. No Rust source was changed.
+
+model.py — NnueModel mirrors the contract topology: a shared feature transformer 768->H per perspective as an nn.EmbeddingBag whose weight is [input_dim, H], exactly the feature-major on-disk W_ft order (so quantized export serialises it untransposed); a separate ft_bias; concat(acc[stm], acc[nstm]) side-to-move first; clipped ReLU; a 2H->1 linear output emitting fout in SCALE-normalised units (fout == eval_cp/SCALE). NnueConfig carries the contract's parameterizable dimensions (hidden H, activation crelu/screlu, scale, qa, qb) and applies the loader's validation rules (H a positive multiple of 16, output_dim 1, feature_set_id 0 => input_dim 768, positive scales). FT weights init small so the accumulator starts inside the CReLU active band.
+
+data.py — the fast dataloader over the SBRG packed format (8-byte header + 32-byte records). It memory-maps the file and decodes a whole batch at once with vectorised NumPy: unpack occupancy bits and piece nibbles, scatter nibbles to occupied squares via a cumsum of occupancy, compute per-perspective feature indices with the contract formula (oriented + 64*pt0 + 384*side), then flatten under the occupancy mask into the (indices, offsets) form EmbeddingBag consumes. stm/nstm share one offsets array because they cover the same active squares. No per-sample Python loop. Score (raw i16, mate band preserved) and wdl are passed through untouched; the trainer owns the target formulation.
+
+train.py — the blended win-probability target y = lambda*r + (1-lambda)*sigmoid(search_cp/SCALE) with p = sigmoid(fout), MSE loss; a train/val split reporting both losses per epoch; fp32 checkpoint writing (config + float state_dict + loss history); and a --benchmark mode measuring decode throughput.
+
+testsupport.py + test_data.py + test_model.py — stdlib unittest (no pytest dep, matching the strength harness). An independent reference encoder builds records so tests are hermetic and do not require the engine to be built. Feature indices are checked against hand-computed values from the contract formula; perspective selection, target blend, stream-header rejection, and the architectural mirror invariance (a position and its colour/board mirror evaluate identically from the side to move) are all covered; a short run is asserted to converge.
+
+Verified end to end against real engine data: seaborg datagen produced 216,233 filtered self-play samples; the loader benchmarked at ~561,000 samples/sec (decode only, batch 16,384) versus ~197,000 samples/sec for the full CPU training step, so the loader has ~2.8x headroom over a CPU trainer and more over a GPU. A 25-epoch run converged monotonically (train 0.0462 -> 0.0016, val 0.0309 -> 0.0040) to a 197,377-parameter fp32 checkpoint whose weight shapes match the contract (feature_transformer.weight [768,256], output.weight [1,512]). Figures recorded in tools/trainer/README.md. The .venv and generated *.bin/*.pt artifacts are gitignored.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @claude
+created: 2026-07-21 03:21
+---
+Implementation handoff
+Branch: task-69.8-pytorch-training-scaffold
+Worktree: /Users/seabo/seaborg-worktrees/task-69.8-pytorch-training-scaffold
+Base: 05880a59a02a47f388fafad164e482fb764c7ccc
+Implementation target: 5bcc8889e7f2dd1a2ca1b31601a0bff317167b71
+Resolved findings: none
+Verification:
+- cargo fmt --check: pass (clean)
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean)
+- cargo test --workspace: pass (540 tests: 49+373+98+19+1; 2 ignored; 0 failed)
+- python -m unittest discover (tools/trainer, torch 2.13/numpy 2.5, Python 3.14 venv): pass (22 tests)
+- Real-data run: seaborg datagen -> 216,233 samples; loader ~561k samples/sec decode vs ~197k/sec full CPU step; 25-epoch training converged train 0.0462->0.0016, val 0.0309->0.0040; fp32 checkpoint (197,377 params) written
+Known failures: none
+Notes for the reviewer: no Rust source changed (only tools/trainer added), so the Rust checks guard against regressions rather than exercise new code. The Python suite requires the venv deps (torch, numpy) per tools/trainer/requirements.txt; create tools/trainer/.venv and pip install -r requirements.txt to run them. The generated dataset, checkpoint, and venv are gitignored and not committed.
+---
+<!-- COMMENTS:END -->
