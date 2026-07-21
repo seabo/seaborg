@@ -3,9 +3,11 @@ id: TASK-74.3
 title: >-
   Decouple Lichess event-stream ingestion from blocking HTTP so a 429 cannot
   stall challenge handling
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-21 03:55'
+updated_date: '2026-07-21 05:21'
 labels:
   - lichess
   - conformance
@@ -34,3 +36,13 @@ Fix (seaborg-idiomatic, std threads): read the event stream on its own thread th
 - [ ] #4 No duplicate game workers on gameStart replay; existing active-set dedup still holds
 - [ ] #5 cargo fmt --check, cargo clippy -D warnings, and cargo test --workspace all pass
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Rework onto pinned master 274cef3 (already contains TASK-74.1 from_self filter + replay harness in event.rs/policy.rs/run.rs).
+2. Re-apply the approved three-thread decoupling of run.rs: a reader thread that only decodes event-stream lines onto an mpsc channel; a consumer thread that handles decoded events (accept/decline, game lifecycle); and, when enabled, a matchmaking thread. Matchmaker moves behind Arc<Mutex>, locked only for brief state updates never across HTTP.
+3. Integrate the from_self filter into the new design: thread bot_id into run_event_consumer + handle_event and re-add the drop-before-policy `challenge.is_from_self(bot_id)` guard.
+4. Preserve TASK-74.1 replay-harness tests (self-echo ignored, incoming accepted/declined) adapted to drive handle_event, plus the new concurrency test proving an incoming challenge is accepted while a matchmaking call is blocked, and prompt shutdown.
+5. Run cargo fmt --check, clippy -D warnings, cargo test --workspace; hand off for review.
+<!-- SECTION:PLAN:END -->

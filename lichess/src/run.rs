@@ -3,6 +3,7 @@
 
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -23,6 +24,17 @@ use crate::transport::{HttpTransport, Transport};
 /// fetched on each attempt.
 const ONLINE_BOTS_LIMIT: u32 = 50;
 
+/// How often the matchmaking thread wakes to consider seeking a game. The
+/// [`Matchmaker`] gates the actual cadence (idle timeout, minimum interval), so
+/// this only needs to be short enough that a due challenge is issued promptly
+/// once the bot goes idle; it is not the challenge rate itself.
+const MATCHMAKING_POLL: Duration = Duration::from_secs(1);
+
+/// How long the event consumer waits for the next event before looping to
+/// re-check the shutdown flag. Short enough that a shutdown request is honored
+/// promptly on an otherwise-quiet stream, long enough not to busy-wait.
+const CONSUMER_POLL: Duration = Duration::from_millis(200);
+
 /// Read the bot token from the environment, failing fast when it is absent.
 ///
 /// A whitespace-only value is treated as absent so a blank export does not sail
@@ -36,6 +48,15 @@ pub fn load_token() -> Result<String> {
 
 /// Connect to Lichess and run the challenge-handling event loop, playing each
 /// accepted game in its own worker thread until Ctrl-C is pressed.
+///
+/// Ingestion is decoupled from outbound HTTP: the account event stream is read on
+/// its own thread that only decodes lines onto a channel, a consumer thread
+/// handles the decoded events (accept/decline and game lifecycle), and — when
+/// enabled — matchmaking runs on a third thread. This keeps a rate-limit backoff
+/// on an outgoing call (a challenge-create or bot-list `429` can pause a thread
+/// for minutes) from stalling the reading of, and reaction to, an incoming
+/// challenge; on the single-threaded design that backoff blocked the stream and
+/// hung the challenger's UI.
 ///
 /// The event stream and per-game streams drop routinely; both reconnect with
 /// exponential backoff rather than ending the bot. On Ctrl-C the bot stops
@@ -57,18 +78,25 @@ pub fn run(config_path: Option<&Path>) -> Result<()> {
     let account = require_bot_account(&client)?;
     log::info!("connected to Lichess as bot {}", account.username);
     // Lichess reports each game's players by their lowercase account id, which
-    // is what identifies the bot's own side once a game starts.
+    // is what identifies the bot's own side once a game starts, and which the
+    // account stream echoes as the challenger on the bot's own outgoing
+    // challenges so the consumer can drop them.
     let bot_id = account.id;
 
     // Proactive matchmaking. Disabled by default, in which case the loop is
     // purely reactive; enabling it lets the bot challenge other bots when idle.
-    let mut matchmaker = Matchmaker::new(
+    // The matchmaker is shared with the event consumer (which records game
+    // starts and declines) and, when enabled, the matchmaking thread, so it lives
+    // behind a mutex; each holder locks it only for brief state updates, never
+    // across an HTTP call.
+    let matchmaker = Arc::new(Mutex::new(Matchmaker::new(
         config.matchmaking.clone(),
         config.max_concurrent_games,
         bot_id.clone(),
         Instant::now(),
-    );
-    if matchmaker.is_enabled() {
+    )));
+    let matchmaking_enabled = matchmaker.lock().unwrap().is_enabled();
+    if matchmaking_enabled {
         log::info!("matchmaking enabled: will challenge idle bots");
     }
 
@@ -104,25 +132,92 @@ pub fn run(config_path: Option<&Path>) -> Result<()> {
         })
     };
 
-    let result = run_event_loop(
+    // A non-recoverable error raised by a background thread (the reader or the
+    // matchmaker) is stored here and surfaced after everything winds down, so a
+    // rejected token still ends the bot with an error rather than being lost to
+    // the thread that hit it.
+    let fatal: Arc<Mutex<Option<Error>>> = Arc::new(Mutex::new(None));
+
+    // The event stream is read on its own thread that only decodes lines onto
+    // this channel; because that thread makes no accept/decline/matchmaking
+    // request, an outbound-call rate-limit backoff can never stall the reading of
+    // an already-delivered event.
+    let (events_tx, events_rx) = mpsc::channel::<Event>();
+
+    let reader = {
+        let client = Arc::clone(&client);
+        let shutdown = shutdown.clone();
+        let fatal = Arc::clone(&fatal);
+        std::thread::spawn(move || {
+            let result = run_event_reader(
+                &client,
+                &shutdown,
+                |event| events_tx.send(event).is_ok(),
+                |wait| shutdown.sleep(wait),
+            );
+            if let Err(error) = result {
+                log::error!("event stream reader stopped: {error}");
+                *fatal.lock().unwrap() = Some(error);
+                shutdown.request();
+            }
+        })
+    };
+
+    // Matchmaking runs on its own thread so a rate-limit backoff on an outgoing
+    // challenge cannot delay handling of an incoming one. It is spawned only when
+    // matchmaking is enabled; the reactive-only path runs no such thread.
+    let matchmaker_thread = if matchmaking_enabled {
+        let client = Arc::clone(&client);
+        let active = active.clone();
+        let matchmaker = Arc::clone(&matchmaker);
+        let shutdown = shutdown.clone();
+        let fatal = Arc::clone(&fatal);
+        Some(std::thread::spawn(move || {
+            let result = run_matchmaking(&client, &active, &matchmaker, &shutdown, |wait| {
+                shutdown.sleep(wait)
+            });
+            if let Err(error) = result {
+                log::error!("matchmaking stopped: {error}");
+                *fatal.lock().unwrap() = Some(error);
+                shutdown.request();
+            }
+        }))
+    } else {
+        None
+    };
+
+    // This thread consumes decoded events and handles them (accept/decline and
+    // game-lifecycle tracking), spawning a worker per accepted game.
+    let consumed = run_event_consumer(
         &client,
         &config,
         &bot_id,
-        &shutdown,
         &active,
-        &mut matchmaker,
+        &matchmaker,
+        &shutdown,
+        events_rx,
         |game_id| workers.push(spawn_game(game_id)),
-        |wait| shutdown.sleep(wait),
     );
 
-    // However the loop ended, wind the workers down: request shutdown so any
-    // in-flight game resigns, then join every worker before returning so the
-    // process does not exit while a game is still connected.
+    // However the loop ended, wind everything down: request shutdown so any
+    // in-flight game resigns and the background threads leave their waits, then
+    // join every thread before returning so the process does not exit while a
+    // connection is still open.
     shutdown.request();
+    let _ = reader.join();
+    if let Some(handle) = matchmaker_thread {
+        let _ = handle.join();
+    }
     for worker in workers {
         let _ = worker.join();
     }
-    result
+
+    // Prefer a consumer-side error; otherwise surface any fatal a background
+    // thread recorded. A clean shutdown leaves both empty.
+    consumed.and_then(|()| match fatal.lock().unwrap().take() {
+        Some(error) => Err(error),
+        None => Ok(()),
+    })
 }
 
 /// Confirm the authenticated account is a BOT account, returning it.
@@ -202,11 +297,12 @@ where
 
 /// The set of games that currently have a live worker.
 ///
-/// Shared between the event loop — which records a game when it starts and reads
-/// the count for the concurrency cap — and each game worker, which removes its
-/// own game when it exits. Worker-driven removal keeps the cap correct even if a
-/// `gameFinish` event is missed while the event stream is disconnected, which the
-/// event-driven count alone could not guarantee.
+/// Shared between the event consumer — which records a game when it starts and
+/// reads the count for the concurrency cap — the matchmaking thread — which reads
+/// the count to know whether a slot is free — and each game worker, which removes
+/// its own game when it exits. Worker-driven removal keeps the cap correct even
+/// if a `gameFinish` event is missed while the event stream is disconnected,
+/// which the event-driven count alone could not guarantee.
 #[derive(Clone, Default)]
 pub struct ActiveGames(Arc<Mutex<HashSet<String>>>);
 
@@ -235,38 +331,28 @@ impl ActiveGames {
     }
 }
 
-/// Read the account event stream and act on each event, reconnecting with
-/// exponential backoff when the stream drops.
+/// Read the account event stream and forward each decoded event, reconnecting
+/// with exponential backoff when the stream drops.
 ///
-/// `bot_id` is the authenticated account's own id, used to ignore the bot's own
-/// outgoing challenges echoed back on the stream. `start_game` is invoked with a
-/// game's id the first time that game starts, to begin playing it. `active` tracks
-/// the games with live workers; it gates the concurrency cap and survives
-/// reconnects so a replayed `gameStart` never spawns a duplicate worker. `sleep`
-/// performs the reconnect wait (injected so tests can avoid real delays). The loop
-/// returns cleanly once shutdown is requested.
+/// This performs no accept/decline or matchmaking HTTP: it only decodes lines and
+/// hands each real event to `forward`, so an outbound-call rate-limit backoff
+/// running elsewhere cannot delay ingestion. `forward` returns `false` when the
+/// consumer has gone away, which ends the reader. Blank keepalive lines are
+/// consumed (giving the loop a chance to notice shutdown on a quiet stream) but
+/// not forwarded. `sleep` performs the reconnect wait, injected so tests can
+/// avoid real delays. Returns cleanly once shutdown is requested or the consumer
+/// stops; a non-recoverable error surfaces.
 ///
 /// Generic over the transport so it can be driven by recorded NDJSON in tests.
-// This is the top-level wiring seam: it takes the full set of collaborators the
-// loop drives (client, config, own identity, shutdown, active-game set,
-// matchmaker) plus two injected closures — `start_game` and `sleep` — that exist
-// so tests can substitute game spawning and the reconnect wait. The closures
-// cannot join a plain data struct, so the argument count is inherent here rather
-// than a sign of a missing abstraction.
-#[allow(clippy::too_many_arguments)]
-pub fn run_event_loop<T, S, P>(
+fn run_event_reader<T, F, P>(
     client: &LichessClient<T>,
-    config: &Config,
-    bot_id: &str,
     shutdown: &Shutdown,
-    active: &ActiveGames,
-    matchmaker: &mut Matchmaker,
-    mut start_game: S,
+    mut forward: F,
     mut sleep: P,
 ) -> Result<()>
 where
     T: Transport,
-    S: FnMut(&str),
+    F: FnMut(Event) -> bool,
     P: FnMut(Duration),
 {
     let mut backoff = Backoff::new(RECONNECT_BASE, RECONNECT_MAX);
@@ -274,16 +360,8 @@ where
         if shutdown.is_requested() {
             return Ok(());
         }
-        match run_event_stream_once(
-            client,
-            config,
-            bot_id,
-            shutdown,
-            active,
-            matchmaker,
-            &mut start_game,
-        )? {
-            StreamOutcome::Shutdown => return Ok(()),
+        match read_stream_once(client, shutdown, &mut forward)? {
+            StreamOutcome::Stop => return Ok(()),
             StreamOutcome::Disconnected { made_progress } => {
                 if shutdown.is_requested() {
                     return Ok(());
@@ -302,27 +380,24 @@ where
 
 /// Why a single event-stream connection stopped.
 enum StreamOutcome {
-    /// Shutdown was requested; the loop should end.
-    Shutdown,
+    /// Shutdown was requested, or the consumer stopped receiving; the reader
+    /// should end.
+    Stop,
     /// The connection ended without a fatal error. `made_progress` is whether any
     /// event arrived before it dropped.
     Disconnected { made_progress: bool },
 }
 
-/// Consume one event-stream connection until it drops, a fatal error occurs, or
-/// shutdown is requested.
-fn run_event_stream_once<T, S>(
+/// Consume one event-stream connection until it drops, a fatal error occurs, the
+/// consumer goes away, or shutdown is requested, forwarding each decoded event.
+fn read_stream_once<T, F>(
     client: &LichessClient<T>,
-    config: &Config,
-    bot_id: &str,
     shutdown: &Shutdown,
-    active: &ActiveGames,
-    matchmaker: &mut Matchmaker,
-    start_game: &mut S,
+    forward: &mut F,
 ) -> Result<StreamOutcome>
 where
     T: Transport,
-    S: FnMut(&str),
+    F: FnMut(Event) -> bool,
 {
     let stream = match client.event_stream() {
         Ok(stream) => stream,
@@ -337,52 +412,140 @@ where
     let mut made_progress = false;
     for item in stream {
         if shutdown.is_requested() {
-            return Ok(StreamOutcome::Shutdown);
+            return Ok(StreamOutcome::Stop);
         }
         match item {
             Ok(Some(event)) => {
                 made_progress = true;
-                handle_event(
-                    client, config, bot_id, active, matchmaker, start_game, event,
-                )?;
+                if !forward(event) {
+                    // The consumer has gone; there is no reason to keep reading.
+                    return Ok(StreamOutcome::Stop);
+                }
             }
-            // Keepalive line: no event to handle, but a regular chance to seek a
-            // matchmaking game and (via the check above) to notice shutdown.
+            // Keepalive line: nothing to forward, but the shutdown check at the
+            // top of the loop still runs each line so a quiet but live stream
+            // notices a shutdown request promptly.
             Ok(None) => {}
             Err(error) if error.is_recoverable() => {
                 return Ok(StreamOutcome::Disconnected { made_progress })
             }
             Err(error) => return Err(error),
         }
-        // Each event and each keepalive is a moment to consider seeking a game;
-        // when matchmaking is disabled this is a cheap no-op.
-        maybe_seek_matchmaking_game(client, active, matchmaker)?;
     }
     Ok(StreamOutcome::Disconnected { made_progress })
+}
+
+/// Receive decoded events and act on each until the reader closes the channel or
+/// shutdown is requested.
+///
+/// `bot_id` is the authenticated account's own id, used to ignore the bot's own
+/// outgoing challenges echoed back on the stream. `start_game` is invoked with a
+/// game's id the first time that game starts, to begin playing it. `active` tracks
+/// the games with live workers; it gates the concurrency cap and survives
+/// reconnects so a replayed `gameStart` never spawns a duplicate worker. The loop
+/// returns cleanly once shutdown is requested or the reader thread ends (closing
+/// the channel); a non-recoverable error surfaces.
+///
+/// Generic over the transport so it can be driven with a test double.
+// The consumer drives the full set of collaborators an event may touch (client,
+// config, own identity, active-game set, matchmaker, shutdown) plus the event
+// channel and an injected `start_game` closure that exists so tests can
+// substitute game spawning. The closure cannot join a plain data struct, so the
+// argument count is inherent here rather than a sign of a missing abstraction.
+#[allow(clippy::too_many_arguments)]
+fn run_event_consumer<T, S>(
+    client: &LichessClient<T>,
+    config: &Config,
+    bot_id: &str,
+    active: &ActiveGames,
+    matchmaker: &Mutex<Matchmaker>,
+    shutdown: &Shutdown,
+    events: Receiver<Event>,
+    mut start_game: S,
+) -> Result<()>
+where
+    T: Transport,
+    S: FnMut(&str),
+{
+    while !shutdown.is_requested() {
+        match events.recv_timeout(CONSUMER_POLL) {
+            Ok(event) => handle_event(
+                client,
+                config,
+                bot_id,
+                active,
+                matchmaker,
+                &mut start_game,
+                event,
+            )?,
+            // No event this interval: loop to re-check the shutdown flag.
+            Err(RecvTimeoutError::Timeout) => {}
+            // The reader thread has ended and closed the channel; nothing more
+            // will arrive, so stop.
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    Ok(())
+}
+
+/// Periodically seek a matchmaking game until shutdown.
+///
+/// Runs on its own thread so a rate-limit backoff incurred while listing bots or
+/// creating a challenge cannot delay the event consumer. `sleep` performs the
+/// inter-poll wait, injected so tests can drive it without real delays. A
+/// non-recoverable error surfaces; a transient one is logged inside the seek and
+/// swallowed.
+fn run_matchmaking<T, P>(
+    client: &LichessClient<T>,
+    active: &ActiveGames,
+    matchmaker: &Mutex<Matchmaker>,
+    shutdown: &Shutdown,
+    mut sleep: P,
+) -> Result<()>
+where
+    T: Transport,
+    P: FnMut(Duration),
+{
+    loop {
+        if shutdown.is_requested() {
+            return Ok(());
+        }
+        seek_matchmaking_game(client, active, matchmaker)?;
+        sleep(MATCHMAKING_POLL);
+    }
 }
 
 /// If matchmaking is due, fetch online bots, pick an eligible opponent, and issue
 /// a challenge.
 ///
 /// Does nothing unless matchmaking is enabled and the [`Matchmaker`] judges the
-/// bot idle enough to seek a game. A transient failure to list bots or issue the
+/// bot idle enough to seek a game. The matchmaker mutex is held only to decide
+/// and to record the outcome, never across the bot-list or challenge-create HTTP,
+/// so a rate-limit backoff on either call does not block the event consumer's
+/// brief matchmaker updates. A transient failure to list bots or issue the
 /// challenge is logged and swallowed so one bad request does not end the bot; a
 /// non-recoverable error still surfaces.
-fn maybe_seek_matchmaking_game<T: Transport>(
+fn seek_matchmaking_game<T: Transport>(
     client: &LichessClient<T>,
     active: &ActiveGames,
-    matchmaker: &mut Matchmaker,
+    matchmaker: &Mutex<Matchmaker>,
 ) -> Result<()> {
-    if !matchmaker.is_enabled() {
-        return Ok(());
-    }
     let now = Instant::now();
-    if matchmaker.choose(now, active.len() as u32) != Action::Seek {
-        return Ok(());
+    // Read the active count before locking the matchmaker so the two mutexes are
+    // never held at once.
+    let active_games = active.len() as u32;
+    {
+        let mut matchmaker = matchmaker.lock().unwrap();
+        if !matchmaker.is_enabled() {
+            return Ok(());
+        }
+        if matchmaker.choose(now, active_games) != Action::Seek {
+            return Ok(());
+        }
+        // Count this as an attempt up front so a failed lookup or an empty
+        // candidate list still waits out the minimum interval before retrying.
+        matchmaker.record_attempt(now);
     }
-    // Count this as an attempt up front so a failed lookup or an empty candidate
-    // list still waits out the minimum interval before retrying.
-    matchmaker.record_attempt(now);
 
     let bots = match client.online_bots(ONLINE_BOTS_LIMIT) {
         Ok(bots) => bots,
@@ -393,10 +556,14 @@ fn maybe_seek_matchmaking_game<T: Transport>(
         Err(error) => return Err(error),
     };
 
-    let spec = matchmaker.compose_spec();
-    let target = matchmaker
-        .select_opponent(&spec, &bots, now)
-        .map(|bot| bot.id.clone());
+    let (spec, target) = {
+        let mut matchmaker = matchmaker.lock().unwrap();
+        let spec = matchmaker.compose_spec();
+        let target = matchmaker
+            .select_opponent(&spec, &bots, now)
+            .map(|bot| bot.id.clone());
+        (spec, target)
+    };
     let Some(target) = target else {
         return Ok(());
     };
@@ -408,14 +575,17 @@ fn maybe_seek_matchmaking_game<T: Transport>(
         if spec.rated { "rated" } else { "casual" }
     );
     match client.create_challenge(&target, &spec) {
-        Ok(()) => matchmaker.record_issued(now),
+        Ok(()) => matchmaker.lock().unwrap().record_issued(now),
         Err(error) if error.is_recoverable() => {
             log::warn!("challenging bot {target}: {error}");
             // The challenge did not take (commonly a creation-time rejection).
             // Back off from this bot so the deterministic first-eligible selection
             // does not re-pick it every interval and wedge matchmaking on one
             // unreachable opponent.
-            matchmaker.record_challenge_failed(&target, now);
+            matchmaker
+                .lock()
+                .unwrap()
+                .record_challenge_failed(&target, now);
         }
         Err(error) => return Err(error),
     }
@@ -431,7 +601,7 @@ fn handle_event<T, S>(
     config: &Config,
     bot_id: &str,
     active: &ActiveGames,
-    matchmaker: &mut Matchmaker,
+    matchmaker: &Mutex<Matchmaker>,
     start_game: &mut S,
     event: Event,
 ) -> Result<()>
@@ -482,7 +652,10 @@ where
         Event::GameStart { game } => {
             // A game is starting, so any matchmaking challenge that was pending is
             // resolved (this may be that challenge being accepted).
-            matchmaker.record_game_started(Instant::now());
+            matchmaker
+                .lock()
+                .unwrap()
+                .record_game_started(Instant::now());
             if active.insert(&game.id) {
                 log::info!(
                     "game {} started ({}/{} active)",
@@ -507,7 +680,10 @@ where
             // from re-challenging that bot for the configured window.
             if let Some(dest) = challenge.dest_user {
                 log::info!("bot {} declined our challenge", dest.id);
-                matchmaker.record_declined(&dest.id, Instant::now());
+                matchmaker
+                    .lock()
+                    .unwrap()
+                    .record_declined(&dest.id, Instant::now());
             }
         }
         Event::Other => {}
@@ -532,6 +708,8 @@ fn tolerate_recoverable(result: Result<()>, context: impl FnOnce() -> String) ->
 mod tests {
     use std::cell::RefCell;
     use std::collections::VecDeque;
+    use std::sync::mpsc::Sender;
+    use std::sync::Condvar;
 
     use super::*;
     use crate::config::Config;
@@ -645,23 +823,44 @@ mod tests {
     // fixtures use it as the challenger, so it never falsely flags a real one.
     const SELF_ID: &str = "seaborg";
 
-    /// Drive one event-stream connection to its end, returning the game ids the
-    /// runner was asked to start. Used by the challenge-handling tests, which
-    /// assert on a single connection without the reconnect wrapper.
-    fn drive_one_connection(client: &LichessClient<FakeTransport>) -> Vec<String> {
+    /// Drive every event of a single recorded connection through [`handle_event`]
+    /// for a bot whose own id is `bot_id`, returning the game ids the runner was
+    /// asked to start. Matchmaking is disabled, so this isolates the
+    /// accept/decline and game-lifecycle handling the way the event consumer runs
+    /// it, minus the channel plumbing.
+    fn handle_one_stream(client: &LichessClient<FakeTransport>, bot_id: &str) -> Vec<String> {
         let active = ActiveGames::new();
+        let matchmaker = Mutex::new(Matchmaker::disabled());
         let mut started = Vec::new();
-        run_event_stream_once(
-            client,
-            &Config::default(),
-            SELF_ID,
-            &Shutdown::new(),
-            &active,
-            &mut Matchmaker::disabled(),
-            &mut |id: &str| started.push(id.to_string()),
-        )
-        .unwrap();
+        let stream = client.event_stream().unwrap();
+        for item in stream {
+            if let Some(event) = item.unwrap() {
+                handle_event(
+                    client,
+                    &Config::default(),
+                    bot_id,
+                    &active,
+                    &matchmaker,
+                    &mut |id: &str| started.push(id.to_string()),
+                    event,
+                )
+                .unwrap();
+            }
+        }
         started
+    }
+
+    /// Run the matchmaking seek `times` times against `client`, as the
+    /// matchmaking thread would across successive polls.
+    fn seek_times(
+        client: &LichessClient<FakeTransport>,
+        active: &ActiveGames,
+        matchmaker: &Mutex<Matchmaker>,
+        times: usize,
+    ) {
+        for _ in 0..times {
+            seek_matchmaking_game(client, active, matchmaker).unwrap();
+        }
     }
 
     /// One outbound challenge-API call the bot made, classified from a recorded
@@ -719,21 +918,28 @@ mod tests {
     /// Replay `lines` as one account-event connection for a bot whose own id is
     /// `bot_id`, under `config`, and report the outbound calls and final slot
     /// count. Matchmaking is disabled so the only outbound calls are reactions to
-    /// the replayed events themselves.
+    /// the replayed events themselves. Events are driven through [`handle_event`]
+    /// directly, the way the event consumer processes what the reader forwards.
     fn replay(bot_id: &str, config: &Config, lines: &[&str]) -> Replay {
         let stream = lines.join("\n");
         let client = LichessClient::new(FakeTransport::new("{}", &stream));
         let active = ActiveGames::new();
-        run_event_stream_once(
-            &client,
-            config,
-            bot_id,
-            &Shutdown::new(),
-            &active,
-            &mut Matchmaker::disabled(),
-            &mut |_id: &str| {},
-        )
-        .unwrap();
+        let matchmaker = Mutex::new(Matchmaker::disabled());
+        let events = client.event_stream().unwrap();
+        for item in events {
+            if let Some(event) = item.unwrap() {
+                handle_event(
+                    &client,
+                    config,
+                    bot_id,
+                    &active,
+                    &matchmaker,
+                    &mut |_id: &str| {},
+                    event,
+                )
+                .unwrap();
+            }
+        }
         let calls = client_transport(&client)
             .posts
             .borrow()
@@ -851,7 +1057,7 @@ mod tests {
     }
 
     #[test]
-    fn event_loop_accepts_and_declines_by_policy() {
+    fn handling_accepts_and_declines_by_policy() {
         // A blank keepalive, an acceptable challenge, an unhandled event type,
         // a declinable challenge, and a game lifecycle, all in one stream.
         let stream = format!(
@@ -859,7 +1065,7 @@ mod tests {
         );
         let transport = FakeTransport::new("{}", &stream);
         let client = LichessClient::new(transport);
-        let started = drive_one_connection(&client);
+        let started = handle_one_stream(&client, SELF_ID);
 
         // The one started game is handed to the runner.
         assert_eq!(started, vec!["g1".to_string()]);
@@ -878,7 +1084,7 @@ mod tests {
     }
 
     #[test]
-    fn event_loop_declines_when_at_game_cap() {
+    fn handling_declines_when_at_game_cap() {
         // One game already running fills the default single-game cap, so the
         // following challenge is declined even though the policy would allow it.
         let stream = format!(
@@ -886,7 +1092,7 @@ mod tests {
         );
         let transport = FakeTransport::new("{}", &stream);
         let client = LichessClient::new(transport);
-        let started = drive_one_connection(&client);
+        let started = handle_one_stream(&client, SELF_ID);
 
         // The game that filled the cap was still handed to the runner; only the
         // challenge that would have exceeded the cap is declined.
@@ -901,17 +1107,15 @@ mod tests {
     fn matchmaking_issues_a_challenge_to_an_eligible_idle_bot() {
         use crate::config::{MatchmakingConfig, MatchmakingMode};
 
-        // A stream of just keepalives: no incoming events, so the only thing that
-        // can happen is a matchmaking tick issuing an outgoing challenge.
-        let mut transport = FakeTransport::new("{}", "\n\n");
+        let mut transport = FakeTransport::new("{}", "");
         transport.bots_json =
             r#"{"id":"maia","title":"BOT","perfs":{"blitz":{"rating":1600}}}"#.to_string();
         let client = LichessClient::new(transport);
 
-        // Zero idle timeout so the very first keepalive is due to seek, but a long
-        // interval so the pending challenge from that first tick blocks the second
-        // keepalive's tick — exactly one challenge should be issued. The pools
-        // compose a 5+0 (blitz) casual challenge.
+        // Zero idle timeout so the very first seek is due, but a long interval so
+        // the pending challenge from that first seek blocks the second — exactly
+        // one challenge should be issued. The pools compose a 5+0 (blitz) casual
+        // challenge.
         let config = MatchmakingConfig {
             enabled: true,
             variants: vec!["standard".to_string()],
@@ -922,18 +1126,9 @@ mod tests {
             min_challenge_interval_seconds: 3600,
             ..MatchmakingConfig::default()
         };
-        let mut matchmaker = Matchmaker::new(config, 1, "me", Instant::now());
+        let matchmaker = Mutex::new(Matchmaker::new(config, 1, "me", Instant::now()));
         let active = ActiveGames::new();
-        run_event_stream_once(
-            &client,
-            &Config::default(),
-            SELF_ID,
-            &Shutdown::new(),
-            &active,
-            &mut matchmaker,
-            &mut |_id: &str| {},
-        )
-        .unwrap();
+        seek_times(&client, &active, &matchmaker, 2);
 
         // Exactly one challenge was issued, to the eligible bot. (A second was not
         // stacked, because the first is now a pending challenge.)
@@ -947,11 +1142,10 @@ mod tests {
     fn a_failed_challenge_moves_matchmaking_to_a_different_bot() {
         use crate::config::{MatchmakingConfig, MatchmakingMode};
 
-        // Two keepalives drive two seek ticks. The first bot's challenge is
-        // rejected at creation; without a penalty the deterministic first-eligible
-        // selection would re-pick it on the second tick. Instead the second tick
-        // must target the other bot.
-        let mut transport = FakeTransport::new("{}", "\n\n");
+        // The first bot's challenge is rejected at creation; without a penalty the
+        // deterministic first-eligible selection would re-pick it on the second
+        // seek. Instead the second seek must target the other bot.
+        let mut transport = FakeTransport::new("{}", "");
         transport.bots_json = concat!(
             r#"{"id":"firstbot","title":"BOT","perfs":{"blitz":{"rating":1600}}}"#,
             "\n",
@@ -961,8 +1155,8 @@ mod tests {
         transport.challenge_create_fails = true;
         let client = LichessClient::new(transport);
 
-        // Zero idle timeout and zero interval so both keepalive ticks seek. A 5+0
-        // (blitz) casual challenge matches both bots' ratings.
+        // Zero idle timeout and zero interval so both seeks fire. A 5+0 (blitz)
+        // casual challenge matches both bots' ratings.
         let config = MatchmakingConfig {
             enabled: true,
             variants: vec!["standard".to_string()],
@@ -973,18 +1167,9 @@ mod tests {
             min_challenge_interval_seconds: 0,
             ..MatchmakingConfig::default()
         };
-        let mut matchmaker = Matchmaker::new(config, 1, "me", Instant::now());
+        let matchmaker = Mutex::new(Matchmaker::new(config, 1, "me", Instant::now()));
         let active = ActiveGames::new();
-        run_event_stream_once(
-            &client,
-            &Config::default(),
-            SELF_ID,
-            &Shutdown::new(),
-            &active,
-            &mut matchmaker,
-            &mut |_id: &str| {},
-        )
-        .unwrap();
+        seek_times(&client, &active, &matchmaker, 2);
 
         // Both attempts were made, and the second went to a different bot rather
         // than re-challenging the one that just failed.
@@ -998,24 +1183,16 @@ mod tests {
     }
 
     #[test]
-    fn disabled_matchmaking_issues_no_challenge_on_a_keepalive() {
-        // The same keepalive-only stream with matchmaking off must produce no
-        // outgoing request at all: reactive behaviour is unchanged.
-        let mut transport = FakeTransport::new("{}", "\n\n");
+    fn disabled_matchmaking_issues_no_challenge() {
+        // A disabled matchmaker must produce no outgoing request at all: reactive
+        // behaviour is unchanged.
+        let mut transport = FakeTransport::new("{}", "");
         transport.bots_json =
             r#"{"id":"maia","title":"BOT","perfs":{"blitz":{"rating":1600}}}"#.to_string();
         let client = LichessClient::new(transport);
         let active = ActiveGames::new();
-        run_event_stream_once(
-            &client,
-            &Config::default(),
-            SELF_ID,
-            &Shutdown::new(),
-            &active,
-            &mut Matchmaker::disabled(),
-            &mut |_id: &str| {},
-        )
-        .unwrap();
+        let matchmaker = Mutex::new(Matchmaker::disabled());
+        seek_times(&client, &active, &matchmaker, 1);
         assert!(client_transport(&client).post_paths().is_empty());
     }
 
@@ -1030,7 +1207,7 @@ mod tests {
             "\n",
         );
         let client = LichessClient::new(FakeTransport::new("{}", stream));
-        assert_eq!(drive_one_connection(&client), vec!["g1".to_string()]);
+        assert_eq!(handle_one_stream(&client, SELF_ID), vec!["g1".to_string()]);
     }
 
     #[test]
@@ -1053,10 +1230,11 @@ mod tests {
     }
 
     #[test]
-    fn event_loop_reconnects_after_a_drop_then_stops_on_shutdown() {
+    fn reader_reconnects_after_a_drop_then_stops_on_shutdown() {
         // Two connections, each ending (a drop). The injected reconnect wait
-        // requests shutdown on its second call, so the loop reconnects once, runs
-        // the second stream, then exits cleanly.
+        // requests shutdown on its second call, so the reader reconnects once,
+        // reads the second stream, then exits cleanly — forwarding both streams'
+        // events in order.
         let first = format!("{ACCEPTABLE_CHALLENGE}\n");
         let second = format!("{VARIANT_CHALLENGE}\n");
         let client = LichessClient::new(FakeTransport::with_streams(
@@ -1064,16 +1242,15 @@ mod tests {
             [first.as_str(), second.as_str()],
         ));
         let shutdown = Shutdown::new();
-        let active = ActiveGames::new();
         let waits = RefCell::new(0u32);
-        run_event_loop(
+        let mut events = Vec::new();
+        run_event_reader(
             &client,
-            &Config::default(),
-            SELF_ID,
             &shutdown,
-            &active,
-            &mut Matchmaker::disabled(),
-            |_id| {},
+            |event| {
+                events.push(event);
+                true
+            },
             |_wait| {
                 *waits.borrow_mut() += 1;
                 if *waits.borrow() >= 2 {
@@ -1083,44 +1260,242 @@ mod tests {
         )
         .unwrap();
 
-        // Both recorded streams were opened (one reconnect happened), and each
-        // connection's challenge was acted on.
+        // Both recorded streams were opened (one reconnect happened).
         assert_eq!(client_transport(&client).streams_remaining(), 0);
         assert_eq!(waits.into_inner(), 2);
-        assert_eq!(
-            client_transport(&client).post_paths(),
-            vec![
-                "/api/challenge/good01/accept".to_string(),
-                "/api/challenge/bad960/decline".to_string(),
-            ]
-        );
+        // Each connection's challenge was forwarded, in order.
+        let ids: Vec<String> = events
+            .into_iter()
+            .filter_map(|event| match event {
+                Event::Challenge { challenge } => Some(challenge.id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids, vec!["good01".to_string(), "bad960".to_string()]);
     }
 
     #[test]
-    fn event_loop_returns_immediately_when_already_shut_down() {
-        // Shutdown requested before the loop starts: it returns without opening a
-        // connection or accepting anything.
+    fn reader_returns_immediately_when_already_shut_down() {
+        // Shutdown requested before the reader starts: it returns without opening
+        // a connection or forwarding anything.
         let client = LichessClient::new(FakeTransport::new("{}", ACCEPTABLE_CHALLENGE));
         let shutdown = Shutdown::new();
         shutdown.request();
-        let active = ActiveGames::new();
-        run_event_loop(
+        let mut events = Vec::new();
+        run_event_reader(
             &client,
-            &Config::default(),
-            SELF_ID,
             &shutdown,
-            &active,
-            &mut Matchmaker::disabled(),
-            |_id| panic!("no game should start during shutdown"),
+            |event| {
+                events.push(event);
+                true
+            },
             |_wait| panic!("no reconnect wait during shutdown"),
         )
         .unwrap();
-        assert!(client_transport(&client).post_paths().is_empty());
+        assert!(events.is_empty());
         assert_eq!(
             client_transport(&client).streams_remaining(),
             1,
             "the stream must not be opened once shutdown is requested"
         );
+    }
+
+    /// A thread-safe [`Transport`] for the ingestion-isolation test. It delivers a
+    /// single recorded event-stream connection (the recorded lines, then blank
+    /// keepalives until shutdown), blocks the matchmaking challenge-create POST on
+    /// a gate the test releases (standing in for a multi-minute `429` backoff),
+    /// and signals the test when an accept is recorded and when the create begins
+    /// blocking.
+    struct ConcurrentTransport {
+        bots_json: String,
+        stream_lines: Mutex<Option<Vec<String>>>,
+        shutdown: Shutdown,
+        posts: Mutex<Vec<String>>,
+        accept_tx: Mutex<Sender<String>>,
+        create_started_tx: Mutex<Sender<()>>,
+        create_gate: Arc<(Mutex<bool>, Condvar)>,
+    }
+
+    impl Transport for ConcurrentTransport {
+        fn get(&self, path: &str) -> Result<String> {
+            if path.starts_with("/api/bot/online") {
+                return Ok(self.bots_json.clone());
+            }
+            Ok("{}".to_string())
+        }
+
+        fn post_empty(&self, path: &str) -> Result<String> {
+            self.posts.lock().unwrap().push(path.to_string());
+            if path.ends_with("/accept") {
+                let _ = self.accept_tx.lock().unwrap().send(path.to_string());
+            }
+            Ok(String::new())
+        }
+
+        fn post_form(&self, path: &str, _form: &[(&str, &str)]) -> Result<String> {
+            self.posts.lock().unwrap().push(path.to_string());
+            let is_create = path.starts_with("/api/challenge/")
+                && !path.ends_with("/accept")
+                && !path.ends_with("/decline");
+            if is_create {
+                // Announce that the outgoing challenge began, then block until the
+                // test releases the gate — the stand-in for a long rate-limit
+                // backoff pausing this thread.
+                let _ = self.create_started_tx.lock().unwrap().send(());
+                let (lock, cvar) = &*self.create_gate;
+                let mut released = lock.lock().unwrap();
+                while !*released {
+                    released = cvar.wait(released).unwrap();
+                }
+            }
+            Ok(String::new())
+        }
+
+        fn open_stream(&self, path: &str) -> Result<Box<dyn Iterator<Item = Result<String>>>> {
+            assert_eq!(path, "/api/stream/event", "unexpected stream path in test");
+            let lines = self
+                .stream_lines
+                .lock()
+                .unwrap()
+                .take()
+                .expect("event stream opened more than once");
+            Ok(Box::new(KeepaliveStream {
+                lines: lines.into_iter(),
+                shutdown: self.shutdown.clone(),
+            }))
+        }
+    }
+
+    /// The recorded lines, followed by blank keepalives (with a short pause each)
+    /// until shutdown ends the connection — the way a live stream stays open
+    /// between events and only drops when the connection dies.
+    struct KeepaliveStream {
+        lines: std::vec::IntoIter<String>,
+        shutdown: Shutdown,
+    }
+
+    impl Iterator for KeepaliveStream {
+        type Item = Result<String>;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            if let Some(line) = self.lines.next() {
+                return Some(Ok(line));
+            }
+            if self.shutdown.is_requested() {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+            Some(Ok(String::new()))
+        }
+    }
+
+    #[test]
+    fn incoming_challenge_is_handled_while_a_matchmaking_call_is_blocked() {
+        use crate::config::{MatchmakingConfig, MatchmakingMode};
+
+        let (accept_tx, accept_rx) = mpsc::channel::<String>();
+        let (create_started_tx, create_started_rx) = mpsc::channel::<()>();
+        let create_gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let shutdown = Shutdown::new();
+
+        // The stream delivers one incoming human challenge, then keepalives.
+        let transport = ConcurrentTransport {
+            bots_json: r#"{"id":"maia","title":"BOT","perfs":{"blitz":{"rating":1600}}}"#
+                .to_string(),
+            stream_lines: Mutex::new(Some(vec![ACCEPTABLE_CHALLENGE.to_string()])),
+            shutdown: shutdown.clone(),
+            posts: Mutex::new(Vec::new()),
+            accept_tx: Mutex::new(accept_tx),
+            create_started_tx: Mutex::new(create_started_tx),
+            create_gate: Arc::clone(&create_gate),
+        };
+        let client = Arc::new(LichessClient::new(transport));
+
+        // Matchmaking enabled and immediately due (zero idle, zero interval), so
+        // the matchmaking thread issues an outgoing challenge at once — which the
+        // transport blocks, standing in for a 429 backoff.
+        let config = MatchmakingConfig {
+            enabled: true,
+            variants: vec!["standard".to_string()],
+            initial_seconds: vec![300],
+            increment_seconds: vec![0],
+            mode: MatchmakingMode::Casual,
+            idle_timeout_seconds: 0,
+            min_challenge_interval_seconds: 0,
+            ..MatchmakingConfig::default()
+        };
+        let matchmaker = Arc::new(Mutex::new(Matchmaker::new(config, 1, "me", Instant::now())));
+        let active = ActiveGames::new();
+        let (events_tx, events_rx) = mpsc::channel::<Event>();
+
+        let reader = {
+            let client = Arc::clone(&client);
+            let shutdown = shutdown.clone();
+            std::thread::spawn(move || {
+                run_event_reader(
+                    &client,
+                    &shutdown,
+                    |event| events_tx.send(event).is_ok(),
+                    |wait| shutdown.sleep(wait),
+                )
+                .unwrap();
+            })
+        };
+        let matchmaker_thread = {
+            let client = Arc::clone(&client);
+            let active = active.clone();
+            let matchmaker = Arc::clone(&matchmaker);
+            let shutdown = shutdown.clone();
+            std::thread::spawn(move || {
+                run_matchmaking(&client, &active, &matchmaker, &shutdown, |wait| {
+                    shutdown.sleep(wait)
+                })
+                .unwrap();
+            })
+        };
+        let consumer = {
+            let client = Arc::clone(&client);
+            let active = active.clone();
+            let matchmaker = Arc::clone(&matchmaker);
+            let shutdown = shutdown.clone();
+            std::thread::spawn(move || {
+                run_event_consumer(
+                    &client,
+                    &Config::default(),
+                    SELF_ID,
+                    &active,
+                    &matchmaker,
+                    &shutdown,
+                    events_rx,
+                    |_id: &str| {},
+                )
+                .unwrap();
+            })
+        };
+
+        // The matchmaking challenge-create has started and is now blocked.
+        create_started_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("matchmaking issued an outgoing challenge");
+        // While that call is blocked, the incoming challenge is still accepted
+        // promptly — the property the single-threaded design failed to hold.
+        let accepted = accept_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("incoming challenge accepted while matchmaking is blocked");
+        assert_eq!(accepted, "/api/challenge/good01/accept");
+
+        // Release the blocked matchmaking call and shut down. Every thread stops
+        // promptly (no waiting out a full backoff), proving shutdown stays
+        // responsive.
+        {
+            let (lock, cvar) = &*create_gate;
+            *lock.lock().unwrap() = true;
+            cvar.notify_all();
+        }
+        shutdown.request();
+        reader.join().unwrap();
+        matchmaker_thread.join().unwrap();
+        consumer.join().unwrap();
     }
 
     #[test]
