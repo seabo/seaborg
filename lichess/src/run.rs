@@ -1,7 +1,7 @@
 //! Top-level entry points that wire configuration, transport, and the event
 //! loop together for the `seaborg lichess` command.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
@@ -12,10 +12,10 @@ use crate::backoff::{Backoff, RECONNECT_BASE, RECONNECT_MAX};
 use crate::client::LichessClient;
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::event::Event;
+use crate::event::{Challenge, Event};
 use crate::game::{play_game, EngineMoveChooser};
 use crate::matchmaking::{Action, Matchmaker};
-use crate::policy::{self, Decision};
+use crate::policy::{self, Decision, DeclineReason};
 use crate::shutdown::{self, Shutdown};
 use crate::transport::{HttpTransport, Transport};
 
@@ -106,17 +106,17 @@ pub fn run(config_path: Option<&Path>) -> Result<()> {
     // for every worker to resign and exit rather than dropping mid-move.
     let mut workers: Vec<std::thread::JoinHandle<()>> = Vec::new();
 
-    // Which games have a live worker. This persists across event-stream
-    // reconnects, so a `gameStart` replayed on reconnect does not spawn a second
-    // worker for a game already in progress, and it is the source of truth for
-    // the concurrency cap.
-    let active = ActiveGames::new();
+    // Every game slot the bot holds: reserved on accept, promoted when the game
+    // starts, freed when it ends. This persists across event-stream reconnects, so
+    // a `gameStart` replayed on reconnect does not spawn a second worker for a game
+    // already in progress, and it is the source of truth for the concurrency cap.
+    let slots = GameSlots::new();
 
     let spawn_game = |game_id: &str| -> std::thread::JoinHandle<()> {
         let client = Arc::clone(&client);
         let config = Arc::clone(&config);
         let shutdown = shutdown.clone();
-        let active = active.clone();
+        let slots = slots.clone();
         let bot_id = bot_id.clone();
         let game_id = game_id.to_string();
         std::thread::spawn(move || {
@@ -128,7 +128,7 @@ pub fn run(config_path: Option<&Path>) -> Result<()> {
             // Free the cap slot when the game ends, however it ended. Doing this
             // from the worker keeps the count correct even if the matching
             // `gameFinish` event was missed while the event stream was down.
-            active.remove(&game_id);
+            slots.remove(&game_id);
         })
     };
 
@@ -168,12 +168,12 @@ pub fn run(config_path: Option<&Path>) -> Result<()> {
     // matchmaking is enabled; the reactive-only path runs no such thread.
     let matchmaker_thread = if matchmaking_enabled {
         let client = Arc::clone(&client);
-        let active = active.clone();
+        let slots = slots.clone();
         let matchmaker = Arc::clone(&matchmaker);
         let shutdown = shutdown.clone();
         let fatal = Arc::clone(&fatal);
         Some(std::thread::spawn(move || {
-            let result = run_matchmaking(&client, &active, &matchmaker, &shutdown, |wait| {
+            let result = run_matchmaking(&client, &slots, &matchmaker, &shutdown, |wait| {
                 shutdown.sleep(wait)
             });
             if let Err(error) = result {
@@ -192,7 +192,7 @@ pub fn run(config_path: Option<&Path>) -> Result<()> {
         &client,
         &config,
         &bot_id,
-        &active,
+        &slots,
         &matchmaker,
         &shutdown,
         events_rx,
@@ -295,37 +295,87 @@ where
     Ok(UpgradeOutcome::Upgraded)
 }
 
-/// The set of games that currently have a live worker.
+/// Whether a game slot is merely reserved or backed by a running game.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SlotState {
+    /// A challenge was accepted; the slot is held while awaiting its `gameStart`.
+    /// No worker exists yet. Counts against the concurrency cap so a burst of
+    /// accepts cannot overshoot it before any game has started.
+    Reserved,
+    /// The game has started and has a live worker.
+    Active,
+}
+
+/// The concurrency-cap bookkeeping: every game slot the bot is committed to,
+/// whether reserved by a just-accepted challenge or backing a running game.
 ///
-/// Shared between the event consumer — which records a game when it starts and
-/// reads the count for the concurrency cap — the matchmaking thread — which reads
-/// the count to know whether a slot is free — and each game worker, which removes
-/// its own game when it exits. Worker-driven removal keeps the cap correct even
-/// if a `gameFinish` event is missed while the event stream is disconnected,
-/// which the event-driven count alone could not guarantee.
+/// Keyed by id. A slot's key is the challenge id at reservation and the game id
+/// once it starts; Lichess makes these the same value, which is what lets a
+/// `gameStart` reconcile the reservation its accept created instead of
+/// double-counting it.
+///
+/// Shared between the event consumer — which reserves a slot on accept, promotes
+/// it on `gameStart`, and reads the count for the cap — the matchmaking thread —
+/// which reads the count to know whether a slot is free — and each game worker,
+/// which removes its own game when it exits. Worker-driven removal keeps the cap
+/// correct even if a `gameFinish` event is missed while the event stream is
+/// disconnected, which the event-driven count alone could not guarantee.
 #[derive(Clone, Default)]
-pub struct ActiveGames(Arc<Mutex<HashSet<String>>>);
+pub struct GameSlots(Arc<Mutex<HashMap<String, SlotState>>>);
 
-impl ActiveGames {
-    /// An empty set.
-    pub fn new() -> ActiveGames {
-        ActiveGames::default()
+impl GameSlots {
+    /// An empty set of slots.
+    pub fn new() -> GameSlots {
+        GameSlots::default()
     }
 
-    /// Record `id` as active, returning whether it was newly inserted. A `false`
-    /// means a worker already tracks this game, so the caller must not start
-    /// another for it.
-    fn insert(&self, id: &str) -> bool {
-        self.0.lock().unwrap().insert(id.to_string())
+    /// Reserve a slot for a challenge about to be accepted, returning whether it
+    /// was newly reserved. A `false` means the id is already held (reserved or
+    /// active), so the caller must not reserve or accept it a second time.
+    fn reserve(&self, id: &str) -> bool {
+        let mut slots = self.0.lock().unwrap();
+        if slots.contains_key(id) {
+            return false;
+        }
+        slots.insert(id.to_string(), SlotState::Reserved);
+        true
     }
 
-    /// Drop `id` from the set. Idempotent, so the worker and a `gameFinish` event
-    /// removing the same game is harmless.
+    /// Mark a game as started, returning whether the caller should spawn a worker
+    /// for it. A slot reserved at accept time is promoted in place — reconciling
+    /// the reservation rather than adding a second slot — and a game the bot never
+    /// reserved (an accepted outgoing matchmaking challenge) is recorded fresh;
+    /// both spawn a worker. A game already active spawns nothing, so a `gameStart`
+    /// replayed on reconnect does not start a duplicate worker.
+    fn start(&self, id: &str) -> bool {
+        let mut slots = self.0.lock().unwrap();
+        match slots.get(id) {
+            Some(SlotState::Active) => false,
+            _ => {
+                slots.insert(id.to_string(), SlotState::Active);
+                true
+            }
+        }
+    }
+
+    /// Release a slot only if it is still merely reserved, for a challenge that was
+    /// canceled or whose accept failed. A slot already promoted to a running game
+    /// is left untouched, so a stray event cannot free an in-progress game's slot.
+    fn release_reservation(&self, id: &str) {
+        let mut slots = self.0.lock().unwrap();
+        if slots.get(id) == Some(&SlotState::Reserved) {
+            slots.remove(id);
+        }
+    }
+
+    /// Drop `id` from the set unconditionally, for a finished game. Idempotent, so
+    /// the worker and a `gameFinish` event removing the same game is harmless.
     fn remove(&self, id: &str) {
         self.0.lock().unwrap().remove(id);
     }
 
-    /// How many games currently have a worker.
+    /// How many slots are held in total, reserved and active alike — the number
+    /// the concurrency cap is measured against.
     fn len(&self) -> usize {
         self.0.lock().unwrap().len()
     }
@@ -440,24 +490,31 @@ where
 ///
 /// `bot_id` is the authenticated account's own id, used to ignore the bot's own
 /// outgoing challenges echoed back on the stream. `start_game` is invoked with a
-/// game's id the first time that game starts, to begin playing it. `active` tracks
-/// the games with live workers; it gates the concurrency cap and survives
+/// game's id the first time that game starts, to begin playing it. `slots` tracks
+/// reserved and running games; it gates the concurrency cap and survives
 /// reconnects so a replayed `gameStart` never spawns a duplicate worker. The loop
 /// returns cleanly once shutdown is requested or the reader thread ends (closing
 /// the channel); a non-recoverable error surfaces.
 ///
+/// Acceptance is deferred rather than decided the instant a challenge arrives: a
+/// challenge the policy permits is buffered, and once the burst of currently
+/// available events has drained, the buffer is processed in priority order so a
+/// human can be preferred over a bot and human-reserved slots held open. All the
+/// events waiting on the channel at once form one such burst, matching the short
+/// window Lichess challenges arrive in.
+///
 /// Generic over the transport so it can be driven with a test double.
 // The consumer drives the full set of collaborators an event may touch (client,
-// config, own identity, active-game set, matchmaker, shutdown) plus the event
-// channel and an injected `start_game` closure that exists so tests can
-// substitute game spawning. The closure cannot join a plain data struct, so the
-// argument count is inherent here rather than a sign of a missing abstraction.
+// config, own identity, slot set, matchmaker, shutdown) plus the event channel
+// and an injected `start_game` closure that exists so tests can substitute game
+// spawning. The closure cannot join a plain data struct, so the argument count is
+// inherent here rather than a sign of a missing abstraction.
 #[allow(clippy::too_many_arguments)]
 fn run_event_consumer<T, S>(
     client: &LichessClient<T>,
     config: &Config,
     bot_id: &str,
-    active: &ActiveGames,
+    slots: &GameSlots,
     matchmaker: &Mutex<Matchmaker>,
     shutdown: &Shutdown,
     events: Receiver<Event>,
@@ -467,17 +524,39 @@ where
     T: Transport,
     S: FnMut(&str),
 {
+    // Challenges the policy permits but that have not yet been accepted, held only
+    // for the span of one drain-and-process pass so they can be sorted against one
+    // another before any slot is claimed.
+    let mut pending: Vec<Challenge> = Vec::new();
     while !shutdown.is_requested() {
         match events.recv_timeout(CONSUMER_POLL) {
-            Ok(event) => handle_event(
-                client,
-                config,
-                bot_id,
-                active,
-                matchmaker,
-                &mut start_game,
-                event,
-            )?,
+            Ok(event) => {
+                handle_event(
+                    client,
+                    config,
+                    bot_id,
+                    slots,
+                    matchmaker,
+                    &mut start_game,
+                    &mut pending,
+                    event,
+                )?;
+                // Absorb the rest of the burst so simultaneously-arriving
+                // challenges are weighed together, then decide the whole batch.
+                while let Ok(event) = events.try_recv() {
+                    handle_event(
+                        client,
+                        config,
+                        bot_id,
+                        slots,
+                        matchmaker,
+                        &mut start_game,
+                        &mut pending,
+                        event,
+                    )?;
+                }
+                process_accept_queue(client, config, slots, &mut pending)?;
+            }
             // No event this interval: loop to re-check the shutdown flag.
             Err(RecvTimeoutError::Timeout) => {}
             // The reader thread has ended and closed the channel; nothing more
@@ -497,7 +576,7 @@ where
 /// swallowed.
 fn run_matchmaking<T, P>(
     client: &LichessClient<T>,
-    active: &ActiveGames,
+    slots: &GameSlots,
     matchmaker: &Mutex<Matchmaker>,
     shutdown: &Shutdown,
     mut sleep: P,
@@ -510,7 +589,7 @@ where
         if shutdown.is_requested() {
             return Ok(());
         }
-        seek_matchmaking_game(client, active, matchmaker)?;
+        seek_matchmaking_game(client, slots, matchmaker)?;
         sleep(MATCHMAKING_POLL);
     }
 }
@@ -527,13 +606,13 @@ where
 /// non-recoverable error still surfaces.
 fn seek_matchmaking_game<T: Transport>(
     client: &LichessClient<T>,
-    active: &ActiveGames,
+    slots: &GameSlots,
     matchmaker: &Mutex<Matchmaker>,
 ) -> Result<()> {
     let now = Instant::now();
-    // Read the active count before locking the matchmaker so the two mutexes are
+    // Read the slots count before locking the matchmaker so the two mutexes are
     // never held at once.
-    let active_games = active.len() as u32;
+    let active_games = slots.len() as u32;
     {
         let mut matchmaker = matchmaker.lock().unwrap();
         if !matchmaker.is_enabled() {
@@ -592,17 +671,25 @@ fn seek_matchmaking_game<T: Transport>(
     Ok(())
 }
 
-/// Act on one account event: accept or decline a challenge by policy, or track a
-/// game's lifecycle. A transient failure to accept or decline a challenge is
-/// logged and swallowed so one bad request does not end the bot; a non-recoverable
-/// error (a rejected token) still surfaces.
+/// Act on one account event: buffer or decline a challenge by policy, or track a
+/// game's lifecycle. A challenge the policy permits is pushed onto `pending` for
+/// [`process_accept_queue`] to weigh against the rest of the burst; one the policy
+/// rejects is declined at once, since it never competes for a slot. A transient
+/// failure to decline is logged and swallowed so one bad request does not end the
+/// bot; a non-recoverable error (a rejected token) still surfaces.
+// The handler touches every collaborator an event may reach (client, config, own
+// identity, slot set, matchmaker, the spawn closure, and the accept buffer) plus
+// the event itself; the closure prevents folding these into one struct, so the
+// argument count is inherent rather than a missing abstraction.
+#[allow(clippy::too_many_arguments)]
 fn handle_event<T, S>(
     client: &LichessClient<T>,
     config: &Config,
     bot_id: &str,
-    active: &ActiveGames,
+    slots: &GameSlots,
     matchmaker: &Mutex<Matchmaker>,
     start_game: &mut S,
+    pending: &mut Vec<Challenge>,
     event: Event,
 ) -> Result<()>
 where
@@ -619,23 +706,12 @@ where
                 log::debug!("ignoring own outgoing challenge {}", challenge.id);
                 return Ok(());
             }
-            let decision = policy::evaluate(
-                &challenge,
-                &config.challenge,
-                active.len() as u32,
-                config.max_concurrent_games,
-            );
-            match decision {
-                Decision::Accept => {
-                    log::info!(
-                        "accepting challenge {} from {}",
-                        challenge.id,
-                        challenge.challenger.name
-                    );
-                    tolerate_recoverable(client.accept_challenge(&challenge.id), || {
-                        format!("accepting challenge {}", challenge.id)
-                    })?;
-                }
+            match policy::classify(&challenge, &config.challenge) {
+                // Suitable: defer to the accept queue so it can be ordered against
+                // any other challenges in the same burst and checked against the
+                // cap and human reservations when a slot is actually claimed.
+                Decision::Accept => pending.push(challenge),
+                // Unsuitable regardless of load: decline now, in arrival order.
                 Decision::Decline(reason) => {
                     log::info!(
                         "declining challenge {} from {} ({})",
@@ -656,11 +732,11 @@ where
                 .lock()
                 .unwrap()
                 .record_game_started(Instant::now());
-            if active.insert(&game.id) {
+            if slots.start(&game.id) {
                 log::info!(
-                    "game {} started ({}/{} active)",
+                    "game {} started ({}/{} slots)",
                     game.id,
-                    active.len(),
+                    slots.len(),
                     config.max_concurrent_games
                 );
                 start_game(&game.id);
@@ -672,8 +748,8 @@ where
             }
         }
         Event::GameFinish { game } => {
-            active.remove(&game.id);
-            log::info!("game {} finished ({} active)", game.id, active.len());
+            slots.remove(&game.id);
+            log::info!("game {} finished ({} slots)", game.id, slots.len());
         }
         Event::ChallengeDeclined { challenge } => {
             // A bot we challenged declined. Record it so matchmaking backs off
@@ -686,7 +762,101 @@ where
                     .record_declined(&dest.id, Instant::now());
             }
         }
+        Event::ChallengeCanceled { challenge } => {
+            // The challenger withdrew before the game began. Free any slot the
+            // accept path reserved for it so the reservation does not hold a slot
+            // shut until it would have expired. If it was never reserved (declined,
+            // or already promoted to a game) this is a no-op.
+            slots.release_reservation(&challenge.id);
+            log::debug!("challenge {} canceled by challenger", challenge.id);
+        }
         Event::Other => {}
+    }
+    Ok(())
+}
+
+/// Accept the buffered challenges that fit, in priority order, declining the rest
+/// for capacity.
+///
+/// Called once the current burst of events has drained, so every challenge that
+/// arrived together is weighed as a group. When the policy prefers humans they are
+/// sorted ahead of bots (a stable sort keeps arrival order within each group);
+/// otherwise arrival order stands. Each challenge is then taken in turn: a bot may
+/// occupy a slot only below `max_concurrent_games - reserved_human_slots`, holding
+/// the remaining slots open for humans, while a human may use the full cap. A
+/// challenge that fits is reserved and accepted; one that does not is declined for
+/// capacity. Reserving before the accept POST means a concurrent matchmaking check
+/// already sees the slot as taken, and the reservation is released if the accept
+/// fails or the challenge has since vanished (a benign 404). The buffer is emptied
+/// either way.
+fn process_accept_queue<T: Transport>(
+    client: &LichessClient<T>,
+    config: &Config,
+    slots: &GameSlots,
+    pending: &mut Vec<Challenge>,
+) -> Result<()> {
+    if pending.is_empty() {
+        return Ok(());
+    }
+    if config.challenge.prefer_human_challenges {
+        // `false` (human) sorts before `true` (bot); the sort is stable, so
+        // arrival order is preserved within humans and within bots.
+        pending.sort_by_key(|challenge| challenge.challenger.is_bot());
+    }
+    let max_bot_games = config
+        .max_concurrent_games
+        .saturating_sub(config.matchmaking.reserved_human_slots);
+    for challenge in pending.drain(..) {
+        let effective_cap = if challenge.challenger.is_bot() {
+            max_bot_games
+        } else {
+            config.max_concurrent_games
+        };
+        if (slots.len() as u32) < effective_cap {
+            log::info!(
+                "accepting challenge {} from {}",
+                challenge.id,
+                challenge.challenger.name
+            );
+            // Reserve before the POST so the slot counts against the cap for the
+            // rest of this batch and for a concurrent matchmaking check.
+            slots.reserve(&challenge.id);
+            match client.accept_challenge(&challenge.id) {
+                Ok(()) => {}
+                // The challenge was canceled or expired before the accept landed —
+                // the spec's challenge-gone outcome. Free the slot and move on;
+                // this is expected, not a fault, so it is not logged as a warning.
+                Err(Error::NotFound) => {
+                    log::debug!("challenge {} gone before accept (404)", challenge.id);
+                    slots.release_reservation(&challenge.id);
+                }
+                // A transient failure: free the slot and let the challenge lapse,
+                // as with any recoverable error.
+                Err(error) if error.is_recoverable() => {
+                    log::warn!("accepting challenge {}: {error}", challenge.id);
+                    slots.release_reservation(&challenge.id);
+                }
+                // A terminal fault (a rejected token) surfaces; free the slot first
+                // so the count is honest as the bot winds down.
+                Err(error) => {
+                    slots.release_reservation(&challenge.id);
+                    return Err(error);
+                }
+            }
+        } else {
+            // No slot for this challenger kind: a bot held out of the reserved
+            // human slots, or any challenger over the full cap. Decline for
+            // capacity so the challenger is not left waiting on a silent bot.
+            log::info!(
+                "declining challenge {} from {} (at capacity)",
+                challenge.id,
+                challenge.challenger.name
+            );
+            tolerate_recoverable(
+                client.decline_challenge(&challenge.id, DeclineReason::Generic),
+                || format!("declining challenge {}", challenge.id),
+            )?;
+        }
     }
     Ok(())
 }
@@ -707,7 +877,7 @@ fn tolerate_recoverable(result: Result<()>, context: impl FnOnce() -> String) ->
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
-    use std::collections::VecDeque;
+    use std::collections::{HashSet, VecDeque};
     use std::sync::mpsc::Sender;
     use std::sync::Condvar;
 
@@ -731,6 +901,9 @@ mod tests {
         /// HTTP error, standing in for a Lichess creation-time rejection so the
         /// failure-recovery path can be exercised offline.
         challenge_create_fails: bool,
+        /// Challenge ids whose accept POST answers with HTTP 404, standing in for a
+        /// challenge that was canceled or expired before the accept landed.
+        accept_not_found: HashSet<String>,
         streams: RefCell<VecDeque<String>>,
         posts: RefCell<Vec<RecordedPost>>,
     }
@@ -748,6 +921,7 @@ mod tests {
                 account_json: account_json.to_string(),
                 bots_json: String::new(),
                 challenge_create_fails: false,
+                accept_not_found: HashSet::new(),
                 streams: RefCell::new(streams.into_iter().map(str::to_string).collect()),
                 posts: RefCell::new(Vec::new()),
             }
@@ -775,6 +949,15 @@ mod tests {
 
         fn post_empty(&self, path: &str) -> Result<String> {
             self.posts.borrow_mut().push((path.to_string(), Vec::new()));
+            // A configured accept answers with 404, the challenge-gone outcome.
+            if let Some(id) = path
+                .strip_prefix("/api/challenge/")
+                .and_then(|rest| rest.strip_suffix("/accept"))
+            {
+                if self.accept_not_found.contains(id) {
+                    return Err(Error::NotFound);
+                }
+            }
             Ok(String::new())
         }
 
@@ -825,26 +1008,32 @@ mod tests {
 
     /// Drive every event of a single recorded connection through [`handle_event`]
     /// for a bot whose own id is `bot_id`, returning the game ids the runner was
-    /// asked to start. Matchmaking is disabled, so this isolates the
-    /// accept/decline and game-lifecycle handling the way the event consumer runs
-    /// it, minus the channel plumbing.
+    /// asked to start. The accept queue is processed after each event, modeling
+    /// events that arrive far enough apart to be handled one at a time — so a
+    /// challenge is accepted the moment it is seen, before any later event.
+    /// Matchmaking is disabled, isolating the accept/decline and game-lifecycle
+    /// handling from outgoing challenges.
     fn handle_one_stream(client: &LichessClient<FakeTransport>, bot_id: &str) -> Vec<String> {
-        let active = ActiveGames::new();
+        let slots = GameSlots::new();
         let matchmaker = Mutex::new(Matchmaker::disabled());
+        let config = Config::default();
+        let mut pending = Vec::new();
         let mut started = Vec::new();
         let stream = client.event_stream().unwrap();
         for item in stream {
             if let Some(event) = item.unwrap() {
                 handle_event(
                     client,
-                    &Config::default(),
+                    &config,
                     bot_id,
-                    &active,
+                    &slots,
                     &matchmaker,
                     &mut |id: &str| started.push(id.to_string()),
+                    &mut pending,
                     event,
                 )
                 .unwrap();
+                process_accept_queue(client, &config, &slots, &mut pending).unwrap();
             }
         }
         started
@@ -854,12 +1043,12 @@ mod tests {
     /// matchmaking thread would across successive polls.
     fn seek_times(
         client: &LichessClient<FakeTransport>,
-        active: &ActiveGames,
+        slots: &GameSlots,
         matchmaker: &Mutex<Matchmaker>,
         times: usize,
     ) {
         for _ in 0..times {
-            seek_matchmaking_game(client, active, matchmaker).unwrap();
+            seek_matchmaking_game(client, slots, matchmaker).unwrap();
         }
     }
 
@@ -909,46 +1098,69 @@ mod tests {
     }
 
     /// What one replayed event sequence produced: the ordered outbound calls and
-    /// the number of active game slots still occupied at the end.
+    /// the number of game slots still held at the end (reserved or active).
     struct Replay {
         calls: Vec<OutboundCall>,
         active_slots: usize,
     }
 
-    /// Replay `lines` as one account-event connection for a bot whose own id is
-    /// `bot_id`, under `config`, and report the outbound calls and final slot
-    /// count. Matchmaking is disabled so the only outbound calls are reactions to
-    /// the replayed events themselves. Events are driven through [`handle_event`]
-    /// directly, the way the event consumer processes what the reader forwards.
-    fn replay(bot_id: &str, config: &Config, lines: &[&str]) -> Replay {
-        let stream = lines.join("\n");
-        let client = LichessClient::new(FakeTransport::new("{}", &stream));
-        let active = ActiveGames::new();
+    /// Drive `batches` of recorded NDJSON event lines through the event handler for
+    /// a bot whose own id is `bot_id`, under `config`, against `client`'s recording
+    /// transport, returning the outbound calls made and the slots still held.
+    ///
+    /// Each batch is one drain-and-process pass: every event in it is handled (a
+    /// suitable challenge buffered, everything else acted on at once), then the
+    /// accept queue is processed as a group. Splitting events across batches models
+    /// how far apart they arrived — challenges in the same batch compete for slots
+    /// together, while a `gameStart` in a later batch reflects Lichess answering an
+    /// earlier accept. Matchmaking is disabled, so the only outbound calls are
+    /// reactions to the replayed events.
+    fn drive_batches(
+        client: &LichessClient<FakeTransport>,
+        bot_id: &str,
+        config: &Config,
+        batches: &[&[&str]],
+    ) -> (Vec<OutboundCall>, usize) {
+        let slots = GameSlots::new();
         let matchmaker = Mutex::new(Matchmaker::disabled());
-        let events = client.event_stream().unwrap();
-        for item in events {
-            if let Some(event) = item.unwrap() {
-                handle_event(
-                    &client,
-                    config,
-                    bot_id,
-                    &active,
-                    &matchmaker,
-                    &mut |_id: &str| {},
-                    event,
-                )
-                .unwrap();
+        let mut pending = Vec::new();
+        for batch in batches {
+            for line in *batch {
+                if let Some(event) = crate::event::parse_line(line).unwrap() {
+                    handle_event(
+                        client,
+                        config,
+                        bot_id,
+                        &slots,
+                        &matchmaker,
+                        &mut |_id: &str| {},
+                        &mut pending,
+                        event,
+                    )
+                    .unwrap();
+                }
             }
+            process_accept_queue(client, config, &slots, &mut pending).unwrap();
         }
-        let calls = client_transport(&client)
+        let calls = client_transport(client)
             .posts
             .borrow()
             .iter()
             .map(classify_post)
             .collect();
+        (calls, slots.len())
+    }
+
+    /// Replay `batches` under a default recording transport and report the
+    /// outbound calls and final slot count. For scenarios that need a transport
+    /// configured (e.g. a 404 accept), build the client and call
+    /// [`drive_batches`] directly.
+    fn replay(bot_id: &str, config: &Config, batches: &[&[&str]]) -> Replay {
+        let client = LichessClient::new(FakeTransport::new("{}", ""));
+        let (calls, active_slots) = drive_batches(&client, bot_id, config, batches);
         Replay {
             calls,
-            active_slots: active.len(),
+            active_slots,
         }
     }
 
@@ -971,18 +1183,29 @@ mod tests {
     // A genuine incoming Chess960 challenge — declined by the default policy.
     const INCOMING_VARIANT_CHALLENGE: &str = r#"{"type":"challenge","challenge":{"id":"var01","direction":"in","status":"created","challenger":{"id":"bob","name":"bob","rating":1600},"destUser":{"id":"seaborg","name":"seaborg"},"variant":{"key":"chess960","name":"Chess960"},"rated":false,"speed":"blitz","timeControl":{"type":"clock","limit":300,"increment":3},"color":"random"}}"#;
 
+    // A genuine incoming challenge from another BOT account.
+    const INCOMING_BOT_CHALLENGE: &str = r#"{"type":"challenge","challenge":{"id":"botchal","direction":"in","status":"created","challenger":{"id":"maia1","name":"maia1","rating":1700,"title":"BOT","online":true},"destUser":{"id":"seaborg","name":"seaborg","title":"BOT"},"variant":{"key":"standard","name":"Standard"},"rated":false,"speed":"blitz","timeControl":{"type":"clock","limit":300,"increment":3,"show":"5+3"},"color":"random"}}"#;
+
+    // The challengeCanceled event for the incoming human challenge, sent when the
+    // challenger withdraws it before it becomes a game. Carries the full challenge
+    // object Lichess sends, of which only the id is modeled.
+    const HUMAN_CHALLENGE_CANCELED: &str = r#"{"type":"challengeCanceled","challenge":{"id":"human99","status":"canceled","challenger":{"id":"alice","name":"alice","rating":1500},"destUser":{"id":"seaborg","name":"seaborg","title":"BOT"},"variant":{"key":"standard"},"rated":false,"timeControl":{"type":"clock","limit":300,"increment":3}}}"#;
+
     // The gameStart Lichess sends once the incoming human challenge is accepted.
-    const HUMAN_GAME_START: &str = r#"{"type":"gameStart","game":{"id":"gamehuman","fullId":"gamehumanabcd","color":"white","fen":"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1","speed":"blitz","source":"friend","status":{"id":20,"name":"started"}}}"#;
+    // Its game id is the challenge id (Lichess reuses the id), which is what lets
+    // the accepted challenge's reserved slot reconcile with this start instead of
+    // counting twice.
+    const HUMAN_GAME_START: &str = r#"{"type":"gameStart","game":{"id":"human99","fullId":"human99abcd","color":"white","fen":"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1","speed":"blitz","source":"friend","status":{"id":20,"name":"started"}}}"#;
 
     #[test]
     fn replay_harness_pins_challenge_lifecycle_scenarios() {
-        // Each row is a recorded NDJSON event sequence and the exact outbound
-        // calls plus final active-slot count it must produce. Using real Lichess
-        // JSON (with fields the bot does not parse) keeps these honest about the
-        // wire format and exercises unknown-field tolerance.
+        // Each row is a sequence of event batches and the exact outbound calls plus
+        // final held-slot count it must produce. Using real Lichess JSON (with
+        // fields the bot does not parse) keeps these honest about the wire format
+        // and exercises unknown-field tolerance.
         struct Scenario {
             name: &'static str,
-            lines: &'static [&'static str],
+            batches: &'static [&'static [&'static str]],
             expected_calls: Vec<OutboundCall>,
             expected_slots: usize,
         }
@@ -992,7 +1215,7 @@ mod tests {
             // accept and no decline.
             Scenario {
                 name: "self outgoing challenge is ignored",
-                lines: &[SELF_OUTGOING_CHALLENGE],
+                batches: &[&[SELF_OUTGOING_CHALLENGE]],
                 expected_calls: vec![],
                 expected_slots: 0,
             },
@@ -1000,15 +1223,15 @@ mod tests {
             // identified purely by the challenger id.
             Scenario {
                 name: "self challenge without direction is ignored",
-                lines: &[SELF_CHALLENGE_NO_DIRECTION],
+                batches: &[&[SELF_CHALLENGE_NO_DIRECTION]],
                 expected_calls: vec![],
                 expected_slots: 0,
             },
-            // (b) An incoming human challenge that passes policy is accepted once
-            // and its gameStart occupies exactly one slot.
+            // (b) An incoming human challenge that passes policy is accepted once;
+            // its later gameStart reconciles the reserved slot into one active game.
             Scenario {
                 name: "incoming human challenge is accepted and starts one game",
-                lines: &[INCOMING_HUMAN_CHALLENGE, HUMAN_GAME_START],
+                batches: &[&[INCOMING_HUMAN_CHALLENGE], &[HUMAN_GAME_START]],
                 expected_calls: vec![OutboundCall::Accept {
                     id: "human99".to_string(),
                 }],
@@ -1018,7 +1241,7 @@ mod tests {
             // with the right reason — the from_self guard does not suppress it.
             Scenario {
                 name: "incoming variant challenge is declined",
-                lines: &[INCOMING_VARIANT_CHALLENGE],
+                batches: &[&[INCOMING_VARIANT_CHALLENGE]],
                 expected_calls: vec![OutboundCall::Decline {
                     id: "var01".to_string(),
                     reason: "variant".to_string(),
@@ -1026,13 +1249,12 @@ mod tests {
                 expected_slots: 0,
             },
             // The bot's own echoed challenge and a real incoming one in the same
-            // connection: the self one is skipped, the real one accepted, in order.
+            // batch: the self one is skipped, the real one accepted.
             Scenario {
                 name: "self echo is skipped while a real challenge is accepted",
-                lines: &[
-                    SELF_OUTGOING_CHALLENGE,
-                    INCOMING_HUMAN_CHALLENGE,
-                    HUMAN_GAME_START,
+                batches: &[
+                    &[SELF_OUTGOING_CHALLENGE, INCOMING_HUMAN_CHALLENGE],
+                    &[HUMAN_GAME_START],
                 ],
                 expected_calls: vec![OutboundCall::Accept {
                     id: "human99".to_string(),
@@ -1042,7 +1264,7 @@ mod tests {
         ];
 
         for scenario in scenarios {
-            let result = replay(SELF_ID, &Config::default(), scenario.lines);
+            let result = replay(SELF_ID, &Config::default(), scenario.batches);
             assert_eq!(
                 result.calls, scenario.expected_calls,
                 "outbound calls mismatch in scenario: {}",
@@ -1050,10 +1272,159 @@ mod tests {
             );
             assert_eq!(
                 result.active_slots, scenario.expected_slots,
-                "active slot count mismatch in scenario: {}",
+                "held slot count mismatch in scenario: {}",
                 scenario.name
             );
         }
+    }
+
+    #[test]
+    fn accept_reserves_a_slot_so_the_next_challenge_is_over_cap() {
+        // The first human challenge is accepted and holds a slot while awaiting its
+        // gameStart. A second incoming challenge arriving before that game starts
+        // sees the cap already full and is declined for capacity, rather than
+        // accepted into a slot that does not exist.
+        let (calls, slots) = drive_batches(
+            &LichessClient::new(FakeTransport::new("{}", "")),
+            SELF_ID,
+            &Config::default(),
+            &[&[INCOMING_HUMAN_CHALLENGE], &[ACCEPTABLE_CHALLENGE]],
+        );
+        assert_eq!(
+            calls,
+            vec![
+                OutboundCall::Accept {
+                    id: "human99".to_string(),
+                },
+                OutboundCall::Decline {
+                    id: "good01".to_string(),
+                    reason: "generic".to_string(),
+                },
+            ]
+        );
+        // Only the first challenge's reservation remains.
+        assert_eq!(slots, 1);
+    }
+
+    #[test]
+    fn challenge_canceled_releases_the_reserved_slot() {
+        // A challenge is accepted (reserving a slot), then withdrawn before its
+        // game starts. The cancellation frees the reservation, leaving no slot held.
+        let result = replay(
+            SELF_ID,
+            &Config::default(),
+            &[&[INCOMING_HUMAN_CHALLENGE], &[HUMAN_CHALLENGE_CANCELED]],
+        );
+        assert_eq!(
+            result.calls,
+            vec![OutboundCall::Accept {
+                id: "human99".to_string(),
+            }]
+        );
+        assert_eq!(result.active_slots, 0);
+    }
+
+    #[test]
+    fn a_404_accept_is_benign_and_frees_the_slot() {
+        // The challenge vanishes (canceled or expired) between the decision and the
+        // accept, so the accept POST answers 404. That is the spec's challenge-gone
+        // outcome: it must not surface as an error and must free the reserved slot.
+        let mut transport = FakeTransport::new("{}", "");
+        transport.accept_not_found.insert("human99".to_string());
+        let client = LichessClient::new(transport);
+        // drive_batches unwraps every handler result, so reaching the assertions at
+        // all proves the 404 did not surface as an error.
+        let (calls, slots) = drive_batches(
+            &client,
+            SELF_ID,
+            &Config::default(),
+            &[&[INCOMING_HUMAN_CHALLENGE]],
+        );
+        // The accept was attempted, but its reserved slot was released on the 404.
+        assert_eq!(
+            calls,
+            vec![OutboundCall::Accept {
+                id: "human99".to_string(),
+            }]
+        );
+        assert_eq!(slots, 0);
+    }
+
+    #[test]
+    fn a_human_is_accepted_ahead_of_a_bot_in_the_same_burst() {
+        use crate::config::ChallengePolicy;
+
+        // A bot and a human challenge arrive together with only one slot. With human
+        // preference on, the human is accepted first and the bot — now over the
+        // single-slot cap — is declined, even though the bot arrived first.
+        let config = Config {
+            challenge: ChallengePolicy {
+                accept_bots: true,
+                prefer_human_challenges: true,
+                ..ChallengePolicy::default()
+            },
+            max_concurrent_games: 1,
+            ..Config::default()
+        };
+        let result = replay(
+            SELF_ID,
+            &config,
+            &[&[INCOMING_BOT_CHALLENGE, INCOMING_HUMAN_CHALLENGE]],
+        );
+        assert_eq!(
+            result.calls,
+            vec![
+                OutboundCall::Accept {
+                    id: "human99".to_string(),
+                },
+                OutboundCall::Decline {
+                    id: "botchal".to_string(),
+                    reason: "generic".to_string(),
+                },
+            ]
+        );
+        assert_eq!(result.active_slots, 1);
+    }
+
+    #[test]
+    fn a_bot_is_held_out_of_a_reserved_human_slot() {
+        use crate::config::{ChallengePolicy, MatchmakingConfig};
+
+        // One slot, reserved for humans. A bot challenge is declined for capacity —
+        // the reserved slot is off-limits to it — while a human challenge is still
+        // accepted into that same slot. Matchmaking is disabled, so reserving the
+        // whole cap is allowed here.
+        let config = Config {
+            challenge: ChallengePolicy {
+                accept_bots: true,
+                ..ChallengePolicy::default()
+            },
+            matchmaking: MatchmakingConfig {
+                reserved_human_slots: 1,
+                ..MatchmakingConfig::default()
+            },
+            max_concurrent_games: 1,
+            ..Config::default()
+        };
+        let result = replay(
+            SELF_ID,
+            &config,
+            &[&[INCOMING_BOT_CHALLENGE], &[INCOMING_HUMAN_CHALLENGE]],
+        );
+        assert_eq!(
+            result.calls,
+            vec![
+                OutboundCall::Decline {
+                    id: "botchal".to_string(),
+                    reason: "generic".to_string(),
+                },
+                OutboundCall::Accept {
+                    id: "human99".to_string(),
+                },
+            ]
+        );
+        // The human holds the reserved slot; the bot took none.
+        assert_eq!(result.active_slots, 1);
     }
 
     #[test]
@@ -1061,7 +1432,7 @@ mod tests {
         // A blank keepalive, an acceptable challenge, an unhandled event type,
         // a declinable challenge, and a game lifecycle, all in one stream.
         let stream = format!(
-            "\n{ACCEPTABLE_CHALLENGE}\n{{\"type\":\"challengeCanceled\"}}\n{VARIANT_CHALLENGE}\n{{\"type\":\"gameStart\",\"game\":{{\"id\":\"g1\"}}}}\n{{\"type\":\"gameFinish\",\"game\":{{\"id\":\"g1\"}}}}\n"
+            "\n{ACCEPTABLE_CHALLENGE}\n{{\"type\":\"someFutureEvent\"}}\n{VARIANT_CHALLENGE}\n{{\"type\":\"gameStart\",\"game\":{{\"id\":\"g1\"}}}}\n{{\"type\":\"gameFinish\",\"game\":{{\"id\":\"g1\"}}}}\n"
         );
         let transport = FakeTransport::new("{}", &stream);
         let client = LichessClient::new(transport);
@@ -1127,8 +1498,8 @@ mod tests {
             ..MatchmakingConfig::default()
         };
         let matchmaker = Mutex::new(Matchmaker::new(config, 1, "me", Instant::now()));
-        let active = ActiveGames::new();
-        seek_times(&client, &active, &matchmaker, 2);
+        let slots = GameSlots::new();
+        seek_times(&client, &slots, &matchmaker, 2);
 
         // Exactly one challenge was issued, to the eligible bot. (A second was not
         // stacked, because the first is now a pending challenge.)
@@ -1168,8 +1539,8 @@ mod tests {
             ..MatchmakingConfig::default()
         };
         let matchmaker = Mutex::new(Matchmaker::new(config, 1, "me", Instant::now()));
-        let active = ActiveGames::new();
-        seek_times(&client, &active, &matchmaker, 2);
+        let slots = GameSlots::new();
+        seek_times(&client, &slots, &matchmaker, 2);
 
         // Both attempts were made, and the second went to a different bot rather
         // than re-challenging the one that just failed.
@@ -1190,9 +1561,9 @@ mod tests {
         transport.bots_json =
             r#"{"id":"maia","title":"BOT","perfs":{"blitz":{"rating":1600}}}"#.to_string();
         let client = LichessClient::new(transport);
-        let active = ActiveGames::new();
+        let slots = GameSlots::new();
         let matchmaker = Mutex::new(Matchmaker::disabled());
-        seek_times(&client, &active, &matchmaker, 1);
+        seek_times(&client, &slots, &matchmaker, 1);
         assert!(client_transport(&client).post_paths().is_empty());
     }
 
@@ -1211,22 +1582,45 @@ mod tests {
     }
 
     #[test]
-    fn active_games_tracks_membership_and_frees_slots() {
-        let active = ActiveGames::new();
-        assert!(active.insert("g1"));
-        assert!(
-            !active.insert("g1"),
-            "a game already tracked must not be inserted again"
-        );
-        assert!(active.insert("g2"));
-        assert_eq!(active.len(), 2);
+    fn game_slots_reserve_start_and_free() {
+        let slots = GameSlots::new();
 
-        // A worker removing its game frees the slot for the cap.
-        active.remove("g1");
-        assert_eq!(active.len(), 1);
-        // Removing a game that is not present (e.g. a duplicate removal) is safe.
-        active.remove("absent");
-        assert_eq!(active.len(), 1);
+        // A fresh reservation counts; reserving the same id again does not.
+        assert!(slots.reserve("g1"));
+        assert!(
+            !slots.reserve("g1"),
+            "an id already held must not be reserved again"
+        );
+        assert_eq!(slots.len(), 1);
+
+        // Starting the reserved game promotes it in place — still one slot — and
+        // asks for a worker. Starting it again (a replayed gameStart) does not.
+        assert!(slots.start("g1"), "the reserved game should spawn a worker");
+        assert_eq!(slots.len(), 1, "promotion must not add a second slot");
+        assert!(
+            !slots.start("g1"),
+            "a game already running must not spawn a second worker"
+        );
+
+        // A game the bot never reserved (an accepted outgoing challenge) is
+        // recorded fresh on start and asks for a worker.
+        assert!(slots.start("g2"));
+        assert_eq!(slots.len(), 2);
+
+        // Releasing a reservation only frees a still-reserved slot, never a
+        // running game.
+        slots.reserve("g3");
+        slots.release_reservation("g3");
+        assert_eq!(slots.len(), 2, "the reserved slot was freed");
+        slots.release_reservation("g1");
+        assert_eq!(slots.len(), 2, "a running game keeps its slot");
+
+        // A worker removing its game frees the slot for the cap, and removing an
+        // absent id (a duplicate removal) is harmless.
+        slots.remove("g1");
+        assert_eq!(slots.len(), 1);
+        slots.remove("absent");
+        assert_eq!(slots.len(), 1);
     }
 
     #[test]
@@ -1425,7 +1819,7 @@ mod tests {
             ..MatchmakingConfig::default()
         };
         let matchmaker = Arc::new(Mutex::new(Matchmaker::new(config, 1, "me", Instant::now())));
-        let active = ActiveGames::new();
+        let slots = GameSlots::new();
         let (events_tx, events_rx) = mpsc::channel::<Event>();
 
         let reader = {
@@ -1443,11 +1837,11 @@ mod tests {
         };
         let matchmaker_thread = {
             let client = Arc::clone(&client);
-            let active = active.clone();
+            let slots = slots.clone();
             let matchmaker = Arc::clone(&matchmaker);
             let shutdown = shutdown.clone();
             std::thread::spawn(move || {
-                run_matchmaking(&client, &active, &matchmaker, &shutdown, |wait| {
+                run_matchmaking(&client, &slots, &matchmaker, &shutdown, |wait| {
                     shutdown.sleep(wait)
                 })
                 .unwrap();
@@ -1455,7 +1849,7 @@ mod tests {
         };
         let consumer = {
             let client = Arc::clone(&client);
-            let active = active.clone();
+            let slots = slots.clone();
             let matchmaker = Arc::clone(&matchmaker);
             let shutdown = shutdown.clone();
             std::thread::spawn(move || {
@@ -1463,7 +1857,7 @@ mod tests {
                     &client,
                     &Config::default(),
                     SELF_ID,
-                    &active,
+                    &slots,
                     &matchmaker,
                     &shutdown,
                     events_rx,

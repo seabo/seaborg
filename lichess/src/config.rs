@@ -153,9 +153,14 @@ pub struct MatchmakingConfig {
     /// Minimum gap between successive outgoing challenges, in seconds, so a run
     /// of declines or cancellations does not spam the pool.
     pub min_challenge_interval_seconds: u64,
-    /// Concurrent-game slots held back from matchmaking so a human can always
-    /// still challenge the bot. Matchmaking treats the cap as
-    /// `max_concurrent_games - reserved_human_slots`.
+    /// Concurrent-game slots held back for human challengers. Both outgoing
+    /// matchmaking and incoming *bot* acceptances treat the cap as
+    /// `max_concurrent_games - reserved_human_slots`, so this many slots stay
+    /// reachable by a human even when bot games and challenges would otherwise
+    /// fill the board. Human challenges may still use the full
+    /// `max_concurrent_games`. It lives here rather than under `[challenge]`
+    /// because it began as a matchmaking-only reservation; it now also applies to
+    /// the acceptance side and takes effect whether or not matchmaking is enabled.
     pub reserved_human_slots: u32,
     /// Account ids never to challenge, however eligible they otherwise look.
     pub block_list: Vec<String>,
@@ -265,6 +270,12 @@ pub struct ChallengePolicy {
     /// or unlimited). The engine is built for clocked play, so this is off by
     /// default.
     pub accept_unlimited: bool,
+    /// When several acceptable challenges are pending at once and a game slot is
+    /// scarce, accept human challengers before bots. Off by default, which keeps
+    /// pending challenges in arrival order. Independent of
+    /// [`MatchmakingConfig::reserved_human_slots`], which holds slots open for
+    /// humans regardless of this ordering.
+    pub prefer_human_challenges: bool,
 }
 
 impl Default for ChallengePolicy {
@@ -284,6 +295,7 @@ impl Default for ChallengePolicy {
             min_rating: 0,
             max_rating: 4000,
             accept_unlimited: false,
+            prefer_human_challenges: false,
         }
     }
 }
