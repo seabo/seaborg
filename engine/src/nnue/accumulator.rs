@@ -13,16 +13,17 @@
 //! set and is validated the same way, with [`Accumulator::from_position`] serving as the from-scratch
 //! reference the incremental path is checked against.
 //!
-//! This module delivers the encoding and the accumulator only. Combining the two perspectives,
-//! applying the activation, and reading out a score are the inference layer's concern and live
-//! elsewhere.
+//! The first-layer weights and bias come straight from a loaded [`Network`]: the accumulator borrows
+//! the same feature-transformer block the network file carries, so those weights are stored once and
+//! the loader's dimension checks are reused rather than duplicated. This module delivers the encoding
+//! and the accumulator only. Combining the two perspectives, applying the activation, and reading out
+//! a score are the inference layer's concern and live elsewhere.
 
 use std::fmt;
 
 use chess::position::{Piece, PieceDeltaSink, PieceType, Player, Position, Square};
 
-/// Number of input features per perspective: `2 colours × 6 piece types × 64 squares`.
-pub const INPUT_DIM: usize = 768;
+use super::Network;
 
 /// Squares per `(colour, piece-type)` block within a perspective's input vector.
 const SQUARES: usize = 64;
@@ -34,11 +35,6 @@ const SIDE_STRIDE: usize = 384;
 /// The two perspectives in accumulator-slot order: White is slot 0, Black is slot 1. Iterating this
 /// updates both accumulators from one placement, and its order must agree with [`perspective_slot`].
 const PERSPECTIVES: [Player; 2] = [Player::WHITE, Player::BLACK];
-
-/// The hidden width `H` must be a positive multiple of this. Sixteen is the i16 lane count of the
-/// AVX2 inference path, so honouring it lets one trained network load unchanged into both the scalar
-/// and the vectorised accumulator.
-pub const HIDDEN_MULTIPLE: usize = 16;
 
 /// The accumulator slot for a perspective: White is 0, Black is 1. Must match [`PERSPECTIVES`].
 #[inline(always)]
@@ -80,71 +76,12 @@ pub fn feature_index(perspective: Player, piece: Piece, square: Square) -> usize
     oriented + SQUARES * piece_type_0 + side
 }
 
-/// The NNUE feature transformer: the first linear layer's quantised weights and bias.
-///
-/// The weights are stored feature-major — feature `f`'s `H`-element column is the contiguous slice
-/// `weights[f · H .. (f + 1) · H]` — so folding a placement into the accumulator is one contiguous
-/// column add. This is also the on-disk blob layout, so a loaded file needs no transposition. The
-/// bias seeds each accumulator (the activation of the empty board).
-///
-/// This owns only what the accumulator needs to maintain activations; loading one from a network file
-/// and running the rest of the forward pass are separate concerns.
-pub struct FeatureTransformer {
-    /// Hidden width `H`: the number of first-layer outputs per perspective.
-    hidden: usize,
-    /// First-layer weights, `INPUT_DIM × H` in feature-major order.
-    weights: Box<[i16]>,
-    /// First-layer bias, one per hidden unit (`H` entries).
-    bias: Box<[i16]>,
-}
-
-impl FeatureTransformer {
-    /// Builds a feature transformer from its weights and bias.
-    ///
-    /// `weights` must be `INPUT_DIM × hidden` in feature-major order and `bias` must be `hidden` long;
-    /// `hidden` must be a positive multiple of [`HIDDEN_MULTIPLE`]. These are the same invariants a
-    /// network-file loader enforces from the header, checked here so a malformed transformer cannot be
-    /// constructed regardless of its source.
-    pub fn new(hidden: usize, weights: Box<[i16]>, bias: Box<[i16]>) -> Self {
-        assert!(
-            hidden > 0 && hidden.is_multiple_of(HIDDEN_MULTIPLE),
-            "hidden width must be a positive multiple of {HIDDEN_MULTIPLE}, got {hidden}"
-        );
-        assert_eq!(
-            weights.len(),
-            INPUT_DIM * hidden,
-            "feature-transformer weights must be INPUT_DIM × hidden"
-        );
-        assert_eq!(
-            bias.len(),
-            hidden,
-            "feature-transformer bias must have one entry per hidden unit"
-        );
-        Self {
-            hidden,
-            weights,
-            bias,
-        }
-    }
-
-    /// The hidden width `H`.
-    #[inline(always)]
-    pub fn hidden(&self) -> usize {
-        self.hidden
-    }
-
-    /// The `H`-element weight column for one feature index.
-    #[inline(always)]
-    fn column(&self, feature: usize) -> &[i16] {
-        let start = feature * self.hidden;
-        &self.weights[start..start + self.hidden]
-    }
-
-    /// The first-layer bias, the activation of an empty board.
-    #[inline(always)]
-    fn bias(&self) -> &[i16] {
-        &self.bias
-    }
+/// The `H`-element feature-transformer weight column for one feature index, sliced from the network's
+/// feature-major weight block: feature `f`'s column is the contiguous slice `weights[f · H .. f · H + H]`.
+#[inline(always)]
+fn column(weights: &[i16], hidden: usize, feature: usize) -> &[i16] {
+    let start = feature * hidden;
+    &weights[start..start + hidden]
 }
 
 /// The first-layer activations for both perspectives, maintained incrementally.
@@ -154,6 +91,9 @@ impl FeatureTransformer {
 /// perspective sees it. Every entry is a sum over the pieces, so a move changes it by only the pieces
 /// it moves: [`Accumulator::add`] adds a piece's column to both perspectives and [`Accumulator::remove`]
 /// subtracts it, which is how [`Position::replay_last_move_deltas`] folds a move in.
+///
+/// The feature-transformer weights and bias are borrowed from a loaded [`Network`]; the accumulator
+/// stores only its two evolving activation vectors.
 ///
 /// [`Accumulator::from_position`] rebuilds both vectors from scratch and is the reference the
 /// incremental path is asserted against at every node under debug builds — the guard that catches the
@@ -165,20 +105,23 @@ impl FeatureTransformer {
 /// this cannot exceed `i16::MAX` is the exporter's responsibility, and an overflow here is a defect,
 /// not an intended wrap.
 #[derive(Clone)]
-pub struct Accumulator<'ft> {
-    /// The transformer supplying the weight columns and bias.
-    transformer: &'ft FeatureTransformer,
+pub struct Accumulator<'net> {
+    /// The network supplying the feature-transformer weight columns and bias.
+    network: &'net Network,
+    /// Hidden width `H`, cached from the network so the hot path avoids repeating the cast.
+    hidden: usize,
     /// Per-perspective activations, indexed by [`perspective_slot`]; each `H` long.
     values: [Box<[i16]>; 2],
 }
 
-impl<'ft> Accumulator<'ft> {
-    /// A fresh accumulator seeded to the transformer bias in both perspectives — the activation of an
-    /// empty board, before any pieces are added.
-    pub fn seeded(transformer: &'ft FeatureTransformer) -> Self {
-        let bias = transformer.bias();
+impl<'net> Accumulator<'net> {
+    /// A fresh accumulator seeded to the network's feature-transformer bias in both perspectives — the
+    /// activation of an empty board, before any pieces are added.
+    pub fn seeded(network: &'net Network) -> Self {
+        let bias = network.feature_transformer_bias();
         Self {
-            transformer,
+            network,
+            hidden: network.hidden_width() as usize,
             values: [
                 bias.to_vec().into_boxed_slice(),
                 bias.to_vec().into_boxed_slice(),
@@ -191,8 +134,8 @@ impl<'ft> Accumulator<'ft> {
     /// This seeds a search's accumulator and is the reference the incremental updates are checked
     /// against, so it drives the same [`Accumulator::add`] the incremental path uses: there is exactly
     /// one place the per-piece arithmetic lives.
-    pub fn from_position(transformer: &'ft FeatureTransformer, pos: &Position) -> Self {
-        let mut acc = Self::seeded(transformer);
+    pub fn from_position(network: &'net Network, pos: &Position) -> Self {
+        let mut acc = Self::seeded(network);
         for &player in &PERSPECTIVES {
             for piece_type in [
                 PieceType::Pawn,
@@ -220,11 +163,12 @@ impl<'ft> Accumulator<'ft> {
 impl PieceDeltaSink for Accumulator<'_> {
     #[inline]
     fn add(&mut self, piece: Piece, square: Square) {
-        // Copy the shared reference out so the immutable weight-column borrow does not entangle the
+        // Copy the shared network reference out so the immutable weight borrow does not entangle the
         // mutable borrow of `values` below; the two touch disjoint memory.
-        let transformer = self.transformer;
+        let weights = self.network.feature_transformer_weights();
+        let hidden = self.hidden;
         for (slot, &perspective) in PERSPECTIVES.iter().enumerate() {
-            let column = transformer.column(feature_index(perspective, piece, square));
+            let column = column(weights, hidden, feature_index(perspective, piece, square));
             for (value, weight) in self.values[slot].iter_mut().zip(column) {
                 *value += *weight;
             }
@@ -233,9 +177,10 @@ impl PieceDeltaSink for Accumulator<'_> {
 
     #[inline]
     fn remove(&mut self, piece: Piece, square: Square) {
-        let transformer = self.transformer;
+        let weights = self.network.feature_transformer_weights();
+        let hidden = self.hidden;
         for (slot, &perspective) in PERSPECTIVES.iter().enumerate() {
-            let column = transformer.column(feature_index(perspective, piece, square));
+            let column = column(weights, hidden, feature_index(perspective, piece, square));
             for (value, weight) in self.values[slot].iter_mut().zip(column) {
                 *value -= *weight;
             }
@@ -243,7 +188,7 @@ impl PieceDeltaSink for Accumulator<'_> {
     }
 }
 
-/// Two accumulators are equal when their activations match; the borrowed transformer, shared by
+/// Two accumulators are equal when their activations match; the borrowed network, shared by
 /// construction across the accumulators a search compares, is not part of the value.
 impl PartialEq for Accumulator<'_> {
     fn eq(&self, other: &Self) -> bool {
@@ -263,6 +208,7 @@ impl fmt::Debug for Accumulator<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::nnue::{Parameters, INPUT_DIM, OUTPUT_DIM};
     use chess::init::init_globals;
     use chess::mono_traits::{All, Legal};
     use chess::movelist::BasicMoveList;
@@ -277,20 +223,35 @@ mod tests {
         PieceType::King,
     ];
 
-    /// A deterministic feature transformer for tests, with weights bounded to `[-7, 7]` and bias to
-    /// `[-2, 2]`. With at most 32 pieces on the board an activation stays within `2 + 32 · 7 = 226`,
-    /// far inside `i16`, so these tests exercise the arithmetic without a defect-level overflow. The
-    /// values vary by feature and hidden unit so different columns are distinguishable.
-    fn test_transformer() -> FeatureTransformer {
-        let hidden = 16;
-        let mut weights = vec![0i16; INPUT_DIM * hidden];
-        for (feature, column) in weights.chunks_mut(hidden).enumerate() {
+    /// A deterministic network for tests. Only its feature-transformer block is exercised here (the
+    /// accumulator ignores the output layer), so the output weights and bias are zero. First-layer
+    /// weights are bounded to `[-7, 7]` and bias to `[-2, 2]`; with at most 32 pieces on the board an
+    /// activation stays within `2 + 32 · 7 = 226`, far inside `i16`, so these tests exercise the
+    /// arithmetic without a defect-level overflow. The values vary by feature and hidden unit so
+    /// different columns are distinguishable.
+    fn test_network() -> Network {
+        let hidden = 16u32;
+        let h = hidden as usize;
+        let mut w_ft = vec![0i16; INPUT_DIM as usize * h];
+        for (feature, column) in w_ft.chunks_mut(h).enumerate() {
             for (unit, w) in column.iter_mut().enumerate() {
                 *w = ((feature * 31 + unit * 7) % 15) as i16 - 7;
             }
         }
-        let bias: Vec<i16> = (0..hidden).map(|unit| (unit as i16 % 5) - 2).collect();
-        FeatureTransformer::new(hidden, weights.into_boxed_slice(), bias.into_boxed_slice())
+        let b_ft: Vec<i16> = (0..h).map(|unit| (unit as i16 % 5) - 2).collect();
+        Network::new(
+            hidden,
+            255,
+            64,
+            400,
+            Parameters {
+                w_ft,
+                b_ft,
+                w_out: vec![0i16; 2 * h],
+                b_out: vec![0i32; OUTPUT_DIM as usize],
+            },
+        )
+        .expect("test network parameters satisfy the build invariant")
     }
 
     /// The feature index matches the design contract on representative pieces, squares, and
@@ -335,7 +296,7 @@ mod tests {
     #[test]
     fn feature_index_is_a_bijection_onto_the_input_vector() {
         for &perspective in &PERSPECTIVES {
-            let mut seen = vec![false; INPUT_DIM];
+            let mut seen = vec![false; INPUT_DIM as usize];
             for &colour in &PERSPECTIVES {
                 for &piece_type in &PIECE_TYPES {
                     let piece = Piece::make(colour, piece_type);
@@ -345,7 +306,7 @@ mod tests {
                             piece,
                             Square::from_rank_file(sq as usize / 8, sq as usize % 8),
                         );
-                        assert!(index < INPUT_DIM, "index {index} out of range");
+                        assert!(index < INPUT_DIM as usize, "index {index} out of range");
                         assert!(!seen[index], "feature index {index} collided");
                         seen[index] = true;
                     }
@@ -367,10 +328,10 @@ mod tests {
     /// times in sequence. A single-move test cannot catch an update that is self-consistent per move
     /// but drifts over a deep line; walking to depth does.
     ///
-    /// On entry `acc` must already equal `Accumulator::from_position(ft, pos)`; on return the position
+    /// On entry `acc` must already equal `Accumulator::from_position(net, pos)`; on return the position
     /// and the accumulator are both restored to what they were.
-    fn walk(ft: &FeatureTransformer, pos: &mut Position, acc: &mut Accumulator, depth: u32) {
-        debug_assert_eq!(*acc, Accumulator::from_position(ft, pos));
+    fn walk(net: &Network, pos: &mut Position, acc: &mut Accumulator, depth: u32) {
+        debug_assert_eq!(*acc, Accumulator::from_position(net, pos));
         if depth == 0 {
             return;
         }
@@ -383,17 +344,17 @@ mod tests {
             pos.replay_last_move_deltas(acc);
             assert_eq!(
                 *acc,
-                Accumulator::from_position(ft, pos),
+                Accumulator::from_position(net, pos),
                 "incremental accumulator diverged after {mov}"
             );
 
-            walk(ft, pos, acc, depth - 1);
+            walk(net, pos, acc, depth - 1);
 
             pos.unmake_move();
             *acc = restore;
             assert_eq!(
                 *acc,
-                Accumulator::from_position(ft, pos),
+                Accumulator::from_position(net, pos),
                 "incremental accumulator not restored after unmaking {mov}"
             );
         }
@@ -405,7 +366,7 @@ mod tests {
     #[test]
     fn incremental_accumulator_matches_from_scratch_over_subtrees() {
         init_globals();
-        let ft = test_transformer();
+        let net = test_network();
 
         // Depths kept modest so the from-scratch check at every node stays cheap, while still forcing
         // long make/unmake sequences through each position's characteristic features.
@@ -428,8 +389,8 @@ mod tests {
 
         for (fen, depth) in cases {
             let mut pos = Position::from_fen(fen).expect("test FEN is valid");
-            let mut acc = Accumulator::from_position(&ft, &pos);
-            walk(&ft, &mut pos, &mut acc, depth);
+            let mut acc = Accumulator::from_position(&net, &pos);
+            walk(&net, &mut pos, &mut acc, depth);
         }
     }
 
@@ -439,13 +400,13 @@ mod tests {
     #[test]
     fn make_then_unmake_restores_the_accumulator_exactly() {
         init_globals();
-        let ft = test_transformer();
+        let net = test_network();
 
         let mut pos = Position::from_fen(
             "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
         )
         .expect("test FEN is valid");
-        let before = Accumulator::from_position(&ft, &pos);
+        let before = Accumulator::from_position(&net, &pos);
 
         let moves = pos.generate::<BasicMoveList, All, Legal>();
         for mov in &moves {
@@ -454,7 +415,7 @@ mod tests {
             pos.replay_last_move_deltas(&mut acc);
             assert_eq!(
                 acc,
-                Accumulator::from_position(&ft, &pos),
+                Accumulator::from_position(&net, &pos),
                 "incremental accumulator wrong after {mov}"
             );
 
@@ -463,7 +424,7 @@ mod tests {
             // restores to matches a fresh recomputation of the restored position.
             acc = before.clone();
             assert_eq!(acc, before);
-            assert_eq!(before, Accumulator::from_position(&ft, &pos));
+            assert_eq!(before, Accumulator::from_position(&net, &pos));
         }
     }
 
@@ -473,7 +434,7 @@ mod tests {
     #[test]
     fn accumulator_of_a_clone_matches_a_fresh_computation() {
         init_globals();
-        let ft = test_transformer();
+        let net = test_network();
 
         let mut pos = Position::from_fen("r3k2r/pp3ppp/2n5/8/3P4/2N2N2/PP3PPP/R3K2R w KQkq - 0 1")
             .expect("test FEN is valid");
@@ -483,9 +444,15 @@ mod tests {
         }
 
         let clone = pos.clone();
-        let from_clone = Accumulator::from_position(&ft, &clone);
-        assert_eq!(from_clone, Accumulator::from_position(&ft, &pos));
-        assert_eq!(from_clone.perspective(Player::WHITE).len(), ft.hidden());
-        assert_eq!(from_clone.perspective(Player::BLACK).len(), ft.hidden());
+        let from_clone = Accumulator::from_position(&net, &clone);
+        assert_eq!(from_clone, Accumulator::from_position(&net, &pos));
+        assert_eq!(
+            from_clone.perspective(Player::WHITE).len(),
+            net.hidden_width() as usize
+        );
+        assert_eq!(
+            from_clone.perspective(Player::BLACK).len(),
+            net.hidden_width() as usize
+        );
     }
 }

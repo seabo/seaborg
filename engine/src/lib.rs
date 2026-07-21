@@ -13,7 +13,7 @@
 //! - [`ui`] — serve the loopback browser UI.
 //! - [`search`] — the search driver and its limits.
 //! - [`eval`] — static position evaluation.
-//! - [`nnue`] — the NNUE network file format and its loader.
+//! - [`nnue`] — the NNUE network file format, its loader, and the incremental accumulator.
 //! - [`tt`] — the shared transposition table.
 //! - [`score`] — search score representation.
 //! - [`time`] — time-control models.
