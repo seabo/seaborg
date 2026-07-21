@@ -1,11 +1,11 @@
 ---
 id: TASK-69.4
 title: Scalar quantized NNUE inference wired as a selectable evaluation
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:40'
-updated_date: '2026-07-21 02:17'
+updated_date: '2026-07-21 02:30'
 labels:
   - nnue
   - inference
@@ -27,9 +27,9 @@ This scalar path is the permanent correctness oracle: it is what runs on targets
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 With a loaded network, Search evaluates positions through the scalar quantized forward pass and the evaluation is selectable without disturbing the default hand-crafted path
-- [ ] #2 A golden-vector test loads (FEN, expected-score) pairs and asserts exact integer equality against the scalar forward pass
-- [ ] #3 The quantized arithmetic (scales, clipping, saturation) matches the design contract and is exercised by tests including near-overflow accumulator states
+- [x] #1 With a loaded network, Search evaluates positions through the scalar quantized forward pass and the evaluation is selectable without disturbing the default hand-crafted path
+- [x] #2 A golden-vector test loads (FEN, expected-score) pairs and asserts exact integer equality against the scalar forward pass
+- [x] #3 The quantized arithmetic (scales, clipping, saturation) matches the design contract and is exercised by tests including near-overflow accumulator states
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -84,4 +84,38 @@ Verification (on 1278acf):
 Known failures: none
 Scope note: from-scratch accumulator at the evaluated leaf; incremental accumulator threading through search deferred to the SIMD/perf track (TASK-69.5). Confirmed with the user before implementation. Not a movegen hot path; the NNUE branch runs only when a network is selected, which no default search does, so hot-path benchmarks are not applicable.
 ---
+
+author: @claude
+created: 2026-07-21 02:30
+---
+Review attempt: 1
+Reviewed branch: task-69.4-scalar-nnue-inference
+Reviewed implementation: 1278acfab0c5df4540c3a6f890f62eadfab59ef5
+Verdict: approved
+
+All three acceptance criteria are proven by objective evidence; no blocking findings.
+
+Full diff (0f73ec8..1278acf) touches only engine/src/nnue/inference.rs (new), engine/src/nnue/mod.rs (submodule + re-export + doc), and engine/src/search.rs (network field, set_network, evaluate branch, tests). No unrelated changes. The default (network=None) evaluation path is byte-for-byte unchanged apart from a single always-not-taken Option check at the top of evaluate().
+
+AC#1 (selectable NNUE eval without disturbing the default): evaluate() branches on network at the single leaf-scoring point; set_network toggles it. Proven by search::tests::evaluate_selects_the_nnue_forward_pass_when_a_network_is_set (NNUE score matches an independent forward(), differs from the hand-crafted score, and clearing restores the hand-crafted value exactly).
+
+AC#2 (golden-vector exact-equality harness): nnue::inference::tests::golden_vectors_match_the_scalar_forward_pass_exactly loads (FEN, expected-cp) pairs and asserts exact integer equality against forward() and an independent dense reference. I independently reproduced the king-only anchor by hand from the contract arithmetic (s=-762 -> round_div(-304800, 16320) = -19), confirming the harness is not self-fulfilling.
+
+AC#3 (contract arithmetic incl. near-overflow): arithmetic matches docs/nnue-design-contract.md exactly (stm-first concat, clip [0,QA], i32 accumulate, i64 multiply-by-SCALE, round-half-away-from-zero divide, clamp [-10000,10000]). Exercised by round_div_rounds_half_away_from_zero, activations_saturate_at_the_clip_bounds, output_accumulation_does_not_overflow_near_the_i32_ceiling (H=256, s just under i32::MAX so s*SCALE overflows i32, forcing the i64 widen), and evaluation_is_clamped_into_the_centipawn_band.
+
+Scope: from-scratch accumulator rebuilt at each evaluated leaf; incremental accumulator threading deferred to TASK-69.5. This satisfies AC#1 (which does not require incremental update) and the deferral was confirmed with the user per the notes.
+
+Benchmarks: perft/movegen benchmarks were not run and are not applicable. Neither exercises evaluate(); the only default-path change is a single predictable Option check, and the NNUE branch runs only when a network is selected (no default search does). No search/eval benchmark exists in the prescribed set to measure it.
+
+Verification (on 1278acf):
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass on a clean CARGO_TARGET_DIR (exit 0, 0 warnings)
+- cargo test --workspace: pass (engine 352 / 2 ignored, chess 49, lichess 93, build_metadata 19, doctest 1; 0 failed)
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Scalar quantized NNUE forward pass (engine/src/nnue/inference.rs) wired behind Search::evaluate as a selectable evaluation; the hand-crafted tapered evaluation stays the default (network: Option<Network> = None). The forward pass implements the design contract's normative arithmetic exactly (stm-first concat, clipped ReLU to [0,QA], i32 output accumulate seeded by b_out, i64 multiply by SCALE, round-half-away-from-zero divide by QA*QB, clamp to [-10000,10000]); stm-relative so no pov flip. Verified on implementation target 1278acf: cargo fmt --check pass; cargo clippy --workspace --all-targets --all-features -- -D warnings pass on a clean CARGO_TARGET_DIR (exit 0, 0 warnings); cargo test --workspace pass (engine 352/2 ignored incl. 8 nnue::inference tests + 1 search selectability test, chess 49, lichess 93, build_metadata 19, doctest 1). AC#1 proven by evaluate_selects_the_nnue_forward_pass_when_a_network_is_set; AC#2 by golden_vectors_match_the_scalar_forward_pass_exactly (the king-only anchor -19 was additionally reproduced by hand from the contract arithmetic, confirming the harness is not circular); AC#3 by round_div/saturation/near-i32-ceiling/clamp tests plus an independent dense reference forward and mirror-symmetry check.
+<!-- SECTION:FINAL_SUMMARY:END -->
