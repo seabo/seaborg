@@ -1,9 +1,11 @@
 ---
 id: TASK-64.7
 title: Add reverse futility pruning
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@george'
 created_date: '2026-07-19 13:32'
+updated_date: '2026-07-21 01:43'
 labels:
   - search
   - pruning
@@ -35,3 +37,13 @@ Caveat. This decides what to discard by comparing a static evaluation against a 
 - [ ] #3 A fixed-depth search on a position set where the guards are inactive returns unchanged best moves, confirming the guards
 - [ ] #4 Measured with the TASK-27 strength-regression script, with results recorded in the implementation notes, including a null or negative result and its bearing on evaluation quality
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Add REVERSE_FUTILITY_MAX_DEPTH (6) and reverse_futility_margin(depth) constants next to razoring.
+2. In the interior-node path, right after razoring (Step 7), add reverse futility pruning: in non-PV nodes, not in check, depth <= max, beta.is_cp(), when eval - margin(depth) >= beta, return eval (fail-high without generating a move). Mirror image of razoring on the beta side.
+3. Add a #[cfg(test)] rfp_disabled toggle (mirroring lmr_disabled) so the guard-soundness test can isolate RFP.
+4. Tests: (a) RFP-on vs RFP-off returns identical score/best move on decisive/mate positions where guards keep it sound; (b) RFP reduces node count on a quiet position where it fires; (c) unit tests for the margin/guard helper.
+5. Run required checks; measure with TASK-27 strength-regression script and record result (incl. null/negative) in implementation notes.
+<!-- SECTION:PLAN:END -->
