@@ -238,6 +238,10 @@ fn check_status(
     match response.status().as_u16() {
         200..=299 => Ok(response),
         401 => Err(Error::Unauthorized),
+        // 404 is a distinct, expected outcome on the challenge-accept path (the
+        // challenge was canceled or expired before the accept landed), so it gets
+        // its own variant the caller can single out instead of an opaque body.
+        404 => Err(Error::NotFound),
         429 => Err(Error::RateLimited {
             retry_after: retry_after(&response),
         }),

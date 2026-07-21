@@ -35,8 +35,13 @@ pub enum Error {
     /// The configuration file exists but could not be read or parsed.
     Config(String),
     /// An HTTP request failed at the transport level (connection, TLS, or a
-    /// non-success status other than 401 or 429).
+    /// non-success status other than 401, 404, or 429).
     Http(String),
+    /// The API returned HTTP 404 (the addressed resource does not exist). For a
+    /// challenge accept this is the spec's "challenge gone" outcome — the
+    /// challenger canceled it or it expired before the accept landed — and is
+    /// benign rather than a fault.
+    NotFound,
     /// The API returned HTTP 429 (too many requests). `retry_after` carries the
     /// server's `Retry-After` hint in seconds when it sent one.
     RateLimited {
@@ -54,8 +59,16 @@ impl Error {
     /// A dropped connection or a rate-limit response is recoverable; a rejected
     /// token or a decode failure (a protocol change or a bug) is not, and must
     /// surface rather than spin in a reconnect loop.
+    ///
+    /// A 404 counts as recoverable so a stray one on any call is swallowed like a
+    /// transient fault rather than ending the bot; the accept path handles it
+    /// explicitly as the expected "challenge gone" outcome before this general
+    /// tolerance applies.
     pub fn is_recoverable(&self) -> bool {
-        matches!(self, Error::Http(_) | Error::RateLimited { .. })
+        matches!(
+            self,
+            Error::Http(_) | Error::RateLimited { .. } | Error::NotFound
+        )
     }
 }
 
@@ -86,6 +99,7 @@ impl fmt::Display for Error {
             ),
             Error::Config(detail) => write!(f, "configuration error: {detail}"),
             Error::Http(detail) => write!(f, "HTTP request failed: {detail}"),
+            Error::NotFound => write!(f, "resource not found (HTTP 404)"),
             Error::RateLimited { retry_after } => match retry_after {
                 Some(wait) => write!(
                     f,

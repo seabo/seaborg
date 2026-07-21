@@ -1,8 +1,10 @@
 //! Challenge-acceptance decisions.
 //!
-//! [`evaluate`] compares an incoming challenge against the configured policy and
-//! the number of games already in progress, producing an accept-or-decline
-//! decision with a Lichess decline reason when it declines.
+//! [`classify`] compares an incoming challenge against the configured policy,
+//! producing an accept-or-decline decision with a Lichess decline reason when it
+//! declines. The concurrency cap and human-slot reservation are applied
+//! elsewhere, when a slot is actually claimed, since those depend on the other
+//! challenges pending at the same moment.
 
 use crate::config::ChallengePolicy;
 use crate::event::{Challenge, TimeControl};
@@ -53,24 +55,16 @@ impl DeclineReason {
     }
 }
 
-/// Decide whether to accept `challenge` given the `policy` and the current game
-/// load.
+/// Decide whether `challenge` is one the bot is willing to play, ignoring how
+/// many games are already in progress.
 ///
-/// `active_games` is the number of games already in progress and `max_games` the
-/// configured cap; a challenge that would exceed the cap is declined so the bot
-/// never takes on more games than it can play. The checks run from the most
-/// specific decline reason to the least so the challenger gets the most useful
-/// explanation.
-pub fn evaluate(
-    challenge: &Challenge,
-    policy: &ChallengePolicy,
-    active_games: u32,
-    max_games: u32,
-) -> Decision {
-    if active_games >= max_games {
-        return Decision::Decline(DeclineReason::Generic);
-    }
-
+/// This is the policy-suitability half of the decision: variant, time control,
+/// rated/casual, opponent kind, and rating. The concurrency-cap and
+/// human-reservation half is applied separately when a slot is actually claimed,
+/// because that depends on the other challenges pending at the same moment and on
+/// which slots are held for humans. The checks run from the most specific decline
+/// reason to the least so the challenger gets the most useful explanation.
+pub fn classify(challenge: &Challenge, policy: &ChallengePolicy) -> Decision {
     if !policy.allows_variant(&challenge.variant.key) {
         return Decision::Decline(DeclineReason::Variant);
     }
@@ -146,7 +140,7 @@ mod tests {
     }
 
     fn evaluate_default(challenge: &Challenge) -> Decision {
-        evaluate(challenge, &ChallengePolicy::default(), 0, 1)
+        classify(challenge, &ChallengePolicy::default())
     }
 
     #[test]
@@ -190,7 +184,7 @@ mod tests {
             accept_unlimited: true,
             ..ChallengePolicy::default()
         };
-        assert_eq!(evaluate(&c, &policy, 0, 1), Decision::Accept);
+        assert_eq!(classify(&c, &policy), Decision::Accept);
     }
 
     #[test]
@@ -202,7 +196,7 @@ mod tests {
             ..ChallengePolicy::default()
         };
         assert_eq!(
-            evaluate(&c, &policy, 0, 1),
+            classify(&c, &policy),
             Decision::Decline(DeclineReason::Rated)
         );
     }
@@ -220,7 +214,7 @@ mod tests {
             accept_bots: true,
             ..ChallengePolicy::default()
         };
-        assert_eq!(evaluate(&c, &policy, 0, 1), Decision::Accept);
+        assert_eq!(classify(&c, &policy), Decision::Accept);
     }
 
     #[test]
@@ -231,7 +225,7 @@ mod tests {
             ..ChallengePolicy::default()
         };
         assert_eq!(
-            evaluate(&acceptable(), &policy, 0, 1),
+            classify(&acceptable(), &policy),
             Decision::Decline(DeclineReason::OnlyBot)
         );
     }
@@ -245,16 +239,7 @@ mod tests {
             ..ChallengePolicy::default()
         };
         assert_eq!(
-            evaluate(&c, &policy, 0, 1),
-            Decision::Decline(DeclineReason::Generic)
-        );
-    }
-
-    #[test]
-    fn game_cap_declines_before_any_other_check() {
-        // At the cap, even an otherwise-acceptable challenge is declined.
-        assert_eq!(
-            evaluate(&acceptable(), &ChallengePolicy::default(), 1, 1),
+            classify(&c, &policy),
             Decision::Decline(DeclineReason::Generic)
         );
     }

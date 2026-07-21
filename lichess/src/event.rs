@@ -34,8 +34,15 @@ pub enum Event {
         /// The declined challenge, including who declined it.
         challenge: DeclinedChallenge,
     },
-    /// Any other event type (challenge canceled and future additions). Kept so the
-    /// stream tolerates events the bot does not handle.
+    /// An incoming challenge was withdrawn by the challenger before it became a
+    /// game. Carried so the acceptance path can free a slot it had reserved for
+    /// that challenge; without it the reservation would linger until it expired.
+    ChallengeCanceled {
+        /// The canceled challenge, identified by id.
+        challenge: CanceledChallenge,
+    },
+    /// Any other event type (future additions). Kept so the stream tolerates
+    /// events the bot does not handle.
     #[serde(other)]
     Other,
 }
@@ -48,6 +55,14 @@ pub struct DeclinedChallenge {
     /// for open (untargeted) challenges, which matchmaking never sends.
     #[serde(default)]
     pub dest_user: Option<UserRef>,
+}
+
+/// The subset of a canceled challenge the bot acts on: just its id, which
+/// matches the id of any slot the acceptance path reserved for it.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct CanceledChallenge {
+    /// The challenge id, used to release a reserved slot.
+    pub id: String,
 }
 
 /// A minimal reference to an account by id.
@@ -260,12 +275,24 @@ mod tests {
 
     #[test]
     fn unknown_event_type_maps_to_other() {
+        // A type the bot does not model must not fail the stream.
         assert_eq!(
-            parse_line(r#"{"type":"challengeCanceled","challenge":{"id":"x"}}"#)
+            parse_line(r#"{"type":"someFutureEvent","payload":{"id":"x"}}"#)
                 .unwrap()
                 .unwrap(),
             Event::Other
         );
+    }
+
+    #[test]
+    fn challenge_canceled_carries_the_challenge_id() {
+        // Real challengeCanceled JSON carries a full challenge object; only the id
+        // is modeled, and the surrounding fields must be tolerated.
+        let line = r#"{"type":"challengeCanceled","challenge":{"id":"abc123","status":"canceled","challenger":{"id":"alice","name":"alice"},"destUser":{"id":"seaborg","name":"seaborg"},"variant":{"key":"standard"},"rated":false,"timeControl":{"type":"clock","limit":300,"increment":3}}}"#;
+        match parse_line(line).unwrap().unwrap() {
+            Event::ChallengeCanceled { challenge } => assert_eq!(challenge.id, "abc123"),
+            other => panic!("expected challengeCanceled, got {other:?}"),
+        }
     }
 
     #[test]
