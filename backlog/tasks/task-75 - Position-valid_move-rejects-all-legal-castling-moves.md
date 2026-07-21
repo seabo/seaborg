@@ -1,11 +1,11 @@
 ---
 id: TASK-75
 title: 'Position::valid_move rejects all legal castling moves'
-status: In Progress
+status: Done
 assignee:
   - '@george'
 created_date: '2026-07-21 04:57'
-updated_date: '2026-07-21 05:25'
+updated_date: '2026-07-21 06:08'
 labels:
   - chess
   - movegen
