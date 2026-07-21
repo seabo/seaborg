@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-21 21:22'
-updated_date: '2026-07-21 22:35'
+updated_date: '2026-07-21 22:53'
 labels:
   - search
   - strength
@@ -57,6 +57,22 @@ Measurement discipline: each refinement must be individually gated so its streng
 5. Unit tests: table monotonicity (AC1); history direction (AC2); improving +ply (AC3); pv/favoured less reduction (AC4); reuse existing TASK-36 PV-legality and TASK-51 soundness/tree-reduction tests (AC5); toggle coverage (AC6).
 6. Required checks (fmt/clippy/test), then round-robin base-vs-target fastchess match at a real TC; record Elo + per-refinement attribution in BENCHMARKS.md (AC7).
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented the log-based LMR table plus history/improving/node-type modulation in engine/src/search.rs.
+
+Design:
+- LmrTable: process-global (LazyLock) 256x256 milliplies table, base(depth, move_count) = round(1024 * (LMR_BASE + ln(depth)*ln(move_count)/LMR_DIVISOR)); monotonic non-decreasing in both. LMR_BASE=0.5, LMR_DIVISOR=2.0 keep shallow near-forcing lines at ~1 ply (old step-function behaviour) while deep late moves reduce 3-4+ plies.
+- lmr_reduction() reworked into a pure free function (depth, move_count, pv, improving, favoured, quiet_history) -> plies, accumulating in milliplies and dividing to whole plies once, never negative.
+- Modulations, each behind a pub const toggle for release ablation: LMR_HISTORY_MODULATION (subtract clamped quiet_history/40, cap +/-2 ply), LMR_IMPROVING_MODULATION (+1 ply when not improving), LMR_FAVOURED_MODULATION (-1 ply on PV, -1 ply for killer/counter). LMR_LOG_TABLE selects table vs old step function.
+- Call site samples quiet_history_score() and favoured (killer_slot or is_counter_move()) before make_move (mover still on origin, side unflipped); passes improving and Node::pv(). All TASK-51 guards unchanged; clamp to [0, new_depth-1].
+
+Tests: lmr_base_table_grows_monotonically_in_depth_and_move_count (AC1); lmr_eases_with_strong_history_and_deepens_with_weak (AC2); lmr_non_improving_reduces_one_extra_ply (AC3); lmr_favours_pv_nodes_and_ordering_refutations (AC4); lmr_never_returns_a_negative_reduction; existing TASK-36 PV-legality and TASK-51 soundness/tree-reduction tests still pass (AC5); four pub const toggles (AC6).
+
+child_mate_windows_preserve_distance_parity: the more aggressive reduction defers this fixed-depth mate-in-4 by one iteration (depth 6 -> 7, deterministic single-thread; verified old step function finds it at 6). The test's subject is mate-score parity plumbing, exercised identically by the depth-7 aspiration re-search; updated the harness depth 6->7 and its docstring.
+<!-- SECTION:NOTES:END -->
 
 ## Comments
 
