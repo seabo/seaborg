@@ -17,9 +17,16 @@ use crate::shutdown::Shutdown;
 /// Longest wait to open a connection (TCP plus TLS handshake) before giving up
 /// and letting the caller's reconnect backoff take over.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-/// Longest wait for response headers. This bounds the *header* phase only; it is
-/// deliberately not a body timeout, because the game and event streams are
-/// long-lived bodies that must be allowed to stay open indefinitely.
+/// Longest wait for a response after the request is sent, applied to ordinary
+/// request/response calls so a hung server cannot block them indefinitely.
+///
+/// Despite ureq naming this "recv response", it is not a header-only bound: the
+/// deadline it establishes stays active as a preceding phase while the body is
+/// read, so it also caps body reception. For a long-lived NDJSON stream that
+/// receives keepalives every few seconds but no full "response" for minutes,
+/// this fires mid-stream and tears down a healthy connection. The streaming path
+/// (`open_stream`) therefore clears this per request, matching `curl`, which
+/// applies no receive timeout to a stream and lets TCP failure end a dead one.
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// First wait applied after an HTTP 429, before any doubling. Lichess asks
@@ -71,13 +78,26 @@ impl HttpTransport {
         token: impl AsRef<str>,
         shutdown: Shutdown,
     ) -> HttpTransport {
+        Self::with_response_timeout(base_url, token, shutdown, RESPONSE_TIMEOUT)
+    }
+
+    /// Build a transport whose shared agent bounds response reception by
+    /// `response_timeout`. Factored out of [`HttpTransport::new`] so tests can
+    /// drive the timeout down to a few hundred milliseconds and exercise it
+    /// against a local server without waiting on the production 15s bound.
+    fn with_response_timeout(
+        base_url: impl Into<String>,
+        token: impl AsRef<str>,
+        shutdown: Shutdown,
+        response_timeout: Duration,
+    ) -> HttpTransport {
         // `http_status_as_error(false)` is what lets this crate inspect the
         // status itself, so a 429 can be told apart from other 4xx and mapped to
         // a retryable error instead of an opaque failure.
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .http_status_as_error(false)
             .timeout_connect(Some(CONNECT_TIMEOUT))
-            .timeout_recv_response(Some(RESPONSE_TIMEOUT))
+            .timeout_recv_response(Some(response_timeout))
             .build()
             .into();
         HttpTransport {
@@ -146,9 +166,17 @@ impl Transport for HttpTransport {
     fn open_stream(&self, path: &str) -> Result<Box<dyn Iterator<Item = Result<String>>>> {
         let url = self.url(path);
         self.with_rate_limit_retry(|| {
+            // Clear the shared agent's recv-response deadline for this request
+            // only. That deadline stays active while the body is read, so on a
+            // long-lived NDJSON stream it would fire mid-stream and kill a
+            // healthy connection; a dropped stream is still ended by TCP-level
+            // failure, which surfaces here as an error the caller reconnects on.
             let response = self
                 .agent
                 .get(url.as_str())
+                .config()
+                .timeout_recv_response(None)
+                .build()
                 .header("Authorization", &self.bearer)
                 .call();
             let response = check_status(response)?;
@@ -252,8 +280,111 @@ fn retry_after(response: &ureq::http::Response<ureq::Body>) -> Option<Duration> 
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::thread;
 
     use super::*;
+
+    /// Bind a throwaway HTTP/1.1 server on loopback that handles exactly one
+    /// connection with `handle`, returning the port it listens on. The spawned
+    /// thread owns the socket for the lifetime of the test; `handle` is expected
+    /// to read the request and write the response.
+    fn serve_once<F>(handle: F) -> u16
+    where
+        F: FnOnce(TcpStream) + Send + 'static,
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().expect("local addr").port();
+        thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept one connection");
+            handle(stream);
+        });
+        port
+    }
+
+    /// Drain the request header block so the response can be written without the
+    /// client's send stalling. Reads until the CRLF-CRLF that ends the headers.
+    fn read_request_headers(stream: &mut TcpStream) {
+        let mut buf = [0u8; 1024];
+        let mut seen = Vec::new();
+        loop {
+            let n = stream.read(&mut buf).expect("read request");
+            if n == 0 {
+                break;
+            }
+            seen.extend_from_slice(&buf[..n]);
+            if seen.windows(4).any(|w| w == b"\r\n\r\n") {
+                break;
+            }
+        }
+    }
+
+    #[test]
+    fn streaming_ignores_the_response_timeout_across_a_body_gap() {
+        // A healthy Lichess stream sends a line, goes quiet for longer than the
+        // agent's recv-response bound (as it does between keepalives), then sends
+        // more. The streaming path clears that bound, so every line arrives; were
+        // the bound still in force, the read would die during the silent gap.
+        let response_timeout = Duration::from_millis(200);
+        let gap = Duration::from_millis(600);
+        let port = serve_once(move |mut stream| {
+            read_request_headers(&mut stream);
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\n\
+                      Content-Type: application/x-ndjson\r\n\
+                      Connection: close\r\n\r\n",
+                )
+                .unwrap();
+            stream.write_all(b"line1\n").unwrap();
+            stream.flush().unwrap();
+            thread::sleep(gap);
+            stream.write_all(b"line2\n").unwrap();
+            stream.flush().unwrap();
+        });
+        let transport = HttpTransport::with_response_timeout(
+            format!("http://127.0.0.1:{port}"),
+            "token",
+            Shutdown::new(),
+            response_timeout,
+        );
+        let lines: Vec<String> = transport
+            .open_stream("/stream")
+            .expect("stream opens")
+            .collect::<Result<Vec<_>>>()
+            .expect("every line arrives despite the gap exceeding the response timeout");
+        assert_eq!(lines, vec!["line1".to_string(), "line2".to_string()]);
+    }
+
+    #[test]
+    fn a_non_streaming_get_still_times_out_when_the_body_stalls() {
+        // Response headers arrive at once, but the body stalls past the agent's
+        // recv-response bound. Ordinary calls keep that bound, so a wedged server
+        // surfaces as an error instead of hanging the caller indefinitely.
+        let response_timeout = Duration::from_millis(200);
+        let stall = Duration::from_millis(800);
+        let port = serve_once(move |mut stream| {
+            read_request_headers(&mut stream);
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            // Headers are in; withhold the body long enough to trip the bound.
+            thread::sleep(stall);
+            let _ = stream.write_all(b"late\n");
+        });
+        let transport = HttpTransport::with_response_timeout(
+            format!("http://127.0.0.1:{port}"),
+            "token",
+            Shutdown::new(),
+            response_timeout,
+        );
+        let result = transport.get("/slow");
+        assert!(
+            matches!(result, Err(Error::Http(_))),
+            "a stalled body must surface as an error, got {result:?}"
+        );
+    }
 
     #[test]
     fn retries_through_a_429_then_succeeds() {
