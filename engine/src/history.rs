@@ -1,6 +1,6 @@
 //! History tables.
 
-use chess::position::{Player, Square};
+use chess::position::{Piece, PieceType, Player, Square};
 
 /// Butterfly boards.
 ///
@@ -144,6 +144,99 @@ impl HistoryTable {
     }
 }
 
+/// Number of moving-piece contexts: the twelve real pieces, colour included. Because the mover's
+/// colour is part of the key, this table needs no separate per-side dimension.
+const CAPTURE_MOVERS: usize = 12;
+
+/// Number of captured piece types recorded, one per real piece type. A legal search only ever
+/// captures pawn through queen, but the king slot is kept so the captured type maps directly onto
+/// its index with no special case; it costs one plane that legal play never touches.
+const CAPTURED_TYPES: usize = 6;
+
+/// Bounded history for captures, keyed on the moving piece, the destination square and the type of
+/// piece captured.
+///
+/// Static exchange evaluation says only whether a capture wins material on its square; it cannot
+/// separate two captures with the same material outcome. This table supplies that missing signal by
+/// recording how often a capture of a given (mover, destination, captured type) has produced a beta
+/// cutoff, so ordering can try a capture the search has already found strong ahead of an untried one
+/// of equal material value. Every update goes through the shared [`gravity_update`] rule, so the same
+/// bounded bonus, malus and aging governs these scores as governs quiet history — no independent
+/// unbounded counter is kept.
+///
+/// Like the other move-ordering tables it is search-local: a Lazy SMP worker owns its own, retains
+/// it across iterative-deepening iterations and clears it between separate searches.
+#[derive(Debug)]
+pub struct CaptureHistory {
+    /// A flattened `CAPTURE_MOVERS x 64 x CAPTURED_TYPES` grid. Boxed as one slice so the allocation
+    /// lives on the heap rather than materialising on the stack inside [`super::search::Search`].
+    scores: Box<[i32]>,
+}
+
+impl Default for CaptureHistory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CaptureHistory {
+    pub fn new() -> Self {
+        Self {
+            scores: vec![0; CAPTURE_MOVERS * 64 * CAPTURED_TYPES].into_boxed_slice(),
+        }
+    }
+
+    /// Flatten a `(mover, destination, captured)` key into the backing slice.
+    ///
+    /// `mover` must be a real piece and `captured` a real piece type; both hold for every capture on
+    /// the board, where a real piece moves onto a square occupied by a capturable piece (an
+    /// en-passant capture keys its captured type as a pawn at the call site). A legal search never
+    /// captures a king, so the king plane is exercised only by the illegal synthetic positions the
+    /// move-ordering tests build for worst-case coverage.
+    #[inline(always)]
+    fn index(mover: Piece, dest: Square, captured: PieceType) -> usize {
+        debug_assert!(!mover.is_none());
+        debug_assert!(!captured.is_none());
+        debug_assert!(dest.is_okay());
+        let mover = mover as usize - 1;
+        let captured = captured as usize - 1;
+        (mover * 64 + dest.index() as usize) * CAPTURED_TYPES + captured
+    }
+
+    /// The capture-history score for playing `(mover, dest)` capturing `captured`, without bounds
+    /// checks.
+    ///
+    /// # Safety
+    ///
+    /// `mover` must be a real piece and `captured` a real piece type; the search only ever reads this
+    /// for a real capture on the board.
+    #[inline(always)]
+    pub unsafe fn get_unchecked(&self, mover: Piece, dest: Square, captured: PieceType) -> i32 {
+        let i = Self::index(mover, dest, captured);
+        debug_assert!(i < self.scores.len());
+        *self.scores.get_unchecked(i)
+    }
+
+    /// Bounds-checked read, used by tests. The search hot path reads through
+    /// [`CaptureHistory::get_unchecked`].
+    #[cfg(test)]
+    pub fn get(&self, mover: Piece, dest: Square, captured: PieceType) -> i32 {
+        self.scores[Self::index(mover, dest, captured)]
+    }
+
+    /// Apply a bounded capture-history update for playing `(mover, dest)` capturing `captured`,
+    /// through the shared [`gravity_update`] rule.
+    #[inline]
+    pub fn update(&mut self, mover: Piece, dest: Square, captured: PieceType, bonus: i32) {
+        gravity_update(&mut self.scores[Self::index(mover, dest, captured)], bonus);
+    }
+
+    /// Reset every score to zero.
+    pub fn reset(&mut self) {
+        self.scores.fill(0);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,5 +260,29 @@ mod tests {
         }
         assert_eq!(history.get(from, to, Player::WHITE), -HISTORY_MAX);
         assert_eq!(history.get(from, to, Player::BLACK), 0);
+    }
+
+    #[test]
+    fn capture_history_updates_are_bounded_and_key_local() {
+        let mut capture = CaptureHistory::new();
+        let (mover, dest, captured) = (Piece::WhitePawn, Square::D5, PieceType::Knight);
+
+        // Saturating a key leaves every other key — a different mover, destination or captured type —
+        // untouched, and never pushes the trained entry past the bound.
+        for _ in 0..100 {
+            capture.update(mover, dest, captured, i32::MAX);
+        }
+        assert_eq!(capture.get(mover, dest, captured), HISTORY_MAX);
+        assert_eq!(capture.get(Piece::WhiteKnight, dest, captured), 0);
+        assert_eq!(capture.get(mover, Square::E5, captured), 0);
+        assert_eq!(capture.get(mover, dest, PieceType::Bishop), 0);
+
+        // Opposing evidence pulls the entry straight to the far bound, never past it — the aging that
+        // lets the table adapt within a search.
+        capture.update(mover, dest, captured, -HISTORY_MAX);
+        assert_eq!(capture.get(mover, dest, captured), -HISTORY_MAX);
+
+        capture.reset();
+        assert_eq!(capture.get(mover, dest, captured), 0);
     }
 }

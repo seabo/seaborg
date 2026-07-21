@@ -373,6 +373,14 @@ pub trait Loader {
     /// each move.
     fn score_captures(&mut self, _scorer: Scorer) {}
 
+    /// Fold learned capture history into the capture ordering scores, after they have been split into
+    /// the good, equal and bad capture phases by static exchange evaluation.
+    ///
+    /// This runs once the phase boundaries are fixed, so it may reorder captures within a phase but
+    /// never move one across a boundary. A `Loader` that keeps no capture history leaves the
+    /// static-exchange scores untouched.
+    fn score_capture_history(&mut self, _scorer: Scorer) {}
+
     /// Load killers into the passed `MoveList`.
     fn load_killers(&mut self, _movelist: &mut ScoredMoveList) {}
 
@@ -537,6 +545,14 @@ impl OrderedMoves {
                     self.segments.good_capts = capts.start..good_end;
                     self.segments.equal_capts = good_end..equal_end;
                     self.segments.bad_capts = equal_end..capts.end;
+
+                    // The static-exchange partition above is now committed, so folding capture
+                    // history into the scores here reorders captures only within their own phase and
+                    // can never move one across a phase boundary. The loader bounds the added term
+                    // below the smallest material step, so material outcome still decides the order
+                    // between captures of different value and history only breaks ties among equal
+                    // ones.
+                    loader.score_capture_history(self.segment(capts.clone()).into());
                 }
                 EqualCaptures => { /* Nothing to do here */ }
                 Killers => {
