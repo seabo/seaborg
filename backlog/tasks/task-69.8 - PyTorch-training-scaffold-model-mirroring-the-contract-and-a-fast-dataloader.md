@@ -1,11 +1,11 @@
 ---
 id: TASK-69.8
 title: 'PyTorch training scaffold: model mirroring the contract and a fast dataloader'
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:41'
-updated_date: '2026-07-21 03:21'
+updated_date: '2026-07-21 03:38'
 labels:
   - nnue
   - training
@@ -28,9 +28,9 @@ This task delivers a training run that consumes generated data and produces an f
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A PyTorch model matches the design-contract architecture and exposes the parameterizable dimensions as configuration
-- [ ] #2 The dataloader reads the packed sample format and sustains a measured throughput high enough to keep the GPU utilized, with the figure recorded
-- [ ] #3 A training run over a sample dataset converges to a checkpoint and reports training and validation loss
+- [x] #1 A PyTorch model matches the design-contract architecture and exposes the parameterizable dimensions as configuration
+- [x] #2 The dataloader reads the packed sample format and sustains a measured throughput high enough to keep the GPU utilized, with the figure recorded
+- [x] #3 A training run over a sample dataset converges to a checkpoint and reports training and validation loss
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -81,4 +81,36 @@ Verification:
 Known failures: none
 Notes for the reviewer: no Rust source changed (only tools/trainer added), so the Rust checks guard against regressions rather than exercise new code. The Python suite requires the venv deps (torch, numpy) per tools/trainer/requirements.txt; create tools/trainer/.venv and pip install -r requirements.txt to run them. The generated dataset, checkpoint, and venv are gitignored and not committed.
 ---
+
+author: @claude
+created: 2026-07-21 03:38
+---
+Review attempt: 1
+Reviewed branch: task-69.8-pytorch-training-scaffold
+Reviewed implementation: 5bcc8889e7f2dd1a2ca1b31601a0bff317167b71
+Verdict: approved
+
+Immutability: base 05880a59a02a47f388fafad164e482fb764c7ccc is an ancestor of the target; the only commit after the target (c65f4a6) touches solely the task file (handoff metadata), so no implementation file changed after approval. Full base->target diff is confined to tools/trainer (9 source files) plus the task file; no Rust source changed and no generated artifacts (*.bin/*.pt/.venv) are tracked.
+
+AC#1 (model matches the contract, dims configurable) — PROVEN. model.py topology matches docs/nnue-design-contract.md: FT 768->H per perspective as an EmbeddingBag with feature-major [768,H] weight, side-to-move-first concat, clipped/squared-clipped ReLU, linear 2H->1. NnueConfig exposes hidden (positive multiple of 16), activation, scale, qa, qb with the loader's validation rules. Confirmed by test_model.py (22 tests) and by inspecting a saved checkpoint: feature_transformer.weight [768,256], output.weight [1,512], config carries every parameterizable dim.
+
+AC#2 (dataloader reads the packed format at a recorded throughput) — PROVEN. data.py decodes the SBRG format (cross-checked byte-for-byte against engine/src/selfplay/format.rs) with no per-sample Python loop; feature indices verified by hand against the contract formula (white king e1 -> 4+64*5=324; enemy black king -> +384=764) and by test_data.py. Independently benchmarked on fresh engine data at 457,267 samples/sec decode (batch 16384) versus ~197k/sec for the full CPU training step; the figure is recorded in tools/trainer/README.md.
+
+AC#3 (a run converges to a checkpoint reporting train+val loss) — PROVEN. train.py reports both losses per epoch and writes an fp32 checkpoint. Reproduced end to end: seaborg datagen -> 28,965 samples; an 8-epoch run converged monotonically (train 0.0636->0.0078, val 0.0456->0.0086) and wrote a 197,377-parameter fp32 checkpoint; test_model.py's TrainingTest also asserts convergence.
+
+Verification (run on the implementation target in the task worktree):
+- cargo fmt --check: pass (clean)
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean)
+- cargo test --workspace: pass (540 passed, 2 ignored, 0 failed)
+- python -m unittest discover -p 'test_*.py' (torch 2.13, numpy 2.5, Python 3.14 venv): pass (22 tests)
+- Independent end-to-end: datagen 28,965 samples; --benchmark 457k samples/sec; 8-epoch train converged and wrote fp32 checkpoint (shapes match the contract)
+
+No blocking findings. Not a move-generation or search hot-path change, so perft/movegen benchmarks were not required.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Added tools/trainer, a Python/PyTorch training project (sibling of tools/strength) implementing the float side of the NNUE design contract; no Rust source changed. model.py mirrors the contract topology (feature transformer 768->H per perspective as an EmbeddingBag with feature-major [768,H] weight, side-to-move-first concat, clipped/squared-clipped ReLU, 2H->1 output) with NnueConfig exposing the parameterizable dims (hidden H multiple of 16, activation, scale, qa, qb). data.py is a memory-mapped, fully vectorised decoder of the SBRG packed format producing EmbeddingBag (indices, offsets) inputs; its feature-index math matches the contract formula (verified by hand: e1 white king -> 324, enemy black king -> 764). train.py runs the blended win-probability MSE target, reports train+val loss per epoch, writes an fp32 checkpoint, and measures decode throughput. Verified at implementation SHA 5bcc8889e7f2dd1a2ca1b31601a0bff317167b71: cargo fmt --check clean; cargo clippy --workspace --all-targets --all-features -D warnings clean; cargo test --workspace 540 passed/0 failed; python unittest 22 passed. Independently reproduced end to end on fresh engine data: seaborg datagen -> 28,965 samples; loader benchmarked 457k samples/sec decode (batch 16384) vs ~197k/sec full CPU step; an 8-epoch run converged monotonically (train 0.0636->0.0078, val 0.0456->0.0086) and wrote a 197,377-parameter fp32 checkpoint whose shapes match the contract (feature_transformer.weight [768,256], output.weight [1,512]).
+<!-- SECTION:FINAL_SUMMARY:END -->
