@@ -1,10 +1,11 @@
 ---
 id: TASK-64.10
 title: Add counter-move and continuation history
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-19 13:32'
-updated_date: '2026-07-19 23:49'
+updated_date: '2026-07-21 03:10'
 labels:
   - search
   - move-ordering
@@ -52,3 +53,16 @@ This depends on TASK-64.1, TASK-64.2, TASK-64.3 and TASK-64.17. Coordinate measu
 - [ ] #9 Representative fixed-depth node counts improve without an unacceptable throughput regression, with figures recorded in implementation notes
 - [ ] #10 The selected design is measured with the TASK-27 strength-regression script and results are recorded in implementation notes
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Shared bounded update. Extract the plain-history gravity update (bonus/malus/aging, clamp to +/-HISTORY_MAX) into one primitive reused by every contextual table so counter/continuation evidence uses the same bounded scheme, not independent unbounded counters.
+2. Counter-move table. Key one quiet reply by the previous move's (moving piece, destination). Per-worker field on Search, reset each search alongside history/killers. Read is legality-validated with Position::valid_move before it can be executed.
+3. Continuation history. Two gravity tables for 1 and 2 plies back, indexed [prev piece-to context][current piece-to] as i32, per-worker, reset each search. Record distances, indexing, footprint and per-worker ownership in notes.
+4. Stack context. Store the moving piece per ply in StackEntry when the move is set (before make), so the (piece,to) context of the 1- and 2-ply-back moves is read directly from the stack (null/none handled).
+5. Ordering integration (primary = combined contextual quiet ranking). score_quiets sums plain history + cont-hist(1) + cont-hist(2) + counter bonus. On a quiet beta cutoff: bonus the cutoff move and malus the earlier failed quiets across plain history and both continuation distances, and store the counter move. Killers remain a stage; duplicate suppression must cover hash/killer/counter/quiet.
+6. AC#7 A/B via compile-time knobs (KILLER_SLOTS precedent): counter as a dedicated-stage-equivalent dominant bonus vs combined moderate bonus; equal captures before vs after refutation candidates.
+7. Tests. Contextual evidence orders a reply ahead of a higher plain-history move; duplicate suppression vs hash/killer/counter/quiet; counter legality validation; bounded update shared.
+8. Measurements. Extend the ablation example for node counts + throughput across the AC#7 variants and the killer ablation (AC#8) with continuation history active; run the TASK-27 strength SPRT for the selected design (AC#9/#10). Record all figures in implementation notes.
+<!-- SECTION:PLAN:END -->
