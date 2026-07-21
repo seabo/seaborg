@@ -1,11 +1,11 @@
 ---
 id: TASK-64.10
 title: Add counter-move and continuation history
-status: In Review
+status: Needs Human
 assignee:
   - '@claude'
 created_date: '2026-07-19 13:32'
-updated_date: '2026-07-21 04:30'
+updated_date: '2026-07-21 04:43'
 labels:
   - search
   - move-ordering
@@ -160,5 +160,44 @@ Verification:
 Known failures: none
 
 Reviewer note: this is a strength-feature task and the immediate strength result is INCONCLUSIVE, not a demonstrated gain -- the 400-game CI (~+/-25 Elo) is too wide to conclude, and the point estimate is mildly negative. Fixed-depth nodes are net +3% vs base, driven by a deep-endgame aspiration-window artifact (as in TASK-64.3) while the tactical middlegame improves 16%. All figures are recorded honestly in the notes for the AC#9/#10 determination; a conclusive strength verdict would need more games and/or a longer time control.
+---
+
+author: @claude
+created: 2026-07-21 04:43
+---
+Review attempt: 1
+Reviewed branch: task-64.10-counter-continuation-history
+Reviewed implementation: f1d1952 (immutable; branch tip 3907d64 adds only task-file notes/handoff — verified no implementation file changed between f1d1952 and HEAD)
+Base: 05880a5
+Verdict: needs_human
+
+## Summary
+The implementation is correct, standard, well-tested, and well-documented. Counter-move + 1-/2-ply continuation history are folded into a combined contextual quiet ranking, sharing the bounded gravity update (history::gravity_update); preceding-move (piece,to) context is captured at make time in StackEntry.moved_piece; the counter is legality-validated via Position::valid_move before it can reach the unsafe move loop; duplicate suppression covers hash/killer/counter/quiet. I found no in-scope code defect.
+
+Required checks (run by me on the target in the task worktree):
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (confirmed with a clean CARGO_TARGET_DIR)
+- cargo test --workspace: pass (engine 379 passed / 2 ignored; chess 49; plus integration/support suites all green)
+No new #[allow] introduced; every new unsafe block carries a SAFETY comment.
+
+Acceptance criteria assessment (I did NOT check any AC boxes):
+- AC#1-#8: proven by the new unit/search tests and the recorded ablations (counter stage + full duplicate suppression; continuation reply ordered ahead of higher plain history; legality validation; shared bounded scheme; AC#3 footprint/ownership recorded; AC#7 design A/B and equal-captures ordering recorded; AC#8 killer 0/1/2 ablation recorded).
+- AC#10: satisfied strictly as a measure-and-record criterion — the TASK-27 SPRT was run and recorded (INCONCLUSIVE at the 400-game cap, LLR -0.51, Elo -24.4 +/- 24.6). It does not, by itself, demonstrate a strength gain.
+
+## Why this is Needs Human, not Approve or Changes Requested
+AC#9 requires "Representative fixed-depth node counts improve." The implementer's own honest figures show the opposite in aggregate: net +3.0% nodes vs the feature-off baseline (startpos +13.7%, endgame +35.4% regress; middlegame -16.0%, kiwipete -1.4% improve). The notes state plainly "the net is not a reduction," attributing the endgame spike to a depth-14 aspiration-window artifact (consistent with TASK-64.3). So AC#9 is not objectively proven, and I cannot approve.
+
+This is not an in-scope code defect, so Changes Requested does not fit: the design is standard and was selected empirically, and no rework can manufacture a node-count improvement that the measurements do not show. The open question is a product/scope decision:
+
+Decision needed: Should this correct, foundational move-ordering primitive be accepted despite an immediate empirical payoff that is node-count-negative in aggregate at fixed depth and strength-inconclusive/mildly-negative at fast TC (8+0.08)? Options a human should weigh:
+  1. Accept on foundational grounds (continuation history typically pays off at greater depth/longer TC than the 400-game 8+0.08 run exercises), optionally waiving/reinterpreting AC#9's "improve" to "representative tactical positions improve" (middlegame -16%, kiwipete -1.4%).
+  2. Require a stronger empirical case before merging: a larger game count and/or a longer time control to resolve AC#10, and/or investigation of the startpos/endgame node regressions.
+  3. Defer the feature.
+
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings (clean CARGO_TARGET_DIR): pass
+- cargo test --workspace: pass
+- Recorded ablation/SPRT figures reviewed in implementation notes; AC#9 net node-count direction confirmed regressive from the recorded per-position figures.
 ---
 <!-- COMMENTS:END -->
