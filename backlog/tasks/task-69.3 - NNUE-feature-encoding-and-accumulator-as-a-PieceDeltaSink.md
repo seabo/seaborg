@@ -1,7 +1,7 @@
 ---
 id: TASK-69.3
 title: NNUE feature encoding and accumulator as a PieceDeltaSink
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:40'
