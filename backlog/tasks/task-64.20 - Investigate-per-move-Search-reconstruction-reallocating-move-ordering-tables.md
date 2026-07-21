@@ -1,11 +1,11 @@
 ---
 id: TASK-64.20
 title: Investigate per-move Search reconstruction reallocating move-ordering tables
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-21 04:36'
-updated_date: '2026-07-21 16:43'
+updated_date: '2026-07-21 17:00'
 labels:
   - search
   - move-ordering
@@ -31,11 +31,11 @@ Distinct from TASK-64.19, which reuses the per-node OrderedMoves buffer inside a
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The per-move cost of reconstructing Search and its ordering tables (history, killers, continuation history, counter) is measured in isolation from search work, and the figures are recorded
-- [ ] #2 The measurement result is used to decide whether a fix is warranted; if the cost is immaterial the task records that and closes without a code change
-- [ ] #3 If warranted, the large per-worker ordering tables persist across searches within a worker (allocated once, cleared between searches) rather than reallocated per move, with the per-worker/Lazy-SMP ownership arrangement documented
-- [ ] #4 Fixed-depth node counts are identical before and after any change, confirming cheap clearing is behaviourally equivalent to fresh allocation
-- [ ] #5 A before/after measurement (per-move construction cost, and a fast-TC throughput or strength sanity check) is recorded showing the overhead removed or demonstrated immaterial
+- [x] #1 The per-move cost of reconstructing Search and its ordering tables (history, killers, continuation history, counter) is measured in isolation from search work, and the figures are recorded
+- [x] #2 The measurement result is used to decide whether a fix is warranted; if the cost is immaterial the task records that and closes without a code change
+- [x] #3 If warranted, the large per-worker ordering tables persist across searches within a worker (allocated once, cleared between searches) rather than reallocated per move, with the per-worker/Lazy-SMP ownership arrangement documented
+- [x] #4 Fixed-depth node counts are identical before and after any change, confirming cheap clearing is behaviourally equivalent to fresh allocation
+- [x] #5 A before/after measurement (per-move construction cost, and a fast-TC throughput or strength sanity check) is recorded showing the overhead removed or demonstrated immaterial
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -108,4 +108,34 @@ Verification:
 Known failures: none
 Summary: Measured per-move Search reconstruction cost in isolation (~190us, ~89% of it the 4.72MB ContinuationHistory alloc; cheap-clear alternative ~23us). At a fast-TC per-move budget of tens of ms this is 0.2-0.6% -- immaterial, and it cannot explain the TASK-64.10 INCONCLUSIVE SPRT or the one-time 0.869s preflight outlier. Decision: no fix warranted (AC#2 immaterial branch); AC#3 not triggered; AC#4 satisfied (fixed-depth nodes=51062 identical across fresh searches; allocation strategy cannot change all-zero table init); AC#5 before==after with the ratio as recorded evidence. Full figures and the redundant end-of-run reset observation (search.rs:1116-1119) are in the implementation notes. Reviewer to verify ACs and record the verdict.
 ---
+
+author: @claude
+created: 2026-07-21 17:00
+---
+REVIEW APPROVED — code target b3fd63c (investigation, ZERO code delta)
+
+Independent review outcome: APPROVE. Move to Ready to Merge.
+
+Immutability: implementation target b3fd63c is the recorded base and an ancestor of the branch tip; git diff b3fd63c..HEAD excluding backlog/ is empty (only the task file changed across f39ffa8, ed2b350, 47daf65). No implementation file changed between the code target and this approval commit.
+
+Verification run by reviewer on the target worktree:
+- cargo fmt --check: OK
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: OK
+- cargo test --workspace: OK (all suites, 0 failed)
+
+Claims independently confirmed:
+- ContinuationHistory = 2*768*768 i32 = 4,718,592 bytes = 4.72MB (CONTEXTS=12*64=768, CONTINUATION_DISTANCES=2). Search::new (search.rs:1035) builds all four ordering tables fresh per go.
+- Redundant end-of-run reset at search.rs:1116-1119 is real (history/kt/counter/cont_hist .reset() immediately before drop in the per-move-construction model).
+- Immateriality conclusion is robust: even at a generous 2-3x on the ~190us figure, construction stays ~1% of a ~47ms move, so the decision does not hinge on precise timings. Being constant per move, construction cannot produce a one-move 0.869s outlier — sound.
+
+ACs: #1 measured & recorded; #2 decision recorded (immaterial, no code); #3 correctly not triggered; #4 trivially satisfied + determinism reconfirmed; #5 before==after ratio recorded. All proven.
+
+Note: this approval authorizes Ready to Merge only. Landing to primary and moving to Done requires the human-invoked $merge gate (trivial here given zero code delta).
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Investigation, no code change (implementation target b3fd63c == base; branch carries only backlog lifecycle commits). Measured per-move Search reconstruction in isolation: Search::new ~190us typical, ~89% of it the single 4.72MB ContinuationHistory allocation (2*768*768 i32, size verified); cheap fill(0) clear ~23us. Against a fast-TC per-move budget of tens of ms this is 0.2-0.6% -- immaterial -- and being constant per move it cannot explain the one-time 0.869s TASK-64.10 preflight outlier nor the INCONCLUSIVE fast-TC SPRT. Decision: no fix warranted (AC#2 immaterial branch; AC#3 not triggered). AC#4 satisfied: no code change, determinism reconfirmed (fixed depth-9 middlegame nodes=51062 identical across fresh searches; calloc and fill(0) both yield all-zero tables). AC#5: before==after with the ratio as recorded evidence. Redundant end-of-run reset at search.rs:1116-1119 noted as an observation for a human scope decision; no follow-up created.
+<!-- SECTION:FINAL_SUMMARY:END -->
