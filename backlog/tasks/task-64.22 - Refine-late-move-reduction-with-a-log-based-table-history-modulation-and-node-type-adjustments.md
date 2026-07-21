@@ -6,6 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-21 21:22'
+updated_date: '2026-07-21 22:23'
 labels:
   - search
   - strength
@@ -40,3 +41,13 @@ Measurement discipline: each refinement must be individually gated so its streng
 - [ ] #6 Each refinement is independently toggleable so its individual effect can be measured
 - [ ] #7 Net strength is confirmed by a round-robin base-vs-target match at a fixed time control showing no regression, with results and attribution recorded in BENCHMARKS.md
 <!-- AC:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @codex
+created: 2026-07-21 22:23
+---
+Revisit flag from TASK-64.21 (main-search SEE pruning, closed as a negative result): a properly-gated Stockfish-style main-search SEE prune measured NO gain at a fair time control (-17 +/- 31 Elo; the +137 at nodes=100000 was a node-budget artifact). Diagnostics showed the prune is well-targeted (flagged quiets cut off at 1.35% vs a 4.03% baseline) but LOW-LEVERAGE precisely because the current lmr_reduction this task replaces is nearly a no-op (lmr_depth ~ raw depth), so the lmrDepth-scaled prune is inert. Once this LMR refinement lands (aggressive, history/depth-scaled reductions), main-search SEE pruning becomes worth re-measuring — its leverage in Stockfish comes from exactly that kind of LMR plus continuation-history pre-filtering. Suggestion for whoever picks up this task: after it merges, file a fresh ticket to re-attempt main-search SEE pruning; the prior implementation + mechanism diagnostics live in branch task-64.21-main-search-see-pruning (target 2353acb).
+---
+<!-- COMMENTS:END -->
