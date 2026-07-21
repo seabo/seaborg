@@ -1,11 +1,11 @@
 ---
 id: TASK-64.11
 title: Add capture history to capture ordering
-status: In Review
+status: Ready to Merge
 assignee:
   - '@george'
 created_date: '2026-07-19 13:33'
-updated_date: '2026-07-21 17:23'
+updated_date: '2026-07-21 17:35'
 labels:
   - search
   - move-ordering
@@ -39,11 +39,11 @@ An open question to settle and record: whether capture history should adjust ord
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A capture history table is maintained and contributes to capture ordering scores
-- [ ] #2 The decision on whether capture history can move a capture across an SEE-derived phase boundary is recorded and implemented
-- [ ] #3 Bonus, malus and aging follow the scheme established for plain history
-- [ ] #4 A test asserts that among captures with equal SEE, one previously causing cutoffs is ordered first
-- [ ] #5 Measured with the TASK-27 strength-regression script, with results recorded in the implementation notes
+- [x] #1 A capture history table is maintained and contributes to capture ordering scores
+- [x] #2 The decision on whether capture history can move a capture across an SEE-derived phase boundary is recorded and implemented
+- [x] #3 Bonus, malus and aging follow the scheme established for plain history
+- [x] #4 A test asserts that among captures with equal SEE, one previously causing cutoffs is ordered first
+- [x] #5 Measured with the TASK-27 strength-regression script, with results recorded in the implementation notes
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -141,4 +141,37 @@ Verification:
 - TASK-27 strength script, bounded NON-AUTHORITATIVE run (tc=4+0.04, 400 games, baseline daa79cb): INCONCLUSIVE, Elo -21.74 +/- 26.85, LLR -0.41 within SPRT bounds; 0 crashes/forfeits. A full authoritative SPRT is still required for a strength verdict.
 Known failures: none
 ---
+
+author: @george
+created: 2026-07-21 17:35
+---
+Review attempt: 1
+Reviewed branch: task-64.11-capture-history
+Reviewed implementation: 8c75e5d7f744bf6d18eebdf7e80957733096f760
+Verdict: approved
+
+Immutability: base daa79cb is the merge-base with master and an ancestor of the target; target 8c75e5d is an ancestor of tip d9270a5; the only post-target commit touches solely the task file (handoff metadata). base..target touches exactly history.rs, ordering.rs, search.rs and the task file — no unrelated changes, no new #[allow].
+
+Acceptance criteria (all proven):
+- AC#1: CaptureHistory maintained (constructed in Search::new, reset per search) and contributes via the new score_capture_history Loader hook.
+- AC#2: decision recorded and implemented — intra-phase tie-break only; the SEE-sign partition is committed before the history term is folded in, so a capture can never move across a phase boundary; the +/-49 bound (< half a pawn) cannot bridge the >=100 gap between distinct whole-pawn SEE outcomes. Index bounds verified safe including the reserved king plane (max index 4607 < 4608).
+- AC#3: bonus/malus/aging reuse the shared gravity_update rule; verified by capture_history_updates_are_bounded_and_key_local (saturation to +/-HISTORY_MAX, key isolation, reset).
+- AC#4: trained_captures_break_ties_among_equal_static_exchange_value passes — two equal-SEE pawn captures reordered by history alone.
+- AC#5: TASK-27 strength script run and results recorded in the notes (400 games, Elo -21.74 +/- 26.85, INCONCLUSIVE); the AC requires measurement recorded, which is satisfied. Authoritative SPRT deferred to the merge gate.
+
+Correctness spot-checks: position is the node position at both scoring (no move made) and update (move unmade at Step 21 before the cutoff block); en-passant keys its captured type as Pawn consistently on read and update; the modified ordering score is consumed only by the within-range SelectionSort and never leaks to SEE pruning (which recomputes see()).
+
+Benchmarks: perft/movegen benches do not exercise the search-ordering path this diff touches, and the added cost is a single bounded table read per capture, dominated by the SEE already computed; the search-speed net is the AC#5 strength run.
+
+Verification:
+- cargo fmt --check: PASS
+- cargo clippy --workspace --all-targets --all-features -- -D warnings (clean CARGO_TARGET_DIR): PASS, no warnings
+- cargo test --workspace: PASS (engine lib 393 passed, 2 ignored; workspace green)
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Adds a bounded CaptureHistory table (12 movers x 64 squares x 6 captured types) keyed on (moving piece, destination, captured type), trained on beta cutoffs and folded into capture ordering as an intra-phase tie-break. Decision on AC#2: capture history never crosses an SEE-derived phase boundary — the good/equal/bad partition is committed first, then a history term bounded to +/-49 (< half a pawn) is folded in, and since every SEE outcome is a whole multiple of the pawn value (100), the max 2*49=98 swing cannot bridge a one-pawn gap, so history only breaks ties among equal-material captures. Bonus/malus/aging reuse the shared gravity_update rule (AC#3). Verified: cargo fmt --check PASS; cargo clippy --workspace --all-targets --all-features -D warnings PASS on a clean CARGO_TARGET_DIR; cargo test --workspace PASS (engine lib 393 passed/2 ignored) including the two new tests capture_history_updates_are_bounded_and_key_local and trained_captures_break_ties_among_equal_static_exchange_value (AC#4). Strength measured with the TASK-27 script and recorded in the notes (AC#5): 400-game bounded run, Elo -21.74 +/- 26.85, INCONCLUSIVE within SPRT bounds — the point estimate is dwarfed by its error and an authoritative SPRT is deferred to the merge-time gate.
+<!-- SECTION:FINAL_SUMMARY:END -->
