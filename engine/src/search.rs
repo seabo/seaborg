@@ -2970,6 +2970,13 @@ impl MoveLoader<'_, '_> {
 }
 
 /// Move loader for the quiescence search.
+///
+/// The staged picker this drives yields only queen promotions and captures, in that order. It
+/// deliberately loads no quiet moves and no check evasions: `quiesce` tests for check up front and
+/// routes an in-check node to `quiesce_evasions`, which searches every reply from a plain move list,
+/// before the staged loop is ever entered. So this loader only runs with the side to move not in
+/// check, where a bare quiet cannot improve the stand-pat value and is skipped by design. There is
+/// consequently no `load_quiets`/`score_quiets` here — a quiet segment would always be empty.
 pub struct QMoveLoader<'a, 'search> {
     search: &'a mut Search<'search>,
 }
@@ -2993,12 +3000,6 @@ impl<'a, 'search> Loader for QMoveLoader<'a, 'search> {
         self.search.pos.generate_in::<_, Captures, Legal>(movelist);
     }
 
-    fn load_quiets(&mut self, movelist: &mut ScoredMoveList) {
-        if self.search.pos.in_check() {
-            self.search.pos.generate_in::<_, Quiets, Legal>(movelist);
-        }
-    }
-
     fn score_captures(&mut self, captures: Scorer) {
         for (mov, score) in captures {
             if mov.is_capture() {
@@ -3014,26 +3015,12 @@ impl<'a, 'search> Loader for QMoveLoader<'a, 'search> {
             }
         }
     }
-
-    fn score_quiets(&mut self, quiets: Scorer) {
-        let turn = self.search.pos.turn();
-        for (mov, score) in quiets {
-            // SAFETY: these are legal moves, so both squares are valid.
-            unsafe {
-                *score = history_ordering_score(self.search.history.get_unchecked(
-                    mov.orig(),
-                    mov.dest(),
-                    turn,
-                ));
-            }
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ordering::Phase;
+    use crate::ordering::{Phase, ORDERING_BUFFER_CAPACITY};
     use chess::mov::MoveType;
     use chess::position::Square;
     use std::time::Duration;
@@ -3224,6 +3211,57 @@ mod tests {
             .find(|(phase, _)| *phase == wanted)
             .map(|(_, moves)| moves.clone())
             .unwrap_or_default()
+    }
+
+    /// Load every ordering phase for `fen` with a real [`MoveLoader`] and return the buffer occupancy
+    /// once all phases are in place, i.e. the number of entries the fixed-capacity buffer had to hold.
+    fn ordering_buffer_occupancy(fen: &str) -> usize {
+        chess::init::init_globals();
+        let position = Position::from_fen(fen).unwrap();
+        let flag = AtomicBool::new(false);
+        let table = Table::new(1);
+        let mut search = Search::new(position, &flag, None, &table);
+
+        let mut moves = OrderedMoves::new();
+        while moves.load_next_phase(MoveLoader::from(&mut search, None, 0)) {}
+        moves.buffer_occupancy()
+    }
+
+    /// The ordering buffer is a fixed-capacity array, and `ScoredMoveList::push` silently drops a move
+    /// once it is full. Its capacity rests on an arithmetic argument — worst-case occupancy is about
+    /// `L + 3P + 3` for `L` legal moves and `P` queen promotions — that nothing enforces at runtime
+    /// outside a debug build. In real positions the two terms cannot both be large at once: a high
+    /// promotion count needs pawns on the seventh rank, which displaces the sliding-piece mobility that
+    /// drives a high legal-move count. This pins two points that bound the argument:
+    ///
+    /// - the maximum legal mobility (218 moves, no promotions), the `L`-dominated extreme; and
+    /// - a synthetic position that deliberately breaks the mutual exclusivity — a full seventh-rank
+    ///   promotion wall *and* eight queens for mobility — so both terms are large together. It is
+    ///   unreachable in a real game but legal, and gives a conservative worst case above either
+    ///   realistic extreme alone.
+    ///
+    /// A later phase addition that loads more moves changes these counts and fails the test here,
+    /// rather than silently truncating a move list somewhere in the search.
+    #[test]
+    fn ordering_buffer_worst_case_occupancy_stays_within_capacity() {
+        let max_mobility = "R6R/3Q4/1Q4Q1/4Q3/2Q4Q/Q4Q2/pp1Q4/kBNN1KB1 w - - 0 1";
+        let promotion_and_mobility = "nnnnnnnn/PPPPPPPP/Q6Q/2Q2Q2/2Q2Q2/Q6Q/8/K6k w - - 0 1";
+
+        let max_occupancy = ordering_buffer_occupancy(max_mobility);
+        let stress_occupancy = ordering_buffer_occupancy(promotion_and_mobility);
+
+        // Exact measured occupancy. A change here means a phase now loads a different number of moves;
+        // confirm the capacity argument still holds before updating these constants.
+        assert_eq!(max_occupancy, 218, "maximum-mobility occupancy changed");
+        assert_eq!(
+            stress_occupancy, 156,
+            "promotion-and-mobility occupancy changed"
+        );
+
+        assert!(
+            max_occupancy < ORDERING_BUFFER_CAPACITY && stress_occupancy < ORDERING_BUFFER_CAPACITY,
+            "measured occupancy must stay within the ordering buffer capacity",
+        );
     }
 
     /// Continuation history conditions a quiet on the preceding move, so a move that is a strong
