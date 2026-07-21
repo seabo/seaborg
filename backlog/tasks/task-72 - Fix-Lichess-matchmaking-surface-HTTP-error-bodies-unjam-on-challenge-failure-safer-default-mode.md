@@ -3,11 +3,11 @@ id: TASK-72
 title: >-
   Fix Lichess matchmaking: surface HTTP error bodies, unjam on challenge
   failure, safer default mode
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-21 02:05'
-updated_date: '2026-07-21 02:14'
+updated_date: '2026-07-21 02:22'
 labels: []
 dependencies: []
 type: bug
@@ -22,10 +22,10 @@ Proactive matchmaking (TASK-71) fails in practice: an outgoing rated challenge t
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 On a non-success HTTP status other than 401/429, the transport reads the response body and includes it in the surfaced error (Error::Http), so a 400 from Lichess logs the server-provided reason rather than only "unexpected status 400"; a unit test proves the body text reaches the error
-- [ ] #2 When an outgoing matchmaking challenge fails at create time (recoverable HTTP error), the matchmaker applies a per-opponent penalty so the same bot is not re-selected on the immediately following attempts; a test drives a failing create_challenge and asserts the next attempt targets a different eligible bot (or none) rather than re-challenging the same one
-- [ ] #3 cargo fmt --check, cargo clippy --workspace --all-targets --all-features -- -D warnings, and cargo test --workspace all pass
-- [ ] #4 The bundled example config makes the rated-challenge rejection risk explicit: the [matchmaking] mode comment documents that rated challenges to bots are frequently rejected at creation, and the default mode is chosen so enabling matchmaking out of the box does not produce guaranteed repeated create-time rejections
+- [x] #1 On a non-success HTTP status other than 401/429, the transport reads the response body and includes it in the surfaced error (Error::Http), so a 400 from Lichess logs the server-provided reason rather than only "unexpected status 400"; a unit test proves the body text reaches the error
+- [x] #2 When an outgoing matchmaking challenge fails at create time (recoverable HTTP error), the matchmaker applies a per-opponent penalty so the same bot is not re-selected on the immediately following attempts; a test drives a failing create_challenge and asserts the next attempt targets a different eligible bot (or none) rather than re-challenging the same one
+- [x] #3 cargo fmt --check, cargo clippy --workspace --all-targets --all-features -- -D warnings, and cargo test --workspace all pass
+- [x] #4 The bundled example config makes the rated-challenge rejection risk explicit: the [matchmaking] mode comment documents that rated challenges to bots are frequently rejected at creation, and the default mode is chosen so enabling matchmaking out of the box does not produce guaranteed repeated create-time rejections
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -70,4 +70,32 @@ created: 2026-07-21 02:14
 ---
 Ready for independent review. Implementation target 5e38d3f on task-72-lichess-matchmaking-fixes; all repo-required checks pass. AC checks and final summary left for the reviewer.
 ---
+
+author: @claude
+created: 2026-07-21 02:22
+---
+Review attempt: 1
+Reviewed branch: task-72-lichess-matchmaking-fixes
+Reviewed implementation: 5e38d3f
+Verdict: approved
+
+All four acceptance criteria proven against the immutable base(27a19b4)-to-target(5e38d3f) diff; commits after the target contain only handoff metadata; worktree clean.
+
+AC#1: unexpected_status_error folds the response body into Error::Http for unhandled non-success statuses; 2xx returns early and 401/429 stay typed. Tests: transport::tests::unexpected_status_error_{includes_the_response_body,omits_an_empty_body,caps_a_huge_body}.
+AC#2: record_challenge_failed applies the shared per-opponent backoff; run.rs calls it on a recoverable create failure (Error::Http is_recoverable). Tests: matchmaking::tests::a_failed_challenge_makes_selection_move_to_the_next_bot; run::tests::a_failed_challenge_moves_matchmaking_to_a_different_bot (asserts posts firstbot then secondbot).
+AC#3/AC#4: config default and example toml both Casual with rejection-risk comment; default-mode test updated.
+
+Verification (run in worktree on target-equivalent tip; only the task md differs from 5e38d3f):
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (fresh CARGO_TARGET_DIR, exit 0)
+- cargo test --workspace: pass (exit 0); lichess 98 passed incl. 5 new tests
+
+No new #[allow], no unrelated changes, comments are self-contained.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Fixed three compounding Lichess matchmaking defects. (1) transport.rs check_status now reads the response body on an unhandled non-success status (2xx returns early; 401/429 still typed) and folds a trimmed, 500-char-capped snippet into Error::Http via the pure helper unexpected_status_error, so a 400 logs Lichess's reason; three unit tests prove body-reaches-error, empty-body-omitted, oversized-body-capped. (2) matchmaking.rs adds record_challenge_failed applying the shared per-opponent backoff, and run.rs maybe_seek_matchmaking_game calls it on a recoverable create failure, so the deterministic first-eligible selection no longer re-picks the wedged bot; a matchmaking unit test plus a run.rs integration test (FakeTransport failing challenge-create POST) prove the next attempt targets a different bot. (3) config.rs default mode and the example toml both changed Random->Casual with a comment that rated challenges to bots are frequently rejected at creation; default-mode test updated. Verified on implementation target 5e38d3f: cargo fmt --check pass; cargo clippy --workspace --all-targets --all-features -- -D warnings pass (clean CARGO_TARGET_DIR, exit 0); cargo test --workspace pass (exit 0, 5 new tests green).
+<!-- SECTION:FINAL_SUMMARY:END -->
