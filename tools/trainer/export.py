@@ -313,6 +313,69 @@ def integer_eval_cp(
     return int(np.clip(cp, _EVAL_CP_MIN, _EVAL_CP_MAX))
 
 
+# FEN piece letters to the shared piece codes: 1=P..6=K white, 7=p..12=k black,
+# the same numbering :mod:`data` decodes packed records into.
+_FEN_PIECE_CODES = {
+    "P": 1, "N": 2, "B": 3, "R": 4, "Q": 5, "K": 6,
+    "p": 7, "n": 8, "b": 9, "r": 10, "q": 11, "k": 12,
+}
+
+
+def features_from_fen(fen: str) -> tuple[np.ndarray, np.ndarray]:
+    """The active ``(stm, nstm)`` feature indices for a position written as FEN.
+
+    Parses the piece-placement and side-to-move fields and applies the
+    perspective-768 index formula the contract fixes -- the same one
+    :func:`data.decode` applies to packed records, transcribed here from the FEN
+    directly so it shares no code with the packed-record path. This is what lets
+    :func:`integer_eval_cp` be evaluated on a human-authored FEN and checked
+    against the engine, which derives the identical features from its own board.
+
+    Only the two fields that determine features are read; the rest of the FEN
+    (castling, en passant, clocks) does not affect the evaluation and is ignored.
+    """
+    fields = fen.split()
+    if not fields:
+        raise ExportError("empty FEN")
+    ranks = fields[0].split("/")
+    if len(ranks) != 8:
+        raise ExportError(f"FEN placement needs 8 ranks, got {len(ranks)}")
+    stm_is_white = len(fields) < 2 or fields[1] == "w"
+
+    stm: list[int] = []
+    nstm: list[int] = []
+    # FEN lists rank 8 first; square index has A1 = 0, so rank-8 is board rank 7.
+    for row, rank in enumerate(ranks):
+        file = 0
+        for ch in rank:
+            if ch.isdigit():
+                file += int(ch)
+                continue
+            code = _FEN_PIECE_CODES.get(ch)
+            if code is None:
+                raise ExportError(f"unexpected FEN piece {ch!r}")
+            if file >= 8:
+                raise ExportError(f"FEN rank {rank!r} overflows 8 files")
+            square = (7 - row) * 8 + file
+            is_white = code <= 6
+            piece_type_0 = (code - 1) % 6  # Pawn=0 .. King=5
+            # Own perspective sees the board upright; the other flips it vertically
+            # (square ^ 56) and swaps which side is friendly.
+            white_idx = square + 64 * piece_type_0 + 384 * (0 if is_white else 1)
+            black_idx = (square ^ 56) + 64 * piece_type_0 + 384 * (1 if is_white else 0)
+            if stm_is_white:
+                stm.append(white_idx)
+                nstm.append(black_idx)
+            else:
+                stm.append(black_idx)
+                nstm.append(white_idx)
+            file += 1
+        if file != 8:
+            raise ExportError(f"FEN rank {rank!r} does not fill 8 files")
+
+    return np.array(stm, dtype=np.int64), np.array(nstm, dtype=np.int64)
+
+
 def write_network(path, model: NnueModel) -> QuantizedNetwork:
     """Quantize ``model`` and write the SBNN file at ``path``; return the quantized
     network so a caller can inspect or reproduce it."""
@@ -353,6 +416,111 @@ def _demo_network(hidden: int = 16) -> QuantizedNetwork:
     )
 
 
+def _golden_network(hidden: int = 16) -> QuantizedNetwork:
+    """The deterministic network the golden-vector fixture is evaluated with.
+
+    Like :func:`_demo_network` it is patterned rather than trained, so both
+    languages can hold the identical weights, but its magnitudes are deliberately
+    larger so the golden vectors exercise the wide-value regime a small demo
+    network never reaches. The varied units (1..H-1) have feature-transformer
+    weights spanning roughly ``[-516, 516]``, so a few aligned pieces already push
+    an accumulator entry past the clip at ``QA`` and the units differ enough that
+    distinct positions get distinct scores. Unit 0 is instead a uniform large
+    weight (``+900`` for every feature): its accumulator is essentially ``900``
+    times the piece count, so a maximally dense board -- the near-overflow golden
+    positions -- drives it to roughly ``0.9·i16``, right against the ``i16`` the
+    accumulator is held in, without any legal position overflowing it
+    (``|b_ft| + 32·900 < i16::MAX``, which :func:`_assert_accumulator_fits_i16`
+    confirms). A non-zero output bias and per-block output weights make every
+    weight observable, so a dropped or misordered block changes a score."""
+    features = PERSPECTIVE_768_DIM
+    f = np.arange(features)[:, None]
+    i = np.arange(hidden)[None, :]
+    w_ft = ((((f * 167 + i * 61) % 173) - 86) * 6).astype(np.int64)  # [768, H]
+    # Unit 0 is the near-overflow stressor: a uniform large weight makes its
+    # accumulator scale with the piece count, so the densest positions approach the
+    # i16 the accumulator lives in while the other units keep the scores distinct.
+    w_ft[:, 0] = 900
+    w_ft = w_ft.reshape(-1).astype(np.int16)
+    b_ft = ((np.arange(hidden) * 5 % 13) - 6).astype(np.int16)
+    j = np.arange(2 * hidden)
+    w_out = ((((j * 23) % 97) - 48) * 6).astype(np.int16)
+    b_out = np.array([12000], dtype=np.int32)
+    net = QuantizedNetwork(
+        hidden=hidden, qa=255, qb=64, scale=400, w_ft=w_ft, b_ft=b_ft, w_out=w_out, b_out=b_out
+    )
+    _assert_accumulator_fits_i16(net)
+    return net
+
+
+# The golden positions, tagged by the aspect of the evaluation each set stresses.
+# Every entry is a full six-field FEN so the engine's `Position::from_fen` accepts
+# it verbatim. The categories are what the cross-language check must span:
+#   - tactical:     dense middlegames with pieces on active squares;
+#   - endgame:      sparse material, where a single feature moves the score most;
+#   - king-safety:  castled and exposed kings, exercising the king feature;
+#   - near-overflow: maximal or aligned material that drives the accumulator and
+#                    the output sum toward their integer bounds for this network.
+GOLDEN_POSITIONS: tuple[tuple[str, str], ...] = (
+    ("tactical", "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1"),
+    ("tactical", "r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 1"),
+    ("tactical", "r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/3P1N2/PPP2PPP/RNBQK2R w KQkq - 0 1"),
+    ("endgame", "8/8/8/4k3/8/8/4P3/4K3 w - - 0 1"),
+    ("endgame", "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1"),
+    ("endgame", "8/8/8/3k4/8/8/8/R3K3 w Q - 0 1"),
+    ("king-safety", "r1bq1rk1/pp2bppp/2n1pn2/2pp4/3P4/2N1PN2/PPQ1BPPP/R1B2RK1 w - - 0 1"),
+    ("king-safety", "r3k2r/pbppqppp/1pn2n2/4p3/4P3/1PN2N2/PBPPQPPP/R3K2R w KQkq - 0 1"),
+    ("king-safety", "rnbqkbnr/pp3ppp/2p5/3pp3/6P1/5P2/PPPPP2P/RNBQKBNR w KQkq - 0 1"),
+    ("near-overflow", "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"),
+    ("near-overflow", "qqqqkqqq/qqqqqqqq/8/8/8/8/QQQQQQQQ/QQQQKQQQ w - - 0 1"),
+    ("near-overflow", "rrrrkrrr/rrrrrrrr/8/8/8/8/RRRRRRRR/RRRRKRRR w - - 0 1"),
+)
+
+# Header the vectors file opens with; the trailing line documents the field order
+# the engine's loader parses.
+_GOLDEN_VECTORS_HEADER = (
+    "# Golden NNUE evaluation vectors: (category, FEN, expected centipawns).\n"
+    "# The expected score is this exporter's integer forward pass over the\n"
+    "# committed golden_v1.sbnn network; the engine asserts its own forward pass\n"
+    "# reproduces each one exactly. Regenerate both files together with:\n"
+    "#   python export.py --emit-golden <dir>\n"
+    "# Format per line, tab-separated: <category>\\t<FEN>\\t<expected_cp>\n"
+)
+
+
+def golden_vectors(
+    net: QuantizedNetwork, positions: tuple[tuple[str, str], ...] = GOLDEN_POSITIONS
+) -> list[tuple[str, str, int]]:
+    """Evaluate ``net`` over each ``(category, FEN)`` and return the golden triples
+    ``(category, FEN, expected_cp)``. The expected score is the contract's integer
+    forward pass, the same value the engine's forward pass must reproduce."""
+    result = []
+    for category, fen in positions:
+        stm, nstm = features_from_fen(fen)
+        result.append((category, fen, integer_eval_cp(net, stm, nstm)))
+    return result
+
+
+def _format_golden_vectors(vectors: list[tuple[str, str, int]]) -> str:
+    body = "".join(f"{category}\t{fen}\t{cp}\n" for category, fen, cp in vectors)
+    return _GOLDEN_VECTORS_HEADER + body
+
+
+def write_golden_fixture(
+    net_path, vectors_path, net: QuantizedNetwork | None = None
+) -> list[tuple[str, str, int]]:
+    """Write the two-file golden fixture the engine's differential test consumes:
+    the SBNN ``net_path`` it loads and the ``vectors_path`` of expected scores it
+    checks its forward pass against. Defaults to the deterministic golden network
+    so the fixture is reproducible without a trained checkpoint; pass ``net`` to
+    emit vectors for a real exported network instead."""
+    net = net or _golden_network()
+    vectors = golden_vectors(net)
+    Path(net_path).write_bytes(net.to_bytes())
+    Path(vectors_path).write_text(_format_golden_vectors(vectors))
+    return vectors
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Quantize and export an NNUE network file.")
     parser.add_argument("--checkpoint", type=Path, help="fp32 checkpoint from train.py")
@@ -362,11 +530,33 @@ def main(argv=None) -> int:
         type=Path,
         help="write the deterministic cross-language test fixture and exit",
     )
+    parser.add_argument(
+        "--emit-golden",
+        type=Path,
+        metavar="DIR",
+        help="write the deterministic golden-vector fixture (golden_v1.sbnn and "
+        "golden_v1.vectors) into DIR and exit",
+    )
+    parser.add_argument(
+        "--golden",
+        type=Path,
+        metavar="DIR",
+        help="with --checkpoint/--out, also emit golden vectors for the exported "
+        "network into DIR (golden_v1.sbnn and golden_v1.vectors)",
+    )
     args = parser.parse_args(argv)
 
     if args.emit_fixture is not None:
         args.emit_fixture.write_bytes(_demo_network().to_bytes())
         print(f"wrote fixture to {args.emit_fixture}")
+        return 0
+
+    if args.emit_golden is not None:
+        args.emit_golden.mkdir(parents=True, exist_ok=True)
+        net_path = args.emit_golden / "golden_v1.sbnn"
+        vectors_path = args.emit_golden / "golden_v1.vectors"
+        vectors = write_golden_fixture(net_path, vectors_path)
+        print(f"wrote {len(vectors)} golden vectors to {net_path} and {vectors_path}")
         return 0
 
     if args.checkpoint is None or args.out is None:
@@ -378,6 +568,14 @@ def main(argv=None) -> int:
         f"wrote {args.out}: H={net.hidden} qa={net.qa} qb={net.qb} scale={net.scale}, "
         f"{net.param_bytes()} parameter bytes"
     )
+
+    if args.golden is not None:
+        args.golden.mkdir(parents=True, exist_ok=True)
+        net_path = args.golden / "golden_v1.sbnn"
+        vectors_path = args.golden / "golden_v1.vectors"
+        vectors = write_golden_fixture(net_path, vectors_path, net)
+        print(f"wrote {len(vectors)} golden vectors to {net_path} and {vectors_path}")
+
     return 0
 
 
