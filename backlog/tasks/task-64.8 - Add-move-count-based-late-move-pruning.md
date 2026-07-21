@@ -1,11 +1,11 @@
 ---
 id: TASK-64.8
 title: Add move-count based late move pruning
-status: Ready to Merge
+status: Done
 assignee:
   - '@george'
 created_date: '2026-07-19 13:32'
-updated_date: '2026-07-21 16:14'
+updated_date: '2026-07-21 16:32'
 labels:
   - search
   - pruning
