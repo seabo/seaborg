@@ -1,11 +1,11 @@
 ---
 id: TASK-69.10
 title: Golden-vector emission and three-way differential equivalence test
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:41'
-updated_date: '2026-07-21 15:44'
+updated_date: '2026-07-21 15:53'
 labels:
   - nnue
   - training
@@ -28,9 +28,9 @@ This is the entire cross-language sync guarantee. With it, keeping the two imple
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Export emits a golden-vector set covering tactical, endgame, king-safety, and near-overflow positions
-- [ ] #2 A differential test asserts PyTorch quantized forward equals the Rust scalar forward exactly over the golden vectors
-- [ ] #3 When the SIMD path is available it is included in the equality assertion, giving a three-way check
+- [x] #1 Export emits a golden-vector set covering tactical, endgame, king-safety, and near-overflow positions
+- [x] #2 A differential test asserts PyTorch quantized forward equals the Rust scalar forward exactly over the golden vectors
+- [x] #3 When the SIMD path is available it is included in the equality assertion, giving a three-way check
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -86,4 +86,39 @@ Verification:
 - tools/trainer: .venv/bin/python -m unittest discover -p 'test_*.py': 51 passed (20 in test_export.py, incl. the new FeaturesFromFenTest and GoldenVectorTest)
 Known failures: none. Note: on this aarch64 host the SIMD arm of the differential test is cfg-compiled out, so it runs scalar-vs-Python only; the three-way (scalar + AVX2 + Python) arm is exercised on x86_64 CI. CI does not run the Python suite; the committed engine/tests/fixtures/golden_v1.{sbnn,vectors} is what the Rust gate checks across languages.
 ---
+
+author: @claude
+created: 2026-07-21 15:53
+---
+Review attempt: 1
+Reviewed branch: task-69.10-golden-vector-differential
+Reviewed implementation: 11e589398154e7ae899d93b955541b675abf0b6a
+Verdict: approved
+
+Full base(a5e52e6)-to-target(11e5893) diff reviewed. Target descends from base; the only commit after it (4b084ad) touches the task file alone, so no implementation file changed after the reviewed SHA.
+
+Acceptance criteria (all proven by objective evidence):
+- AC#1: --emit-golden writes golden_v1.{sbnn,vectors}; GOLDEN_POSITIONS spans all four categories; test_positions_span_every_category and test_near_overflow_positions_drive_the_widest_accumulators confirm coverage and that near-overflow entries drive an accumulator past 0.7*i16::MAX while still fitting.
+- AC#2: golden_vectors_agree_across_python_scalar_and_simd asserts the Rust scalar forward equals the exporter's emitted integer_eval_cp for every triple. features_from_fen matches the engine's feature_index contract (oriented square/square^56, piece_type-1, enemy half +384) and is independently cross-checked against data.decode in FeaturesFromFenTest, so the check exercises cross-language feature encoding, not only arithmetic. No golden score hits the +/-10000 clamp (range -2163..4129), so exact wide-value arithmetic is verified rather than saturated.
+- AC#3: on x86-64 with AVX2 the SIMD forward is also asserted equal — a real three-way. cfg gate is correct; the x86_64 arm compiles clean under a fresh CARGO_TARGET_DIR (verified here, since it is cfg-out on the aarch64 review host).
+
+Other checks:
+- forward refactor is codegen-identical for production (inlined generic monomorphized on the zero-sized fn-item dot_clipped_selected); nnue::forward is also off the default hot path (eval network is None by default). No benchmark warranted; the named perft/movegen benches do not cover this code.
+- No #[allow] added. No task-ID/AC/finding-ID references in code comments; comments state rationale.
+- Scope is limited to engine/src/nnue/inference.rs, tools/trainer/{export.py,test_export.py,README.md}, and the two fixtures.
+
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (fresh CARGO_TARGET_DIR)
+- cargo test -p engine: 388 passed, 2 ignored (incl. both golden tests)
+- cargo test --workspace: only failure is lichess run::tests::incoming_challenge_is_handled_while_a_matchmaking_call_is_blocked, a pre-existing timing flake in the untouched lichess crate (passed 3/3 in isolation)
+- tools/trainer: python -m unittest discover: 51 passed
+- cargo test -p engine --target x86_64-apple-darwin --no-run (fresh CARGO_TARGET_DIR): compiles clean (SIMD three-way arm)
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Closed the Rust/Python NNUE sync loop with a committed golden-vector fixture and a three-way differential test. export.py gains features_from_fen (a FEN-based, independent derivation of the perspective-768 indices, cross-checked against the packed-record decoder), a deterministic _golden_network sized to exercise the clip and the wide i16 accumulator regime, GOLDEN_POSITIONS spanning tactical/endgame/king-safety/near-overflow, and an --emit-golden CLI writing golden_v1.{sbnn,vectors}. inference.rs refactors forward into an inlined generic forward_with(dot) — production forward passes dot_clipped_selected exactly as before (zero-cost, codegen-identical) — and adds a #[cfg(test)] differential test asserting the Rust scalar forward, and on x86-64+AVX2 the SIMD forward, reproduce the exporter's emitted integers exactly, plus that all four categories are present. Verified on target 11e5893: cargo fmt --check pass; cargo clippy --workspace --all-targets --all-features -- -D warnings pass (clean CARGO_TARGET_DIR); cargo test -p engine 388 passed incl. golden_vectors_agree_across_python_scalar_and_simd; python -m unittest 51 passed; x86_64-apple-darwin test target compiles clean (SIMD arm) via fresh target dir. The one workspace test failure (lichess run::tests::incoming_challenge_is_handled_while_a_matchmaking_call_is_blocked) is a pre-existing timing flake in the untouched lichess crate, passing 3/3 in isolation.
+<!-- SECTION:FINAL_SUMMARY:END -->
