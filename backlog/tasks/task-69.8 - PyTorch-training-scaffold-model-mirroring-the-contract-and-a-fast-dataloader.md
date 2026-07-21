@@ -1,11 +1,11 @@
 ---
 id: TASK-69.8
 title: 'PyTorch training scaffold: model mirroring the contract and a fast dataloader'
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:41'
-updated_date: '2026-07-21 03:38'
+updated_date: '2026-07-21 03:43'
 labels:
   - nnue
   - training
