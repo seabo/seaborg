@@ -1,11 +1,11 @@
 ---
 id: TASK-69.11
 title: 'Reinforcement loop orchestration: generate, train, SPRT-gate, promote'
-status: In Review
+status: Changes Requested
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:42'
-updated_date: '2026-07-21 18:47'
+updated_date: '2026-07-21 19:01'
 labels:
   - nnue
   - training
@@ -160,5 +160,69 @@ Verification:
 - python3 -m unittest (tools/strength): 21 pass
 - Empirical: _gate_result_from_report on a harness-shaped report.json now returns elo=12.3, elo_interval=8.1, games_played=240 (was None/None/None)
 Known failures: none
+---
+
+author: @claude
+created: 2026-07-21 19:01
+---
+Review attempt: 2
+Reviewed branch: task-69.11-reinforcement-loop-orchestration
+Reviewed implementation: 64950f920ed004cc16c3760895dc80f2b0bdcdfa
+Base: daa79cb8a19d635702e894927f44064e76480f95
+Verdict: changes_requested
+
+REV-2-01 [P2] Baseline network id is mislabeled after any non-promoting generation
+Location: tools/rl/loop.py:522 (_attribution) and tools/rl/loop.py:301 (SubprocessBackend.gate)
+Impact: Blocks AC #2's attribution requirement ("network id ... so strength changes
+  stay attributable"). Both the ledger's baseline network_id and the gate's --baseline-id
+  are built with network_id(best, generation - 1), which assumes the current best was
+  promoted at the immediately preceding generation. That assumption is false whenever a
+  candidate is rejected — a normal, tested outcome (test_non_pass_verdicts_do_not_promote,
+  test_a_failed_candidate_leaves_the_previous_best_intact). When generation-1 did not
+  promote, the baseline is an older network but is labeled with a generation that never
+  produced a network, so:
+    - the same network bytes are recorded under two different network_ids across
+      iterations (e.g. nnue:gen-000 in one ledger line, nnue:gen-001 in the next);
+    - the label contradicts best.json, whose "generation" field is the true producing
+      generation (written correctly by _promote); and
+    - network_id's own contract ("the generation that produced it", loop.py:88-95) is
+      violated, and the fabricated id is also injected into the strength report via
+      --baseline-id.
+  The candidate network_id is unaffected; only the baseline is mislabeled. The raw
+  baseline sha256 is still recorded in a sibling field, so identity is recoverable, but
+  the ledger — the permanent attribution record the programme run (69.12) depends on — is
+  internally inconsistent and names a generation that does not exist.
+Reproduction:
+  cd tools/rl && python3 -c "
+  import json, tempfile; from pathlib import Path; import loop as rl
+  class FB(rl.Backend):
+      def __init__(self,v): self.v=v; self.n=0
+      def generate(s,out,network,nodes,games):
+          out.parent.mkdir(parents=True,exist_ok=True)
+          out.write_bytes(b'\x00'*(rl.SAMPLE_HEADER_SIZE+rl.SAMPLE_RECORD_SIZE))
+          return rl.GenerateResult(path=out,samples=10)
+      def train(s,data,cp,gen): cp.write_bytes(b'c')
+      def export(s,cp,net): s.n+=1; net.write_bytes(f'net-{s.n}'.encode())
+      def gate(s,bn,cn,od,gen):
+          v=s.v(gen); c=next(k for k,x in rl.VERDICT_BY_EXIT.items() if x==v)
+          return rl.GateResult(verdict=v,exit_code=c,output_dir=od,elo=1.0,elo_interval=2.0,games_played=10)
+  t=Path(tempfile.mkdtemp())/'state'; vd={0:'PASS',1:'FAIL',2:'FAIL'}
+  rl.ReinforcementLoop(rl.LoopConfig(state_dir=t,engine=Path('/e'),trainer_dir=Path('/t'),strength_script=Path('/s')),FB(lambda g:vd[g])).run(3)
+  print('best.json gen', json.loads((t/rl.BEST_MANIFEST).read_text())['generation'])
+  for r in [json.loads(l) for l in (t/rl.LEDGER).read_text().splitlines()]:
+      print('gen',r['generation'],'baseline.network_id',r['baseline']['network_id'])"
+  # best.json gen 0; gen 1 baseline nnue:gen-000...; gen 2 baseline nnue:gen-001... (same bytes, nonexistent gen)
+Expected: The baseline network_id and gate --baseline-id must name the generation that
+  actually produced the current best (available in best.json's "generation", written by
+  _promote), not generation - 1, so a network's id is stable across iterations, agrees
+  with best.json, and never names a rejected/nonexistent generation.
+
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean)
+- cargo test --workspace: pass (engine 397/2 ignored, chess 50, integration + doc-tests green)
+- python3 -m unittest (tools/rl): 11 pass; (tools/strength): 21 pass
+- Empirical: with verdicts {0:PASS,1:FAIL,2:FAIL}, best.json records generation 0 while
+  the gen-2 ledger line labels the identical baseline bytes nnue:gen-001
 ---
 <!-- COMMENTS:END -->
