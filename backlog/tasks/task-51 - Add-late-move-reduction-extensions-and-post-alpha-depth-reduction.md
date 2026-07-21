@@ -5,7 +5,7 @@ status: Changes Requested
 assignee:
   - '@george'
 created_date: '2026-07-18 18:30'
-updated_date: '2026-07-21 00:41'
+updated_date: '2026-07-21 00:50'
 labels: []
 dependencies:
   - TASK-50
@@ -84,7 +84,7 @@ Implemented the single reductions/extensions/LMR mechanism in engine/src/search.
 
 ## Strength measurement (AC #5)
 
-Controlled round-robin, candidate (this branch, cbdfe4c) vs baseline (merge-base 6d3d4ac, the only diff being this change), fastchess, reproducible node limit nodes=100000, openings-v1.epd, 16MB hash, single worker.
+Controlled round-robin, candidate (this branch, 356c776, the reviewed implementation target) vs baseline (merge-base 6d3d4ac, the only diff being this change), fastchess, reproducible node limit nodes=100000, openings-v1.epd, 16MB hash, single worker.
 - 20-game harness smoke (tools/strength/strength_test.py --mode smoke): completed cleanly, no illegal moves / crashes; SPRT inconclusive at 20 games (LLR 0.14), as expected for that sample size.
 - 200-game direct match: Elo +188.5 +/- 51.5, nElo +215.8, LOS 100.0%, 137W / 38L / 25D (74.75%), Ptnml [0,13,25,12,50]. No crashes or illegal moves.
 Result is a decisive strength gain, well beyond the 'no strength loss' bar. The node-limited budget is a fair test: LMR converts the nodes it saves into greater search depth.
@@ -145,5 +145,11 @@ Expected: Correct the candidate identity in the notes to the reviewed implementa
 
 Verification (independent confirmation that 356c776 is the strong commit and the fix direction is unambiguous):
 - Controlled node-limited match, target 356c776 vs base 6d3d4ac, fastchess nodes=100000, option.Hash=16, openings-v1.epd, 100 games: Elo +186.25 +/- 74.13, nElo +211.19, LOS 100.00%, 74.5% (68W/19L/13D), Ptnml [0,7,12,6,25]. Reproduces the reported gain and confirms 356c776 (not cbdfe4c) is the measured candidate.
+---
+
+author: @reviewer
+created: 2026-07-21 00:50
+---
+Resolved REV-1-01: corrected the AC#5 strength-measurement candidate in the implementation notes from cbdfe4c (task-md only, no code) to 356c776, the reviewed implementation target. Applied under an explicit human override of the implementer/reviewer split for this notes-only textual fix; no code changed (git diff 356c776 -- ':!backlog/' is empty).
 ---
 <!-- COMMENTS:END -->
