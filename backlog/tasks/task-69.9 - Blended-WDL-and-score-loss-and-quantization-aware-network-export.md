@@ -1,9 +1,11 @@
 ---
 id: TASK-69.9
 title: Blended WDL-and-score loss and quantization-aware network export
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-20 19:41'
+updated_date: '2026-07-21 05:48'
 labels:
   - nnue
   - training
@@ -30,3 +32,27 @@ The WDL term is the only signal in the whole loop that comes from the rules of c
 - [ ] #2 Training accounts for quantization so exported integer weights reproduce the trained model behaviour within the contract tolerance
 - [ ] #3 The exporter writes a versioned network file that the engine loader (TASK-69.2) accepts
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Lambda schedule (AC#1): add a LambdaSchedule to train.py supporting a constant lambda (default 0.3) and a linear ramp over generations (0.1->0.5), resolved per-generation; keep the float 'lam' path back-compatible. CLI gains --lambda-end/--lambda-generations/--generation. Test on a small fixture in test_train.py.
+2. Quantization-aware training (AC#2): add straight-through fake quantization (round-half-to-even weights at QA/QB, activation at QA) to NnueModel behind a quantization_aware flag so the training forward already computes the quantized quantities; keep feature-transformer weight/bias magnitude clamping each step so the i16 accumulator cannot overflow for any <=32-piece position. train() enables QAT.
+3. Exporter (AC#2/#3): export.py quantizes a trained model to integer Parameters (round-half-to-even; W_ft*QA i16, b_ft*QA i16, W_out*QB i16, b_out*QA*QB i32), verifies no integer-type overflow and the accumulator i16 bound, and serialises the SBNN file (64-byte header + blob + FNV-1a hash) byte-for-byte per engine/src/nnue/format.rs. A Python integer-inference reference mirrors engine::nnue::forward exactly; a fixture test asserts it reproduces the QAT float forward within a small documented centipawn tolerance.
+4. Cross-language (AC#3): export.py --emit-fixture writes a deterministic patterned SBNN file; a Rust integration test (engine/tests) asserts engine::nnue::Network::read accepts it and decodes to the expected network. Python test independently re-reads the exported bytes and validates every header field.
+5. Update README/model docstrings (export is now this task, not a later one). Run cargo fmt/clippy/test and the Python unittest suite; write the review handoff.
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented the blended-loss lambda schedule, quantization-aware training, and the SBNN exporter in tools/trainer; added a Rust integration test that loads an exported fixture. No engine source changed except the new integration test and its fixture.
+
+AC#1 (schedulable lambda): train.py gains LambdaSchedule (constant, or a linear ramp resolved per reinforcement generation) and resolve_lambda; a run trains one generation and resolves to a single lambda. CLI flags --lambda-end/--lambda-generations/--generation build and resolve it. test_train.py pins the schedule arithmetic and its effect on the blended target on a small fixture (search vs outcome endpoints, linear interpolation, clamping, and that the schedule genuinely changes the target).
+
+AC#2 (quantization-aware, reproduces within tolerance): model.py adds a straight-through fake-quantization forward (round-half-to-even weights at QA/QB, activations at QA) behind a quantization_aware flag, plus clamp_for_quantization() that bounds the feature-transformer weights so the i16 accumulator cannot overflow for any <=32-piece position. train() trains quantization-aware by default and clamps each step. export.py quantizes with the contract rounding and scales, refuses any weight overflowing its integer type or an accumulator that could exceed i16, and provides integer_eval_cp mirroring engine::nnue::forward exactly. Because training optimises the quantized behaviour, the exported integer network reproduces the model's own centipawn output to <=1 cp (measured max 0.49 cp over a trained fixture; the residual is only the final round-half-away divide). test_export.py asserts it.
+
+AC#3 (engine loads the exported file): export.py serialises the 64-byte SBNN header + blob + FNV-1a hash byte-for-byte per engine/src/nnue/format.rs, with an independent Python reader (QuantizedNetwork.from_bytes) validating every field and rejection rule. export.py --emit-fixture writes a deterministic patterned network to engine/tests/fixtures/exported_v1.sbnn; engine/tests/loads_exported_network.rs loads it with Network::read and asserts it decodes to the network rebuilt from the same pattern.
+
+Verified end to end: CLI train (lambda ramp at generation 2) -> checkpoint -> export.py -> reloadable SBNN file. README documents the schedule, QAT, and export.
+<!-- SECTION:NOTES:END -->

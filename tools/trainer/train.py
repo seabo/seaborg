@@ -1,9 +1,9 @@
-"""Train the float NNUE network on packed self-play samples.
+"""Train the NNUE network on packed self-play samples.
 
-This delivers the first half of the training pipeline: consume generated data
-and produce an fp32 checkpoint, reporting training and validation loss. The
-quantized export and the strength-preserving numeric guarantees are separate,
-later tasks; this checkpoint is float weights only.
+This consumes generated data and produces an fp32 checkpoint, reporting training
+and validation loss. By default it trains quantization-aware (see
+:mod:`model`) so the checkpoint's behaviour survives the integer export in
+:mod:`export`; pass ``--no-quantization-aware`` for a plain fp32 model.
 
 The training target is the contract's blended, win-probability-space target::
 
@@ -31,6 +31,52 @@ import torch
 
 from data import PackedData, iter_batches
 from model import NnueConfig, NnueModel
+
+
+@dataclass(frozen=True)
+class LambdaSchedule:
+    """The blend weight ``lambda`` as a function of the reinforcement generation.
+
+    ``lambda`` weights the game outcome against the search score (0 trusts search
+    entirely, 1 trusts the result entirely). Self-play outcomes from a weak
+    bootstrap are noisy, so the contract's schedule leans on search scores early
+    (small ``lambda``) and shifts toward outcomes as strength grows across
+    generations. A run trains one generation, so the schedule resolves to a single
+    ``lambda`` for that run; the ramp plays out across successive runs.
+
+    ``start`` alone is a constant schedule. Giving ``end`` makes it ramp linearly
+    from ``start`` at generation 0 to ``end`` at generation ``generations - 1``,
+    clamped outside that range."""
+
+    start: float
+    end: float | None = None
+    generations: int = 1
+
+    @classmethod
+    def constant(cls, value: float) -> "LambdaSchedule":
+        return cls(start=value)
+
+    @classmethod
+    def ramp(cls, start: float, end: float, generations: int) -> "LambdaSchedule":
+        if generations < 1:
+            raise ValueError("a ramp needs at least one generation")
+        return cls(start=start, end=end, generations=generations)
+
+    def at(self, generation: int) -> float:
+        """The blend weight for ``generation`` (0-based), clamped to the ends."""
+        if self.end is None or self.generations <= 1:
+            return self.start
+        frac = generation / (self.generations - 1)
+        frac = min(1.0, max(0.0, frac))
+        return self.start + (self.end - self.start) * frac
+
+
+def resolve_lambda(lam: "float | LambdaSchedule", generation: int) -> float:
+    """The scalar blend weight to train with: a bare float passes through, a
+    :class:`LambdaSchedule` resolves at ``generation``."""
+    if isinstance(lam, LambdaSchedule):
+        return lam.at(generation)
+    return float(lam)
 
 
 def _sigmoid(x: np.ndarray) -> np.ndarray:
@@ -91,15 +137,24 @@ def train(
     epochs: int,
     batch_size: int,
     lr: float,
-    lam: float,
+    lam: "float | LambdaSchedule",
     val_fraction: float,
     seed: int,
+    generation: int = 0,
+    quantization_aware: bool = True,
     device: str = "cpu",
     log=print,
 ) -> tuple[NnueModel, list[EpochReport]]:
-    """Train a fresh model and return it with its per-epoch loss history."""
+    """Train a fresh model and return it with its per-epoch loss history.
+
+    ``lam`` is either a scalar blend weight or a :class:`LambdaSchedule`, resolved
+    once at ``generation`` for the whole run. With ``quantization_aware`` set (the
+    default), the model trains on its quantized behaviour so the exported integer
+    network reproduces it; the feature-transformer weights are clamped each step so
+    the i16 accumulator cannot overflow."""
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
+    lam_value = resolve_lambda(lam, generation)
 
     order = rng.permutation(len(data))
     val_size = int(len(order) * val_fraction)
@@ -108,7 +163,9 @@ def train(
     if len(train_idx) == 0:
         raise ValueError("no training samples remain after the validation split")
 
-    model = NnueModel(config).to(device)
+    model = NnueModel(config, quantization_aware=quantization_aware).to(device)
+    if quantization_aware:
+        model.clamp_for_quantization()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     history: list[EpochReport] = []
@@ -118,16 +175,18 @@ def train(
         total = 0.0
         seen = 0
         for batch in iter_batches(data, epoch_order, batch_size):
-            loss = _loss_on(model, batch, device, config.scale, lam)
+            loss = _loss_on(model, batch, device, config.scale, lam_value)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            if quantization_aware:
+                model.clamp_for_quantization()
             n = len(batch)
             total += loss.item() * n
             seen += n
         train_loss = total / max(seen, 1)
         val_loss = (
-            _evaluate(model, data, val_idx, batch_size, device, config.scale, lam)
+            _evaluate(model, data, val_idx, batch_size, device, config.scale, lam_value)
             if len(val_idx) > 0
             else float("nan")
         )
@@ -178,6 +237,14 @@ def _build_config(args) -> NnueConfig:
     return NnueConfig(hidden=args.hidden, activation=args.activation, scale=args.scale)
 
 
+def _build_schedule(args) -> LambdaSchedule:
+    """A constant schedule from ``--lambda`` unless ``--lambda-end`` asks for a
+    ramp across ``--lambda-generations``."""
+    if args.lambda_end is None:
+        return LambdaSchedule.constant(args.lam)
+    return LambdaSchedule.ramp(args.lam, args.lambda_end, args.lambda_generations)
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Train the float NNUE network.")
     parser.add_argument("--data", type=Path, required=True, help="packed sample file")
@@ -188,11 +255,39 @@ def main(argv=None) -> int:
     parser.add_argument("--activation", choices=["crelu", "screlu"], default="crelu")
     parser.add_argument("--scale", type=int, default=400)
     parser.add_argument(
-        "--lambda", dest="lam", type=float, default=0.3, help="weight on the game outcome"
+        "--lambda",
+        dest="lam",
+        type=float,
+        default=0.3,
+        help="weight on the game outcome (the ramp start when --lambda-end is given)",
+    )
+    parser.add_argument(
+        "--lambda-end",
+        type=float,
+        default=None,
+        help="ramp lambda from --lambda to this value across --lambda-generations",
+    )
+    parser.add_argument(
+        "--lambda-generations",
+        type=int,
+        default=1,
+        help="number of reinforcement generations the lambda ramp spans",
+    )
+    parser.add_argument(
+        "--generation",
+        type=int,
+        default=0,
+        help="this run's reinforcement generation, at which the lambda schedule resolves",
     )
     parser.add_argument("--val-fraction", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", default="cpu")
+    parser.add_argument(
+        "--no-quantization-aware",
+        dest="quantization_aware",
+        action="store_false",
+        help="train the plain fp32 model instead of its quantized behaviour",
+    )
     parser.add_argument("--out", type=Path, help="write the fp32 checkpoint here")
     parser.add_argument(
         "--benchmark",
@@ -216,9 +311,11 @@ def main(argv=None) -> int:
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,
-        lam=args.lam,
+        lam=_build_schedule(args),
         val_fraction=args.val_fraction,
         seed=args.seed,
+        generation=args.generation,
+        quantization_aware=args.quantization_aware,
         device=args.device,
     )
 

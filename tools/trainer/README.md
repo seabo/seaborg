@@ -1,25 +1,25 @@
 # NNUE trainer
 
 The Python/PyTorch training project for Seaborg's NNUE network. It consumes the
-packed self-play samples the engine generates and produces an **fp32
-checkpoint**. Quantized export and the strength-preserving numeric guarantees are
-separate, later tasks; this project stops at float weights.
+packed self-play samples the engine generates, trains a model, and **exports the
+quantized `SBNN` network file the engine loads and runs**.
 
 Everything here implements the shared decisions in
 [`docs/nnue-design-contract.md`](../../docs/nnue-design-contract.md): the feature
-set and index formula, the topology and its parameterizable dimensions, and the
-blended win-probability training target. When the contract and this code
-disagree, the contract wins.
+set and index formula, the topology and its parameterizable dimensions, the
+blended win-probability training target, and the quantization scheme. When the
+contract and this code disagree, the contract wins.
 
 ## Layout
 
 | File | Role |
 | --- | --- |
-| `model.py` | The float NNUE model and its `NnueConfig` (the contract's parameterizable dimensions). |
+| `model.py` | The NNUE model and its `NnueConfig` (the contract's parameterizable dimensions), including the quantization-aware forward pass. |
 | `data.py` | The dataloader: memory-maps the packed format and decodes batches into sparse `EmbeddingBag` inputs with vectorised NumPy. |
-| `train.py` | Training loop, the blended target, checkpoint writing, and the throughput benchmark. |
+| `train.py` | Training loop, the blended target and its `LambdaSchedule`, checkpoint writing, and the throughput benchmark. |
+| `export.py` | Quantizes a checkpoint and writes the versioned `SBNN` network file; also the integer forward pass the export is checked against. |
 | `testsupport.py` | A reference encoder for the packed format, used by the tests. |
-| `test_data.py`, `test_model.py` | `unittest` suites (no pytest dependency). |
+| `test_data.py`, `test_model.py`, `test_train.py`, `test_export.py` | `unittest` suites (no pytest dependency). |
 
 ## Setup
 
@@ -57,6 +57,55 @@ The checkpoint stores the architecture config plus float weights:
 `feature_transformer.weight` is `[768, H]` in the same feature-major order the
 on-disk `W_ft` block uses, so quantized export serialises it without
 transposing.
+
+### Scheduling lambda
+
+`lambda` weights the game outcome against the search score. Self-play outcomes
+from a weak bootstrap are noisy, so the contract's schedule leans on search
+scores early and shifts toward outcomes as strength grows across reinforcement
+generations. A run trains one generation, so a schedule resolves to a single
+`lambda` for that run and the ramp plays out across successive runs:
+
+```sh
+# Generation 3 of a 0.1 -> 0.5 ramp spanning 10 generations.
+.venv/bin/python train.py --data samples.bin --lambda 0.1 --lambda-end 0.5 \
+    --lambda-generations 10 --generation 3 --out gen3.pt
+```
+
+Without `--lambda-end`, `--lambda` is a constant (default 0.3).
+
+### Quantization-aware training
+
+The engine runs an **integer** network, and the `QB = 64` output-weight grid
+alone shifts a naively-quantized score by tens of centipawns. So training is
+quantization-aware by default: the forward pass rounds weights and activations
+onto the engine's integer grids (with a straight-through gradient), so the model
+optimises the behaviour the export will actually ship. Pass
+`--no-quantization-aware` to train the plain fp32 model instead. Either way, the
+feature-transformer weights are clamped each step so the i16 accumulator cannot
+overflow for any legal position — the contract makes that overflow a defect.
+
+## Exporting a network
+
+`export.py` quantizes a checkpoint and writes the versioned `SBNN` file
+(`engine/src/nnue/format.rs`) the engine loads directly:
+
+```sh
+.venv/bin/python export.py --checkpoint checkpoint.pt --out network.sbnn
+```
+
+Quantization follows the contract (round half to even): `W_ft, b_ft = round(·QA)`
+as i16, `W_out = round(·QB)` as i16, `b_out = round(·QA·QB)` as i32. The export
+refuses a network whose accumulator could overflow i16 or whose weights overflow
+their integer type, so a written file is always one the engine can run.
+
+Because training is quantization-aware, the exported integer network reproduces
+the model's own centipawn evaluation to within the dequantizing divide's rounding
+(≤ 1 cp): with the same rounded weights and activations on both sides,
+`integer_eval_cp` equals `round(SCALE · fout)`. `test_export.py` asserts this on a
+trained fixture, and a Rust integration test
+(`engine/tests/loads_exported_network.rs`) loads an exported fixture to confirm
+the two languages agree on the byte layout.
 
 ## Measured throughput
 
@@ -112,4 +161,8 @@ side-to-move perspective selection, target decoding, stream-header rejection, an
 the mirror invariance of the sparse encoding. `test_model.py` checks
 configuration validation, parameterization, that a mirrored position evaluates
 identically (an architectural property that holds without training), the target
-blend, and that a short run converges.
+blend, and that a short run converges. `test_train.py` pins the `LambdaSchedule`
+arithmetic and its effect on the blended target. `test_export.py` checks the
+quantization rounding, the accumulator bound, the `SBNN` serialization (with a
+reader written independently of the writer), and that the exported integer
+network reproduces a trained model within tolerance.
