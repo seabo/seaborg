@@ -1,11 +1,11 @@
 ---
 id: TASK-64.7
 title: Add reverse futility pruning
-status: In Review
+status: Ready to Merge
 assignee:
   - '@george'
 created_date: '2026-07-19 13:32'
-updated_date: '2026-07-21 02:31'
+updated_date: '2026-07-21 02:33'
 labels:
   - search
   - pruning
@@ -32,10 +32,10 @@ Caveat. This decides what to discard by comparing a static evaluation against a 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Reverse futility pruning is applied in non-PV nodes below a documented depth and is disabled in check and when beta is a mate score
-- [ ] #2 The technique is implemented separately from and does not duplicate the forward futility pruning of TASK-50
-- [ ] #3 A fixed-depth search on a position set where the guards are inactive returns unchanged best moves, confirming the guards
-- [ ] #4 Measured with the TASK-27 strength-regression script, with results recorded in the implementation notes, including a null or negative result and its bearing on evaluation quality
+- [x] #1 Reverse futility pruning is applied in non-PV nodes below a documented depth and is disabled in check and when beta is a mate score
+- [x] #2 The technique is implemented separately from and does not duplicate the forward futility pruning of TASK-50
+- [x] #3 A fixed-depth search on a position set where the guards are inactive returns unchanged best moves, confirming the guards
+- [x] #4 Measured with the TASK-27 strength-regression script, with results recorded in the implementation notes, including a null or negative result and its bearing on evaluation quality
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -164,4 +164,36 @@ Verification:
 Known failures: none
 Note: strength wrapper script's UCI preflight cannot handshake seaborg (stdout block-buffered under a pipe; reproduces on baseline 0f73ec8), so the measurement was run through its fastchess runner directly. See implementation notes.
 ---
+
+author: @george
+created: 2026-07-21 02:32
+---
+Review verdict: APPROVE
+
+Branch: task-64.7-reverse-futility-pruning
+Base: 0f73ec88f5e22bb0db44839e4599077f5d4b1593
+Implementation target (immutable, code SHA): 1ddd6cc94ce16639756c5a5e3c70ea3e1817ed68
+Approval commit adds task metadata only; verified no implementation file changed between the target and the branch tip.
+
+Acceptance criteria — all proven:
+- AC#1: Guard set is `!Node::pv() && !in_check() && depth <= REVERSE_FUTILITY_MAX_DEPTH (2) && beta.is_cp() && eval - reverse_futility_margin(depth) >= beta` (search.rs:1354). Non-PV, disabled in check, disabled when beta is a mate score (beta.is_cp()), depth documented with rationale.
+- AC#2: Distinct from TASK-50 forward futility. RFP is a whole-node prune before move generation returning Some(eval); forward futility (Step 8) sets a per-move flag applied inside the move loop. Both present and independent.
+- AC#3: reverse_futility_pruning_does_not_change_sound_search_results — RFP on vs off returns identical score and best move on 5 decisive/mate positions; paired with reverse_futility_pruning_reduces_the_search_tree proving the step fires and shrinks the tree. Both pass.
+- AC#4: Measured base 0f73ec8 vs target 1ddd6cc via the TASK-27 harness runner (fastchess; the wrapper's UCI preflight cannot handshake seaborg's block-buffered stdout, a pre-existing engine-I/O limitation that reproduces on the baseline binary). 200 games, nodes=200000: +47.19 +/- 33.68 Elo, LOS 99.74%, CI [+13.5, +80.9]. Recorded with bearing on evaluation quality (gain realised as search efficiency under a material-only eval; depth held at 2 because RFP has no verification search and would otherwise mask forced wins).
+
+Verification on the target commit:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean with a fresh CARGO_TARGET_DIR
+- cargo test --workspace: pass (346 engine tests, 0 failures across workspace)
+
+Notes:
+- Score arithmetic is safe: eval is material-only (always cp), margin is cp; the subtraction clamps and compares against the cp-guarded beta. No #[allow] added. Scope limited to engine/src/search.rs plus task metadata.
+- Hot-path benches (perft/movegen) not run: the change is confined to the alpha-beta interior-node path and does not touch move generation, so those benches cannot reflect it; search impact is covered by the AC#4 strength result.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Added reverse futility pruning (static null-move pruning) as the beta-side companion to razoring in engine/src/search.rs (Step 7). In a non-PV node, not in check, at depth <= REVERSE_FUTILITY_MAX_DEPTH (2), with a centipawn beta bound, when eval - reverse_futility_margin(depth) (300 + 100*depth cp) >= beta the node fails high immediately returning eval, before any move is generated. A #[cfg(test)] rfp_disabled hook mirrors lmr_disabled. Verified on target 1ddd6cc: cargo fmt --check pass; cargo clippy --workspace --all-targets --all-features -- -D warnings clean with a fresh CARGO_TARGET_DIR; cargo test --workspace pass (346 engine tests incl. reverse_futility_margin_grows_with_depth, reverse_futility_pruning_does_not_change_sound_search_results, reverse_futility_pruning_reduces_the_search_tree). Strength (fastchess base 0f73ec8 vs target 1ddd6cc, 200 games, nodes=200000): +47.19 +/- 33.68 Elo, LOS 99.74%, CI entirely above zero.
+<!-- SECTION:FINAL_SUMMARY:END -->
