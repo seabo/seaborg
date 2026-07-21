@@ -3,11 +3,11 @@ id: TASK-74.1
 title: >-
   Fix self-authored (from_self) Lichess challenges and build the event-replay
   conformance harness
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-21 03:54'
-updated_date: '2026-07-21 04:12'
+updated_date: '2026-07-21 05:02'
 labels:
   - lichess
   - conformance
