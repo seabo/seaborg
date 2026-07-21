@@ -1,11 +1,11 @@
 ---
 id: TASK-69.3
 title: NNUE feature encoding and accumulator as a PieceDeltaSink
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:40'
-updated_date: '2026-07-21 00:13'
+updated_date: '2026-07-21 00:32'
 labels:
   - nnue
   - inference
