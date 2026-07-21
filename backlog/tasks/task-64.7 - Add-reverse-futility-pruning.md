@@ -1,11 +1,11 @@
 ---
 id: TASK-64.7
 title: Add reverse futility pruning
-status: Ready to Merge
+status: Done
 assignee:
   - '@george'
 created_date: '2026-07-19 13:32'
-updated_date: '2026-07-21 02:34'
+updated_date: '2026-07-21 02:40'
 labels:
   - search
   - pruning
