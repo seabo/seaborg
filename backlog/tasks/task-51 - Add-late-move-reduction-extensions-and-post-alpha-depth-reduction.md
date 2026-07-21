@@ -1,11 +1,11 @@
 ---
 id: TASK-51
 title: 'Add late move reduction, extensions, and post-alpha depth reduction'
-status: Changes Requested
+status: Ready to Merge
 assignee:
   - '@george'
 created_date: '2026-07-18 18:30'
-updated_date: '2026-07-21 00:50'
+updated_date: '2026-07-21 00:51'
 labels: []
 dependencies:
   - TASK-50
@@ -38,12 +38,12 @@ TODO sites: engine/src/search.rs:637, :640, :692.
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Late move reduction is implemented with a re-search at full depth whenever the reduced search raises alpha
-- [ ] #2 Reductions and extensions are implemented at step 16 and are not applied in PV nodes where they would truncate the principal variation
-- [ ] #3 Remaining moves after an alpha raise are searched at the reduced depth described at search.rs:692
-- [ ] #4 The reported principal variation remains legal and complete under reduction, verified against the regression coverage added by TASK-36
-- [ ] #5 Measured with the TASK-27 strength-regression script showing no strength loss, with results recorded in the implementation notes
-- [ ] #6 The step 16 and step 17 TODO markers and the search.rs:692 TODO are replaced by implementations, with the numbered step comments retained
+- [x] #1 Late move reduction is implemented with a re-search at full depth whenever the reduced search raises alpha
+- [x] #2 Reductions and extensions are implemented at step 16 and are not applied in PV nodes where they would truncate the principal variation
+- [x] #3 Remaining moves after an alpha raise are searched at the reduced depth described at search.rs:692
+- [x] #4 The reported principal variation remains legal and complete under reduction, verified against the regression coverage added by TASK-36
+- [x] #5 Measured with the TASK-27 strength-regression script showing no strength loss, with results recorded in the implementation notes
+- [x] #6 The step 16 and step 17 TODO markers and the search.rs:692 TODO are replaced by implementations, with the numbered step comments retained
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -152,4 +152,38 @@ created: 2026-07-21 00:50
 ---
 Resolved REV-1-01: corrected the AC#5 strength-measurement candidate in the implementation notes from cbdfe4c (task-md only, no code) to 356c776, the reviewed implementation target. Applied under an explicit human override of the implementer/reviewer split for this notes-only textual fix; no code changed (git diff 356c776 -- ':!backlog/' is empty).
 ---
+
+author: @reviewer
+created: 2026-07-21 00:51
+---
+Review attempt: 1 (continued)
+Reviewed branch: task-51-lmr-extensions-post-alpha-reduction
+Reviewed implementation: 356c776bc8897be983e54f18e733a9aebcdbd699
+Base: 6d3d4ac98a40a455959b4cea18d0b0a82b0c7867
+Verdict: approved
+
+REV-1-01 [P2] resolved: the AC#5 strength-measurement notes now name the candidate as 356c776 (the reviewed implementation target) rather than the no-op commit cbdfe4c. Notes-only correction, applied under an explicit human override of the implement/review split; no implementation file changed (git diff 356c776 -- ':!backlog/' is empty).
+
+All acceptance criteria proven:
+- AC#1: LMR with a full-depth re-search whenever the reduced scout raises alpha (search.rs:1540-1552).
+- AC#2: Step 16 extensions/reductions; the check-evasion extension only adds depth and any reduced scout that beats alpha is re-searched at full new_depth before the Step 20 PV search writes the PV table, so PV nodes are never truncated.
+- AC#3: remaining moves after an alpha raise are reduced immediately via did_raise_alpha (search.rs:1511, 1609-1613).
+- AC#4: reported_principal_variations_are_legal and a_node_searched_past_the_nominal_horizon_still_reports_a_legal_pv pass with LMR/extensions active.
+- AC#5: no strength loss, recorded in notes and independently reproduced (see below).
+- AC#6: the three TODO markers replaced; all numbered step comments retained (remaining TODOs at Steps 10/11/13/14 are unrelated future work).
+
+Verification commands and results (run on the implementation target code, identical across the metadata-only commits):
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings (clean CARGO_TARGET_DIR): pass, no warnings
+- cargo test --workspace: pass (engine lib 306 passed / 2 ignored; workspace 0 failures)
+- Independent controlled strength match, target 356c776 vs base 6d3d4ac, fastchess nodes=100000, option.Hash=16, openings-v1.epd, 100 games: Elo +186.25 +/- 74.13, nElo +211.19, LOS 100.00%, 74.5% (68W/19L/13D), Ptnml [0,7,12,6,25].
+
+Approved implementation SHA: 356c776bc8897be983e54f18e733a9aebcdbd699. No implementation file changed between the target and this approval commit.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Implemented the unified reductions/extensions/LMR mechanism in engine/src/search.rs (Step 16 check-evasion extension, Step 17 late move reduction with a full-depth re-search on an alpha-raising reduced scout, and post-alpha-raise reduction via did_raise_alpha), replacing the three TODO markers while retaining all numbered step comments. All six acceptance criteria verified: cargo fmt --check, cargo clippy --workspace --all-targets --all-features -- -D warnings (clean CARGO_TARGET_DIR), and cargo test --workspace all pass (engine 306 passed / 2 ignored); TASK-36 PV-legality tests pass with LMR/extensions active; and an independent controlled node-limited match (target 356c776 vs base 6d3d4ac, fastchess nodes=100000, 16MB hash, openings-v1.epd, 100 games) reproduced the reported strength gain at +186.25 +/- 74.13 Elo (74.5%, LOS 100%), confirming no strength loss.
+<!-- SECTION:FINAL_SUMMARY:END -->
