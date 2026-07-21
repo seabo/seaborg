@@ -65,7 +65,12 @@ pub struct GameRef {
     pub id: String,
 }
 
-/// An incoming challenge.
+/// A challenge event carried on the account event stream.
+///
+/// The stream delivers this for challenges in both directions: ones sent *to*
+/// the bot and echoes of ones the bot itself *issued*. [`Challenge::is_from_self`]
+/// distinguishes them so the bot never tries to accept its own outgoing
+/// challenge (which Lichess answers with a 404).
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Challenge {
@@ -79,6 +84,37 @@ pub struct Challenge {
     pub time_control: TimeControl,
     /// The account issuing the challenge.
     pub challenger: Challenger,
+    /// Which way the challenge points relative to the authenticated account, when
+    /// Lichess reports it. `Out` marks a challenge the bot issued. Optional per the
+    /// API spec, so it only ever corroborates the challenger-identity check.
+    #[serde(default)]
+    pub direction: Option<Direction>,
+}
+
+/// The direction of a challenge relative to the authenticated account.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Direction {
+    /// An incoming challenge, sent to the bot.
+    In,
+    /// An outgoing challenge, issued by the bot.
+    Out,
+}
+
+impl Challenge {
+    /// Whether this challenge was issued by the bot itself.
+    ///
+    /// The account event stream echoes the bot's own outgoing challenges
+    /// alongside genuine incoming ones. Accepting an outgoing challenge is a
+    /// nonsensical request Lichess rejects with a 404, so these must be ignored.
+    ///
+    /// The challenger's account id is the authoritative signal: Lichess sets it
+    /// to the bot's own id on an echoed outgoing challenge. The `direction` field
+    /// is optional, so it cannot be relied on alone; when Lichess does include it,
+    /// an `Out` direction confirms the same conclusion.
+    pub fn is_from_self(&self, own_id: &str) -> bool {
+        self.challenger.id == own_id || self.direction == Some(Direction::Out)
+    }
 }
 
 /// A game variant, identified by its stable key.
@@ -262,5 +298,48 @@ mod tests {
     #[test]
     fn malformed_line_is_an_error() {
         assert!(parse_line("{not json").is_err());
+    }
+
+    #[test]
+    fn direction_out_marks_an_outgoing_challenge() {
+        // Real Lichess challenge JSON for the bot's own outgoing matchmaking
+        // challenge, carrying fields the bot does not parse (speed, perf, color,
+        // finalColor, destUser) to confirm they are tolerated.
+        let line = r#"{"type":"challenge","challenge":{"id":"out01","direction":"out","status":"created","challenger":{"id":"seaborg","name":"seaborg","title":"BOT","rating":1800},"destUser":{"id":"maia1","name":"maia1","title":"BOT","rating":1700},"variant":{"key":"standard"},"rated":false,"speed":"blitz","timeControl":{"type":"clock","limit":300,"increment":3,"show":"5+3"},"color":"random","finalColor":"white","perf":{"icon":"","name":"Blitz"}}}"#;
+        match parse_line(line).unwrap().unwrap() {
+            Event::Challenge { challenge } => {
+                assert_eq!(challenge.direction, Some(Direction::Out));
+                // The challenger id matches; direction merely corroborates.
+                assert!(challenge.is_from_self("seaborg"));
+            }
+            other => panic!("expected challenge, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn is_from_self_uses_challenger_identity_when_direction_absent() {
+        // No direction field: identity alone must still flag the bot's own
+        // challenge, and must not flag a stranger's.
+        let line = r#"{"type":"challenge","challenge":{"id":"c","rated":false,"variant":{"key":"standard"},"timeControl":{"type":"clock","limit":300,"increment":3},"challenger":{"id":"seaborg","name":"seaborg","title":"BOT"}}}"#;
+        match parse_line(line).unwrap().unwrap() {
+            Event::Challenge { challenge } => {
+                assert_eq!(challenge.direction, None);
+                assert!(challenge.is_from_self("seaborg"));
+                assert!(!challenge.is_from_self("someone-else"));
+            }
+            other => panic!("expected challenge, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn incoming_direction_is_not_from_self() {
+        let line = r#"{"type":"challenge","challenge":{"id":"in01","direction":"in","rated":false,"variant":{"key":"standard"},"timeControl":{"type":"clock","limit":300,"increment":3},"challenger":{"id":"alice","name":"alice"}}}"#;
+        match parse_line(line).unwrap().unwrap() {
+            Event::Challenge { challenge } => {
+                assert_eq!(challenge.direction, Some(Direction::In));
+                assert!(!challenge.is_from_self("seaborg"));
+            }
+            other => panic!("expected challenge, got {other:?}"),
+        }
     }
 }

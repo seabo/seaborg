@@ -141,6 +141,7 @@ mod tests {
                 rating: Some(1500),
                 title: None,
             },
+            direction: None,
         }
     }
 
