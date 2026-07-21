@@ -396,6 +396,11 @@ fn maybe_seek_matchmaking_game<T: Transport>(
         Ok(()) => matchmaker.record_issued(now),
         Err(error) if error.is_recoverable() => {
             log::warn!("challenging bot {target}: {error}");
+            // The challenge did not take (commonly a creation-time rejection).
+            // Back off from this bot so the deterministic first-eligible selection
+            // does not re-pick it every interval and wedge matchmaking on one
+            // unreachable opponent.
+            matchmaker.record_challenge_failed(&target, now);
         }
         Err(error) => return Err(error),
     }
@@ -520,6 +525,10 @@ mod tests {
         account_json: String,
         /// NDJSON returned for `GET /api/bot/online`, for the matchmaking tests.
         bots_json: String,
+        /// When set, an outgoing challenge-create POST fails with a recoverable
+        /// HTTP error, standing in for a Lichess creation-time rejection so the
+        /// failure-recovery path can be exercised offline.
+        challenge_create_fails: bool,
         streams: RefCell<VecDeque<String>>,
         posts: RefCell<Vec<RecordedPost>>,
     }
@@ -536,6 +545,7 @@ mod tests {
             FakeTransport {
                 account_json: account_json.to_string(),
                 bots_json: String::new(),
+                challenge_create_fails: false,
                 streams: RefCell::new(streams.into_iter().map(str::to_string).collect()),
                 posts: RefCell::new(Vec::new()),
             }
@@ -572,6 +582,16 @@ mod tests {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect();
             self.posts.borrow_mut().push((path.to_string(), form));
+            // A challenge-create POST addresses a bot directly (`/api/challenge/{id}`),
+            // unlike the accept/decline sub-actions on an existing challenge.
+            let is_challenge_create = path.starts_with("/api/challenge/")
+                && !path.ends_with("/accept")
+                && !path.ends_with("/decline");
+            if self.challenge_create_fails && is_challenge_create {
+                return Err(Error::Http(
+                    "unexpected status 400: {\"error\":\"nope\"}".to_string(),
+                ));
+            }
             Ok(String::new())
         }
 
@@ -703,6 +723,59 @@ mod tests {
         assert_eq!(
             client_transport(&client).post_paths(),
             vec!["/api/challenge/maia".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_failed_challenge_moves_matchmaking_to_a_different_bot() {
+        use crate::config::{MatchmakingConfig, MatchmakingMode};
+
+        // Two keepalives drive two seek ticks. The first bot's challenge is
+        // rejected at creation; without a penalty the deterministic first-eligible
+        // selection would re-pick it on the second tick. Instead the second tick
+        // must target the other bot.
+        let mut transport = FakeTransport::new("{}", "\n\n");
+        transport.bots_json = concat!(
+            r#"{"id":"firstbot","title":"BOT","perfs":{"blitz":{"rating":1600}}}"#,
+            "\n",
+            r#"{"id":"secondbot","title":"BOT","perfs":{"blitz":{"rating":1600}}}"#,
+        )
+        .to_string();
+        transport.challenge_create_fails = true;
+        let client = LichessClient::new(transport);
+
+        // Zero idle timeout and zero interval so both keepalive ticks seek. A 5+0
+        // (blitz) casual challenge matches both bots' ratings.
+        let config = MatchmakingConfig {
+            enabled: true,
+            variants: vec!["standard".to_string()],
+            initial_seconds: vec![300],
+            increment_seconds: vec![0],
+            mode: MatchmakingMode::Casual,
+            idle_timeout_seconds: 0,
+            min_challenge_interval_seconds: 0,
+            ..MatchmakingConfig::default()
+        };
+        let mut matchmaker = Matchmaker::new(config, 1, "me", Instant::now());
+        let active = ActiveGames::new();
+        run_event_stream_once(
+            &client,
+            &Config::default(),
+            &Shutdown::new(),
+            &active,
+            &mut matchmaker,
+            &mut |_id: &str| {},
+        )
+        .unwrap();
+
+        // Both attempts were made, and the second went to a different bot rather
+        // than re-challenging the one that just failed.
+        assert_eq!(
+            client_transport(&client).post_paths(),
+            vec![
+                "/api/challenge/firstbot".to_string(),
+                "/api/challenge/secondbot".to_string(),
+            ]
         );
     }
 
