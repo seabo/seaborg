@@ -1,11 +1,11 @@
 ---
 id: TASK-69.4
 title: Scalar quantized NNUE inference wired as a selectable evaluation
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:40'
-updated_date: '2026-07-21 02:30'
+updated_date: '2026-07-21 02:45'
 labels:
   - nnue
   - inference
