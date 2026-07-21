@@ -319,6 +319,45 @@ fn lmr_reduction(depth: Depth, move_count: u8) -> Depth {
     r
 }
 
+/// Largest remaining depth at which late-move (move-count) pruning is attempted.
+///
+/// Move-count pruning discards the tail of the quiet-move list outright, without any verifying
+/// re-search — unlike late-move *reduction*, a move dropped here is never looked at again. That is
+/// only safe close to the horizon, where a quiet move buried deep in the ordering is very unlikely to
+/// be the one that changes the node's value and the subtree saved is small enough that the occasional
+/// missed resource costs little. Higher up the tree the discarded subtrees are large: a single
+/// overlooked quiet can be the first move of a forced mate whose remaining plies branch below this
+/// node, and dropping it delays or hides that mate. The cap is deliberately low for a second reason
+/// beyond safety — a search tree is overwhelmingly leaf-heavy, so nodes within three plies of the
+/// horizon are the vast majority, and pruning only there already captures almost all of the node
+/// saving while leaving the deeper mating and tactical lines fully searched. Raising the cap trims
+/// comparatively few extra nodes yet starts to defer short forced mates the deeper nodes would
+/// otherwise prove.
+const LMP_MAX_DEPTH: Depth = 3;
+
+/// Number of moves to search at a node before the remaining quiet moves are pruned by move count.
+///
+/// Once this many moves have been searched, every further move drawn from the history-ordered quiet
+/// phase is discarded (a quiet move that gives check excepted; see the move loop). The count grows
+/// with remaining depth: nearer the horizon a shallow search is coarse and the ordering less to be
+/// trusted, so fewer moves are kept; a little deeper — still within [`LMP_MAX_DEPTH`] — the quiets are
+/// ordered more reliably and the node can afford to look wider before giving up on the tail. Across
+/// the pruned band this yields 3, 5 and 7 moves at remaining depths 1, 2 and 3. The constant term
+/// keeps a floor of three moves searched at every depth so the promising prefix (hash move, captures,
+/// killers, counter, and the best quiets) is never pruned.
+///
+/// The threshold counts *all* moves searched so far, not only quiets, because the quiet phase always
+/// follows the hash move, captures and refutations in the ordering; a node with many captures has
+/// therefore already spent part of its allowance before the first quiet, which is the intended
+/// behaviour — a noisy position warrants pruning its quiet tail sooner.
+#[inline]
+fn late_move_count(depth: Depth) -> u8 {
+    // Quadratic growth kept modest across the pruned band. `depth` is positive here — the caller
+    // gates on `depth >= 1` and never calls past `LMP_MAX_DEPTH` — so the arithmetic cannot underflow
+    // and the result is small enough to cast exactly.
+    (3 + depth * depth / 2) as u8
+}
+
 /// Whether the side to move is doing better than the last time it was on move.
 ///
 /// The *improving* signal compares this node's static evaluation against the static evaluation two
@@ -926,6 +965,11 @@ pub struct Search<'engine> {
     /// unchanged while still shrinking the tree.
     #[cfg(test)]
     lmr_disabled: bool,
+    /// Test hook that disables late-move (move-count) pruning so a test can search the same position
+    /// with the quiet tail kept and confirm the prune shrinks the tree without changing a sound
+    /// fixed-depth result.
+    #[cfg(test)]
+    lmp_disabled: bool,
     /// Test hook that disables reverse futility pruning so a test can search the same position with
     /// and without it and confirm the guards leave sound positions unchanged while it still shrinks
     /// the tree where it fires.
@@ -1019,6 +1063,8 @@ impl<'engine> Search<'engine> {
             forward_pruning_disabled: false,
             #[cfg(test)]
             lmr_disabled: false,
+            #[cfg(test)]
+            lmp_disabled: false,
             #[cfg(test)]
             rfp_disabled: false,
             #[cfg(test)]
@@ -1576,10 +1622,35 @@ impl<'engine> Search<'engine> {
         // it is searched at least as deeply as the node, never less.
         let node_in_check = self.pos.in_check();
 
+        // Late-move (move-count) pruning is decided once per node here and applied per move in the
+        // loop. It abandons the tail of the history-ordered quiet moves outright once enough moves
+        // have been searched — with no verifying re-search, unlike late-move reduction. It shares the
+        // forward-pruning guards: a non-PV node only, and never in check, where a forced reply must
+        // not be dropped and the ordering is a poor guide. It is further confined to nodes near the
+        // horizon (Step 5 sends depth <= 0 to quiescence, so depth is at least one here). Its safety
+        // rests on quiet moves being ordered by history: only because the history heuristic sorts them
+        // does a quiet move appearing late genuinely mean an unpromising one. Before that ordering
+        // existed the quiet segment was unsorted and there was no sense in which a quiet move was
+        // "late", which is why this technique depends on the history heuristic being active.
+        let late_move_pruning =
+            self.lmp_enabled() && !Node::pv() && !node_in_check && depth <= LMP_MAX_DEPTH;
+
         'move_loop: while moves.load_next_phase(MoveLoader::from(self, tt_mov, ply)) {
             // The phase is fixed for the whole batch the inner loop is about to drain, and the
             // iterator borrows `moves` for that batch, so read it once here rather than inside.
             let phase = moves.phase();
+
+            // Underpromotions are excluded from the main search. They are the final ordering phase,
+            // and each is derived from a queen promotion that has already been searched from this
+            // node, so skipping them never removes the last legal move (the mate/stalemate check
+            // below therefore stays sound). A rook, knight or bishop promotion is decisive so rarely
+            // that resolving it is left to quiescence, whose move loop still expands the
+            // queen-promotion segment into these. Dropping the phase here saves generating and
+            // searching three extra moves for every promotion in the tree.
+            if phase == Phase::Underpromotions {
+                break 'move_loop;
+            }
+
             for mov in &mut moves {
                 if self.stopping() {
                     break 'move_loop;
@@ -1632,6 +1703,28 @@ impl<'engine> Search<'engine> {
                 // Step 18. Make the move.
                 // SAFETY: ordered moves originate from move generation for `self.pos`.
                 unsafe { self.make_move(&mov) };
+
+                // Step 8a (applied). Late-move (move-count) pruning. Once enough moves have been
+                // searched, a quiet move drawn from the history-ordered quiet phase is discarded
+                // outright — with no verifying re-search, unlike late-move reduction. `move_count`
+                // counts the moves already reached, so the promising prefix (hash move, captures,
+                // killers, counter, and the leading quiets) is always kept before this can fire. A
+                // quiet move that gives check is exempt: a checking move is forcing and can still
+                // deliver mate near the horizon, and whether it checks is only known once it is on the
+                // board — which is why this sits after the move is made rather than replacing it with
+                // a bare counter test. The make/unmake is negligible beside the recursive search it
+                // avoids. Bad captures, which the ordering places after the quiets, are deliberately
+                // never pruned here: pruning losing captures by move count is in effect a
+                // static-exchange prune of the main search, a combination that measured as a strong
+                // strength regression, and a bad capture can be the sacrifice that forces a tactic.
+                if late_move_pruning
+                    && phase == Phase::Quiet
+                    && move_count > late_move_count(depth)
+                    && !self.pos.in_check()
+                {
+                    self.unmake_move();
+                    continue;
+                }
 
                 // The child's first act is to probe this cluster, and the table is far larger than
                 // cache, so that probe misses. Starting the fetch here overlaps the miss with the
@@ -2276,6 +2369,21 @@ impl<'engine> Search<'engine> {
         #[cfg(test)]
         {
             !self.lmr_disabled
+        }
+        #[cfg(not(test))]
+        {
+            true
+        }
+    }
+
+    /// Whether late-move (move-count) pruning is active. Always true in normal builds; a test can
+    /// switch it off to search a position with the quiet tail kept and compare against the pruned
+    /// search.
+    #[inline(always)]
+    fn lmp_enabled(&self) -> bool {
+        #[cfg(test)]
+        {
+            !self.lmp_disabled
         }
         #[cfg(not(test))]
         {
@@ -4480,6 +4588,113 @@ mod tests {
         assert!(
             reduced_nodes < full_nodes,
             "late-move reduction did not reduce the tree: {reduced_nodes} reduced vs {full_nodes} full"
+        );
+    }
+
+    /// Late-move (move-count) pruning must earn its keep: on a quiet middlegame position with a long
+    /// tail of quiet moves at every node, the pruned search visits strictly fewer nodes than the same
+    /// fixed-depth search with the prune switched off. This confirms the technique actually discards
+    /// work rather than sitting dead behind its guards.
+    #[test]
+    fn late_move_pruning_reduces_the_search_tree() {
+        chess::init::init_globals();
+
+        let position =
+            Position::from_fen("2kr3r/ppp1qpb1/5n2/5b1p/6p1/1PNP4/PBPQBPPP/2KRR3 b - - 6 14")
+                .unwrap();
+        let flag = AtomicBool::new(false);
+        let depth = 7;
+
+        let pruned_table = Table::new(16);
+        let mut pruned = Search::new(position.clone(), &flag, None, &pruned_table);
+        pruned.run::<Master>(depth).unwrap();
+        let pruned_nodes = pruned.trace.all_nodes_visited();
+
+        let plain_table = Table::new(16);
+        let mut plain = Search::new(position, &flag, None, &plain_table);
+        plain.lmp_disabled = true;
+        plain.run::<Master>(depth).unwrap();
+        let plain_nodes = plain.trace.all_nodes_visited();
+
+        assert!(
+            pruned_nodes < plain_nodes,
+            "late-move pruning did not reduce the tree: {pruned_nodes} pruned vs {plain_nodes} plain"
+        );
+    }
+
+    /// Late-move pruning discards only the tail of the quiet moves; a decisive move that wins material
+    /// is a winning capture, ordered far ahead of the quiet phase, so the prune must never reach it.
+    /// From a position whose best move is a free capture of the enemy queen, the pruned search still
+    /// finds that capture with a winning score, exactly as the search with the prune switched off
+    /// does. (The two searches' exact scores need not coincide — pruning the quiet tail deeper in the
+    /// tree can shift the backed-up value by a hair — so the decisive move and a winning margin are
+    /// what is asserted, not a bit-identical score.) This guards against the prune reaching too far up
+    /// the ordering and dropping a move that actually decides the position.
+    #[test]
+    fn late_move_pruning_keeps_a_decisive_capture() {
+        chess::init::init_globals();
+
+        // White to move: the rook on d1 wins the undefended black queen on d4 outright.
+        let position = Position::from_fen("4k3/8/8/8/3q4/8/8/3RK3 w - - 0 1").unwrap();
+        let flag = AtomicBool::new(false);
+        let depth = 5;
+
+        let pruned_table = Table::new(16);
+        let mut pruned = Search::new(position.clone(), &flag, None, &pruned_table);
+        let pruned_result = pruned.run::<Master>(depth).unwrap();
+
+        let plain_table = Table::new(16);
+        let mut plain = Search::new(position, &flag, None, &plain_table);
+        plain.lmp_disabled = true;
+        let plain_result = plain.run::<Master>(depth).unwrap();
+
+        for (label, result) in [("pruned", &pruned_result), ("plain", &plain_result)] {
+            let best = result.best_move.expect("a legal move exists");
+            assert_eq!(
+                (best.orig(), best.dest()),
+                (Square::D1, Square::D4),
+                "{label} search did not play the decisive capture"
+            );
+            assert!(
+                result.score >= Score::cp(500),
+                "{label} search lost the winning score: {:?}",
+                result.score
+            );
+        }
+    }
+
+    /// The main search does not consider underpromotions: they are the final ordering phase and are
+    /// dropped from every non-quiescence node, on the reasoning that a rook, knight or bishop
+    /// promotion decides a game so rarely that resolving it can be left to quiescence. This test pins
+    /// that decision to observable behaviour. In the position below a knight underpromotion promotes
+    /// with check and forks the black king and queen, winning the queen outright — objectively far
+    /// stronger than the queen promotion — yet the search must decline it and promote to a queen,
+    /// because the knight promotion is never generated at a search node. A search that did consider
+    /// underpromotions here would return the knight fork; this one must not.
+    #[test]
+    fn the_main_search_does_not_select_an_underpromotion() {
+        chess::init::init_globals();
+
+        // White to move: e7-e8=N+ forks the king on c7 and the queen on g7. Every white king and rook
+        // placement here keeps the promotion legal and the king off the black queen's lines.
+        let position = Position::from_fen("8/2k1P1q1/8/8/8/7K/8/R7 w - - 0 1").unwrap();
+        let flag = AtomicBool::new(false);
+        let depth = 5;
+
+        let table = Table::new(16);
+        let mut search = Search::new(position, &flag, None, &table);
+        let result = search.run::<Master>(depth).unwrap();
+        let best = result.best_move.expect("a legal move exists");
+
+        assert_eq!(
+            (best.orig(), best.dest()),
+            (Square::E7, Square::E8),
+            "the search abandoned the promotion entirely"
+        );
+        assert_eq!(
+            best.promo_piece_type(),
+            Some(PieceType::Queen),
+            "the main search selected an underpromotion, which it must never generate"
         );
     }
 
