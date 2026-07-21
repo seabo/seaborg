@@ -1,7 +1,7 @@
 use crate::continuation::{ContinuationHistory, CounterMoveTable, CONTINUATION_DISTANCES};
 use crate::history::{HistoryTable, HISTORY_MAX};
 
-use super::eval::{EvalState, Evaluation};
+use super::eval::{piece_value, EvalState, Evaluation};
 use super::killer::KillerTable;
 use super::nnue::{self, Accumulator, Network};
 use super::ordering::{Loader, OrderedMoves, Phase, ScoredMoveList, Scorer};
@@ -17,7 +17,7 @@ use super::tt::{Bound, Snapshot, Table};
 use chess::mono_traits::{All as AllGen, Captures, Legal, QueenPromotions, Quiets};
 use chess::mov::Move;
 use chess::movelist::{BasicMoveList, MoveList};
-use chess::position::{Piece, Player, Position, Square};
+use chess::position::{Piece, PieceType, Player, Position, Square};
 
 use separator::Separatable;
 
@@ -228,6 +228,29 @@ fn futility_margin(depth: Depth) -> Score {
     debug_assert!(depth >= 1);
     Score::cp(100 + 100 * depth)
 }
+
+/// Threshold, in centipawns, at or below which a capture's static exchange evaluation marks it as
+/// losing material and disqualifies it from a quiescence search.
+///
+/// Quiescence exists to resolve the material swings a fixed-depth search stops in the middle of, so
+/// a capture the swing-off already scores as losing has nothing to resolve: playing it hands the
+/// opponent a favourable recapture the static evaluation would then reward. SEE is a pure material
+/// calculation and does not depend on evaluation quality, which is what makes discarding these
+/// captures reliable rather than a gamble on the evaluation. Zero is the natural cut: a capture is
+/// kept only when the exchange sequence is at worst even. A capture that gives check is exempt — the
+/// in-check evasion path never reaches this cut, so a side genuinely in check keeps every reply, and
+/// a checking capture at the horizon can still force mate.
+const QUIESCENCE_SEE_THRESHOLD: i16 = 0;
+
+/// Delta-pruning margin for quiescence captures, in centipawns.
+///
+/// Even a capture that wins material is not worth searching if the most it could add — the value of
+/// the piece it takes, plus a promotion's gain — still leaves the side to move short of alpha by
+/// more than this cushion. The cushion absorbs what a bare material count omits: a recapture may
+/// open a file, a passed pawn may be created, positional compensation may exist. It is deliberately
+/// generous so the cut only fires when no plausible tactic could bridge the gap. Like every static
+/// margin it is meaningless against a mate-distance alpha and is not applied there.
+const QUIESCENCE_DELTA_MARGIN: i16 = 200;
 
 /// Smallest remaining depth at which a null-move search is attempted.
 ///
@@ -913,6 +936,11 @@ pub struct Search<'engine> {
     /// the deeper effective search an extension produces would otherwise move that score.
     #[cfg(test)]
     extensions_disabled: bool,
+    /// Test hook that disables the quiescence static-exchange cuts — the losing-capture cut and the
+    /// delta cut — so a test can search the same position with and without them and confirm they
+    /// leave a materially sound result unchanged while still shrinking the tree.
+    #[cfg(test)]
+    see_pruning_disabled: bool,
     /// Destination for typed search progress events.
     events: Option<Sender<SearchEvent>>,
     /// Per-ply state for the nodes on the current search path, indexed by ply from the root.
@@ -995,6 +1023,8 @@ impl<'engine> Search<'engine> {
             rfp_disabled: false,
             #[cfg(test)]
             extensions_disabled: false,
+            #[cfg(test)]
+            see_pruning_disabled: false,
         }
     }
 
@@ -1092,17 +1122,35 @@ impl<'engine> Search<'engine> {
             self.min_search_complete = true;
         }
 
-        // Cancellation can end the search before any iteration completes. Report the fallback so
-        // the position's legal move is still played; a terminal root has none, which UCI renders as
-        // `bestmove 0000`. The score is not a search result and the depth records that no iteration
-        // finished, so neither is reported as one.
-        result.or_else(|| {
-            self.root_fallback.map(|best_move| SearchResult {
-                score: Score::zero(),
-                best_move: Some(best_move),
-                depth: 0,
+        // A completed iteration can carry an exact score but no move: a root already drawn by
+        // repetition scores zero without any move raising alpha, leaving the principal variation
+        // empty. Reporting that as-is hands back a null move — a `bestmove 0000` forfeit — even
+        // though legal moves exist, so substitute the guaranteed first legal move while keeping the
+        // iteration's score. A *terminal* root (checkmate or stalemate) has no fallback move, so it
+        // correctly keeps its move-less result. Forward pruning makes the drawn case easy to hit by
+        // racing a dead-drawn endgame to a very high depth in a sliver of time.
+        result
+            .map(|completed| match completed.best_move {
+                None => match self.root_fallback {
+                    Some(fallback) => SearchResult {
+                        best_move: Some(fallback),
+                        ..completed
+                    },
+                    None => completed,
+                },
+                Some(_) => completed,
             })
-        })
+            // Cancellation can also end the search before any iteration completes. Report the
+            // fallback so the position's legal move is still played; a terminal root has none, which
+            // UCI renders as `bestmove 0000`. The score is not a search result and the depth records
+            // that no iteration finished, so neither is reported as one.
+            .or_else(|| {
+                self.root_fallback.map(|best_move| SearchResult {
+                    score: Score::zero(),
+                    best_move: Some(best_move),
+                    depth: 0,
+                })
+            })
     }
 
     /// Search iteration `d` at the root, narrowing the window around the previous iteration's
@@ -2249,6 +2297,21 @@ impl<'engine> Search<'engine> {
         }
     }
 
+    /// Whether the quiescence static-exchange cuts — the losing-capture cut and the delta cut — are
+    /// active. Always true in normal builds; a test can switch them off to compare a position
+    /// searched with and without the cuts.
+    #[inline(always)]
+    fn see_pruning_enabled(&self) -> bool {
+        #[cfg(test)]
+        {
+            !self.see_pruning_disabled
+        }
+        #[cfg(not(test))]
+        {
+            true
+        }
+    }
+
     /// Returns 1 if the player to move is White, -1 if Black. Useful wherever we are using
     /// evaluation functions in a negamax framework, and have to return the evaluation from the
     /// perspective of the side to move.
@@ -2450,8 +2513,61 @@ impl<'engine> Search<'engine> {
                     break 'move_loop;
                 }
 
+                // Static quiescence cuts, decided from the pre-move position and applied once the
+                // move is on the board. This loop is only reached with the side to move not in check
+                // — an in-check node hands off to `quiesce_evasions` above — so no reply here is a
+                // forced evasion. The cuts apply to captures only: a queen promotion is not a capture
+                // in isolation and is always worth resolving. A capture that gives check is exempt —
+                // a checking capture at the horizon is how a sacrifice delivers mate, and its child,
+                // being in check, searches every evasion or detects checkmate — but whether it checks
+                // is only known once it is made, so the decision is prepared here and taken below.
+                let statically_cut = self.see_pruning_enabled() && mov.is_capture() && {
+                    // Delta cut: the most this capture can add to the stand-pat value is the piece it
+                    // takes plus, for a promoting capture, a queen's premium over a pawn. If even
+                    // that optimistic ceiling plus a cushion for what a bare material count cannot see
+                    // still falls short of alpha, the capture cannot lift this node. Not taken against
+                    // a mate-distance alpha, where a centipawn margin means nothing.
+                    let delta_cut = alpha.is_cp() && {
+                        let stand_pat = eval
+                            .expect("quiescence past the in-check handoff always has a stand pat");
+                        let mut optimistic =
+                            i32::from(piece_value(self.pos.piece_at_sq(mov.dest()).type_of()));
+                        if mov.is_promo() {
+                            optimistic += i32::from(piece_value(PieceType::Queen))
+                                - i32::from(piece_value(PieceType::Pawn));
+                        }
+                        i32::from(stand_pat.to_i16())
+                            + optimistic
+                            + i32::from(QUIESCENCE_DELTA_MARGIN)
+                            <= i32::from(alpha.to_i16())
+                    };
+
+                    // SEE cut: a capture the exchange swing-off scores as losing material hands the
+                    // opponent a favourable recapture and is not searched.
+                    delta_cut
+                        || self
+                            .see(
+                                mov.orig(),
+                                mov.dest(),
+                                self.pos.piece_at_sq(mov.dest()).type_of(),
+                                self.pos.piece_at_sq(mov.orig()).type_of(),
+                            )
+                            .to_i16()
+                            < QUIESCENCE_SEE_THRESHOLD
+                };
+
                 // SAFETY: quiescence moves originate from move generation for `self.pos`.
                 unsafe { self.make_move(&mov) };
+
+                // Take the prepared cut now that the move's check status is known: a capture that
+                // neither wins its exchange nor could plausibly reach alpha is dropped, unless it
+                // gives check and might yet force mate.
+                if statically_cut && !self.pos.in_check() {
+                    self.unmake_move();
+                    self.trace.see_skip_node();
+                    continue;
+                }
+
                 // As in the main search: start the child's cluster fetch as soon as its key exists,
                 // so the miss overlaps the descent instead of stalling in front of the probe.
                 self.tt.prefetch(self.pos.zobrist().0);
@@ -5547,5 +5663,248 @@ mod tests {
 
         assert_eq!(search_a.kt.slot_of(3, killer), Some(0));
         assert_eq!(search_b.kt.slot_of(3, killer), None);
+    }
+
+    /// Static-exchange pruning must not change the result of a search whose answer is forced: with
+    /// the cuts switched off, a fixed-depth search of each position returns exactly the score and
+    /// best move it returns with them on. The suite is chosen so the correct move, or the proof of
+    /// the correct move, hinges on a *losing* capture — a queen taking a defended pawn to mate, and
+    /// a mate whose forcing line sacrifices material — which is precisely what these cuts are most at
+    /// risk of discarding. That the answers are identical either way is the guard-correctness
+    /// contract: where the cuts fire they only skip work the full search would have thrown away.
+    #[test]
+    fn see_pruning_leaves_forced_results_unchanged() {
+        chess::init::init_globals();
+
+        let positions = [
+            // Qxg7# — the only mate, and it is a queen-for-pawn capture (SEE deeply negative) that
+            // survives the cut solely because it gives check.
+            ("6k1/5ppp/7Q/5N2/8/8/8/6K1 w - - 0 1", 2),
+            // A mate in three whose forcing sequence gives up material on the way in.
+            (
+                "r2qkb1r/pp2nppp/3p4/2pNN1B1/2BnP3/3P4/PPP2PPP/R2bK2R w KQkq - 1 1",
+                6,
+            ),
+            // A mate in seven whose proof rests on sacrificial captures deep in the tree; the
+            // quiescence cuts must keep those checking captures searchable rather than revert it to
+            // a bare material score.
+            ("2k5/8/b1p5/Pq2r1p1/8/5PpP/3p2P1/Q2R2K1 b - - 1 61", 6),
+        ];
+
+        for (fen, depth) in positions {
+            let position = Position::from_fen(fen).unwrap();
+            let flag = AtomicBool::new(false);
+
+            let pruned_table = Table::new(16);
+            let mut pruned = Search::new(position.clone(), &flag, None, &pruned_table);
+            let pruned_result = pruned.run::<Master>(depth).unwrap();
+
+            let plain_table = Table::new(16);
+            let mut plain = Search::new(position, &flag, None, &plain_table);
+            plain.see_pruning_disabled = true;
+            let plain_result = plain.run::<Master>(depth).unwrap();
+
+            assert_eq!(
+                pruned_result.score, plain_result.score,
+                "{fen}: SEE pruning changed the score"
+            );
+            assert_eq!(
+                pruned_result.best_move, plain_result.best_move,
+                "{fen}: SEE pruning changed the best move"
+            );
+        }
+    }
+
+    /// A capture that loses material by the swing-off but gives check can still deliver mate, so the
+    /// quiescence SEE cut must exempt it. Here the one mating move, Qxg7#, is a queen taking a
+    /// pawn — a swing-off of roughly minus eight pawns — yet a bare quiescence search finds the mate
+    /// and skips nothing, because the check exemption keeps the capture in the search.
+    #[test]
+    fn quiescence_finds_a_mate_delivered_by_a_losing_capture() {
+        chess::init::init_globals();
+
+        let position = Position::from_fen("6k1/5ppp/7Q/5N2/8/8/8/6K1 w - - 0 1").unwrap();
+        let flag = AtomicBool::new(false);
+        let table = Table::new(16);
+        let mut search = Search::new(position, &flag, None, &table);
+
+        let value = search.quiesce::<Master, Pv>(Score::INF_N, Score::INF_P, 0);
+
+        assert_eq!(value, Some(Score::mate(1)), "quiescence missed Qxg7#");
+        assert_eq!(
+            search.trace.see_skipped_nodes(),
+            0,
+            "the checking mate capture was wrongly cut"
+        );
+    }
+
+    /// Quiescence must skip captures the swing-off scores as losing: they hand the opponent a
+    /// favourable recapture and cannot improve the stand-pat value. On a capture-rich middlegame the
+    /// cut fires several times and collapses the quiescence subtree, and — because a losing capture
+    /// could never have raised the score anyway — the value it returns is identical to the value with
+    /// the cut switched off.
+    #[test]
+    fn quiescence_skips_losing_captures() {
+        chess::init::init_globals();
+
+        let fen = "2kr3r/ppp1qpb1/5n2/5b1p/6p1/1PNP4/PBPQBPPP/2KRR3 b - - 6 14";
+        let position = Position::from_fen(fen).unwrap();
+        let flag = AtomicBool::new(false);
+
+        let on_table = Table::new(16);
+        let mut on = Search::new(position.clone(), &flag, None, &on_table);
+        let on_value = on.quiesce::<Master, Pv>(Score::cp(-2000), Score::cp(2000), 0);
+
+        let off_table = Table::new(16);
+        let mut off = Search::new(position, &flag, None, &off_table);
+        off.see_pruning_disabled = true;
+        let off_value = off.quiesce::<Master, Pv>(Score::cp(-2000), Score::cp(2000), 0);
+
+        assert_eq!(
+            on_value, off_value,
+            "the SEE cut changed the quiescence value"
+        );
+        assert!(
+            on.trace.see_skipped_nodes() > 0,
+            "no losing capture was skipped"
+        );
+        assert!(
+            on.trace.q_nodes_visited() < off.trace.q_nodes_visited(),
+            "the cut did not shrink the quiescence tree: {} vs {}",
+            on.trace.q_nodes_visited(),
+            off.trace.q_nodes_visited(),
+        );
+    }
+
+    /// The delta cut is distinct from the losing-capture cut: it discards even a *winning* capture
+    /// when the piece it wins cannot lift the stand-pat value to alpha. The same non-losing capture
+    /// (a pawn grab, SEE positive) is searched under a low alpha it can reach, but skipped under a
+    /// high alpha it cannot — isolating the margin as the cause.
+    #[test]
+    fn quiescence_delta_margin_skips_out_of_reach_captures() {
+        chess::init::init_globals();
+
+        // White can play exd5, winning an undefended pawn (SEE positive, so the losing-capture cut
+        // never applies). Stand pat is level.
+        let fen = "4k3/8/8/3p4/4P3/8/8/4K3 w - - 0 1";
+        let position = Position::from_fen(fen).unwrap();
+        let flag = AtomicBool::new(false);
+
+        // Under a window the pawn grab can reach, the capture is searched.
+        let reachable_table = Table::new(16);
+        let mut reachable = Search::new(position.clone(), &flag, None, &reachable_table);
+        reachable.quiesce::<Master, Pv>(Score::cp(-500), Score::cp(-400), 0);
+        assert_eq!(
+            reachable.trace.see_skipped_nodes(),
+            0,
+            "a reachable capture was pruned by the delta margin"
+        );
+
+        // Under a window even the won pawn cannot reach, the delta margin prunes it.
+        let hopeless_table = Table::new(16);
+        let mut hopeless = Search::new(position, &flag, None, &hopeless_table);
+        hopeless.quiesce::<Master, Pv>(Score::cp(500), Score::cp(600), 0);
+        assert!(
+            hopeless.trace.see_skipped_nodes() > 0,
+            "the delta margin did not prune a hopeless capture"
+        );
+    }
+
+    /// While the side to move is in check there is no stand pat and every evasion must be searched,
+    /// so neither quiescence cut may fire — the in-check node routes through `quiesce_evasions`,
+    /// which has no cut at all. Here the only legal reply is a losing capture, Qxe2, taking a rook
+    /// that a bishop immediately recaptures; a quiescence search returns the same value whether the
+    /// cuts are on or off, and that value reflects the forced capture rather than a false checkmate.
+    #[test]
+    fn quiescence_cuts_do_not_apply_while_in_check() {
+        chess::init::init_globals();
+
+        let fen = "4k3/8/8/1b6/8/7b/4r3/3QK3 w - - 0 1";
+        let position = Position::from_fen(fen).unwrap();
+        assert!(position.in_check(), "test position must be in check");
+        let flag = AtomicBool::new(false);
+
+        let on_table = Table::new(16);
+        let mut on = Search::new(position.clone(), &flag, None, &on_table);
+        let on_value = on.quiesce::<Master, Pv>(Score::cp(-2000), Score::cp(2000), 0);
+
+        let off_table = Table::new(16);
+        let mut off = Search::new(position, &flag, None, &off_table);
+        off.see_pruning_disabled = true;
+        let off_value = off.quiesce::<Master, Pv>(Score::cp(-2000), Score::cp(2000), 0);
+
+        assert_eq!(
+            on_value, off_value,
+            "the cuts changed the value of an in-check node"
+        );
+        assert_ne!(
+            on_value,
+            Some(Score::mate(0)),
+            "the forced evasion was not searched"
+        );
+    }
+
+    /// SEE pruning must earn its keep: on a quiet middlegame it visits strictly fewer nodes than the
+    /// same fixed-depth search with the cuts switched off, and the skip counter confirms the cuts
+    /// actually fired rather than being dead code behind their guards.
+    #[test]
+    fn see_pruning_shrinks_the_search_tree() {
+        chess::init::init_globals();
+
+        let position =
+            Position::from_fen("r3k2r/pppq1ppp/2np1n2/4p3/2B1P3/2NP1N2/PPP2PPP/R2Q1RK1 w kq - 0 1")
+                .unwrap();
+        let flag = AtomicBool::new(false);
+        let depth = 7;
+
+        let pruned_table = Table::new(16);
+        let mut pruned = Search::new(position.clone(), &flag, None, &pruned_table);
+        pruned.run::<Master>(depth).unwrap();
+
+        let plain_table = Table::new(16);
+        let mut plain = Search::new(position, &flag, None, &plain_table);
+        plain.see_pruning_disabled = true;
+        plain.run::<Master>(depth).unwrap();
+
+        assert!(
+            pruned.trace.see_skipped_nodes() > 0,
+            "SEE pruning never fired"
+        );
+        assert!(
+            pruned.trace.all_nodes_visited() < plain.trace.all_nodes_visited(),
+            "SEE pruning did not shrink the tree: {} pruned vs {} plain",
+            pruned.trace.all_nodes_visited(),
+            plain.trace.all_nodes_visited(),
+        );
+    }
+
+    /// A search of a position that is already drawn — here by the fifty-move rule — still owes a
+    /// legal move. Every iteration returns the draw score with no principal variation, because a
+    /// drawn root scores zero without any move raising alpha, so the deepest completed iteration
+    /// carries an empty PV. Reporting that iteration would hand back a null move — a `bestmove 0000`
+    /// forfeit — even though the position has legal moves. This became easy to hit once forward
+    /// pruning let a dead-drawn endgame race to a very high depth in a sliver of time.
+    #[test]
+    fn a_drawn_root_still_reports_a_legal_move() {
+        chess::init::init_globals();
+
+        // White to move, fifty-move counter already at the 100-ply draw boundary, but with legal
+        // moves available (not stalemate).
+        let position = Position::from_fen("6k1/8/6K1/8/8/8/8/6R1 w - - 100 80").unwrap();
+        let legal = position.generate::<BasicMoveList, AllGen, Legal>();
+        assert!(!legal.is_empty(), "test position must have legal moves");
+
+        let flag = AtomicBool::new(false);
+        let tt = Table::new(16);
+        let mut search = Search::new(position, &flag, None, &tt);
+        let result = search.run::<Master>(8).unwrap();
+
+        let mov = result.best_move.expect(
+            "a drawn but non-terminal root must still return a legal move, not a null move",
+        );
+        assert!(
+            (&legal).into_iter().any(|legal_move| *legal_move == mov),
+            "the reported move {mov:?} is not legal in the position",
+        );
     }
 }
