@@ -3,10 +3,11 @@ id: TASK-74.4
 title: >-
   Lichess accept path: cap accounting at accept-time, challengeCanceled, benign
   404, and human-slot priority
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-21 03:55'
-updated_date: '2026-07-21 04:02'
+updated_date: '2026-07-21 12:44'
 labels:
   - lichess
   - conformance
@@ -41,3 +42,16 @@ References: lichess-bot lib/lichess_bot.py (accept_challenges, sort_challenges, 
 - [ ] #7 Pinned harness scenarios cover: over-cap accept prevention, challengeCanceled releasing a reserved slot, a benign 404 accept, a human accepted ahead of a queued bot challenge, and a bot held out of a reserved human slot
 - [ ] #8 cargo fmt --check, cargo clippy --workspace --all-targets --all-features -D warnings, and cargo test --workspace all pass
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. event.rs: add ChallengeCanceled event (challenge id) so a withdrawn challenge is no longer swallowed as Other; keep #[serde(other)] for genuinely-unknown types. Add tests.
+2. error.rs + transport.rs: add Error::NotFound, map HTTP 404 to it in check_status; is_recoverable() stays true so existing swallow-behaviour is unchanged everywhere except the accept site.
+3. run.rs slot model: replace ActiveGames' HashSet with a Reserved/Active state map. reserve(id) on accept, start(id) promotes Reserved->Active (reconcile, no double count) or inserts a fresh Active for matchmaking-accepted games, release_reservation(id) frees a Reserved slot on cancel/accept-failure, remove(id) on finish/worker-exit. len() counts reserved+active so the cap sees reserved-but-not-started games. (Relies on Lichess challenge id == resulting game id.)
+4. policy.rs: split cap check out of evaluate into a suitability classification; the cap/reservation/priority decision moves to the accept queue.
+5. run.rs accept queue: handle_event enqueues suitable challenges and declines unsuitable ones immediately. process_accept_queue sorts by preference (humans first when configured, stable) and, per challenge, accepts under an effective cap (bots: max - reserved_human_slots; humans: max), reserving a slot then POSTing accept; a benign 404 or other error releases the reservation. Over-cap challenges are declined (generic). Consumer drains available events then processes the queue.
+6. config.rs: add challenge.prefer_human_challenges (default false); apply the existing matchmaking.reserved_human_slots to the acceptance side.
+7. Extend the replay harness to drive batches so priority/reservation scenarios are pinnable; pin over-cap decline, challengeCanceled release, benign 404, human-ahead-of-bot, bot-held-out-of-reserved-slot. Update fixtures so challenge id == game id.
+8. cargo fmt/clippy/test.
+<!-- SECTION:PLAN:END -->
