@@ -155,6 +155,36 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
             return false;
         }
 
+        // A castle is a king move of two squares, but the king move table below only spans one
+        // square, so a castle can never be recognised by the ordinary per-piece path and must be
+        // validated against the same castle-availability predicate the generator uses.
+        if mov.move_type().contains(MoveType::CASTLE) {
+            // Castling is a quiet move, so it is not a candidate under capture or promotion
+            // generation.
+            if G::kind() != Generation::All && G::kind() != Generation::Quiets {
+                return false;
+            }
+            // Castling out of check is illegal. The generator enforces this structurally by
+            // emitting evasions instead of castles when in check, so `castle_available` (which
+            // only inspects the squares the king crosses and lands on, not its origin) never
+            // sees an in-check position. Replicate that guard here.
+            if movegen.position.in_check() {
+                return false;
+            }
+            let player = PL::player();
+            if orig != player.relative_square(Square::E1) {
+                return false;
+            }
+            let side = if mov.dest() == player.relative_square(Square::G1) {
+                CastleType::Kingside
+            } else if mov.dest() == player.relative_square(Square::C1) {
+                CastleType::Queenside
+            } else {
+                return false;
+            };
+            return movegen.castle_available::<PL>(side);
+        }
+
         if movegen.position.in_check() {
             if piece.is_none() || piece.player() != movegen.position.turn() {
                 return false;
@@ -682,43 +712,63 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
     // Generates castling for a single side
     #[inline(always)]
     fn castling_side<PL: Side, L: Legality>(&mut self, side: CastleType) {
+        if self.castle_available::<PL>(side) {
+            let player = PL::player();
+            let ksq = player.relative_square(Square::E1);
+            let k_to = player.relative_square(if side == CastleType::Kingside {
+                Square::G1
+            } else {
+                Square::C1
+            });
+            self.add_move::<L>(unsafe { Move::build_unchecked(ksq, k_to, None, MoveType::CASTLE) });
+        }
+    }
+
+    /// Whether the side to move may castle to `side`, assuming the king is not already in check:
+    /// the right is present, the path between king and rook is empty, king and rook stand on their
+    /// castling squares, and the king passes through or into no attacked square. The king's origin
+    /// is deliberately not tested for attackers — callers must reject castling out of check
+    /// themselves (the generator does so by emitting evasions instead of castles when in check).
+    /// This is the single source of truth for the remaining castle conditions; both the generator
+    /// (`castling_side`) and the pseudo-legality validator (`valid_move`) consult it so the two
+    /// can never disagree about whether a castle is available.
+    #[inline(always)]
+    fn castle_available<PL: Side>(&self, side: CastleType) -> bool {
         let player = PL::player();
         let king_orig = player.relative_square(Square::E1);
         let rook_orig = self.position.castling_rook_square(side);
 
-        if self.position.can_castle(player, side)
+        if !(self.position.can_castle(player, side)
             && !self.position.castle_impeded(side)
             && self.position.piece_at_sq(king_orig) == Piece::make(player, PieceType::King)
-            && self.position.piece_at_sq(rook_orig) == Piece::make(player, PieceType::Rook)
+            && self.position.piece_at_sq(rook_orig) == Piece::make(player, PieceType::Rook))
         {
-            let king_side = side == CastleType::Kingside;
-            let ksq = king_orig;
-            let k_to = player.relative_square(if king_side { Square::G1 } else { Square::C1 });
-            let enemies = self.them_occ;
-            let direction: fn(Square) -> Square = if king_side {
-                |x: Square| unsafe { x.offset_unchecked(-1) }
-            } else {
-                |x: Square| unsafe { x.offset_unchecked(1) }
-            };
-
-            let mut s: Square = k_to;
-            let mut can_castle = true;
-            // Loop through all the squares the king goes through
-            // If any enemies attack that square, cannot castle
-            'outer: while s != ksq {
-                let attackers = self.position.attackers_to(s) & enemies;
-                if attackers.is_not_empty() {
-                    can_castle = false;
-                    break 'outer;
-                }
-                s = direction(s);
-            }
-            if can_castle {
-                self.add_move::<L>(unsafe {
-                    Move::build_unchecked(ksq, k_to, None, MoveType::CASTLE)
-                });
-            }
+            return false;
         }
+
+        let king_side = side == CastleType::Kingside;
+        let ksq = king_orig;
+        let k_to = player.relative_square(if king_side { Square::G1 } else { Square::C1 });
+        let enemies = self.them_occ;
+        let direction: fn(Square) -> Square = if king_side {
+            |x: Square| unsafe { x.offset_unchecked(-1) }
+        } else {
+            |x: Square| unsafe { x.offset_unchecked(1) }
+        };
+
+        // Walk the squares the king crosses, from its destination back toward — but not
+        // including — its origin. An enemy attacking any of these forbids the castle: the
+        // destination guards against castling into check, the intermediate square against
+        // castling through it. The origin is not examined, so castling out of check is not
+        // caught here and must be excluded by the caller (see the doc comment).
+        let mut s: Square = k_to;
+        while s != ksq {
+            if (self.position.attackers_to(s) & enemies).is_not_empty() {
+                return false;
+            }
+            s = direction(s);
+        }
+        true
     }
 
     #[inline(always)]
@@ -958,5 +1008,65 @@ mod tests {
         // generation phase, and to avoid complexity deduplicating, they are not generated as part
         // of the capture phase.
         assert_eq!(res, 4_224_543);
+    }
+
+    /// `valid_move` is the pseudo-legality gate the search uses to filter transposition-table and
+    /// killer move hints. It must accept exactly the castles the legal generator emits — no more
+    /// (missing rights, blocked path, castling through/into/out of check) and no fewer. It once
+    /// rejected every castle because it consulted only the one-square king attack table, so a
+    /// castle best move was discarded and miscounted as a Zobrist collision; the Kiwipete O-O and
+    /// O-O-O below are that concrete regression.
+    #[test]
+    fn valid_move_agrees_with_generator_on_castles() {
+        init_globals();
+
+        let fens = [
+            // Kiwipete — both castles legal for White.
+            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+            // Sparse board, both castles legal, White then Black to move.
+            "4k3/8/8/8/8/8/8/R3K2R w KQ - 0 1",
+            "r3k2r/8/8/8/8/8/8/4K3 b kq - 0 1",
+            // No castling rights.
+            "4k3/8/8/8/8/8/8/R3K2R w - - 0 1",
+            // Path blocked: knight on g1 (kingside) / on b1 (queenside).
+            "4k3/8/8/8/8/8/8/R3K1NR w KQ - 0 1",
+            "4k3/8/8/8/8/8/8/RN2K2R w KQ - 0 1",
+            // King would cross an attacked square: black rook on f8 covers f1 (blocks O-O),
+            // black rook on d8 covers d1 (blocks O-O-O).
+            "4kr2/8/8/8/8/8/8/R3K2R w KQ - 0 1",
+            "3rk3/8/8/8/8/8/8/R3K2R w KQ - 0 1",
+            // King starts in check (black rook on e8) and so cannot castle out of it.
+            "4r1k1/8/8/8/8/8/8/R3K2R w KQ - 0 1",
+        ];
+
+        for fen in fens {
+            let pos = Position::from_fen(fen).unwrap();
+            let legal = pos.generate::<BasicMoveList, All, Legal>();
+
+            // Every move the legal generator emits — castles included — must validate.
+            for mov in legal.iter() {
+                assert!(
+                    pos.valid_move(mov),
+                    "generated legal move {mov} rejected by valid_move in {fen}"
+                );
+            }
+
+            // For each castle destination, `valid_move` must match whether the generator emits
+            // that castle, covering both the accept and the reject direction.
+            let turn = pos.turn();
+            let orig = turn.relative_square(Square::E1);
+            for dest_rel in [Square::G1, Square::C1] {
+                let dest = turn.relative_square(dest_rel);
+                let castle = unsafe { Move::build_unchecked(orig, dest, None, MoveType::CASTLE) };
+                let generated = legal
+                    .iter()
+                    .any(|m| m.is_castle() && m.orig() == orig && m.dest() == dest);
+                assert_eq!(
+                    pos.valid_move(&castle),
+                    generated,
+                    "valid_move and generator disagree on {castle} in {fen}"
+                );
+            }
+        }
     }
 }
