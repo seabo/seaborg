@@ -3,11 +3,11 @@ id: TASK-72
 title: >-
   Fix Lichess matchmaking: surface HTTP error bodies, unjam on challenge
   failure, safer default mode
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-21 02:05'
-updated_date: '2026-07-21 02:08'
+updated_date: '2026-07-21 02:14'
 labels: []
 dependencies: []
 type: bug
@@ -37,3 +37,37 @@ Proactive matchmaking (TASK-71) fails in practice: an outgoing rated challenge t
 4. config example + code default (AC#4): change the built-in matchmaking mode default from Random to Casual in config.rs (the example file header promises it shows built-in defaults, so both must agree), update the example toml mode value and comment to explain rated challenges to bots are frequently rejected at creation, and update the config.rs default-mode test.
 5. Run cargo fmt --check, clippy -D warnings, and cargo test --workspace (AC#3).
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented all three defects on this branch.
+
+- AC#1 (transport): check_status now reads the response body on an unhandled non-success status and folds a trimmed, 500-char-capped snippet into Error::Http through a new pure helper unexpected_status_error(status, body). Unit-tested directly (body reaches the error, empty body omitted, oversized body capped) so no live socket is needed.
+- AC#2 (matchmaking + run): added Matchmaker::record_challenge_failed, which applies the same per-opponent backoff as a decline (shared start_backoff helper). run.rs maybe_seek_matchmaking_game calls it on a recoverable create failure. Covered by a matchmaking unit test (selection moves to the next bot after a failure, and re-eligible after the backoff) and a run.rs integration test using a FakeTransport that fails challenge-create POSTs, asserting the second seek targets a different bot.
+- AC#4 (config): changed the built-in matchmaking mode default from Random to Casual and the example toml to match (the example header promises it mirrors built-in defaults), with a comment in both explaining rated challenges to bots are frequently rejected at creation. Updated the config default-mode test.
+
+Decision: reused the existing decline-backoff window (decline_backoff_seconds) for create failures rather than adding a separate knob — a create-time rejection is as good a reason to skip a bot as a decline, and a second timing knob was not warranted.
+
+Implementation handoff
+Branch: task-72-lichess-matchmaking-fixes
+Worktree: /Users/seabo/seaborg-worktrees/task-72-lichess-matchmaking-fixes
+Base: 27a19b4
+Implementation target: 5e38d3f
+Resolved findings: none
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass
+- cargo test --workspace: pass (exit code 0); cargo test -p lichess = 98 passed
+Known failures: none
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @claude
+created: 2026-07-21 02:14
+---
+Ready for independent review. Implementation target 5e38d3f on task-72-lichess-matchmaking-fixes; all repo-required checks pass. AC checks and final summary left for the reviewer.
+---
+<!-- COMMENTS:END -->
