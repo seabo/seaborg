@@ -3,11 +3,11 @@ id: TASK-73
 title: >-
   Fix Lichess event-stream reconnect churn: 15s recv-response timeout kills
   long-lived streams
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-21 03:03'
-updated_date: '2026-07-21 03:07'
+updated_date: '2026-07-21 03:12'
 labels: []
 dependencies: []
 priority: high
@@ -46,3 +46,46 @@ The fix must keep the 15s header timeout for ordinary request/response calls (ge
 4. Add a regression test using a local TcpListener HTTP server: with a short agent recv-response timeout and a server that delays the body past that deadline, open_stream still receives all lines (override effective) while a non-streaming get() against a slow body times out (bound retained).
 5. Run fmt, clippy -D warnings, and cargo test --workspace.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Root cause confirmed against ureq 3.3.0 source: RecvBody's next_timeout still
+evaluates the RecvResponse deadline as a preceding phase (timings.rs
+`preceeding`), so timeout_recv_response bounds the streamed body, not just
+headers. Fix clears it per request on the streaming path only.
+
+Changes (lichess/src/transport.rs):
+- open_stream: `.config().timeout_recv_response(None).build()` on the GET, so
+  the long-lived body has no receive deadline; a dead stream still ends via
+  TCP failure -> Error, which the existing run_event_loop backoff reconnects on
+  (unchanged).
+- get/post_empty/post_form: unchanged, retain the shared agent's 15s bound.
+- Refactored agent construction into private with_response_timeout(...) so tests
+  inject a short bound; new() delegates with RESPONSE_TIMEOUT (15s).
+- Rewrote the RESPONSE_TIMEOUT doc comment to state recv-response also caps body
+  reception and why the stream path exempts it.
+- Regression tests (loopback TcpListener, no network): streaming survives a
+  600ms body gap under a 200ms bound; a non-streaming get times out on an
+  800ms body stall under the same bound.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @claude
+created: 2026-07-21 03:12
+---
+Implementation handoff
+Branch: task-73-lichess-stream-recv-timeout
+Worktree: /Users/seabo/seaborg-worktrees/task-73-lichess-stream-recv-timeout
+Base: 05880a59a02a47f388fafad164e482fb764c7ccc
+Implementation target: c8954cbdade6f44e87d2c3c23937a9c71165abfa
+Resolved findings: none
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean)
+- cargo test --workspace: pass (all suites; lichess 100 passed, incl. 2 new transport tests)
+Known failures: none
+---
+<!-- COMMENTS:END -->
