@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::account::Account;
 use crate::backoff::{Backoff, RECONNECT_BASE, RECONNECT_MAX};
@@ -13,9 +13,15 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::event::Event;
 use crate::game::{play_game, EngineMoveChooser};
+use crate::matchmaking::{Action, Matchmaker};
 use crate::policy::{self, Decision};
 use crate::shutdown::{self, Shutdown};
 use crate::transport::{HttpTransport, Transport};
+
+/// How many online bots to fetch when looking for a matchmaking opponent. A small
+/// page is enough: the bot only needs one eligible opponent, and a fresh page is
+/// fetched on each attempt.
+const ONLINE_BOTS_LIMIT: u32 = 50;
 
 /// Read the bot token from the environment, failing fast when it is absent.
 ///
@@ -54,6 +60,18 @@ pub fn run(config_path: Option<&Path>) -> Result<()> {
     // is what identifies the bot's own side once a game starts.
     let bot_id = account.id;
 
+    // Proactive matchmaking. Disabled by default, in which case the loop is
+    // purely reactive; enabling it lets the bot challenge other bots when idle.
+    let mut matchmaker = Matchmaker::new(
+        config.matchmaking.clone(),
+        config.max_concurrent_games,
+        bot_id.clone(),
+        Instant::now(),
+    );
+    if matchmaker.is_enabled() {
+        log::info!("matchmaking enabled: will challenge idle bots");
+    }
+
     // Each accepted game runs to completion on its own thread, matching the
     // repo's std-thread idiom, so a slow search in one game cannot stall the
     // event loop or the other games. The handles are kept so shutdown can wait
@@ -91,6 +109,7 @@ pub fn run(config_path: Option<&Path>) -> Result<()> {
         &config,
         &shutdown,
         &active,
+        &mut matchmaker,
         |game_id| workers.push(spawn_game(game_id)),
         |wait| shutdown.sleep(wait),
     );
@@ -230,6 +249,7 @@ pub fn run_event_loop<T, S, P>(
     config: &Config,
     shutdown: &Shutdown,
     active: &ActiveGames,
+    matchmaker: &mut Matchmaker,
     mut start_game: S,
     mut sleep: P,
 ) -> Result<()>
@@ -243,7 +263,14 @@ where
         if shutdown.is_requested() {
             return Ok(());
         }
-        match run_event_stream_once(client, config, shutdown, active, &mut start_game)? {
+        match run_event_stream_once(
+            client,
+            config,
+            shutdown,
+            active,
+            matchmaker,
+            &mut start_game,
+        )? {
             StreamOutcome::Shutdown => return Ok(()),
             StreamOutcome::Disconnected { made_progress } => {
                 if shutdown.is_requested() {
@@ -277,6 +304,7 @@ fn run_event_stream_once<T, S>(
     config: &Config,
     shutdown: &Shutdown,
     active: &ActiveGames,
+    matchmaker: &mut Matchmaker,
     start_game: &mut S,
 ) -> Result<StreamOutcome>
 where
@@ -298,20 +326,80 @@ where
         if shutdown.is_requested() {
             return Ok(StreamOutcome::Shutdown);
         }
-        let event = match item {
-            Ok(Some(event)) => event,
-            // Keepalive line: no event, but a chance to notice shutdown, taken by
-            // the check at the top of the next iteration.
-            Ok(None) => continue,
+        match item {
+            Ok(Some(event)) => {
+                made_progress = true;
+                handle_event(client, config, active, matchmaker, start_game, event)?;
+            }
+            // Keepalive line: no event to handle, but a regular chance to seek a
+            // matchmaking game and (via the check above) to notice shutdown.
+            Ok(None) => {}
             Err(error) if error.is_recoverable() => {
                 return Ok(StreamOutcome::Disconnected { made_progress })
             }
             Err(error) => return Err(error),
-        };
-        made_progress = true;
-        handle_event(client, config, active, start_game, event)?;
+        }
+        // Each event and each keepalive is a moment to consider seeking a game;
+        // when matchmaking is disabled this is a cheap no-op.
+        maybe_seek_matchmaking_game(client, active, matchmaker)?;
     }
     Ok(StreamOutcome::Disconnected { made_progress })
+}
+
+/// If matchmaking is due, fetch online bots, pick an eligible opponent, and issue
+/// a challenge.
+///
+/// Does nothing unless matchmaking is enabled and the [`Matchmaker`] judges the
+/// bot idle enough to seek a game. A transient failure to list bots or issue the
+/// challenge is logged and swallowed so one bad request does not end the bot; a
+/// non-recoverable error still surfaces.
+fn maybe_seek_matchmaking_game<T: Transport>(
+    client: &LichessClient<T>,
+    active: &ActiveGames,
+    matchmaker: &mut Matchmaker,
+) -> Result<()> {
+    if !matchmaker.is_enabled() {
+        return Ok(());
+    }
+    let now = Instant::now();
+    if matchmaker.choose(now, active.len() as u32) != Action::Seek {
+        return Ok(());
+    }
+    // Count this as an attempt up front so a failed lookup or an empty candidate
+    // list still waits out the minimum interval before retrying.
+    matchmaker.record_attempt(now);
+
+    let bots = match client.online_bots(ONLINE_BOTS_LIMIT) {
+        Ok(bots) => bots,
+        Err(error) if error.is_recoverable() => {
+            log::warn!("listing online bots for matchmaking: {error}");
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
+
+    let spec = matchmaker.compose_spec();
+    let target = matchmaker
+        .select_opponent(&spec, &bots, now)
+        .map(|bot| bot.id.clone());
+    let Some(target) = target else {
+        return Ok(());
+    };
+
+    log::info!(
+        "challenging bot {target} to {}+{} ({})",
+        spec.initial_seconds,
+        spec.increment_seconds,
+        if spec.rated { "rated" } else { "casual" }
+    );
+    match client.create_challenge(&target, &spec) {
+        Ok(()) => matchmaker.record_issued(now),
+        Err(error) if error.is_recoverable() => {
+            log::warn!("challenging bot {target}: {error}");
+        }
+        Err(error) => return Err(error),
+    }
+    Ok(())
 }
 
 /// Act on one account event: accept or decline a challenge by policy, or track a
@@ -322,6 +410,7 @@ fn handle_event<T, S>(
     client: &LichessClient<T>,
     config: &Config,
     active: &ActiveGames,
+    matchmaker: &mut Matchmaker,
     start_game: &mut S,
     event: Event,
 ) -> Result<()>
@@ -362,6 +451,9 @@ where
             }
         }
         Event::GameStart { game } => {
+            // A game is starting, so any matchmaking challenge that was pending is
+            // resolved (this may be that challenge being accepted).
+            matchmaker.record_game_started(Instant::now());
             if active.insert(&game.id) {
                 log::info!(
                     "game {} started ({}/{} active)",
@@ -380,6 +472,14 @@ where
         Event::GameFinish { game } => {
             active.remove(&game.id);
             log::info!("game {} finished ({} active)", game.id, active.len());
+        }
+        Event::ChallengeDeclined { challenge } => {
+            // A bot we challenged declined. Record it so matchmaking backs off
+            // from re-challenging that bot for the configured window.
+            if let Some(dest) = challenge.dest_user {
+                log::info!("bot {} declined our challenge", dest.id);
+                matchmaker.record_declined(&dest.id, Instant::now());
+            }
         }
         Event::Other => {}
     }
@@ -418,6 +518,8 @@ mod tests {
     /// so challenge handling can be asserted deterministically.
     struct FakeTransport {
         account_json: String,
+        /// NDJSON returned for `GET /api/bot/online`, for the matchmaking tests.
+        bots_json: String,
         streams: RefCell<VecDeque<String>>,
         posts: RefCell<Vec<RecordedPost>>,
     }
@@ -433,6 +535,7 @@ mod tests {
         ) -> FakeTransport {
             FakeTransport {
                 account_json: account_json.to_string(),
+                bots_json: String::new(),
                 streams: RefCell::new(streams.into_iter().map(str::to_string).collect()),
                 posts: RefCell::new(Vec::new()),
             }
@@ -451,6 +554,9 @@ mod tests {
 
     impl Transport for FakeTransport {
         fn get(&self, path: &str) -> Result<String> {
+            if path.starts_with("/api/bot/online") {
+                return Ok(self.bots_json.clone());
+            }
             assert_eq!(path, "/api/account", "unexpected GET in test");
             Ok(self.account_json.clone())
         }
@@ -501,6 +607,7 @@ mod tests {
             &Config::default(),
             &Shutdown::new(),
             &active,
+            &mut Matchmaker::disabled(),
             &mut |id: &str| started.push(id.to_string()),
         )
         .unwrap();
@@ -555,6 +662,72 @@ mod tests {
     }
 
     #[test]
+    fn matchmaking_issues_a_challenge_to_an_eligible_idle_bot() {
+        use crate::config::{MatchmakingConfig, MatchmakingMode};
+
+        // A stream of just keepalives: no incoming events, so the only thing that
+        // can happen is a matchmaking tick issuing an outgoing challenge.
+        let mut transport = FakeTransport::new("{}", "\n\n");
+        transport.bots_json =
+            r#"{"id":"maia","title":"BOT","perfs":{"blitz":{"rating":1600}}}"#.to_string();
+        let client = LichessClient::new(transport);
+
+        // Zero idle timeout so the very first keepalive is due to seek, but a long
+        // interval so the pending challenge from that first tick blocks the second
+        // keepalive's tick — exactly one challenge should be issued. The pools
+        // compose a 5+0 (blitz) casual challenge.
+        let config = MatchmakingConfig {
+            enabled: true,
+            variants: vec!["standard".to_string()],
+            initial_seconds: vec![300],
+            increment_seconds: vec![0],
+            mode: MatchmakingMode::Casual,
+            idle_timeout_seconds: 0,
+            min_challenge_interval_seconds: 3600,
+            ..MatchmakingConfig::default()
+        };
+        let mut matchmaker = Matchmaker::new(config, 1, "me", Instant::now());
+        let active = ActiveGames::new();
+        run_event_stream_once(
+            &client,
+            &Config::default(),
+            &Shutdown::new(),
+            &active,
+            &mut matchmaker,
+            &mut |_id: &str| {},
+        )
+        .unwrap();
+
+        // Exactly one challenge was issued, to the eligible bot. (A second was not
+        // stacked, because the first is now a pending challenge.)
+        assert_eq!(
+            client_transport(&client).post_paths(),
+            vec!["/api/challenge/maia".to_string()]
+        );
+    }
+
+    #[test]
+    fn disabled_matchmaking_issues_no_challenge_on_a_keepalive() {
+        // The same keepalive-only stream with matchmaking off must produce no
+        // outgoing request at all: reactive behaviour is unchanged.
+        let mut transport = FakeTransport::new("{}", "\n\n");
+        transport.bots_json =
+            r#"{"id":"maia","title":"BOT","perfs":{"blitz":{"rating":1600}}}"#.to_string();
+        let client = LichessClient::new(transport);
+        let active = ActiveGames::new();
+        run_event_stream_once(
+            &client,
+            &Config::default(),
+            &Shutdown::new(),
+            &active,
+            &mut Matchmaker::disabled(),
+            &mut |_id: &str| {},
+        )
+        .unwrap();
+        assert!(client_transport(&client).post_paths().is_empty());
+    }
+
+    #[test]
     fn duplicate_game_start_does_not_spawn_a_second_worker() {
         // The event stream replays an in-progress game after reconnecting, so a
         // repeated gameStart for the same id must start the game only once.
@@ -606,6 +779,7 @@ mod tests {
             &Config::default(),
             &shutdown,
             &active,
+            &mut Matchmaker::disabled(),
             |_id| {},
             |_wait| {
                 *waits.borrow_mut() += 1;
@@ -642,6 +816,7 @@ mod tests {
             &Config::default(),
             &shutdown,
             &active,
+            &mut Matchmaker::disabled(),
             |_id| panic!("no game should start during shutdown"),
             |_wait| panic!("no reconnect wait during shutdown"),
         )

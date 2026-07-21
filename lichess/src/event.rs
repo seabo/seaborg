@@ -28,10 +28,33 @@ pub enum Event {
         /// The finished game.
         game: GameRef,
     },
-    /// Any other event type (challenge canceled, challenge declined, and future
-    /// additions). Kept so the stream tolerates events the bot does not handle.
+    /// A challenge the bot sent was declined by its recipient. Carried so
+    /// matchmaking can avoid immediately re-challenging a bot that just declined.
+    ChallengeDeclined {
+        /// The declined challenge, including who declined it.
+        challenge: DeclinedChallenge,
+    },
+    /// Any other event type (challenge canceled and future additions). Kept so the
+    /// stream tolerates events the bot does not handle.
     #[serde(other)]
     Other,
+}
+
+/// The subset of a declined challenge the bot acts on.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeclinedChallenge {
+    /// The account the challenge was sent to — the one that declined it. Absent
+    /// for open (untargeted) challenges, which matchmaking never sends.
+    #[serde(default)]
+    pub dest_user: Option<UserRef>,
+}
+
+/// A minimal reference to an account by id.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct UserRef {
+    /// The account id.
+    pub id: String,
 }
 
 /// Reference to a game carried by `gameStart` / `gameFinish` events.
@@ -183,6 +206,20 @@ mod tests {
                 }
             }
         );
+    }
+
+    #[test]
+    fn challenge_declined_carries_the_declining_bot() {
+        let line = r#"{"type":"challengeDeclined","challenge":{"id":"x","status":"declined","destUser":{"id":"fussybot","name":"FussyBot"}}}"#;
+        match parse_line(line).unwrap().unwrap() {
+            Event::ChallengeDeclined { challenge } => {
+                assert_eq!(
+                    challenge.dest_user.map(|u| u.id),
+                    Some("fussybot".to_string())
+                );
+            }
+            other => panic!("expected challengeDeclined, got {other:?}"),
+        }
     }
 
     #[test]

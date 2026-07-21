@@ -43,3 +43,40 @@ hash_mb = 64
 # Time subtracted from each move's budget to cover network and scheduling
 # latency, in milliseconds.
 move_overhead_ms = 100
+
+[matchmaking]
+# Proactively challenge other bots when idle. Off by default: with `enabled`
+# false the bot is purely reactive and every other field in this section is
+# ignored. The rest of this section takes effect only once matchmaking is on.
+enabled = false
+
+# Variant keys, initial clock times (seconds), and increments (seconds) to draw
+# from when composing a challenge. Successive challenges rotate through each pool.
+variants = ["standard"]
+initial_seconds = [60, 180, 300]
+increment_seconds = [0, 2, 3]
+
+# Only challenge bots whose rating for the chosen time control's speed falls
+# within these inclusive bounds. A bot with no rating for that speed is skipped.
+min_rating = 0
+max_rating = 4000
+
+# Whether issued challenges are "rated", "casual", or "random" (alternating).
+mode = "random"
+
+# How long the bot must be idle (no games running) before it seeks an opponent,
+# and the minimum gap between successive outgoing challenges, both in seconds.
+idle_timeout_seconds = 30
+min_challenge_interval_seconds = 30
+
+# Concurrent-game slots held back from matchmaking so a human can always still
+# challenge the bot. Matchmaking treats its cap as
+# `max_concurrent_games - reserved_human_slots`, so this must be below that cap.
+reserved_human_slots = 0
+
+# Account ids never to challenge, however eligible they otherwise look.
+block_list = []
+
+# After a bot declines a challenge, how long to avoid re-challenging that same
+# bot, in seconds.
+decline_backoff_seconds = 3600
