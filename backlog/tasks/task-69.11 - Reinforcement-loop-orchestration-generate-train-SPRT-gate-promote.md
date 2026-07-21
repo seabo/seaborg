@@ -1,11 +1,11 @@
 ---
 id: TASK-69.11
 title: 'Reinforcement loop orchestration: generate, train, SPRT-gate, promote'
-status: In Review
+status: Changes Requested
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:42'
-updated_date: '2026-07-21 20:08'
+updated_date: '2026-07-21 20:40'
 labels:
   - nnue
   - training
@@ -248,5 +248,76 @@ Verification:
 - python3 -m unittest (tools/strength): 21 pass
 - Empirical: with verdicts {0:PASS,1:FAIL,2:FAIL}, best.json records generation 0 and the gen-1/gen-2 ledger baselines both carry the gen-000 id (was gen-001/gen-002)
 Known failures: none
+---
+
+author: @claude
+created: 2026-07-21 20:40
+---
+Review attempt: 3
+Reviewed branch: task-69.11-reinforcement-loop-orchestration
+Reviewed implementation: a2b727d82633fb203e1874988a2b9c800ea01ee0
+Base: daa79cb8a19d635702e894927f44064e76480f95
+Verdict: changes_requested
+
+REV-3-01 [P2] Baseline attribution records the promoted candidate's bytes, not the baseline that played
+Location: tools/rl/loop.py:437-443 (run_iteration promotes before building attribution) and tools/rl/loop.py:551-554 (_attribution reads sha256(best)/network_id(best, ...))
+Impact: Blocks AC #2's attribution requirement ("network id ... so strength changes stay
+  attributable" / "the decision plus attribution are recorded"). run_iteration calls
+  _promote(generation, candidate) (loop.py:438) BEFORE _attribution (loop.py:440). _promote
+  overwrites state/best.sbnn with the candidate's bytes (shutil.copyfile at loop.py:506).
+  _attribution then builds the baseline record from `best`, which is the path
+  state/best.sbnn returned by _current_best() (loop.py:461) — and after promotion that file
+  holds the candidate's bytes, not the baseline's. So for every generation whose candidate
+  PASSES at generation > 0, the ledger records baseline.sha256 (loop.py:554) and
+  baseline.network_id (loop.py:551) computed from the just-promoted candidate rather than
+  from the network that actually played as the baseline in the gate. The resulting id is
+  internally inconsistent: it pairs the correct producing generation (baseline_generation,
+  read before promotion) with the wrong hash, e.g. "nnue:gen-000:sha256=<gen-1 bytes>".
+  Unlike REV-2-01, where the raw baseline sha256 was still a recoverable sibling field, here
+  that sha256 is itself wrong, so the baseline identity is unrecoverable from the ledger — on
+  exactly the improving iterations (consecutive promotions) the programme run (TASK-69.12)
+  most depends on. REV-2-01's regression drives only {0:PASS,1:FAIL,2:FAIL}, so no promotion
+  occurs after generation 0 and the overwrite-before-read path is never exercised; all 12 rl
+  tests pass with the defect present.
+Reproduction:
+  cd tools/rl && python3 -c "
+  import json, tempfile, sys; from pathlib import Path
+  sys.path.insert(0,'.'); import loop as rl
+  class FB(rl.Backend):
+      def __init__(s): s.n=0
+      def generate(s,out,network,nodes,games):
+          out.parent.mkdir(parents=True,exist_ok=True)
+          out.write_bytes(b'\x00'*(rl.SAMPLE_HEADER_SIZE+rl.SAMPLE_RECORD_SIZE))
+          return rl.GenerateResult(path=out,samples=10)
+      def train(s,d,cp,g): cp.write_bytes(b'c')
+      def export(s,cp,net): s.n+=1; net.write_bytes(f'net-gen-{s.n-1}'.encode())
+      def gate(s,bn,bg,cn,od,g):
+          return rl.GateResult(verdict='PASS',exit_code=0,output_dir=od,elo=1.0,elo_interval=2.0,games_played=10)
+  t=Path(tempfile.mkdtemp())/'state'
+  loop=rl.ReinforcementLoop(rl.LoopConfig(state_dir=t,engine=Path('/e'),trainer_dir=Path('/t'),strength_script=Path('/s')),FB())
+  for g in range(2): loop.run_iteration(g)
+  gen0=rl.sha256(t/rl.NETWORKS_DIR/'gen-000.sbnn'); gen1=rl.sha256(t/rl.NETWORKS_DIR/'gen-001.sbnn')
+  r1=json.loads((t/rl.LEDGER).read_text().splitlines()[1])
+  print('gen1 baseline network_id:', r1['baseline']['network_id'])
+  print('gen1 baseline sha256    :', r1['baseline']['sha256'][:16])
+  print('archived gen-000 sha    :', gen0[:16], '(the baseline that actually played)')
+  print('records gen-1 bytes (BUG)?', r1['baseline']['sha256']==gen1)"
+  # prints baseline network_id nnue:gen-000:sha256=<gen-1 hash>, baseline sha256 == gen-1 bytes,
+  # not the archived gen-000 network the gate baseline actually used.
+Expected: The baseline's recorded network_id and sha256 must describe the network that
+  actually played as the baseline (the pre-promotion best). Build the baseline attribution
+  before _promote overwrites best.sbnn, or snapshot the baseline hash/id before promoting.
+  Add a regression that drives consecutive PASSes (generations 0 and 1 both promote) and
+  asserts generation 1's baseline.sha256 / network_id equal the archived gen-000 network, not
+  generation 1's own bytes.
+
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean)
+- cargo test --workspace: pass (chess 50, engine 397/2 ignored, lichess 131, integration + build_metadata green)
+- python3 -m unittest (tools/rl): 12 pass; (tools/strength): 21 pass
+- Empirical: with all-PASS verdicts, gen-1 ledger baseline.sha256 = a9c85bab53687d3a (gen-1
+  candidate bytes) and network_id = nnue:gen-000:sha256=a9c85bab53687d3a, instead of the
+  archived gen-000 network fdb672691da570e7 that the gate baseline used.
 ---
 <!-- COMMENTS:END -->
