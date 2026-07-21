@@ -24,6 +24,7 @@ use separator::Separatable;
 use std::ops::Neg;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -320,21 +321,167 @@ const LMR_MIN_DEPTH: Depth = 3;
 /// bound and are reducible immediately.
 const LMR_MOVE_THRESHOLD: u8 = 3;
 
+/// Whether late-move reduction draws its base reduction from the log-shaped [`LmrTable`] rather than
+/// the older hand-tuned step function.
+///
+/// Flip to `false` and rebuild to measure the table's own strength contribution against the step
+/// function it replaced; the modulation toggles below stack on top of whichever base this selects.
+pub const LMR_LOG_TABLE: bool = true;
+
+/// Whether the base reduction is eased for quiet moves the ordering tables already trust and deepened
+/// for those they distrust: a move with strong accumulated main-plus-continuation history is reduced
+/// less, a poorly scored one more. Flip to `false` and rebuild to isolate this refinement's effect.
+pub const LMR_HISTORY_MODULATION: bool = true;
+
+/// Whether a side to move that is not improving takes one extra ply of reduction while an improving
+/// side keeps the base. When the position is deteriorating the moves matter less and can be trimmed
+/// harder. Flip to `false` and rebuild to isolate this refinement's effect.
+pub const LMR_IMPROVING_MODULATION: bool = true;
+
+/// Whether PV nodes and killer/counter moves are reduced less than a plain late quiet at the same
+/// depth and move count, so the ordering prefix keeps its depth. Flip to `false` and rebuild to
+/// isolate this refinement's effect.
+pub const LMR_FAVOURED_MODULATION: bool = true;
+
+/// Milliplies per whole ply. The base reduction and every modulation accumulate in this fixed-point
+/// unit so fractional adjustments compose smoothly, and the sum is divided down to whole plies only
+/// once, at the end of [`lmr_reduction`].
+const LMR_PLY: i32 = 1024;
+
+/// Constant term of the base reduction curve, in plies: the reduction a barely-late, barely-deep
+/// move receives before the logarithmic growth term adds to it. Kept low so shallow, near-forcing
+/// lines — where a mate or tactic can sit just past a one-ply cut — are reduced only a single ply,
+/// matching the older step function there; the growth term is what makes deep late moves aggressive.
+const LMR_BASE: f64 = 0.5;
+
+/// Divisor of the logarithmic growth term. A smaller value steepens the curve, concentrating the
+/// reduction on deep moves far down the ordering — the ones least likely to repay a full search —
+/// where cuts of three or four plies pay off, while leaving shallow moves lightly reduced.
+const LMR_DIVISOR: f64 = 2.0;
+
+/// Side length of the square [`LmrTable`], covering every remaining depth and move count the search
+/// can present. `MAX_DEPTH` is 255 and the move count is a `u8`, so both indices fit; the table
+/// clamps anything at the boundary, where the reduction has long since saturated.
+const MAX_LMR_DIM: usize = 256;
+
+/// Divisor mapping a move's accumulated quiet history to a reduction adjustment in milliplies. A
+/// smaller value lets history move the reduction more per unit of evidence; the result is clamped by
+/// [`LMR_HISTORY_MAX_ADJUST`] so one extreme table entry cannot swamp the base reduction.
+const LMR_HISTORY_DIVISOR: i32 = 40;
+
+/// Largest reduction adjustment, in milliplies, the history term may contribute in either direction.
+const LMR_HISTORY_MAX_ADJUST: i32 = 2 * LMR_PLY;
+
+/// Base late-move reduction, in milliplies, as a function of remaining depth and move count.
+///
+/// The reduction grows like `LMR_BASE + ln(depth) * ln(move_count) / LMR_DIVISOR`: a shallow or early
+/// move is barely reduced, while a move buried deep in the ordering far from the horizon — the one
+/// least likely to repay a full search — is cut by several plies. Both logarithms are non-decreasing
+/// and non-negative over the covered range, so the curve is monotonically non-decreasing in each
+/// argument: a later or deeper move is never assigned a smaller base reduction than an earlier or
+/// shallower one.
+struct LmrTable {
+    /// `MAX_LMR_DIM * MAX_LMR_DIM` milliplies values, row-major in remaining depth then move count.
+    reductions: Box<[i32]>,
+}
+
+impl LmrTable {
+    fn new() -> Self {
+        let mut reductions = vec![0i32; MAX_LMR_DIM * MAX_LMR_DIM].into_boxed_slice();
+        for depth in 0..MAX_LMR_DIM {
+            for move_count in 0..MAX_LMR_DIM {
+                // The logarithm is undefined at zero and negative just above it; a move at depth or
+                // count zero never reaches reduction anyway, so the corner is pinned to no reduction.
+                let milliplies = if depth == 0 || move_count == 0 {
+                    0
+                } else {
+                    let growth = (depth as f64).ln() * (move_count as f64).ln() / LMR_DIVISOR;
+                    ((LMR_BASE + growth) * LMR_PLY as f64).round().max(0.0) as i32
+                };
+                reductions[depth * MAX_LMR_DIM + move_count] = milliplies;
+            }
+        }
+        Self { reductions }
+    }
+
+    /// Base reduction in milliplies for a remaining depth and move count, clamped to the table bounds.
+    #[inline]
+    fn base(&self, depth: Depth, move_count: u8) -> i32 {
+        let d = (depth.max(0) as usize).min(MAX_LMR_DIM - 1);
+        let m = (move_count as usize).min(MAX_LMR_DIM - 1);
+        self.reductions[d * MAX_LMR_DIM + m]
+    }
+}
+
+/// The reduction curve is a pure function of depth and move count, identical for every search, so it
+/// is built once for the process rather than per search — a search is reconstructed every move and a
+/// per-move rebuild of a 64K-entry table would be pure waste.
+static LMR_TABLE: LazyLock<LmrTable> = LazyLock::new(LmrTable::new);
+
 /// Plies removed from a late quiet move's zero-window scout search.
 ///
-/// A single ply is taken off by default, and one more only for a move that is both deep in the tree
-/// and well down the ordering — the moves least likely to repay a full-depth search. The growth is
-/// deliberately shallow: a reduction the re-search cannot undo is one where the reduced scout fails
-/// low on a move that a full search would have raised alpha with, and that risk rises fast with the
-/// size of the cut. Keeping the cut to one or two plies leaves short forcing lines — where a tactic
-/// or mate sits just a few plies on — visible to the reduced scout, so its verdict can be trusted.
+/// The base cut comes from the log-shaped [`LmrTable`] (or, when [`LMR_LOG_TABLE`] is off, the older
+/// step function): it grows with both remaining depth and how far down the ordering the move sits,
+/// because a move ordered late and searched deep is the one least likely to repay a full search. That
+/// base is then modulated by signals the search has already computed, each behind its own toggle so a
+/// strength match can isolate it:
+///
+/// * a move with strong accumulated quiet history (main plus continuation) is reduced less and a
+///   poorly scored one more, since history is the engine's own estimate of how promising the move is;
+/// * a non-improving side to move takes an extra ply, trimming harder in a deteriorating position;
+/// * PV nodes and killer/counter moves are reduced less, keeping the trusted ordering prefix deep.
+///
+/// The growth is bounded and the result never negative: a modulation sum below zero means "do not
+/// reduce", not "extend" — late-move *extensions* are out of scope. The caller keeps the safety
+/// properties the reduction depends on: it is applied only to a quiet, non-checking, unextended move
+/// past the first, it caps the result so the scout keeps at least one ply of its own, and any reduced
+/// scout that raises alpha is re-searched at full depth before it can enter the PV.
+///
+/// `quiet_history` is the move's combined main-plus-continuation history for the side to move, and
+/// `favoured` is true when the move is a killer or the counter move; both are meaningful only for the
+/// quiet moves this reduction applies to and are ignored otherwise.
 #[inline]
-fn lmr_reduction(depth: Depth, move_count: u8) -> Depth {
-    let mut r: Depth = 1;
-    if depth >= 8 && move_count >= 8 {
-        r += 1;
+fn lmr_reduction(
+    depth: Depth,
+    move_count: u8,
+    pv: bool,
+    improving: bool,
+    favoured: bool,
+    quiet_history: i32,
+) -> Depth {
+    let mut r: i32 = if LMR_LOG_TABLE {
+        LMR_TABLE.base(depth, move_count)
+    } else {
+        // The historical step function: one ply, and a second only for a move both deep in the tree
+        // and well down the ordering.
+        if depth >= 8 && move_count >= 8 {
+            2 * LMR_PLY
+        } else {
+            LMR_PLY
+        }
+    };
+
+    if LMR_HISTORY_MODULATION {
+        let adjust = (quiet_history / LMR_HISTORY_DIVISOR)
+            .clamp(-LMR_HISTORY_MAX_ADJUST, LMR_HISTORY_MAX_ADJUST);
+        r -= adjust;
     }
-    r
+
+    if LMR_IMPROVING_MODULATION && !improving {
+        r += LMR_PLY;
+    }
+
+    if LMR_FAVOURED_MODULATION {
+        if pv {
+            r -= LMR_PLY;
+        }
+        if favoured {
+            r -= LMR_PLY;
+        }
+    }
+
+    // Whole plies, never negative. The caller further caps this so the reduced scout keeps a ply.
+    (r.max(0) / LMR_PLY) as Depth
 }
 
 /// Largest remaining depth at which late-move (move-count) pruning is attempted.
@@ -1750,6 +1897,19 @@ impl<'engine> Search<'engine> {
                 // The reduction is decided just below, after the move is made, where whether it gives
                 // check is known: a checking move is forcing and must not be searched shallower than
                 // the moves around it. See "Step 17 (applied)".
+                //
+                // Its history- and ordering-based inputs are sampled here, before the move is made,
+                // while the mover still stands on its origin and the side to move is unflipped —
+                // afterwards both reads would be wrong. Only quiet moves are ever reduced, so the
+                // lookups are confined to them; anything else supplies neutral inputs it will ignore.
+                let (lmr_history, lmr_favoured) = if mov.is_quiet() {
+                    (
+                        self.quiet_history_score(mov, ply),
+                        killer_slot.is_some() || self.is_counter_move(mov, ply),
+                    )
+                } else {
+                    (0, false)
+                };
 
                 // Step 18. Make the move.
                 // SAFETY: ordered moves originate from move generation for `self.pos`.
@@ -1815,6 +1975,12 @@ impl<'engine> Search<'engine> {
                 // Step 20 alpha-raise records this). The first move is never reduced, so a principal
                 // variation always rests on a full-depth search.
                 //
+                // The amount is no longer a flat step: `lmr_reduction` grows the cut with depth and
+                // move count and then modulates it by the move's own quiet history, the improving
+                // signal, and whether the ordering favours it, so the trusted prefix keeps its depth
+                // while the unpromising tail is trimmed harder. The inputs were sampled before the
+                // move was made (see Step 17).
+                //
                 // `self.pos.in_check()` here reports the position *after* the move, i.e. whether the
                 // move gives check; the node's own in-check status is `node_in_check`.
                 let mut reduction: Depth = 0;
@@ -1825,7 +1991,14 @@ impl<'engine> Search<'engine> {
                     && depth >= LMR_MIN_DEPTH
                     && (move_count > LMR_MOVE_THRESHOLD || did_raise_alpha)
                 {
-                    reduction = lmr_reduction(depth, move_count);
+                    reduction = lmr_reduction(
+                        depth,
+                        move_count,
+                        Node::pv(),
+                        improving,
+                        lmr_favoured,
+                        lmr_history,
+                    );
                     // Keep at least one ply in the reduced scout. `new_depth` is at least two here
                     // (the depth gate guarantees it), so this never collapses the scout into the
                     // Step 5 quiescence handover, which must stay reserved for depth at or below zero.
@@ -1923,8 +2096,8 @@ impl<'engine> Search<'engine> {
                             alpha = value;
                             // A move has now raised alpha at this node. Every move still to come is
                             // scouted against this proven bound and is unlikely to beat it, so from
-                            // here they are reduced: Step 17 reads this flag to reduce the remaining
-                            // moves and to take an extra ply off their scout.
+                            // here they are reduced: Step 17 reads this flag to engage the reduction
+                            // on the remaining moves without waiting for the move-count threshold.
                             did_raise_alpha = true;
                         } else {
                             debug_assert!(value >= beta);
@@ -2208,6 +2381,44 @@ impl<'engine> Search<'engine> {
                 Some((entry.moved_piece, entry.mov.dest()))
             }
         })
+    }
+
+    /// The moving side's combined main-plus-continuation history for the quiet move `mov` at this
+    /// node, summed exactly as the quiet ordering scores it. Read by late-move reduction so a
+    /// well-scored quiet is reduced less and a poorly scored one more.
+    ///
+    /// Must be called before the move is made, while the mover still stands on its origin square and
+    /// the side to move is unflipped — after the move both the origin piece and `turn` are wrong.
+    #[inline]
+    fn quiet_history_score(&self, mov: Move, ply: usize) -> i32 {
+        let side = self.pos.turn();
+        // SAFETY: `mov` is a legal quiet move for `self.pos`, so both squares are valid and a real
+        // piece stands on its origin — the same invariant `score_quiets` relies on.
+        let cur_piece = self.pos.piece_at_sq(mov.orig());
+        let mut raw = unsafe { self.history.get_unchecked(mov.orig(), mov.dest(), side) };
+        let contexts = self.continuation_contexts(ply);
+        for (dist, ctx) in contexts.iter().enumerate() {
+            if let Some((prev_piece, prev_to)) = *ctx {
+                // SAFETY: `dist` is a tracked continuation distance and every piece is real.
+                raw += unsafe {
+                    self.cont_hist
+                        .get_unchecked(dist, prev_piece, prev_to, cur_piece, mov.dest())
+                };
+            }
+        }
+        raw
+    }
+
+    /// Whether `mov` is the counter move recorded for the move one ply back — the quiet reply the
+    /// counter-move heuristic favours here. Read at the reduction decision so a favoured move keeps
+    /// more of its depth. False at the root and after a null move, where no counter context exists.
+    #[inline]
+    fn is_counter_move(&self, mov: Move, ply: usize) -> bool {
+        let contexts = self.continuation_contexts(ply);
+        match contexts[0] {
+            Some((prev_piece, prev_to)) => self.counter.get(prev_piece, prev_to) == mov,
+            None => false,
+        }
     }
 
     /// Reward the quiet move that produced a beta cutoff and penalise the quiet moves tried before
@@ -3367,6 +3578,90 @@ mod tests {
         assert!(!is_improving(None, Some(Score::cp(10))));
         assert!(!is_improving(Some(Score::cp(10)), None));
         assert!(!is_improving(None, None));
+    }
+
+    /// The base reduction table must grow with both remaining depth and move count and never shrink
+    /// in either: a deeper or later move is the one least likely to repay a full search, so it may
+    /// never be reduced less than a shallower or earlier one. Monotonicity is what makes the reduction
+    /// a coherent "how far down the ordering" signal rather than a bag of tuned points.
+    #[test]
+    fn lmr_base_table_grows_monotonically_in_depth_and_move_count() {
+        // Non-decreasing along move count at every depth.
+        for depth in 1..64 as Depth {
+            for move_count in 1..200u8 {
+                assert!(
+                    LMR_TABLE.base(depth, move_count) >= LMR_TABLE.base(depth, move_count - 1),
+                    "reduction fell as move count rose at depth {depth}, move {move_count}"
+                );
+            }
+        }
+        // Non-decreasing along depth at every move count.
+        for depth in 2..64 as Depth {
+            for move_count in 1..200u8 {
+                assert!(
+                    LMR_TABLE.base(depth, move_count) >= LMR_TABLE.base(depth - 1, move_count),
+                    "reduction fell as depth rose at depth {depth}, move {move_count}"
+                );
+            }
+        }
+        // And it genuinely grows across the range rather than being flat.
+        assert!(
+            LMR_TABLE.base(32, 32) > LMR_TABLE.base(3, 4),
+            "the table did not grow from an early shallow move to a late deep one"
+        );
+    }
+
+    /// A move the ordering tables already trust is reduced less, and one they distrust more: the
+    /// reduction eases as accumulated quiet history rises. This is the whole point of spending the
+    /// history signal on the reduction amount.
+    #[test]
+    fn lmr_eases_with_strong_history_and_deepens_with_weak() {
+        // A depth and move count whose base reduction has headroom in both directions.
+        let strong = lmr_reduction(16, 16, false, true, false, 80_000);
+        let neutral = lmr_reduction(16, 16, false, true, false, 0);
+        let weak = lmr_reduction(16, 16, false, true, false, -80_000);
+        assert!(
+            strong < neutral && neutral < weak,
+            "history did not modulate the reduction: strong {strong}, neutral {neutral}, weak {weak}"
+        );
+    }
+
+    /// A side to move that is not improving takes exactly one extra ply of reduction; an improving
+    /// side keeps the base. The deteriorating side's moves matter less and can be trimmed harder.
+    #[test]
+    fn lmr_non_improving_reduces_one_extra_ply() {
+        let improving = lmr_reduction(16, 16, false, true, false, 0);
+        let not_improving = lmr_reduction(16, 16, false, false, false, 0);
+        assert_eq!(
+            not_improving,
+            improving + 1,
+            "a non-improving side should take exactly one extra ply of reduction"
+        );
+    }
+
+    /// PV nodes and killer/counter moves are reduced less than a plain late quiet at the same depth
+    /// and move count, so the trusted ordering prefix keeps its depth.
+    #[test]
+    fn lmr_favours_pv_nodes_and_ordering_refutations() {
+        let plain = lmr_reduction(16, 16, false, true, false, 0);
+        let pv = lmr_reduction(16, 16, true, true, false, 0);
+        let favoured = lmr_reduction(16, 16, false, true, true, 0);
+        assert!(
+            pv < plain,
+            "a PV node should be reduced less: pv {pv}, plain {plain}"
+        );
+        assert!(
+            favoured < plain,
+            "a killer/counter move should be reduced less: favoured {favoured}, plain {plain}"
+        );
+    }
+
+    /// The reduction never drops below zero even when every easing signal fires at once: a modulation
+    /// sum below zero means "do not reduce", never "extend" — late-move extensions are out of scope.
+    #[test]
+    fn lmr_never_returns_a_negative_reduction() {
+        let r = lmr_reduction(3, 4, true, true, true, HISTORY_MAX * 3);
+        assert!(r >= 0, "reduction went negative: {r}");
     }
 
     #[test]
@@ -5117,10 +5412,11 @@ mod tests {
     /// ply count, and formatting the progress event tripped Score's parity assertion on the UCI
     /// driver thread.
     ///
-    /// The mate surfaces here at depth six: an aspiration window centred on the previous
-    /// iteration's non-mate score first fails high on the mate and only the widening re-search
-    /// recovers it, so this also exercises that a mate reported out of a re-search still carries
-    /// correct distance parity.
+    /// The mate surfaces at depth seven: the previous iteration returns a non-mate centipawn score,
+    /// so an aspiration window centred on it first fails high on the mate and only the widening
+    /// re-search recovers it. This exercises that a mate reported out of a re-search still carries
+    /// correct distance parity. (The exact iteration the mate first appears at depends on the
+    /// reduction schedule and is not itself the subject; only the parity plumbing is.)
     #[test]
     fn child_mate_windows_preserve_distance_parity() {
         chess::init::init_globals();
@@ -5128,17 +5424,17 @@ mod tests {
         let position =
             Position::from_fen("2k5/8/b1p5/Pq2r1p1/8/5PpP/3p2P1/Q2R2K1 b - - 1 61").unwrap();
         let engine = SearchEngine::new(1);
-        let search = engine.start(position, SearchLimit::Depth(6));
+        let search = engine.start(position, SearchLimit::Depth(7));
         let events = search.events().clone();
         let outcome = search.wait();
         let progress = events
             .try_iter()
             .filter_map(|event| match event {
-                SearchEvent::Progress(progress) if progress.depth == 6 => Some(progress),
+                SearchEvent::Progress(progress) if progress.depth == 7 => Some(progress),
                 _ => None,
             })
             .next()
-            .expect("depth-six progress must be emitted");
+            .expect("depth-seven progress must be emitted");
 
         assert!(matches!(outcome, SearchOutcome::Completed(Some(_))));
         assert_eq!(progress.score, Score::mate(7));
