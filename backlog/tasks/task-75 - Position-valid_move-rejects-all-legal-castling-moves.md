@@ -1,9 +1,11 @@
 ---
 id: TASK-75
 title: 'Position::valid_move rejects all legal castling moves'
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@george'
 created_date: '2026-07-21 04:57'
+updated_date: '2026-07-21 05:25'
 labels:
   - chess
   - movegen
@@ -37,3 +39,13 @@ The fix is to teach valid_move (valid_move_helper / valid_move_per_piece) to rec
 - [ ] #3 The TT ordering path (search.rs) no longer counts a legal castle TT move as a hash collision, and a castle TT/killer move is retained as an ordering hint
 - [ ] #4 Fixed-depth node counts and the required checks (cargo fmt --check, clippy -D warnings, cargo test --workspace) remain green, confirming no domain-safety check was weakened
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Extract a shared predicate castle_available::<PL>(side) in InnerMoveGen that returns whether castling to a side is legal (rights, not impeded, king+rook in place, no through/into-check), mirroring castling_side exactly.
+2. Refactor castling_side to call castle_available so generator and validator cannot drift.
+3. In valid_move_helper, detect a CASTLE-flagged king move: reject when in check (generator never emits castles in check), map dest (relative G1/C1) to CastleType, guard on All/Quiets generation, and return castle_available result. Reject dest not matching either castle destination.
+4. Add regression test asserting valid_move agrees with the generated legal move list on castles, incl. Kiwipete e1g1/e1c1, plus negative cases (no rights, blocked path, through-check).
+5. Run fmt/clippy/test and confirm node counts unchanged.
+<!-- SECTION:PLAN:END -->
