@@ -3,11 +3,11 @@ id: TASK-73
 title: >-
   Fix Lichess event-stream reconnect churn: 15s recv-response timeout kills
   long-lived streams
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-21 03:03'
-updated_date: '2026-07-21 03:18'
+updated_date: '2026-07-21 03:24'
 labels: []
 dependencies: []
 priority: high
