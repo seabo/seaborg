@@ -3,10 +3,11 @@ id: TASK-74.6
 title: >-
   Lichess matchmaking robustness and challenge-policy precision, plus a
   conformance-divergence note
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-21 03:56'
-updated_date: '2026-07-21 04:03'
+updated_date: '2026-07-21 15:24'
 labels:
   - lichess
   - conformance
@@ -40,3 +41,16 @@ References: lichess-bot lib/matchmaking.py (outstanding-id cancel, weighted sele
 - [ ] #6 Pinned tests cover: an expired outstanding challenge triggering a cancel with the tracked id, selection spreading across eligible candidates, the new decline-reason mappings, and the block/allow and per-user-limit paths
 - [ ] #7 cargo fmt --check, cargo clippy --workspace --all-targets --all-features -D warnings, and cargo test --workspace all pass
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. client.rs: create_challenge parses the create response and returns the challenge id; add cancel_challenge (POST /api/challenge/{id}/cancel).
+2. matchmaking.rs: Outstanding stores the challenge id; record_issued(now, id); choose() stashes the id of an abandoned/expired outstanding challenge; take_challenge_to_cancel() drains it. Replace first-eligible select_opponent with random selection over eligible candidates using an internal SplitMix64 rng; add with_seed builder as the injectable seam (production seeds from system entropy; new() uses a fixed seed for deterministic tests).
+3. run.rs seek_matchmaking_game: capture the created id via record_issued; after choose, cancel any abandoned challenge (outside the lock). GameSlots tracks a per-slot owner id and exposes games_for_user; process_accept_queue enforces max_games_per_user (decline reason later) and passes the challenger id as slot owner.
+4. policy.rs: add DeclineReason TooFast/TooSlow/Later/Standard (11 total). Time control too-fast vs too-slow; standard vs variant reason; mode mismatch offers the alternative mode (rated->casual, casual->rated). allow_list/block_list matched by account id (case-insensitive) -> decline generic.
+5. config.rs: ChallengePolicy gains allow_list, block_list, max_games_per_user.
+6. lichess/REFERENCE_CONFORMANCE.md: record intentional divergences (idle-timeout seconds vs reference minutes, uniform-random vs rating-weighted selection, id-based case-insensitive list matching, unimplemented reference knobs).
+7. seaborg-lichess.example.toml: document the new challenge fields.
+8. Add pinned tests (expired->cancel, selection spread, new decline mappings, allow/block + per-user-limit) and run fmt/clippy/test.
+<!-- SECTION:PLAN:END -->
