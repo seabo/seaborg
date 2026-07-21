@@ -14,16 +14,21 @@
 //! incrementally as a [`chess::position::PieceDeltaSink`], borrowing the
 //! feature-transformer weights straight from a loaded [`Network`].
 //!
-//! The forward pass — combining the two perspectives, applying the activation, and
-//! reading out a score — is deliberately *not* here yet. The format itself
-//! (feature set, topology, quantization scales, header layout, and the rejection
-//! rules) is fixed by the NNUE design contract in `docs/nnue-design-contract.md`.
+//! The [`inference`] submodule owns the scalar quantized forward pass: it combines
+//! the two perspectives side-to-move first, applies the clipped-ReLU activation,
+//! runs the output layer, and dequantizes to a single centipawn score. It is the
+//! portable correctness oracle the SIMD path and the PyTorch quantized forward are
+//! both checked against. The format itself (feature set, topology, quantization
+//! scales, header layout, and the rejection rules) is fixed by the NNUE design
+//! contract in `docs/nnue-design-contract.md`.
 
 mod accumulator;
 mod format;
+mod inference;
 
 pub use accumulator::{feature_index, Accumulator};
 pub use format::{
     BuildError, LoadError, Network, Parameters, ACTIVATION_CRELU, FEATURE_SET_PERSPECTIVE_768,
     FORMAT_VERSION, HEADER_LEN, INPUT_DIM, MAGIC, OUTPUT_DIM,
 };
+pub use inference::forward;
