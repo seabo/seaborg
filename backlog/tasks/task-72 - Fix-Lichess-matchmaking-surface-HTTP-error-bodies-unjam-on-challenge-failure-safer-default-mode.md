@@ -3,10 +3,11 @@ id: TASK-72
 title: >-
   Fix Lichess matchmaking: surface HTTP error bodies, unjam on challenge
   failure, safer default mode
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-21 02:05'
-updated_date: '2026-07-21 02:05'
+updated_date: '2026-07-21 02:08'
 labels: []
 dependencies: []
 type: bug
@@ -26,3 +27,13 @@ Proactive matchmaking (TASK-71) fails in practice: an outgoing rated challenge t
 - [ ] #3 cargo fmt --check, cargo clippy --workspace --all-targets --all-features -- -D warnings, and cargo test --workspace all pass
 - [ ] #4 The bundled example config makes the rated-challenge rejection risk explicit: the [matchmaking] mode comment documents that rated challenges to bots are frequently rejected at creation, and the default mode is chosen so enabling matchmaking out of the box does not produce guaranteed repeated create-time rejections
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. transport.rs (AC#1): in check_status, on an unhandled non-success status read the response body and fold it into Error::Http. Extract a pure helper unexpected_status_error(status, body) that appends a trimmed, length-capped body when present, and unit-test it directly (body text reaches the error) without needing a live socket.
+2. matchmaking.rs (AC#2): add record_challenge_failed(bot_id, now) that applies the same per-opponent backoff as a decline (share a private record_backoff helper with record_declined). Unit-test that after recording a failure, select_opponent skips that bot and returns the next eligible one.
+3. run.rs (AC#2): in maybe_seek_matchmaking_game, on a recoverable create_challenge failure call matchmaker.record_challenge_failed(&target, now) so the wedged bot is skipped next tick. Extend FakeTransport to fail challenge-create POSTs and add a test driving two seek ticks (idle_timeout=0, min_interval=0) asserting the second attempt targets a different bot.
+4. config example + code default (AC#4): change the built-in matchmaking mode default from Random to Casual in config.rs (the example file header promises it shows built-in defaults, so both must agree), update the example toml mode value and comment to explain rated challenges to bots are frequently rejected at creation, and update the config.rs default-mode test.
+5. Run cargo fmt --check, clippy -D warnings, and cargo test --workspace (AC#3).
+<!-- SECTION:PLAN:END -->
