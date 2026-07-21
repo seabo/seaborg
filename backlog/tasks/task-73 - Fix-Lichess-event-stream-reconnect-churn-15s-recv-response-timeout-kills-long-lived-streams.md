@@ -3,9 +3,11 @@ id: TASK-73
 title: >-
   Fix Lichess event-stream reconnect churn: 15s recv-response timeout kills
   long-lived streams
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-21 03:03'
+updated_date: '2026-07-21 03:07'
 labels: []
 dependencies: []
 priority: high
@@ -34,3 +36,13 @@ The fix must keep the 15s header timeout for ordinary request/response calls (ge
 - [ ] #5 Regression coverage exists (unit/integration) demonstrating the streaming path does not impose the 15s response-receive deadline, without requiring live network access
 - [ ] #6 cargo fmt --check, clippy (workspace, all-targets, all-features, -D warnings), and cargo test --workspace all pass
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Refactor HttpTransport agent construction to inject the recv-response timeout, so tests can build the agent with a short deadline without live network.
+2. In open_stream, override the request config with timeout_recv_response(None) so the long-lived streaming body is not bound by the header timeout; keep get/post_empty/post_form using the shared agent's 15s recv-response bound.
+3. Correct the RESPONSE_TIMEOUT comment: ureq applies recv-response to streaming bodies (deadline persists as a preceeding timeout during body reads), so it is not header-only; document why the stream path exempts it.
+4. Add a regression test using a local TcpListener HTTP server: with a short agent recv-response timeout and a server that delays the body past that deadline, open_stream still receives all lines (override effective) while a non-streaming get() against a slow body times out (bound retained).
+5. Run fmt, clippy -D warnings, and cargo test --workspace.
+<!-- SECTION:PLAN:END -->
