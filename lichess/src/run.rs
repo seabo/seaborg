@@ -107,6 +107,7 @@ pub fn run(config_path: Option<&Path>) -> Result<()> {
     let result = run_event_loop(
         &client,
         &config,
+        &bot_id,
         &shutdown,
         &active,
         &mut matchmaker,
@@ -237,16 +238,26 @@ impl ActiveGames {
 /// Read the account event stream and act on each event, reconnecting with
 /// exponential backoff when the stream drops.
 ///
-/// `start_game` is invoked with a game's id the first time that game starts, to
-/// begin playing it. `active` tracks the games with live workers; it gates the
-/// concurrency cap and survives reconnects so a replayed `gameStart` never spawns
-/// a duplicate worker. `sleep` performs the reconnect wait (injected so tests can
-/// avoid real delays). The loop returns cleanly once shutdown is requested.
+/// `bot_id` is the authenticated account's own id, used to ignore the bot's own
+/// outgoing challenges echoed back on the stream. `start_game` is invoked with a
+/// game's id the first time that game starts, to begin playing it. `active` tracks
+/// the games with live workers; it gates the concurrency cap and survives
+/// reconnects so a replayed `gameStart` never spawns a duplicate worker. `sleep`
+/// performs the reconnect wait (injected so tests can avoid real delays). The loop
+/// returns cleanly once shutdown is requested.
 ///
 /// Generic over the transport so it can be driven by recorded NDJSON in tests.
+// This is the top-level wiring seam: it takes the full set of collaborators the
+// loop drives (client, config, own identity, shutdown, active-game set,
+// matchmaker) plus two injected closures — `start_game` and `sleep` — that exist
+// so tests can substitute game spawning and the reconnect wait. The closures
+// cannot join a plain data struct, so the argument count is inherent here rather
+// than a sign of a missing abstraction.
+#[allow(clippy::too_many_arguments)]
 pub fn run_event_loop<T, S, P>(
     client: &LichessClient<T>,
     config: &Config,
+    bot_id: &str,
     shutdown: &Shutdown,
     active: &ActiveGames,
     matchmaker: &mut Matchmaker,
@@ -266,6 +277,7 @@ where
         match run_event_stream_once(
             client,
             config,
+            bot_id,
             shutdown,
             active,
             matchmaker,
@@ -302,6 +314,7 @@ enum StreamOutcome {
 fn run_event_stream_once<T, S>(
     client: &LichessClient<T>,
     config: &Config,
+    bot_id: &str,
     shutdown: &Shutdown,
     active: &ActiveGames,
     matchmaker: &mut Matchmaker,
@@ -329,7 +342,9 @@ where
         match item {
             Ok(Some(event)) => {
                 made_progress = true;
-                handle_event(client, config, active, matchmaker, start_game, event)?;
+                handle_event(
+                    client, config, bot_id, active, matchmaker, start_game, event,
+                )?;
             }
             // Keepalive line: no event to handle, but a regular chance to seek a
             // matchmaking game and (via the check above) to notice shutdown.
@@ -414,6 +429,7 @@ fn maybe_seek_matchmaking_game<T: Transport>(
 fn handle_event<T, S>(
     client: &LichessClient<T>,
     config: &Config,
+    bot_id: &str,
     active: &ActiveGames,
     matchmaker: &mut Matchmaker,
     start_game: &mut S,
@@ -425,6 +441,14 @@ where
 {
     match event {
         Event::Challenge { challenge } => {
+            // The account stream echoes the bot's own outgoing challenges. Trying
+            // to accept one is a request Lichess rejects with a 404, so drop these
+            // before any policy decision — the bot neither accepts nor declines a
+            // challenge it issued itself.
+            if challenge.is_from_self(bot_id) {
+                log::debug!("ignoring own outgoing challenge {}", challenge.id);
+                return Ok(());
+            }
             let decision = policy::evaluate(
                 &challenge,
                 &config.challenge,
@@ -616,6 +640,11 @@ mod tests {
     // A Chess960 challenge — declined by the default standard-only policy.
     const VARIANT_CHALLENGE: &str = r#"{"type":"challenge","challenge":{"id":"bad960","rated":false,"variant":{"key":"chess960"},"timeControl":{"type":"clock","limit":300,"increment":3},"challenger":{"id":"bob","name":"bob","rating":1600,"title":null}}}"#;
 
+    // The authenticated bot's own account id, used to recognise its own outgoing
+    // challenges echoed back on the account stream. None of the incoming-challenge
+    // fixtures use it as the challenger, so it never falsely flags a real one.
+    const SELF_ID: &str = "seaborg";
+
     /// Drive one event-stream connection to its end, returning the game ids the
     /// runner was asked to start. Used by the challenge-handling tests, which
     /// assert on a single connection without the reconnect wrapper.
@@ -625,6 +654,7 @@ mod tests {
         run_event_stream_once(
             client,
             &Config::default(),
+            SELF_ID,
             &Shutdown::new(),
             &active,
             &mut Matchmaker::disabled(),
@@ -632,6 +662,192 @@ mod tests {
         )
         .unwrap();
         started
+    }
+
+    /// One outbound challenge-API call the bot made, classified from a recorded
+    /// POST so scenarios can assert intent — with ids and decline reasons — rather
+    /// than matching raw request paths.
+    #[derive(Debug, PartialEq, Eq)]
+    enum OutboundCall {
+        /// `POST /api/challenge/{id}/accept`.
+        Accept { id: String },
+        /// `POST /api/challenge/{id}/decline` with a reason.
+        Decline { id: String, reason: String },
+        /// `POST /api/challenge/{username}` — an outgoing challenge-create.
+        Create { username: String },
+        /// `POST /api/challenge/{id}/cancel` — cancelling an outgoing challenge.
+        Cancel { id: String },
+    }
+
+    /// Classify a recorded challenge POST into a typed [`OutboundCall`].
+    ///
+    /// Every path the event loop POSTs is under `/api/challenge/`; the trailing
+    /// segment (or its absence) distinguishes accept, decline, cancel, and a bare
+    /// create addressed to a username.
+    fn classify_post((path, form): &RecordedPost) -> OutboundCall {
+        let rest = path
+            .strip_prefix("/api/challenge/")
+            .unwrap_or_else(|| panic!("unexpected outbound POST during replay: {path}"));
+        if let Some(id) = rest.strip_suffix("/accept") {
+            OutboundCall::Accept { id: id.to_string() }
+        } else if let Some(id) = rest.strip_suffix("/decline") {
+            let reason = form
+                .iter()
+                .find(|(k, _)| k == "reason")
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default();
+            OutboundCall::Decline {
+                id: id.to_string(),
+                reason,
+            }
+        } else if let Some(id) = rest.strip_suffix("/cancel") {
+            OutboundCall::Cancel { id: id.to_string() }
+        } else {
+            OutboundCall::Create {
+                username: rest.to_string(),
+            }
+        }
+    }
+
+    /// What one replayed event sequence produced: the ordered outbound calls and
+    /// the number of active game slots still occupied at the end.
+    struct Replay {
+        calls: Vec<OutboundCall>,
+        active_slots: usize,
+    }
+
+    /// Replay `lines` as one account-event connection for a bot whose own id is
+    /// `bot_id`, under `config`, and report the outbound calls and final slot
+    /// count. Matchmaking is disabled so the only outbound calls are reactions to
+    /// the replayed events themselves.
+    fn replay(bot_id: &str, config: &Config, lines: &[&str]) -> Replay {
+        let stream = lines.join("\n");
+        let client = LichessClient::new(FakeTransport::new("{}", &stream));
+        let active = ActiveGames::new();
+        run_event_stream_once(
+            &client,
+            config,
+            bot_id,
+            &Shutdown::new(),
+            &active,
+            &mut Matchmaker::disabled(),
+            &mut |_id: &str| {},
+        )
+        .unwrap();
+        let calls = client_transport(&client)
+            .posts
+            .borrow()
+            .iter()
+            .map(classify_post)
+            .collect();
+        Replay {
+            calls,
+            active_slots: active.len(),
+        }
+    }
+
+    // Captured Lichess challenge/game JSON in the shapes the live stream sends,
+    // including fields the bot does not parse (direction, status, destUser, speed,
+    // perf, color, finalColor, fullId, fen, source). Their presence confirms the
+    // event types tolerate unknown fields.
+
+    // The bot's own outgoing matchmaking challenge, echoed back on the account
+    // stream. `direction` is "out" and the challenger is the bot itself.
+    const SELF_OUTGOING_CHALLENGE: &str = r#"{"type":"challenge","challenge":{"id":"self01","direction":"out","status":"created","challenger":{"id":"seaborg","name":"seaborg","title":"BOT","rating":1800,"online":true},"destUser":{"id":"maia1","name":"maia1","title":"BOT","rating":1700},"variant":{"key":"standard","name":"Standard","short":"Std"},"rated":false,"speed":"blitz","timeControl":{"type":"clock","limit":300,"increment":3,"show":"5+3"},"color":"random","finalColor":"white","perf":{"icon":"","name":"Blitz"}}}"#;
+
+    // A self challenge with NO `direction` field: the challenger id alone must
+    // identify it as the bot's own.
+    const SELF_CHALLENGE_NO_DIRECTION: &str = r#"{"type":"challenge","challenge":{"id":"self02","status":"created","challenger":{"id":"seaborg","name":"seaborg","title":"BOT","rating":1800},"destUser":{"id":"human1","name":"human1"},"variant":{"key":"standard"},"rated":false,"speed":"blitz","timeControl":{"type":"clock","limit":300,"increment":3},"color":"random","finalColor":"black"}}"#;
+
+    // A genuine incoming human challenge that passes the default policy.
+    const INCOMING_HUMAN_CHALLENGE: &str = r#"{"type":"challenge","challenge":{"id":"human99","direction":"in","status":"created","challenger":{"id":"alice","name":"alice","rating":1500,"title":null,"online":true},"destUser":{"id":"seaborg","name":"seaborg","title":"BOT"},"variant":{"key":"standard","name":"Standard"},"rated":false,"speed":"blitz","timeControl":{"type":"clock","limit":300,"increment":3,"show":"5+3"},"color":"random","finalColor":"white","perf":{"icon":"","name":"Blitz"}}}"#;
+
+    // A genuine incoming Chess960 challenge — declined by the default policy.
+    const INCOMING_VARIANT_CHALLENGE: &str = r#"{"type":"challenge","challenge":{"id":"var01","direction":"in","status":"created","challenger":{"id":"bob","name":"bob","rating":1600},"destUser":{"id":"seaborg","name":"seaborg"},"variant":{"key":"chess960","name":"Chess960"},"rated":false,"speed":"blitz","timeControl":{"type":"clock","limit":300,"increment":3},"color":"random"}}"#;
+
+    // The gameStart Lichess sends once the incoming human challenge is accepted.
+    const HUMAN_GAME_START: &str = r#"{"type":"gameStart","game":{"id":"gamehuman","fullId":"gamehumanabcd","color":"white","fen":"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1","speed":"blitz","source":"friend","status":{"id":20,"name":"started"}}}"#;
+
+    #[test]
+    fn replay_harness_pins_challenge_lifecycle_scenarios() {
+        // Each row is a recorded NDJSON event sequence and the exact outbound
+        // calls plus final active-slot count it must produce. Using real Lichess
+        // JSON (with fields the bot does not parse) keeps these honest about the
+        // wire format and exercises unknown-field tolerance.
+        struct Scenario {
+            name: &'static str,
+            lines: &'static [&'static str],
+            expected_calls: Vec<OutboundCall>,
+            expected_slots: usize,
+        }
+
+        let scenarios = vec![
+            // (a) A self/outgoing challenge echoed on the stream is ignored: no
+            // accept and no decline.
+            Scenario {
+                name: "self outgoing challenge is ignored",
+                lines: &[SELF_OUTGOING_CHALLENGE],
+                expected_calls: vec![],
+                expected_slots: 0,
+            },
+            // (c) A self challenge with `direction` absent is still ignored,
+            // identified purely by the challenger id.
+            Scenario {
+                name: "self challenge without direction is ignored",
+                lines: &[SELF_CHALLENGE_NO_DIRECTION],
+                expected_calls: vec![],
+                expected_slots: 0,
+            },
+            // (b) An incoming human challenge that passes policy is accepted once
+            // and its gameStart occupies exactly one slot.
+            Scenario {
+                name: "incoming human challenge is accepted and starts one game",
+                lines: &[INCOMING_HUMAN_CHALLENGE, HUMAN_GAME_START],
+                expected_calls: vec![OutboundCall::Accept {
+                    id: "human99".to_string(),
+                }],
+                expected_slots: 1,
+            },
+            // A genuine incoming challenge the policy rejects is still declined
+            // with the right reason — the from_self guard does not suppress it.
+            Scenario {
+                name: "incoming variant challenge is declined",
+                lines: &[INCOMING_VARIANT_CHALLENGE],
+                expected_calls: vec![OutboundCall::Decline {
+                    id: "var01".to_string(),
+                    reason: "variant".to_string(),
+                }],
+                expected_slots: 0,
+            },
+            // The bot's own echoed challenge and a real incoming one in the same
+            // connection: the self one is skipped, the real one accepted, in order.
+            Scenario {
+                name: "self echo is skipped while a real challenge is accepted",
+                lines: &[
+                    SELF_OUTGOING_CHALLENGE,
+                    INCOMING_HUMAN_CHALLENGE,
+                    HUMAN_GAME_START,
+                ],
+                expected_calls: vec![OutboundCall::Accept {
+                    id: "human99".to_string(),
+                }],
+                expected_slots: 1,
+            },
+        ];
+
+        for scenario in scenarios {
+            let result = replay(SELF_ID, &Config::default(), scenario.lines);
+            assert_eq!(
+                result.calls, scenario.expected_calls,
+                "outbound calls mismatch in scenario: {}",
+                scenario.name
+            );
+            assert_eq!(
+                result.active_slots, scenario.expected_slots,
+                "active slot count mismatch in scenario: {}",
+                scenario.name
+            );
+        }
     }
 
     #[test]
@@ -711,6 +927,7 @@ mod tests {
         run_event_stream_once(
             &client,
             &Config::default(),
+            SELF_ID,
             &Shutdown::new(),
             &active,
             &mut matchmaker,
@@ -761,6 +978,7 @@ mod tests {
         run_event_stream_once(
             &client,
             &Config::default(),
+            SELF_ID,
             &Shutdown::new(),
             &active,
             &mut matchmaker,
@@ -791,6 +1009,7 @@ mod tests {
         run_event_stream_once(
             &client,
             &Config::default(),
+            SELF_ID,
             &Shutdown::new(),
             &active,
             &mut Matchmaker::disabled(),
@@ -850,6 +1069,7 @@ mod tests {
         run_event_loop(
             &client,
             &Config::default(),
+            SELF_ID,
             &shutdown,
             &active,
             &mut Matchmaker::disabled(),
@@ -887,6 +1107,7 @@ mod tests {
         run_event_loop(
             &client,
             &Config::default(),
+            SELF_ID,
             &shutdown,
             &active,
             &mut Matchmaker::disabled(),
