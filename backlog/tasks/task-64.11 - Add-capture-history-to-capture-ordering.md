@@ -1,10 +1,11 @@
 ---
 id: TASK-64.11
 title: Add capture history to capture ordering
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@george'
 created_date: '2026-07-19 13:33'
-updated_date: '2026-07-19 13:44'
+updated_date: '2026-07-21 16:42'
 labels:
   - search
   - move-ordering
@@ -44,3 +45,15 @@ An open question to settle and record: whether capture history should adjust ord
 - [ ] #4 A test asserts that among captures with equal SEE, one previously causing cutoffs is ordered first
 - [ ] #5 Measured with the TASK-27 strength-regression script, with results recorded in the implementation notes
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Add a CaptureHistory table in history.rs keyed on (moving piece, destination square, captured piece type), backed by a boxed flat i32 slice and using the shared gravity_update rule for bonus/malus/aging. En-passant captures key their captured type as Pawn so read and update stay consistent.
+2. Wire it into Search: new field, construction in Search::new, and reset in the per-search reset block alongside the other move-ordering tables.
+3. Train it on beta cutoffs: track failed captures in the main move loop; on any cutoff apply a depth-scaled malus to failed captures and, when the cutoff move is itself a capture, a bonus to it. New update_capture_histories mirrors update_quiet_histories.
+4. Decision (AC#2): capture history adjusts ordering WITHIN the existing SEE-derived phases only and can never move a capture across a phase boundary. Implemented by partitioning the capture segment on pure SEE first (unchanged), then folding a bounded history term into the within-phase ordering score. The term is bounded below one pawn (the minimum nonzero SEE granularity, since piece values are whole pawns), so it breaks ties among captures of equal material outcome without ever outweighing a material difference. This preserves the material-based phase guarantee that move-count pruning and LMP depend on.
+5. Ordering plumbing: add Loader::score_capture_history (default no-op); call it in ordering.rs after the SEE partition commits the good/equal/bad subranges; implement it on MoveLoader to add the bounded history term to the stored SEE score. Quiescence (QMoveLoader) keeps pure SEE.
+6. Tests: capture-history bounded/aging/keying test in history.rs; a search.rs test asserting that among captures of equal SEE the one previously causing cutoffs is ordered first.
+7. Run cargo fmt/clippy/test and the TASK-27 strength-regression script; record results in implementation notes.
+<!-- SECTION:PLAN:END -->
