@@ -3,11 +3,11 @@ id: TASK-74.4
 title: >-
   Lichess accept path: cap accounting at accept-time, challengeCanceled, benign
   404, and human-slot priority
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-21 03:55'
-updated_date: '2026-07-21 13:04'
+updated_date: '2026-07-21 13:24'
 labels:
   - lichess
   - conformance
@@ -33,14 +33,14 @@ References: lichess-bot lib/lichess_bot.py (accept_challenges, sort_challenges, 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 With max_concurrent_games = N and N accepted challenges awaiting gameStart, an additional incoming challenge is declined for capacity rather than accepted
-- [ ] #2 Accepting a challenge reserves a slot that is reconciled (not double-counted) when its gameStart arrives, and released if the challenge is canceled or the accept fails
-- [ ] #3 A challengeCanceled event releases any slot reserved for that challenge
-- [ ] #4 A 404 response to accept is treated as an expected challenge-gone outcome and does not surface as a warning or an error to the caller
-- [ ] #5 A configured number of game slots is reserved on the acceptance side so a human challenge can be accepted even when bot challenges/games would otherwise fill the cap, and a bot challenge is not accepted into a reserved human slot
-- [ ] #6 When multiple challenges are pending and a preference is configured, human challenges are accepted ahead of bot challenges
-- [ ] #7 Pinned harness scenarios cover: over-cap accept prevention, challengeCanceled releasing a reserved slot, a benign 404 accept, a human accepted ahead of a queued bot challenge, and a bot held out of a reserved human slot
-- [ ] #8 cargo fmt --check, cargo clippy --workspace --all-targets --all-features -D warnings, and cargo test --workspace all pass
+- [x] #1 With max_concurrent_games = N and N accepted challenges awaiting gameStart, an additional incoming challenge is declined for capacity rather than accepted
+- [x] #2 Accepting a challenge reserves a slot that is reconciled (not double-counted) when its gameStart arrives, and released if the challenge is canceled or the accept fails
+- [x] #3 A challengeCanceled event releases any slot reserved for that challenge
+- [x] #4 A 404 response to accept is treated as an expected challenge-gone outcome and does not surface as a warning or an error to the caller
+- [x] #5 A configured number of game slots is reserved on the acceptance side so a human challenge can be accepted even when bot challenges/games would otherwise fill the cap, and a bot challenge is not accepted into a reserved human slot
+- [x] #6 When multiple challenges are pending and a preference is configured, human challenges are accepted ahead of bot challenges
+- [x] #7 Pinned harness scenarios cover: over-cap accept prevention, challengeCanceled releasing a reserved slot, a benign 404 accept, a human accepted ahead of a queued bot challenge, and a bot held out of a reserved human slot
+- [x] #8 cargo fmt --check, cargo clippy --workspace --all-targets --all-features -D warnings, and cargo test --workspace all pass
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -86,4 +86,41 @@ Verification:
 - cargo test --workspace: pass on rerun (lichess 110/110; workspace all green)
 Known failures: engine/tests/timed_selfplay.rs::fast_timed_self_play_never_forfeits_or_hangs failed once under the parallel full-suite run (CPU contention), then passed 3/3 in isolation and on a full-suite rerun. It is a load-sensitive timing flake in the engine crate; the diff touches only lichess/src and does not touch engine, so it is unrelated to this change.
 ---
+
+author: @claude
+created: 2026-07-21 13:23
+---
+Review verdict: APPROVE
+
+Branch: task-74.4-lichess-accept-path
+Base: c9bca2a
+Implementation target (code): f68d429 — immutable; verified an ancestor of the branch tip, with only the task file changed after it.
+
+Reviewed the full base..target diff (lichess/src/{config,error,event,policy,transport,run}.rs). Scope is confined to the lichess crate; no move-generation or search hot path is touched, so the speed benchmarks do not apply.
+
+Acceptance criteria — all proven by pinned tests in lichess/src/run.rs / event.rs:
+- #1 over-cap accept prevention: accept_reserves_a_slot_so_the_next_challenge_is_over_cap
+- #2 reserve reconciled on gameStart / released on cancel/accept-fail: game_slots_reserve_start_and_free, replay "incoming human challenge is accepted and starts one game", challenge_canceled_releases_the_reserved_slot, a_404_accept_is_benign_and_frees_the_slot
+- #3 challengeCanceled releases a reserved slot: challenge_canceled_releases_the_reserved_slot (+ challenge_canceled_carries_the_challenge_id)
+- #4 benign 404 on accept: a_404_accept_is_benign_and_frees_the_slot; 404 maps to Error::NotFound, handled at the accept site as debug + release, not WARN/error
+- #5 human-reserved slots on the acceptance side / bot held out: a_bot_is_held_out_of_a_reserved_human_slot
+- #6 human preference ordering: a_human_is_accepted_ahead_of_a_bot_in_the_same_burst
+- #7 all five scenarios pinned in the replay harness / dedicated tests
+- #8 required checks pass (below)
+
+Verification run on the target:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass, clean, with a fresh CARGO_TARGET_DIR
+- cargo test --workspace: green on a clean pass (lichess 110/110; engine 379/379)
+
+Pre-existing flake (not patch-introduced): engine/src/ui/tests.rs::a_last_event_id_from_a_previous_process_still_receives_current_state failed once during a contended full-suite run, then passed 3/3 in isolation and green on a clean full-workspace pass. It is a load-sensitive HTTP TestServer timing test in the engine crate; the diff touches only lichess/src, so it cannot be affected by this change.
+
+Non-blocking observation (not a finding): a reserved slot is freed only by gameStart, challengeCanceled, or a failed accept — there is no independent expiry. The common reconnect case is healed by Lichess replaying gameStart for ongoing games; a slot could orphan only if a game's entire lifetime elapsed during a stream outage. This matches the task's chosen design and no acceptance criterion requires expiry.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Brought the Lichess challenge-accept path to reference behaviour. GameSlots (a Reserved/Active state map keyed by the shared challenge/game id) replaces the gameStart-only ActiveGames: a slot is reserved on accept, promoted in place on the matching gameStart (no double count), released on challengeCanceled or a failed accept, and removed on game finish; len() counts reserved+active so the cap sees reserved-but-not-started games. challengeCanceled is now a modeled event that frees a reserved slot; HTTP 404 on accept maps to a new benign Error::NotFound handled at the accept site (debug log, slot released) rather than a WARN. Acceptance is deferred to a short-lived queue drained once per event burst: suitable challenges are buffered, sorted humans-first when challenge.prefer_human_challenges is set, and accepted under an effective cap (bots: max_concurrent_games - matchmaking.reserved_human_slots; humans: full cap), so a configured number of slots stays reachable by humans and a bot is held out of a reserved human slot. policy::evaluate was split into cap-free policy::classify. Verified with cargo fmt --check (clean), cargo clippy --workspace --all-targets --all-features -- -D warnings (clean, fresh CARGO_TARGET_DIR), and cargo test --workspace (green on a clean pass; lichess 110/110). Pinned harness scenarios cover over-cap decline, challengeCanceled release, benign 404 accept, human-ahead-of-bot, and bot-held-out-of-reserved-slot.
+<!-- SECTION:FINAL_SUMMARY:END -->
