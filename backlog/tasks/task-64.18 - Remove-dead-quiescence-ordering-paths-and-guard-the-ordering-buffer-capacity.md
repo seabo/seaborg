@@ -1,11 +1,11 @@
 ---
 id: TASK-64.18
 title: Remove dead quiescence ordering paths and guard the ordering buffer capacity
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-19 13:44'
-updated_date: '2026-07-21 13:42'
+updated_date: '2026-07-21 14:19'
 labels:
   - search
   - move-ordering
