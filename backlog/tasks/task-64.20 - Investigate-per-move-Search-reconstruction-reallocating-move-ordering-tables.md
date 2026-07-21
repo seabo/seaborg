@@ -1,11 +1,11 @@
 ---
 id: TASK-64.20
 title: Investigate per-move Search reconstruction reallocating move-ordering tables
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-21 04:36'
-updated_date: '2026-07-21 16:42'
+updated_date: '2026-07-21 16:43'
 labels:
   - search
   - move-ordering
@@ -88,3 +88,24 @@ No code change => before/after per-move construction cost and throughput are ide
 
 Verification: cargo fmt --check OK; cargo clippy --workspace --all-targets --all-features -D warnings OK; cargo test --workspace OK (all suites green).
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @claude
+created: 2026-07-21 16:43
+---
+Implementation handoff
+Branch: task-64.20-investigate-search-reconstruction
+Worktree: /Users/seabo/seaborg-worktrees/task-64.20-investigate-search-reconstruction
+Base: b3fd63c (master + task-64.8 merge, per user direction)
+Implementation target: b3fd63c (investigation only -- ZERO code delta; no non-backlog files changed vs base, verified by git diff)
+Resolved findings: none
+Verification:
+- cargo fmt --check: OK
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: OK
+- cargo test --workspace: OK (all suites green)
+Known failures: none
+Summary: Measured per-move Search reconstruction cost in isolation (~190us, ~89% of it the 4.72MB ContinuationHistory alloc; cheap-clear alternative ~23us). At a fast-TC per-move budget of tens of ms this is 0.2-0.6% -- immaterial, and it cannot explain the TASK-64.10 INCONCLUSIVE SPRT or the one-time 0.869s preflight outlier. Decision: no fix warranted (AC#2 immaterial branch); AC#3 not triggered; AC#4 satisfied (fixed-depth nodes=51062 identical across fresh searches; allocation strategy cannot change all-zero table init); AC#5 before==after with the ratio as recorded evidence. Full figures and the redundant end-of-run reset observation (search.rs:1116-1119) are in the implementation notes. Reviewer to verify ACs and record the verdict.
+---
+<!-- COMMENTS:END -->
