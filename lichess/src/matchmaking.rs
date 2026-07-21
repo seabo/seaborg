@@ -343,8 +343,27 @@ impl Matchmaker {
     /// clearing any pending challenge.
     pub fn record_declined(&mut self, bot_id: &str, now: Instant) {
         self.outstanding = None;
-        // Opportunistically drop entries whose backoff has already elapsed, so the
-        // map does not grow without bound over a long session.
+        self.start_backoff(bot_id, now);
+    }
+
+    /// Record that an attempt to challenge `bot_id` failed before any game began —
+    /// most often the challenge was rejected at creation (an HTTP error), rather
+    /// than declined by the opponent.
+    ///
+    /// Without this, opponent selection is deterministic (the first eligible bot
+    /// in the online list) and nothing marks a bot that just refused a challenge,
+    /// so matchmaking would re-select the same unreachable bot every interval and
+    /// make no progress. Applying the same backoff a decline uses moves matchmaking
+    /// on to a different opponent instead.
+    pub fn record_challenge_failed(&mut self, bot_id: &str, now: Instant) {
+        self.start_backoff(bot_id, now);
+    }
+
+    /// Put `bot_id` into the per-opponent backoff, so it is skipped until the
+    /// configured window elapses. Opportunistically drops entries whose backoff
+    /// has already passed, so the map does not grow without bound over a long
+    /// session.
+    fn start_backoff(&mut self, bot_id: &str, now: Instant) {
         let backoff = self.decline_backoff();
         self.declined_at
             .retain(|_, at| now.duration_since(*at) < backoff);
@@ -619,6 +638,43 @@ mod tests {
             mm.select_opponent(&spec, &candidates, start + Duration::from_secs(3601))
                 .map(|b| b.id.as_str()),
             Some("fussy")
+        );
+    }
+
+    #[test]
+    fn a_failed_challenge_makes_selection_move_to_the_next_bot() {
+        // Selection is deterministic (first eligible), so a bot whose challenge
+        // fails must be penalized, or matchmaking re-picks it forever. After
+        // recording a failure the same list yields the next eligible bot instead.
+        let start = Instant::now();
+        let mut mm = Matchmaker::new(enabled_config(), 1, "me", start);
+        let spec = ChallengeSpec {
+            variant: "standard".to_string(),
+            initial_seconds: 300,
+            increment_seconds: 0,
+            rated: false,
+        };
+        let candidates = vec![
+            bot("first", Speed::Blitz, 1500),
+            bot("second", Speed::Blitz, 1500),
+        ];
+        assert_eq!(
+            mm.select_opponent(&spec, &candidates, start)
+                .map(|b| b.id.as_str()),
+            Some("first")
+        );
+        mm.record_challenge_failed("first", start);
+        // Within the backoff the failed bot is skipped and the next one is chosen.
+        assert_eq!(
+            mm.select_opponent(&spec, &candidates, start + Duration::from_secs(1))
+                .map(|b| b.id.as_str()),
+            Some("second")
+        );
+        // Once the backoff elapses the bot is eligible again.
+        assert_eq!(
+            mm.select_opponent(&spec, &candidates, start + Duration::from_secs(3601))
+                .map(|b| b.id.as_str()),
+            Some("first")
         );
     }
 

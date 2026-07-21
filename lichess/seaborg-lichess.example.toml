@@ -62,7 +62,11 @@ min_rating = 0
 max_rating = 4000
 
 # Whether issued challenges are "rated", "casual", or "random" (alternating).
-mode = "random"
+# Casual by default: rated challenges to bots are frequently rejected at creation
+# (many bots, such as the Maia family, accept only casual games), so "rated" or
+# "random" can make a share of outgoing challenges fail until an accepting
+# opponent is found.
+mode = "casual"
 
 # How long the bot must be idle (no games running) before it seeks an opponent,
 # and the minimum gap between successive outgoing challenges, both in seconds.

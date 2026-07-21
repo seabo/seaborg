@@ -175,7 +175,12 @@ impl Default for MatchmakingConfig {
             increment_seconds: vec![0, 2, 3],
             min_rating: 0,
             max_rating: 4000,
-            mode: MatchmakingMode::Random,
+            // Casual by default: rated challenges to bots are frequently rejected
+            // at creation (many bots, such as the Maia family, accept only casual
+            // games), so a rated default would fail out of the box for most
+            // opponents. Rated and random remain available for accounts that want
+            // them.
+            mode: MatchmakingMode::Casual,
             idle_timeout_seconds: 30,
             min_challenge_interval_seconds: 30,
             reserved_human_slots: 0,
@@ -387,7 +392,7 @@ mod tests {
     fn matchmaking_is_disabled_by_default() {
         let m = &Config::default().matchmaking;
         assert!(!m.enabled);
-        assert_eq!(m.mode, MatchmakingMode::Random);
+        assert_eq!(m.mode, MatchmakingMode::Casual);
         assert_eq!(m.variants, vec!["standard".to_string()]);
         assert!(m.block_list.is_empty());
     }

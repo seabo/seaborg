@@ -213,7 +213,32 @@ fn check_status(
         429 => Err(Error::RateLimited {
             retry_after: retry_after(&response),
         }),
-        other => Err(Error::Http(format!("unexpected status {other}"))),
+        // Lichess explains a rejected request in the response body (typically
+        // `{"error":"..."}`), which is the only thing that says *why* a 400
+        // happened. Read it so the reason reaches the caller instead of a bare
+        // status code.
+        other => {
+            let body = response.into_body().read_to_string().ok();
+            Err(unexpected_status_error(other, body.as_deref()))
+        }
+    }
+}
+
+/// Longest body prefix folded into an [`Error::Http`]. Error bodies from Lichess
+/// are small JSON objects; the cap keeps a misbehaving or unexpected endpoint
+/// from flooding the log with a large body.
+const MAX_ERROR_BODY_CHARS: usize = 500;
+
+/// Build the error for an unhandled non-success status, folding in the response
+/// body when the server sent a non-empty one. Kept separate from [`check_status`]
+/// so the status-to-message mapping can be unit-tested without a live socket.
+fn unexpected_status_error(status: u16, body: Option<&str>) -> Error {
+    match body.map(str::trim).filter(|b| !b.is_empty()) {
+        Some(body) => {
+            let snippet: String = body.chars().take(MAX_ERROR_BODY_CHARS).collect();
+            Error::Http(format!("unexpected status {status}: {snippet}"))
+        }
+        None => Error::Http(format!("unexpected status {status}")),
     }
 }
 
@@ -321,6 +346,46 @@ mod tests {
         );
         assert_eq!(calls.into_inner(), 1);
         assert!(waits.into_inner().is_empty());
+    }
+
+    #[test]
+    fn unexpected_status_error_includes_the_response_body() {
+        // The reason Lichess sends on a 400 must survive into the error message,
+        // so a failed challenge logs why rather than just the status code.
+        let error = unexpected_status_error(400, Some(r#"{"error":"Rated games require..."}"#));
+        let Error::Http(message) = error else {
+            panic!("expected Error::Http");
+        };
+        assert!(message.contains("400"), "status is reported: {message}");
+        assert!(
+            message.contains(r#"{"error":"Rated games require..."}"#),
+            "body reaches the error: {message}"
+        );
+    }
+
+    #[test]
+    fn unexpected_status_error_omits_an_empty_body() {
+        // A missing or blank body leaves a clean status-only message with no
+        // dangling separator.
+        assert!(matches!(
+            unexpected_status_error(500, None),
+            Error::Http(m) if m == "unexpected status 500"
+        ));
+        assert!(matches!(
+            unexpected_status_error(500, Some("   \n")),
+            Error::Http(m) if m == "unexpected status 500"
+        ));
+    }
+
+    #[test]
+    fn unexpected_status_error_caps_a_huge_body() {
+        // An oversized body is truncated so it cannot flood the log.
+        let huge = "x".repeat(MAX_ERROR_BODY_CHARS * 2);
+        let Error::Http(message) = unexpected_status_error(400, Some(&huge)) else {
+            panic!("expected Error::Http");
+        };
+        let body_len = message.len() - "unexpected status 400: ".len();
+        assert_eq!(body_len, MAX_ERROR_BODY_CHARS);
     }
 
     #[test]
