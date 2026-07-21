@@ -71,7 +71,13 @@ Compute cost is variable and commonly thousands of games. Increase
 `--concurrency` only when the machine can give every engine equal, uncontended
 resources. Use the same machine, OS, compiler, target features, and
 background-load controls for both builds. `--engine-option NAME=VALUE` applies
-identically to both players.
+identically to both players. `--baseline-option NAME=VALUE` and
+`--candidate-option NAME=VALUE` apply to one side only, and are how a single
+executable is made to play as two different engines — the reinforcement loop
+gives each side its own network with `--baseline-option EvalFile=best.sbnn`
+against `--candidate-option EvalFile=candidate.sbnn`. Both binaries may then be
+the same file; the report still records each side's identity, options, and the
+shared byte hash.
 
 ## Resource limits
 

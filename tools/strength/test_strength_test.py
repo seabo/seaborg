@@ -96,6 +96,7 @@ class StrengthTestTests(unittest.TestCase):
             runner="fastchess", candidate=Path("/candidate"),
             baseline=Path("/baseline"), limit="tc=10+0.1", hash_mb=64,
             threads=1, engine_arg=["-u"], engine_option=["Ponder=false"],
+            baseline_option=[], candidate_option=[],
             max_games=100, openings=Path("/openings.epd"), concurrency=2,
             elo0=-5.0, elo1=0.0, alpha=0.05, beta=0.05)
 
@@ -125,6 +126,31 @@ class StrengthTestTests(unittest.TestCase):
     def test_command_applies_engine_args_to_both_engines(self):
         command = st.build_command(self.config(), Path("games.pgn"))
         self.assertEqual(command.count("args=-u"), 2)
+
+    def test_per_side_options_go_to_the_right_engine_only(self):
+        # The gate tells one binary apart from itself by giving each side its own network. Per-side
+        # options must land in that engine's own block, never in the shared -each block that would
+        # apply them to both.
+        config = self.config()
+        config.baseline_option = ["EvalFile=best.sbnn"]
+        config.candidate_option = ["EvalFile=candidate.sbnn"]
+        command = st.build_command(config, Path("games.pgn"))
+
+        def block_for(name):
+            start = next(i for i, tok in enumerate(command)
+                         if tok == "-engine" and command[i + 1] == f"name={name}")
+            end = next((i for i in range(start + 1, len(command))
+                        if command[i] in ("-engine", "-each")), len(command))
+            return command[start:end]
+
+        self.assertIn("option.EvalFile=candidate.sbnn", block_for("candidate"))
+        self.assertNotIn("option.EvalFile=best.sbnn", block_for("candidate"))
+        self.assertIn("option.EvalFile=best.sbnn", block_for("baseline"))
+        self.assertNotIn("option.EvalFile=candidate.sbnn", block_for("baseline"))
+        # Neither per-side option leaks into the shared block.
+        each = command[command.index("-each"):]
+        self.assertNotIn("option.EvalFile=best.sbnn", each)
+        self.assertNotIn("option.EvalFile=candidate.sbnn", each)
 
     def test_command_restarts_engine_processes_between_games(self):
         command = st.build_command(self.config(), Path("games.pgn"))

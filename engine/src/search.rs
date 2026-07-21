@@ -516,13 +516,28 @@ impl CancellationToken {
 /// A reusable owner of search resources.
 pub struct SearchEngine {
     table: Arc<Table>,
+    /// The NNUE network every started search evaluates with, or `None` for the hand-crafted
+    /// evaluation.
+    ///
+    /// Held here so the choice outlives any single search: each move builds a fresh [`Search`] in
+    /// [`SearchEngine::start_inner`], which clones this reference-counted handle rather than the
+    /// weights. It stays `None` by default, so an engine that is never pointed at a network keeps
+    /// evaluating with the hand-crafted score.
+    network: Option<Arc<Network>>,
 }
 
 impl SearchEngine {
     pub fn new(hash_size_mb: usize) -> Self {
         Self {
             table: Arc::new(Table::new(hash_size_mb)),
+            network: None,
         }
+    }
+
+    /// Select the network every subsequently started search evaluates with, or `None` to restore
+    /// the hand-crafted evaluation. Searches already running keep the handle they were started with.
+    pub fn set_network(&mut self, network: Option<Arc<Network>>) {
+        self.network = network;
     }
 
     /// Invalidate the shared hash at an explicit administrative boundary.
@@ -589,6 +604,9 @@ impl SearchEngine {
         // up. Ages never invalidate: everything already in the table stays readable.
         self.table.advance_age();
         let table = Arc::clone(&self.table);
+        // Clone the reference-counted handle, not the weights, and hand it to the worker so the
+        // network outlives this call on the search thread.
+        let network = self.network.clone();
         let (events, receiver) = unbounded();
         let events_probe = events.clone();
         // Capacity 1 and a single send per worker, so signalling completion can never
@@ -608,6 +626,7 @@ impl SearchEngine {
                 node_limit,
                 &table,
                 events,
+                network,
             );
             let result = search.run::<Master>(depth);
             let outcome = if thread_cancellation.is_cancelled() {
@@ -872,7 +891,11 @@ pub struct Search<'engine> {
     /// The accumulator is rebuilt from the position at each evaluated leaf rather than maintained
     /// incrementally through make and unmake; the incremental accumulator seam is a later
     /// performance concern and is not needed for the correctness this scalar path provides.
-    network: Option<Network>,
+    ///
+    /// The network is held behind an [`Arc`] because a fresh `Search` is constructed for every move
+    /// the engine plays; sharing the weights by reference-count keeps that per-move setup from
+    /// deep-copying the whole parameter blob each time.
+    network: Option<Arc<Network>>,
     /// Table for tracking the principal variation of the search.
     pvt: PVTable,
     /// Tracer to track search stats.
@@ -1010,7 +1033,7 @@ impl<'engine> Search<'engine> {
         stop_time: Option<Instant>,
         tt: &'engine Table,
     ) -> Self {
-        Self::build(pos, flag, stop_time, None, tt, None)
+        Self::build(pos, flag, stop_time, None, tt, None, None)
     }
 
     fn with_events(
@@ -1020,8 +1043,9 @@ impl<'engine> Search<'engine> {
         node_limit: Option<u64>,
         tt: &'engine Table,
         events: Sender<SearchEvent>,
+        network: Option<Arc<Network>>,
     ) -> Self {
-        Self::build(pos, flag, stop_time, node_limit, tt, Some(events))
+        Self::build(pos, flag, stop_time, node_limit, tt, Some(events), network)
     }
 
     fn build(
@@ -1031,13 +1055,14 @@ impl<'engine> Search<'engine> {
         node_limit: Option<u64>,
         tt: &'engine Table,
         events: Option<Sender<SearchEvent>>,
+        network: Option<Arc<Network>>,
     ) -> Self {
         let eval_state = EvalState::from_position(&pos);
         Self {
             pos,
             eval_state,
             eval_stack: Vec::with_capacity(MAX_PLY),
-            network: None,
+            network,
             tt,
             kt: KillerTable::new(MAX_PLY, KILLER_SLOTS),
             history: HistoryTable::new(),
@@ -1080,7 +1105,7 @@ impl<'engine> Search<'engine> {
     /// Selection takes effect at [`Search::evaluate`]; nothing else in the search changes, so a
     /// search configured with a network still makes and unmakes moves and maintains the hand-crafted
     /// accumulator exactly as before — the network is consulted only when a leaf is scored.
-    pub fn set_network(&mut self, network: Option<Network>) {
+    pub fn set_network(&mut self, network: Option<Arc<Network>>) {
         self.network = network;
     }
 
@@ -2236,7 +2261,7 @@ impl<'engine> Search<'engine> {
         // The evaluation selector lives here, at the single point a leaf value is produced. With a
         // network selected the leaf is scored by the scalar quantized forward pass; otherwise the
         // hand-crafted tapered evaluation runs, unchanged.
-        if let Some(network) = &self.network {
+        if let Some(network) = self.network.as_deref() {
             // The forward pass already returns the score from the side to move's perspective (the
             // two accumulators are concatenated side-to-move first), so unlike the hand-crafted
             // score below it takes no `pov()` flip. The accumulator is rebuilt from the position
@@ -3597,7 +3622,7 @@ mod tests {
 
             // Selected: the scalar quantized forward pass, computed independently here and
             // returned already from the side to move's perspective (no `pov` flip).
-            search.set_network(Some(net.clone()));
+            search.set_network(Some(Arc::new(net.clone())));
             let acc = Accumulator::from_position(&net, &pos);
             let expected = Score::cp(nnue::forward(&net, &acc, pos.turn()) as i16);
             assert_eq!(
@@ -3615,6 +3640,47 @@ mod tests {
             search.set_network(None);
             assert_eq!(search.evaluate(), handcrafted);
         }
+    }
+
+    /// A network set on the `SearchEngine` reaches the searches it starts: this is the plumbing the
+    /// UCI `EvalFile` option and datagen `--network` both drive. A depth-1 search backs up its
+    /// root move's leaf value, so selecting a network that scores leaves differently must change the
+    /// reported score, and clearing it must restore the hand-crafted result.
+    #[test]
+    fn search_engine_starts_searches_with_the_configured_network() {
+        chess::init::init_globals();
+        let fen = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1";
+        let pos = Position::from_fen(fen).unwrap();
+
+        let score_of = |engine: &SearchEngine| {
+            engine
+                .start(pos.clone(), SearchLimit::Depth(1))
+                .wait()
+                .result()
+                .expect("a depth-1 search on a non-terminal position returns a result")
+                .score
+        };
+
+        let mut engine = SearchEngine::new(1);
+        let handcrafted = score_of(&engine);
+
+        // Clear the shared table alongside each evaluator change, as the driver does: the table
+        // caches evaluation-function-dependent static evals that a new evaluator would invalidate.
+        engine.set_network(Some(Arc::new(test_network())));
+        engine.new_game();
+        assert_ne!(
+            score_of(&engine),
+            handcrafted,
+            "the configured network did not reach the started search"
+        );
+
+        engine.set_network(None);
+        engine.new_game();
+        assert_eq!(
+            score_of(&engine),
+            handcrafted,
+            "clearing the network did not restore the hand-crafted search"
+        );
     }
 
     /// The evaluation must not depend on the halfmove clock, which the Zobrist key does not cover;
@@ -5119,6 +5185,7 @@ mod tests {
                 None,
                 &table,
                 sender,
+                None,
             );
 
             let value = search
@@ -5151,6 +5218,7 @@ mod tests {
             None,
             &table,
             sender,
+            None,
         );
 
         let value = search
@@ -5170,7 +5238,7 @@ mod tests {
         let flag = AtomicBool::new(false);
         let table = Table::new(1);
         let (sender, events) = unbounded();
-        let search = Search::with_events(position, &flag, None, None, &table, sender);
+        let search = Search::with_events(position, &flag, None, None, &table, sender, None);
 
         search.emit_current_move(7, &current_move, 4);
 

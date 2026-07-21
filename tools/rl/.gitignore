@@ -1,0 +1,4 @@
+__pycache__/
+# Run artifacts: networks, samples, checkpoints, strength reports, and the ledger
+# all live under a run's state directory, which is generated, not committed.
+state/

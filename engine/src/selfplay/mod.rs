@@ -32,6 +32,7 @@ use chess::mov::Move;
 use chess::movelist::BasicMoveList;
 use chess::position::{PieceType, Player, Position};
 
+use crate::nnue::Network;
 use crate::score::Score;
 use crate::search::{SearchEngine, SearchLimit};
 
@@ -165,6 +166,17 @@ pub struct SelfPlayConfig {
     /// How each game's starting position is diversified away from the initial
     /// position, so the generated games do not all repeat one opening.
     pub opening: openings::OpeningConfig,
+    /// The network the self-play searches evaluate with, or `None` for the
+    /// hand-crafted evaluation.
+    ///
+    /// `None` is the reinforcement loop's generation-0 bootstrap: the first
+    /// self-play data is labelled by the engine playing with only its
+    /// hand-crafted evaluation. Each later generation sets the previous
+    /// generation's promoted network here, so the games that produce a
+    /// generation's labels are played by the engine using the prior network —
+    /// the self-play purity boundary the design contract requires. Shared behind
+    /// an [`Arc`] so every worker's engine references the one loaded copy.
+    pub network: Option<Arc<Network>>,
 }
 
 impl Default for SelfPlayConfig {
@@ -177,6 +189,7 @@ impl Default for SelfPlayConfig {
             max_plies: 800,
             adjudication: Adjudication::default(),
             opening: openings::OpeningConfig::default(),
+            network: None,
         }
     }
 }
@@ -422,6 +435,10 @@ where
         let config = config.clone();
         handles.push(std::thread::spawn(move || {
             let mut engine = SearchEngine::new(config.hash_size_mb);
+            // Every game this worker plays evaluates with the configured network (the previous
+            // generation's, or the hand-crafted evaluation at generation 0). Set once here rather
+            // than per game: `new_game` only clears the shared table, not the evaluator.
+            engine.set_network(config.network.clone());
             loop {
                 let index = next_game.fetch_add(1, Ordering::Relaxed);
                 if index >= config.games {
@@ -667,6 +684,43 @@ mod tests {
             play_game(&engine, Position::start_pos(), &config)
         };
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn run_threads_the_configured_network_into_self_play() {
+        // The committed golden network is a valid SBNN file. Path relative to the package
+        // directory, the working directory of a cargo test binary.
+        let bytes = std::fs::read("tests/fixtures/golden_v1.sbnn")
+            .expect("committed golden network fixture is readable");
+        let network =
+            Arc::new(Network::read(&mut &bytes[..]).expect("golden fixture is a valid network"));
+
+        // One game, one worker, a fixed opening and node budget, so the only thing that can make the
+        // two runs differ is the evaluator each played with.
+        let base = SelfPlayConfig {
+            node_budget: 2_000,
+            workers: 1,
+            games: 1,
+            max_plies: 24,
+            ..SelfPlayConfig::default()
+        };
+        let play = |config: &SelfPlayConfig| {
+            let mut collected = Vec::new();
+            run(config, |record| collected.push(record));
+            collected
+        };
+
+        let handcrafted = play(&base);
+        let networked = play(&SelfPlayConfig {
+            network: Some(network),
+            ..base.clone()
+        });
+
+        assert_eq!(handcrafted.len(), 1);
+        assert_eq!(networked.len(), 1);
+        // An identical game would mean the configured network never reached the workers; the games
+        // differing (in moves or in the recorded search scores) is the evaluator taking effect.
+        assert_ne!(handcrafted[0], networked[0]);
     }
 
     #[test]

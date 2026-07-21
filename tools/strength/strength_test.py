@@ -130,7 +130,19 @@ def parser() -> argparse.ArgumentParser:
                         "=-prefixed form for any dash argument, e.g. "
                         "--engine-arg=-x, so it is not mistaken for an option")
     p.add_argument("--engine-option", action="append", default=[],
-                   metavar="NAME=VALUE")
+                   metavar="NAME=VALUE",
+                   help="UCI option applied identically to both engines; "
+                        "repeatable")
+    p.add_argument("--baseline-option", action="append", default=[],
+                   metavar="NAME=VALUE",
+                   help="UCI option applied to the baseline engine only; "
+                        "repeatable. This is how two builds of the same executable "
+                        "are told apart, e.g. --baseline-option EvalFile=best.sbnn "
+                        "against --candidate-option EvalFile=candidate.sbnn")
+    p.add_argument("--candidate-option", action="append", default=[],
+                   metavar="NAME=VALUE",
+                   help="UCI option applied to the candidate engine only; "
+                        "repeatable (see --baseline-option)")
     p.add_argument("--preflight-timeout", type=positive, default=10)
     p.add_argument("--match-timeout", type=positive, default=None,
                    help="optional wall-clock seconds after which a running match "
@@ -166,9 +178,12 @@ def validate(args: argparse.Namespace) -> None:
             f"(tc=... or st=...), got {args.limit!r}")
     if "=" not in args.limit or not args.limit.split("=", 1)[1]:
         raise InfrastructureError(f"invalid limit: {args.limit!r}")
-    for item in args.engine_option:
-        if "=" not in item or not item.split("=", 1)[0]:
-            raise InfrastructureError(f"invalid engine option: {item!r}")
+    for label, items in (("engine", args.engine_option),
+                         ("baseline", args.baseline_option),
+                         ("candidate", args.candidate_option)):
+        for item in items:
+            if "=" not in item or not item.split("=", 1)[0]:
+                raise InfrastructureError(f"invalid {label} option: {item!r}")
     for label in ("baseline", "candidate"):
         path = getattr(args, label).resolve()
         if not path.is_file() or not os.access(path, os.X_OK):
@@ -260,11 +275,16 @@ def build_command(args: argparse.Namespace, pgn: Path) -> list[str]:
             f"option.Hash={args.hash_mb}", f"option.Threads={args.threads}"]
     each.extend(f"option.{item}" for item in args.engine_option)
     engine_args = " ".join(args.engine_arg)
+    per_side = {"candidate": args.candidate_option, "baseline": args.baseline_option}
     engines: list[str] = []
     for name, path in (("candidate", args.candidate), ("baseline", args.baseline)):
         engines += ["-engine", f"name={name}", f"cmd={path}"]
         if engine_args:
             engines.append(f"args={engine_args}")
+        # Per-side options live in the engine's own block, not the shared -each block, so the two
+        # sides can run different networks (or any other option) while sharing everything else. This
+        # is what lets one binary play as two different-strength engines in the reinforcement gate.
+        engines.extend(f"option.{item}" for item in per_side[name])
     return [args.runner, *engines, "-each", *each,
             # -rounds counts opening pairs; -games 2 -repeat 2 plays each opening
             # twice with colours reversed. Total games = rounds * 2 = max_games
@@ -340,9 +360,9 @@ def run(argv: Sequence[str] | None = None) -> int:
             "schema_version": 1, "mode": args.mode,
             "authority": "AUTHORITATIVE" if args.mode == "authoritative" else "NON-AUTHORITATIVE",
             "baseline": {"path": str(args.baseline), "identity": args.baseline_id,
-                         "sha256": sha256(args.baseline)},
+                         "sha256": sha256(args.baseline), "options": args.baseline_option},
             "candidate": {"path": str(args.candidate), "identity": args.candidate_id,
-                          "sha256": sha256(args.candidate)},
+                          "sha256": sha256(args.candidate), "options": args.candidate_option},
             "build_settings": args.build_settings, "runner": args.runner,
             "runner_version": version,
             "openings": {"path": str(args.openings), "sha256": sha256(args.openings),
