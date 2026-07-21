@@ -1,11 +1,11 @@
 ---
 id: TASK-64.9
 title: Use SEE for pruning in the main search and quiescence
-status: In Review
+status: Needs Human
 assignee:
   - '@codex'
 created_date: '2026-07-19 13:32'
-updated_date: '2026-07-21 12:45'
+updated_date: '2026-07-21 13:00'
 labels:
   - search
   - pruning
@@ -115,5 +115,34 @@ Verification:
 - strength vs merge-base baseline (fastchess, nodes=100000, 300 games, openings-v1.epd): +68.03 +/- 31.87 Elo, LOS 100.00%
 Known failures: none
 Scope note: AC#4 (main-search SEE prune) intentionally DEFERRED per an explicit user decision this session. Measured -88 Elo when combined with the quiescence cuts (q-cuts alone +70; main prune alone -19; strong negative interaction). The main-search prune code was removed; a properly-gated version is potential follow-up (not created per lifecycle). Also included a small search-core robustness fix (null best move in drawn non-terminal roots) that the q-cuts exposed. See implementation notes for full detail.
+---
+
+author: @codex-reviewer
+created: 2026-07-21 13:00
+---
+Review attempt: 1
+Reviewed branch: task-64.9-see-pruning
+Reviewed base: 027d20f3992a77e3d641c4c3acd3d553434e8d79
+Reviewed implementation: b32c1a32461d6271846d2d7de26ce5f2727ea3ff
+Verdict: needs_human
+
+DECISION NEEDED (scope / authority): This task defines 7 acceptance criteria. AC#4 (main search prunes moves below a depth-scaled SEE threshold in non-PV nodes at shallow depth) is intentionally NOT delivered — the main-search prune code and its constants were removed. The implementation notes cite a user decision this session to ship quiescence cuts only, after measuring the combined change at -88 Elo (q-cuts alone +70; main prune alone -19; strong negative interaction), corroborated independently. That is a sound engineering call, but it is a scope change: (a) as an independent reviewer I cannot verify the cited consent, and (b) AC#4 is still listed as a required criterion on this task. A reviewer may approve only when objective evidence proves EVERY acceptance criterion, so this cannot move to Ready to Merge, and requesting the implementer to build AC#4 would demand a change already measured to regress strength. A human must either:
+  1. Ratify dropping AC#4 from this task (ideally splitting a properly-gated main-search SEE prune — lmrDepth-scaled / history-conditioned / capture-only with a workable floor — into a new follow-up task), after which the remaining six criteria are approvable; or
+  2. Direct that AC#4 be implemented despite the measured regression.
+Neither the descope nor the follow-up task can be created by the implementation or review agents under the lifecycle.
+
+TECHNICAL REVIEW OF THE SHIPPED CHANGE (quiescence cuts + drawn-root fix): sound, no blocking code findings.
+- Worktree clean; b32c1a3 descends from base 027d20f; only later commit (7167497) is task-only handoff metadata; b32c1a3..7167497 touches the task file alone.
+- Repository-required checks re-run on the target by the reviewer:
+  - cargo fmt --check: pass
+  - cargo clippy --workspace --all-targets --all-features -- -D warnings (clean CARGO_TARGET_DIR): pass, zero warnings
+  - cargo test --workspace: pass (exit 0, 0 failures)
+  - New unit tests pass individually (see_pruning_leaves_forced_results_unchanged, quiescence_finds_a_mate_delivered_by_a_losing_capture, quiescence_skips_losing_captures, quiescence_delta_margin_skips_out_of_reach_captures, quiescence_cuts_do_not_apply_while_in_check, see_pruning_shrinks_the_search_tree, a_drawn_root_still_reports_a_legal_move)
+  - engine/tests/timed_selfplay fast_timed_self_play_never_forfeits_or_hangs: pass (validates the drawn-root robustness fix)
+- Correctness: both quiescence cuts are prepared pre-move and applied only after make_move with a !in_check guard, so a checking capture is exempt; the in-check node bypasses the cut loop via quiesce_evasions (AC#3 holds structurally). Delta cut is guarded by alpha.is_cp() so it never fires against a mate-distance alpha. SEE cut threshold is 0. The see_pruning_disabled test toggle mirrors the existing lmr/rfp/futility pattern. Constants carry rationale comments (no bare code restatement, no task-ID-only references). The drawn-root fix substitutes root_fallback only when a completed iteration has an empty PV, preserving the iteration score and leaving genuinely terminal roots move-less.
+
+OBJECTIVELY PROVEN CRITERIA (for the shipped quiescence-only scope): AC#1, AC#2, AC#3, AC#5, AC#6, AC#7. UNMET BY DESIGN: AC#4.
+
+NON-BLOCKING OBSERVATION: for an en-passant capture the delta/SEE inputs read piece_at_sq(mov.dest()), which is empty on the EP destination square, so an EP capture is scored as gaining nothing and tends to be SEE-cut in quiescence. This exactly matches the pre-existing MoveLoader/QMoveLoader score_captures SEE call pattern, introduces no new inconsistency, is tactically marginal, and is subsumed by the strongly positive net strength measurement; noted only for a future SEE-input cleanup, not a blocker here.
 ---
 <!-- COMMENTS:END -->
