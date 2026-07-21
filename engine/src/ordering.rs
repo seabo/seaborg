@@ -9,6 +9,27 @@ use std::ops::Range;
 
 pub type ScoredMove = (Move, i16);
 
+/// Whether the counter move is folded into the combined quiet score instead of being yielded by its
+/// own [`Phase::Counter`] stage.
+///
+/// This selects between the two quiet-ordering designs the counter move can take. With the dedicated
+/// stage (`false`, shipped) the counter is tried immediately after the killers, ahead of every other
+/// quiet regardless of their history. Folded (`true`) it is not a distinct stage at all: it earns an
+/// additive bonus in the combined quiet score and competes with the continuation- and plain-history
+/// evidence of the other quiets. The two are compared on fixed-depth node counts; this constant is
+/// how a measurement build selects between them without a second search path.
+pub const FOLD_COUNTER_INTO_QUIETS: bool = false;
+
+/// Whether equal (SEE = 0) captures are yielded after the refutation stages — killers and the
+/// counter move — rather than before them.
+///
+/// Shipped `false` keeps equal captures ahead of the refutations, matching the order that predates
+/// the counter move. Setting it `true` yields them after, so a refuting quiet is tried before a
+/// materially neutral capture. The two orders are compared on fixed-depth node counts; this constant
+/// selects between them without a second search path. It changes only the order phases are yielded
+/// in, not which move each phase owns.
+pub const EQUAL_CAPTURES_AFTER_REFUTATIONS: bool = false;
+
 /// An `ArrayVec` containing `ScoredMoves`.
 #[derive(Debug)]
 pub struct ScoredMoveList(ArrayVec<ScoredMove, 254>);
@@ -163,6 +184,24 @@ impl Iterator for KillerIter<'_> {
     }
 }
 
+/// An iterator over the counter move.
+///
+/// The counter stage holds at most one move — the recorded reply to the preceding move — and carries
+/// no score, so like the killers there is nothing to sort. Yielding it from an iterator rather than
+/// directly keeps every phase behind the one `PhaseIter` interface.
+struct CounterIter<'a> {
+    counter: std::slice::Iter<'a, ScoredMove>,
+}
+
+impl Iterator for CounterIter<'_> {
+    type Item = Move;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        self.counter.next().map(|sm| sm.0)
+    }
+}
+
 /// The buffer range each ordering phase draws its moves from. Every range indexes
 /// `OrderedMoves::buf`.
 ///
@@ -177,6 +216,7 @@ struct Segments {
     equal_capts: Range<usize>,
     bad_capts: Range<usize>,
     killers: Range<usize>,
+    counter: Range<usize>,
     quiets: Range<usize>,
     underpromo_capts: Range<usize>,
     underpromo_quiets: Range<usize>,
@@ -205,7 +245,7 @@ struct Segments {
 /// `OrderedMoves` is built on top of an `ArrayVec`, as this appears to be significantly more
 /// performant than any solution involving overflows or allocations, since there is very little
 /// overhead / pointer chasing / bounds checking to manage an `ArrayVec`. However, the downside is
-/// that `OrderedMoves` is a large structure - currently 1704 bytes. We will have one of these at
+/// that `OrderedMoves` is a large structure - currently 1720 bytes. We will have one of these at
 /// every ply, so if we are searching deeply we could reach 100KB of data on the stack, just for
 /// move ordering structs.
 pub struct OrderedMoves {
@@ -235,9 +275,15 @@ pub enum Phase {
     /// another variation, and is therefore considered likely to have a similarly positive effect
     /// in this position too.
     Killers,
+    /// The counter move: the quiet reply most recently recorded against the move that reached this
+    /// node. A one-ply refutation that conditions on the preceding move rather than on the ply, so
+    /// it is tried after the killers but ahead of the general quiets. Empty when the counter has been
+    /// folded into the combined quiet score (see [`FOLD_COUNTER_INTO_QUIETS`]).
+    Counter,
     /// All other quiet (i.e. non-capturing or promoting) moves. These are further sorted according
-    /// to the history heuristic, which scores moves based on how many times have they have caused
-    /// cutoffs elsewhere in the tree.
+    /// to combined contextual history — plain from-to history plus continuation history conditioned
+    /// on the preceding moves — which scores a quiet by how often it has caused cutoffs, both
+    /// generally and specifically as a reply to what was just played.
     Quiet,
     /// Captures which have SEE < 0; i.e. expected to lose material.
     BadCaptures,
@@ -248,13 +294,34 @@ pub enum Phase {
 
 impl Phase {
     pub fn inc(&mut self) -> bool {
+        // The refutation stages are always Killers then Counter; only where the equal captures sit
+        // relative to them varies, so the two orders differ only at the seams around that block.
         *self = match *self {
             Phase::Pre => Phase::HashTable,
             Phase::HashTable => Phase::QueenPromotions,
             Phase::QueenPromotions => Phase::GoodCaptures,
-            Phase::GoodCaptures => Phase::EqualCaptures,
-            Phase::EqualCaptures => Phase::Killers,
-            Phase::Killers => Phase::Quiet,
+            Phase::GoodCaptures => {
+                if EQUAL_CAPTURES_AFTER_REFUTATIONS {
+                    Phase::Killers
+                } else {
+                    Phase::EqualCaptures
+                }
+            }
+            Phase::EqualCaptures => {
+                if EQUAL_CAPTURES_AFTER_REFUTATIONS {
+                    Phase::Quiet
+                } else {
+                    Phase::Killers
+                }
+            }
+            Phase::Killers => Phase::Counter,
+            Phase::Counter => {
+                if EQUAL_CAPTURES_AFTER_REFUTATIONS {
+                    Phase::EqualCaptures
+                } else {
+                    Phase::Quiet
+                }
+            }
             Phase::Quiet => Phase::BadCaptures,
             Phase::BadCaptures => Phase::Underpromotions,
             Phase::Underpromotions => return false,
@@ -284,6 +351,14 @@ pub trait Loader {
 
     /// Load killers into the passed `MoveList`.
     fn load_killers(&mut self, _movelist: &mut ScoredMoveList) {}
+
+    /// Load the counter move into the passed `MoveList`.
+    ///
+    /// At most one move should be loaded. It must be validated for legality here, because a counter
+    /// recorded against one occurrence of the preceding move is probed at a possibly different
+    /// position. When the counter is folded into the quiet score
+    /// ([`FOLD_COUNTER_INTO_QUIETS`]) this loads nothing.
+    fn load_counter(&mut self, _movelist: &mut ScoredMoveList) {}
 
     /// Load quiet moves into the passed `MoveList`.
     fn load_quiets(&mut self, _movelist: &mut ScoredMoveList) {}
@@ -451,6 +526,16 @@ impl OrderedMoves {
                     let hash = self.segments.hash.clone();
                     self.segments.killers = self.segregate_duplicates(killers, &[hash]);
                 }
+                Counter => {
+                    loader.load_counter(&mut self.buf);
+                    let counter = self.close_segment();
+
+                    // The counter is a quiet move that may coincide with the hash move or a killer
+                    // already yielded; suppress it there so it is searched at most once.
+                    let hash = self.segments.hash.clone();
+                    let killers = self.segments.killers.clone();
+                    self.segments.counter = self.segregate_duplicates(counter, &[hash, killers]);
+                }
                 Quiet => {
                     loader.load_quiets(&mut self.buf);
                     let quiets = self.close_segment();
@@ -459,7 +544,9 @@ impl OrderedMoves {
 
                     let hash = self.segments.hash.clone();
                     let killers = self.segments.killers.clone();
-                    self.segments.quiets = self.segregate_duplicates(quiets, &[hash, killers]);
+                    let counter = self.segments.counter.clone();
+                    self.segments.quiets =
+                        self.segregate_duplicates(quiets, &[hash, killers, counter]);
                 }
                 BadCaptures => { /* Nothing to do here */ }
                 Underpromotions => { /* Nothing to do here */ }
@@ -494,6 +581,7 @@ enum IterInner<'a> {
     GoodCaptures(SelectionSort<'a>),
     EqualCaptures(SelectionSort<'a>),
     Killers(KillerIter<'a>),
+    Counter(CounterIter<'a>),
     Quiet(SelectionSort<'a>),
     BadCaptures(SelectionSort<'a>),
     Underpromotions(PromotionsIter<'a>),
@@ -514,6 +602,7 @@ impl Iterator for PhaseIter<'_> {
             GoodCaptures(i) => i.next(),
             EqualCaptures(i) => i.next(),
             Killers(i) => i.next(),
+            Counter(i) => i.next(),
             Quiet(i) => i.next(),
             BadCaptures(i) => i.next(),
             Underpromotions(i) => i.next(),
@@ -555,6 +644,12 @@ impl<'a> IntoIterator for &'a mut OrderedMoves {
                 let killers = self.segments.killers.clone();
                 IterInner::Killers(KillerIter {
                     killers: self.segment(killers).iter(),
+                })
+            }
+            Counter => {
+                let counter = self.segments.counter.clone();
+                IterInner::Counter(CounterIter {
+                    counter: self.segment(counter).iter(),
                 })
             }
             Quiet => {
@@ -737,7 +832,7 @@ mod tests {
     /// away from the type, and so a field added here has to be a deliberate choice.
     #[test]
     fn ordered_moves_size_matches_its_documentation() {
-        assert_eq!(std::mem::size_of::<OrderedMoves>(), 1704);
+        assert_eq!(std::mem::size_of::<OrderedMoves>(), 1720);
     }
 
     /// A handful of distinct legal moves to hang synthetic scores off. Their identity does not
@@ -832,6 +927,7 @@ mod tests {
         captures: Vec<Move>,
         capture_scores: Vec<i16>,
         killers: Vec<Move>,
+        counter: Vec<Move>,
         quiets: Vec<Move>,
     }
 
@@ -850,6 +946,10 @@ mod tests {
 
         fn load_killers(&mut self, movelist: &mut ScoredMoveList) {
             self.killers.iter().for_each(|m| movelist.push(*m));
+        }
+
+        fn load_counter(&mut self, movelist: &mut ScoredMoveList) {
+            self.counter.iter().for_each(|m| movelist.push(*m));
         }
 
         fn load_quiets(&mut self, movelist: &mut ScoredMoveList) {
@@ -967,6 +1067,53 @@ mod tests {
         assert_eq!(phase_moves(&phases, Phase::Killers), &[moves[4]]);
         // The killer already yielded is dropped from the quiets too, as is the hash move.
         assert_eq!(phase_moves(&phases, Phase::Quiet), &[moves[6], moves[7]]);
+    }
+
+    /// The counter move is a distinct stage between the killers and the general quiets, and it takes
+    /// part in duplicate suppression on both sides: a counter that coincides with the hash move or a
+    /// killer is dropped from its own stage, and a counter yielded here is dropped from the quiets.
+    #[test]
+    fn the_counter_move_is_a_stage_with_full_duplicate_suppression() {
+        let moves = sample_moves(8);
+
+        // The counter coincides with neither the hash move nor a killer, so it is yielded by its own
+        // stage and then suppressed from the quiets.
+        let loader = ScriptedLoader {
+            hash: vec![moves[0]],
+            killers: vec![moves[1]],
+            counter: vec![moves[2]],
+            quiets: moves[0..6].to_vec(),
+            ..Default::default()
+        };
+        let phases = drain_phases(&loader);
+        assert_eq!(phase_moves(&phases, Phase::Counter), &[moves[2]]);
+        // The hash move, the killer and the counter are all suppressed from the quiets.
+        assert_eq!(
+            phase_moves(&phases, Phase::Quiet),
+            &[moves[3], moves[4], moves[5]]
+        );
+
+        // A counter that duplicates the hash move is dropped from its own stage.
+        let counter_is_hash = ScriptedLoader {
+            hash: vec![moves[0]],
+            counter: vec![moves[0]],
+            quiets: moves[0..4].to_vec(),
+            ..Default::default()
+        };
+        let phases = drain_phases(&counter_is_hash);
+        assert!(phase_moves(&phases, Phase::Counter).is_empty());
+
+        // A counter that duplicates a killer is dropped from its own stage, leaving the killer to
+        // yield it once.
+        let counter_is_killer = ScriptedLoader {
+            killers: vec![moves[1]],
+            counter: vec![moves[1]],
+            quiets: moves[0..4].to_vec(),
+            ..Default::default()
+        };
+        let phases = drain_phases(&counter_is_killer);
+        assert_eq!(phase_moves(&phases, Phase::Killers), &[moves[1]]);
+        assert!(phase_moves(&phases, Phase::Counter).is_empty());
     }
 
     /// The queen promotion that duplicates the hash move is not yielded twice, but its
