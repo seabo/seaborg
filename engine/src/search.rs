@@ -1,7 +1,7 @@
 use crate::continuation::{ContinuationHistory, CounterMoveTable, CONTINUATION_DISTANCES};
-use crate::history::{HistoryTable, HISTORY_MAX};
+use crate::history::{CaptureHistory, HistoryTable, HISTORY_MAX};
 
-use super::eval::{piece_value, EvalState, Evaluation};
+use super::eval::{piece_value, EvalState, Evaluation, PAWN_VALUE};
 use super::killer::KillerTable;
 use super::nnue::{self, Accumulator, Network};
 use super::ordering::{Loader, OrderedMoves, Phase, ScoredMoveList, Scorer};
@@ -56,6 +56,24 @@ fn history_bonus(depth: Depth) -> i32 {
 /// magnitude no longer changes which move is tried first.
 fn history_ordering_score(value: i32) -> i16 {
     value.clamp(i16::MIN.into(), i16::MAX.into()) as i16
+}
+
+/// Largest magnitude the capture-history term may add to a capture's static-exchange ordering score.
+///
+/// Static exchange outcomes are whole multiples of the pawn value, so two captures of different
+/// material outcome differ by at least one pawn. Keeping this bound strictly below half a pawn means
+/// the full swing between two captures — at most `2 * CAPTURE_HISTORY_ORDER_MAX` — can never bridge a
+/// one-pawn gap. Learned history therefore only ever reorders captures of *identical* material
+/// outcome; it cannot promote a capture past one that wins more material, nor across the
+/// static-exchange boundary that separates the good, equal and bad capture phases. That is what makes
+/// capture history an intra-phase tie-break rather than a re-classification.
+const CAPTURE_HISTORY_ORDER_MAX: i32 = PAWN_VALUE as i32 / 2 - 1;
+
+/// Map a capture-history score in `-HISTORY_MAX..=HISTORY_MAX` onto the bounded ordering term added
+/// to a capture's static-exchange score. The linear scaling keeps the sign and relative magnitude of
+/// the evidence while confining it to `[-CAPTURE_HISTORY_ORDER_MAX, CAPTURE_HISTORY_ORDER_MAX]`.
+fn capture_history_order_term(history: i32) -> i16 {
+    (history * CAPTURE_HISTORY_ORDER_MAX / HISTORY_MAX) as i16
 }
 
 /// Score bonus added to the counter move when it is folded into the combined quiet ranking rather
@@ -887,6 +905,9 @@ pub struct Search<'engine> {
     counter: CounterMoveTable,
     /// Bounded continuation-history evidence for the moves one and two plies back.
     cont_hist: ContinuationHistory,
+    /// Bounded history for captures, keyed on the moving piece, destination and captured type. It
+    /// breaks ties among captures of equal static exchange value in move ordering.
+    capture_history: CaptureHistory,
     /// Counts every history-sensitive draw short-circuit taken during this search.
     ///
     /// A draw claimed by repetition or by the fifty-move rule is a property of how the position was
@@ -1043,6 +1064,7 @@ impl<'engine> Search<'engine> {
             history: HistoryTable::new(),
             counter: CounterMoveTable::new(),
             cont_hist: ContinuationHistory::new(),
+            capture_history: CaptureHistory::new(),
             pvt: PVTable::new(8),
             trace: Tracer::new(),
             history_draws: 0,
@@ -1117,6 +1139,7 @@ impl<'engine> Search<'engine> {
         self.kt.reset();
         self.counter.reset();
         self.cont_hist.reset();
+        self.capture_history.reset();
 
         result
     }
@@ -1615,6 +1638,9 @@ impl<'engine> Search<'engine> {
         let mut move_count = 0;
         let mut did_raise_alpha = false;
         let mut failed_quiets = BasicMoveList::empty();
+        // Captures searched at this node that did not cause a cutoff. On a cutoff each takes a
+        // capture-history malus, whether the cutoff itself was a capture or a quiet.
+        let mut failed_captures = BasicMoveList::empty();
 
         // Whether the side to move is in check at this node, sampled once because it is the same for
         // every move played from here. It drives the check-evasion extension at Step 16 and suppresses
@@ -1891,6 +1917,7 @@ impl<'engine> Search<'engine> {
                                 }
                                 self.update_quiet_histories(mov, &failed_quiets, depth, ply);
                             }
+                            self.update_capture_histories(mov, &failed_captures, depth);
 
                             break 'move_loop;
                         }
@@ -1899,6 +1926,8 @@ impl<'engine> Search<'engine> {
 
                 if mov.is_quiet() {
                     failed_quiets.push(mov);
+                } else if mov.is_capture() {
+                    failed_captures.push(mov);
                 }
             }
         }
@@ -2211,6 +2240,52 @@ impl<'engine> Search<'engine> {
         // The reply to the move one ply back is now this cutoff.
         if let Some((prev_piece, prev_to)) = contexts[0] {
             self.counter.store(prev_piece, prev_to, cutoff);
+        }
+    }
+
+    /// The type of piece a capture removes, used to key the capture-history table. An en-passant
+    /// capture takes a pawn that does not stand on the destination square, so it is reported as a
+    /// pawn directly; every other capture removes the piece currently on the destination square. The
+    /// node position is unchanged here — the move is either not yet made (scoring) or already unmade
+    /// (updating) — so the destination still holds the captured piece in the non-en-passant case.
+    #[inline]
+    fn captured_piece_type(&self, mov: &Move) -> PieceType {
+        if mov.is_en_passant() {
+            PieceType::Pawn
+        } else {
+            self.pos.piece_at_sq(mov.dest()).type_of()
+        }
+    }
+
+    /// Reward a capture that produced a beta cutoff and penalise the captures searched before it, in
+    /// the capture-history table.
+    ///
+    /// Unlike the quiet tables this is trained even when the cutoff move is quiet: a capture that was
+    /// searched and did not cut is evidence against that capture whatever ultimately refuted the
+    /// node, so every searched-but-failed capture takes a malus. The matching bonus is applied only
+    /// when the cutoff move is itself a capture. Both go through the bounded gravity rule the quiet
+    /// tables share. The position here is the node's own — the cutoff move has already been unmade —
+    /// so each mover is read from its origin square.
+    fn update_capture_histories(
+        &mut self,
+        cutoff: Move,
+        failed_captures: &BasicMoveList,
+        depth: Depth,
+    ) {
+        let bonus = history_bonus(depth);
+
+        if cutoff.is_capture() {
+            let mover = self.pos.piece_at_sq(cutoff.orig());
+            let captured = self.captured_piece_type(&cutoff);
+            self.capture_history
+                .update(mover, cutoff.dest(), captured, bonus);
+        }
+
+        for failed in failed_captures {
+            let mover = self.pos.piece_at_sq(failed.orig());
+            let captured = self.captured_piece_type(failed);
+            self.capture_history
+                .update(mover, failed.dest(), captured, -bonus);
         }
     }
 
@@ -3022,6 +3097,27 @@ impl<'a, 'search> Loader for MoveLoader<'a, 'search> {
         }
     }
 
+    fn score_capture_history(&mut self, captures: Scorer) {
+        for (mov, score) in captures {
+            if mov.is_capture() {
+                // SAFETY: a capture is made by a real piece onto a square whose captured piece is a
+                // real, non-king type (en passant reports its captured pawn directly), so the key is
+                // always in range.
+                let mover = self.search.pos.piece_at_sq(mov.orig());
+                let captured = self.search.captured_piece_type(mov);
+                let history = unsafe {
+                    self.search
+                        .capture_history
+                        .get_unchecked(mover, mov.dest(), captured)
+                };
+                // The score currently holds the static exchange value, which the phase partition has
+                // already consumed; adding the bounded history term only reorders captures within the
+                // phase they were placed in.
+                *score = score.saturating_add(capture_history_order_term(history));
+            }
+        }
+    }
+
     fn score_quiets(&mut self, quiets: Scorer) {
         let turn = self.search.pos.turn();
         let contexts = self.search.continuation_contexts(self.ply);
@@ -3413,6 +3509,48 @@ mod tests {
         assert!(
             reply_at < plain_at,
             "the continuation reply should precede the higher-plain-history move: {quiets:?}"
+        );
+    }
+
+    /// Among captures with identical static exchange value, the one the search has already found to
+    /// cause cutoffs is tried first. Static exchange evaluation alone leaves such captures in
+    /// generation order; capture history is the signal that separates them, and it does so strictly
+    /// within the phase — here the good-capture phase — so material outcome still decides the order
+    /// between captures of different value.
+    #[test]
+    fn trained_captures_break_ties_among_equal_static_exchange_value() {
+        chess::init::init_globals();
+
+        // The white pawn on b4 can capture either undefended black pawn, on a5 or c5. Each wins
+        // exactly a pawn, so both land in the good-capture phase with identical static exchange
+        // value and nothing but learned history can separate them.
+        let position = Position::from_fen("4k3/8/8/p1p5/1P6/8/8/4K3 w - - 0 1").unwrap();
+        let flag = AtomicBool::new(false);
+        let table = Table::new(1);
+        let mut search = Search::new(position, &flag, None, &table);
+
+        // Reward the c5 capture and penalise the a5 capture. Both are pawn-takes-pawn, keyed apart
+        // only by destination square, so history alone should now order c5 ahead of a5 — the reverse
+        // of the a-file-first generation order.
+        search
+            .capture_history
+            .update(Piece::WhitePawn, Square::C5, PieceType::Pawn, HISTORY_MAX);
+        search
+            .capture_history
+            .update(Piece::WhitePawn, Square::A5, PieceType::Pawn, -HISTORY_MAX);
+
+        let good = phase_yield(&ordered_phases(&mut search, 0), Phase::GoodCaptures);
+        let a5_at = good
+            .iter()
+            .position(|m| m.dest() == Square::A5)
+            .expect("a5 capture should be a good capture");
+        let c5_at = good
+            .iter()
+            .position(|m| m.dest() == Square::C5)
+            .expect("c5 capture should be a good capture");
+        assert!(
+            c5_at < a5_at,
+            "the capture with cutoff history should be ordered first: {good:?}"
         );
     }
 
