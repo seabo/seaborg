@@ -1,7 +1,7 @@
 ---
 id: TASK-69.9
 title: Blended WDL-and-score loss and quantization-aware network export
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:41'
@@ -56,3 +56,26 @@ AC#3 (engine loads the exported file): export.py serialises the 64-byte SBNN hea
 
 Verified end to end: CLI train (lambda ramp at generation 2) -> checkpoint -> export.py -> reloadable SBNN file. README documents the schedule, QAT, and export.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @claude
+created: 2026-07-21 05:48
+---
+Implementation handoff
+Branch: task-69.9-blended-loss-quantized-export
+Worktree: /Users/seabo/seaborg-worktrees/task-69.9-blended-loss-quantized-export
+Base: 027d20f3992a77e3d641c4c3acd3d553434e8d79
+Implementation target: fb11aa41b13abec8539794bc09d43475a4129dba
+Resolved findings: none
+Verification:
+- cargo fmt --check: pass (clean)
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (exit 0, 0 warnings)
+- cargo test --workspace: pass (49 chess + 379 engine incl. new loads_exported_network + 104 + 19 + 1s; 0 failed, 2 ignored)
+- python -m unittest discover -p 'test_*.py' (tools/trainer, torch 2.13 / numpy 2.5 / Python 3.14 venv): pass (42 tests)
+- End-to-end CLI: train.py (lambda ramp, generation 2) -> checkpoint -> export.py -> SBNN file reloadable; measured export reproduction max 0.49 cp over a trained fixture
+Known failures: none
+Notes for the reviewer: only tools/trainer changed plus one engine integration test (engine/tests/loads_exported_network.rs) and its committed fixture (engine/tests/fixtures/exported_v1.sbnn, 25 KB, regenerable via 'python export.py --emit-fixture ...'). No engine/src changed. The Python suite needs the venv deps (tools/trainer/requirements.txt); create tools/trainer/.venv and pip install -r requirements.txt. The .venv, checkpoints, and datasets are gitignored.
+---
+<!-- COMMENTS:END -->
