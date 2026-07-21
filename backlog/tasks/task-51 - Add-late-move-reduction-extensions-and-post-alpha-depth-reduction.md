@@ -1,11 +1,11 @@
 ---
 id: TASK-51
 title: 'Add late move reduction, extensions, and post-alpha depth reduction'
-status: In Progress
+status: In Review
 assignee:
   - '@george'
 created_date: '2026-07-18 18:30'
-updated_date: '2026-07-20 22:55'
+updated_date: '2026-07-21 00:01'
 labels: []
 dependencies:
   - TASK-50
@@ -57,3 +57,56 @@ TODO sites: engine/src/search.rs:637, :640, :692.
 6. Retain the numbered Step 16/17 comments; replace the three TODO markers with implementations (AC#6).
 7. Tests: LMR does not change sound (forced-mate/clean-win) results vs lmr-disabled; LMR reduces the tree; existing TASK-36 PV-legality tests still pass (AC#4). Run fmt, clippy, cargo test. Attempt TASK-27 strength smoke and record (AC#5).
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+## Implementation
+
+Implemented the single reductions/extensions/LMR mechanism in engine/src/search.rs, replacing the three TODO markers (former Step 16, Step 17, and the post-alpha-raise site) while retaining all numbered step comments.
+
+- Step 16 (extensions): check-evasion extension. When the side to move is in check, every move is a forced evasion; the whole subtree is searched one ply deeper (new_depth = depth - 1 + extension). Extensions only add depth, so they never truncate the PV.
+- Step 17 (LMR): the reduction is decided just after the move is made (labelled 'Step 17 (applied)'), where whether the move gives check is known. A late, quiet, non-checking, non-extended move is scouted at new_depth - reduction with a zero window; if that reduced scout raises alpha it is re-searched at full new_depth (Step 19). A reduced scout that fails low is trusted. The first move is never reduced, and any reduced move that would enter the PV is re-searched at full depth before Step 20's PV search writes the PV table, so the reported PV always rests on a full-depth search.
+- Post-alpha-raise (former search.rs:692 TODO): once a move raises alpha in a PV node, did_raise_alpha is set; Step 17 reads it so the remaining moves are reduced immediately rather than waiting for the late-move-count threshold.
+- Reduction schedule is deliberately shallow (1 ply, or 2 for deep-and-late moves) so short forcing lines stay visible to the reduced scout.
+- Added test hooks lmr_disabled and extensions_disabled mirroring forward_pruning_disabled.
+
+## Regression coverage adjustments
+
+- gives_correct_answers suite: two of ~20 positions shifted, best move correct in both. '2q4k/3r3p/2p2P2/p7/2P5/P2Q2P1/5bK1/1R6 w' depth 6->7 (LMR defers the mate score by one iteration; d3d7 found at every depth, mate verified at depth 7). 'r5k1/p1P5/8/8/8/8/3RK3/8 w' upper bound cp955->cp985 (check-evasion extension searches deeper; d2d8 unchanged).
+- Two TT/halfmove-clock tests (warm_table_reuse_agrees..., the_same_key_is_worth_different_scores...) now disable lmr/extensions in their local search: LMR's move-ordering dependence and the extension's extra ply are orthogonal to the clock invariant they pin, and would otherwise move the exact scores those tests assert.
+
+## New tests
+
+- late_move_reduction_does_not_change_sound_search_results (lmr on == off on decisive non-mate positions)
+- late_move_reduction_reduces_the_search_tree (lmr on visits strictly fewer nodes)
+- the_check_evasion_extension_deepens_an_in_check_search
+
+## Strength measurement (AC #5)
+
+Controlled round-robin, candidate (this branch, cbdfe4c) vs baseline (merge-base 6d3d4ac, the only diff being this change), fastchess, reproducible node limit nodes=100000, openings-v1.epd, 16MB hash, single worker.
+- 20-game harness smoke (tools/strength/strength_test.py --mode smoke): completed cleanly, no illegal moves / crashes; SPRT inconclusive at 20 games (LLR 0.14), as expected for that sample size.
+- 200-game direct match: Elo +188.5 +/- 51.5, nElo +215.8, LOS 100.0%, 137W / 38L / 25D (74.75%), Ptnml [0,13,25,12,50]. No crashes or illegal moves.
+Result is a decisive strength gain, well beyond the 'no strength loss' bar. The node-limited budget is a fair test: LMR converts the nodes it saves into greater search depth.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @george
+created: 2026-07-21 00:01
+---
+Implementation handoff
+Branch: task-51-lmr-extensions-post-alpha-reduction
+Worktree: /Users/seabo/seaborg-worktrees/task-51-lmr-extensions-post-alpha-reduction
+Base: 6d3d4ac98a40a455959b4cea18d0b0a82b0c7867
+Implementation target: 356c776bc8897be983e54f18e733a9aebcdbd699
+Resolved findings: none (new work)
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (no warnings)
+- cargo test --workspace: pass (engine lib 306 passed / 2 ignored; workspace 0 failures)
+- Strength (fastchess, nodes=100000, base 6d3d4ac vs target): +188.5 +/- 51.5 Elo over 200 games (137W/38L/25D), LOS 100%, no illegal moves or crashes
+Known failures: none
+---
+<!-- COMMENTS:END -->
