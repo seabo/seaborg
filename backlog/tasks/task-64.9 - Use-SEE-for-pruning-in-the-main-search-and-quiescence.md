@@ -1,11 +1,11 @@
 ---
 id: TASK-64.9
 title: Use SEE for pruning in the main search and quiescence
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-19 13:32'
-updated_date: '2026-07-21 13:03'
+updated_date: '2026-07-21 13:16'
 labels:
   - search
   - pruning
