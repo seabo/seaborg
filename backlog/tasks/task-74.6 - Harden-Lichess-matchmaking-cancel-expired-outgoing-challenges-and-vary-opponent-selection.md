@@ -3,11 +3,11 @@ id: TASK-74.6
 title: >-
   Lichess matchmaking robustness and challenge-policy precision, plus a
   conformance-divergence note
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-21 03:56'
-updated_date: '2026-07-21 15:58'
+updated_date: '2026-07-21 16:09'
 labels:
   - lichess
   - conformance
