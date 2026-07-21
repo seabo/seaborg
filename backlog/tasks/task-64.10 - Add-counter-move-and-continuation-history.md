@@ -1,11 +1,11 @@
 ---
 id: TASK-64.10
 title: Add counter-move and continuation history
-status: Needs Human
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-19 13:32'
-updated_date: '2026-07-21 04:43'
+updated_date: '2026-07-21 05:18'
 labels:
   - search
   - move-ordering
@@ -42,16 +42,16 @@ This depends on TASK-64.1, TASK-64.2, TASK-64.3 and TASK-64.17. Coordinate measu
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A counter-move is tracked by previous move and participates in ordering with complete duplicate suppression; a dedicated stage after killers may be the initial implementation but is not mandated as the final architecture
-- [ ] #2 Continuation history is maintained for at least one and two plies back and contributes to quiet move ordering
-- [ ] #3 The implemented continuation distances, indexing scheme, memory footprint and expected per-worker ownership are recorded with rationale
-- [ ] #4 Bonus, malus and aging use the bounded scheme established for plain history rather than separate unbounded or exposure-based counters
-- [ ] #5 Tests show that contextual evidence can order a reply ahead of a move with higher plain history and cover duplicate suppression against hash, killer, counter and ordinary quiet candidates
-- [ ] #6 Externally stored killer and counter candidates are legality-validated before unsafe move execution
-- [ ] #7 Fixed-depth node counts and search throughput compare a dedicated killer/counter stage with a combined contextual quiet-ranking design, and compare equal captures before versus after refutation candidates
-- [ ] #8 After contextual history is active, an ablation compares killers disabled, one slot and two slots; the recorded decision may retain, combine or remove the killer heuristic
-- [ ] #9 Representative fixed-depth node counts improve without an unacceptable throughput regression, with figures recorded in implementation notes
-- [ ] #10 The selected design is measured with the TASK-27 strength-regression script and results are recorded in implementation notes
+- [x] #1 A counter-move is tracked by previous move and participates in ordering with complete duplicate suppression; a dedicated stage after killers may be the initial implementation but is not mandated as the final architecture
+- [x] #2 Continuation history is maintained for at least one and two plies back and contributes to quiet move ordering
+- [x] #3 The implemented continuation distances, indexing scheme, memory footprint and expected per-worker ownership are recorded with rationale
+- [x] #4 Bonus, malus and aging use the bounded scheme established for plain history rather than separate unbounded or exposure-based counters
+- [x] #5 Tests show that contextual evidence can order a reply ahead of a move with higher plain history and cover duplicate suppression against hash, killer, counter and ordinary quiet candidates
+- [x] #6 Externally stored killer and counter candidates are legality-validated before unsafe move execution
+- [x] #7 Fixed-depth node counts and search throughput compare a dedicated killer/counter stage with a combined contextual quiet-ranking design, and compare equal captures before versus after refutation candidates
+- [x] #8 After contextual history is active, an ablation compares killers disabled, one slot and two slots; the recorded decision may retain, combine or remove the killer heuristic
+- [x] #9 Representative fixed-depth node counts improve without an unacceptable throughput regression, with figures recorded in implementation notes
+- [x] #10 The selected design is measured with the TASK-27 strength-regression script and results are recorded in implementation notes
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -200,4 +200,29 @@ Verification:
 - cargo test --workspace: pass
 - Recorded ablation/SPRT figures reviewed in implementation notes; AC#9 net node-count direction confirmed regressive from the recorded per-position figures.
 ---
+
+author: @claude
+created: 2026-07-21 05:18
+---
+Review attempt: 1 (approval after human resolution of the Needs Human escalation)
+Reviewed branch: task-64.10-counter-continuation-history
+Reviewed implementation: f1d1952 (immutable code target; branch tip carries only task-file verdict/notes — no implementation file changed after the reviewed SHA)
+Base: 05880a5
+Verdict: approved
+
+The sole blocker in the prior review was AC#9 ("representative fixed-depth node counts improve"), which the honest measurements do not meet in aggregate (net +3.0% nodes; middlegame -16.0% and kiwipete -1.4% improve, offset by an endgame depth-14 aspiration-window artifact). That was escalated as a product/scope decision. The human authority (georgeseabridge) has accepted the task on foundational grounds, resolving that decision. All other acceptance criteria are objectively proven; AC#9 is checked as accepted-by-decision rather than as a demonstrated aggregate node improvement, and this distinction is recorded in the final summary.
+
+Verification (re-run on the target in the task worktree):
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean CARGO_TARGET_DIR)
+- cargo test --workspace: pass (engine 379 passed / 2 ignored; chess 49; support suites green)
+
+Code target for merge: f1d1952. No new #[allow]; every new unsafe carries a SAFETY comment.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Added a counter-move table and 1-/2-ply continuation history, folded into a combined contextual quiet ranking sharing the bounded history::gravity_update; counter is legality-gated via Position::valid_move; duplicate suppression covers hash/killer/counter/quiet. Verified on immutable target f1d1952: cargo fmt --check, cargo clippy --workspace --all-targets --all-features -D warnings (clean CARGO_TARGET_DIR), and cargo test --workspace all pass. AC#1-#8 proven by tests + recorded ablations; AC#10 SPRT run and recorded (INCONCLUSIVE at 400 games). AC#9's literal aggregate node-count improvement is NOT met (net +3.0%, middlegame -16% offset by an endgame depth-14 aspiration artifact); it is accepted by explicit human product decision (georgeseabridge) to land this foundational move-ordering primitive despite neutral immediate empirics.
+<!-- SECTION:FINAL_SUMMARY:END -->
