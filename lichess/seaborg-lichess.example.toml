@@ -36,6 +36,20 @@ max_rating = 4000
 # is built for clocked play, so this is off by default.
 accept_unlimited = false
 
+# Incoming allow/block lists, by account id (the lowercase form of a username),
+# matched case-insensitively. When `allow_list` is non-empty, only listed accounts
+# may challenge the bot; anyone on `block_list` is always refused. Both empty by
+# default, imposing no restriction.
+allow_list = []
+block_list = []
+
+# Most simultaneous games a single account may hold against the bot. A further
+# challenge from an account already at this limit is declined (reason `later`)
+# rather than taking another slot, so one opponent cannot monopolise the board.
+# 0 (the default) imposes no per-account limit; `max_concurrent_games` still caps
+# the total.
+max_games_per_user = 0
+
 [engine]
 # Transposition table size in mebibytes.
 hash_mb = 64

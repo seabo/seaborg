@@ -276,6 +276,21 @@ pub struct ChallengePolicy {
     /// [`MatchmakingConfig::reserved_human_slots`], which holds slots open for
     /// humans regardless of this ordering.
     pub prefer_human_challenges: bool,
+    /// When non-empty, only these accounts may challenge the bot; every other
+    /// challenger is declined before any other rule is consulted. Entries are
+    /// account ids (the lowercase form of a username), matched case-insensitively.
+    /// Empty (the default) imposes no allow list.
+    pub allow_list: Vec<String>,
+    /// Accounts that may never challenge the bot, declined before any other rule
+    /// is consulted even if an allow list would otherwise admit them. Entries are
+    /// account ids, matched case-insensitively. Empty by default.
+    pub block_list: Vec<String>,
+    /// Most simultaneous games one challenger may hold against the bot at once. A
+    /// further challenge from an account already at this limit is declined with
+    /// reason `later` rather than occupying another slot, so a single opponent
+    /// cannot monopolise the board. `0` (the default) imposes no per-account
+    /// limit; the overall [`Config::max_concurrent_games`] cap still applies.
+    pub max_games_per_user: u32,
 }
 
 impl Default for ChallengePolicy {
@@ -296,6 +311,9 @@ impl Default for ChallengePolicy {
             max_rating: 4000,
             accept_unlimited: false,
             prefer_human_challenges: false,
+            allow_list: Vec::new(),
+            block_list: Vec::new(),
+            max_games_per_user: 0,
         }
     }
 }

@@ -35,6 +35,18 @@ const MATCHMAKING_POLL: Duration = Duration::from_secs(1);
 /// promptly on an otherwise-quiet stream, long enough not to busy-wait.
 const CONSUMER_POLL: Duration = Duration::from_millis(200);
 
+/// A best-effort seed for opponent-selection randomness, taken from the wall
+/// clock. Selection only needs to differ between runs, not be unpredictable, so
+/// the current time in nanoseconds suffices and pulls in no dependency; a clock at
+/// the Unix epoch simply yields a fixed seed.
+fn entropy_seed() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos() as u64)
+        .unwrap_or(0)
+}
+
 /// Read the bot token from the environment, failing fast when it is absent.
 ///
 /// A whitespace-only value is treated as absent so a blank export does not sail
@@ -91,12 +103,17 @@ pub fn run(config_path: Option<&Path>) -> Result<()> {
     // starts and declines) and, when enabled, the matchmaking thread, so it lives
     // behind a mutex; each holder locks it only for brief state updates, never
     // across an HTTP call.
-    let matchmaker = Arc::new(Mutex::new(Matchmaker::new(
-        config.matchmaking.clone(),
-        config.max_concurrent_games,
-        bot_id.clone(),
-        Instant::now(),
-    )));
+    let matchmaker = Arc::new(Mutex::new(
+        Matchmaker::new(
+            config.matchmaking.clone(),
+            config.max_concurrent_games,
+            bot_id.clone(),
+            Instant::now(),
+        )
+        // Seed opponent selection from the wall clock so successive bot sessions do
+        // not challenge the online pool in the same order.
+        .with_seed(entropy_seed()),
+    ));
     let matchmaking_enabled = matchmaker.lock().unwrap().is_enabled();
     if matchmaking_enabled {
         log::info!("matchmaking enabled: will challenge idle bots");
@@ -308,6 +325,17 @@ enum SlotState {
     Active,
 }
 
+/// One game slot: its lifecycle state and, for a slot claimed by an incoming
+/// challenge, the account id of the challenger it belongs to.
+#[derive(Clone)]
+struct Slot {
+    state: SlotState,
+    /// The challenger's account id, so a per-account simultaneous-game limit can be
+    /// enforced. `None` for a game the bot itself started (an accepted outgoing
+    /// matchmaking challenge), whose opponent is not tracked here.
+    owner: Option<String>,
+}
+
 /// The concurrency-cap bookkeeping: every game slot the bot is committed to,
 /// whether reserved by a just-accepted challenge or backing a running game.
 ///
@@ -323,7 +351,7 @@ enum SlotState {
 /// correct even if a `gameFinish` event is missed while the event stream is
 /// disconnected, which the event-driven count alone could not guarantee.
 #[derive(Clone, Default)]
-pub struct GameSlots(Arc<Mutex<HashMap<String, SlotState>>>);
+pub struct GameSlots(Arc<Mutex<HashMap<String, Slot>>>);
 
 impl GameSlots {
     /// An empty set of slots.
@@ -331,33 +359,63 @@ impl GameSlots {
         GameSlots::default()
     }
 
-    /// Reserve a slot for a challenge about to be accepted, returning whether it
-    /// was newly reserved. A `false` means the id is already held (reserved or
-    /// active), so the caller must not reserve or accept it a second time.
-    fn reserve(&self, id: &str) -> bool {
+    /// Reserve a slot for a challenge about to be accepted, recording `owner` as
+    /// the challenger it belongs to, and returning whether it was newly reserved. A
+    /// `false` means the id is already held (reserved or active), so the caller
+    /// must not reserve or accept it a second time.
+    fn reserve(&self, id: &str, owner: Option<&str>) -> bool {
         let mut slots = self.0.lock().unwrap();
         if slots.contains_key(id) {
             return false;
         }
-        slots.insert(id.to_string(), SlotState::Reserved);
+        slots.insert(
+            id.to_string(),
+            Slot {
+                state: SlotState::Reserved,
+                owner: owner.map(str::to_string),
+            },
+        );
         true
     }
 
     /// Mark a game as started, returning whether the caller should spawn a worker
     /// for it. A slot reserved at accept time is promoted in place — reconciling
-    /// the reservation rather than adding a second slot — and a game the bot never
-    /// reserved (an accepted outgoing matchmaking challenge) is recorded fresh;
-    /// both spawn a worker. A game already active spawns nothing, so a `gameStart`
-    /// replayed on reconnect does not start a duplicate worker.
+    /// the reservation rather than adding a second slot, keeping its recorded owner
+    /// — and a game the bot never reserved (an accepted outgoing matchmaking
+    /// challenge) is recorded fresh with no owner; both spawn a worker. A game
+    /// already active spawns nothing, so a `gameStart` replayed on reconnect does
+    /// not start a duplicate worker.
     fn start(&self, id: &str) -> bool {
         let mut slots = self.0.lock().unwrap();
-        match slots.get(id) {
-            Some(SlotState::Active) => false,
-            _ => {
-                slots.insert(id.to_string(), SlotState::Active);
+        match slots.get_mut(id) {
+            Some(slot) if slot.state == SlotState::Active => false,
+            Some(slot) => {
+                slot.state = SlotState::Active;
+                true
+            }
+            None => {
+                slots.insert(
+                    id.to_string(),
+                    Slot {
+                        state: SlotState::Active,
+                        owner: None,
+                    },
+                );
                 true
             }
         }
+    }
+
+    /// How many held slots — reserved or active — belong to challenger `user_id`,
+    /// for enforcing a per-account simultaneous-game limit. Matched case-sensitively
+    /// on the account id, the canonical lowercase form Lichess reports.
+    fn games_for_user(&self, user_id: &str) -> u32 {
+        self.0
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|slot| slot.owner.as_deref() == Some(user_id))
+            .count() as u32
     }
 
     /// Release a slot only if it is still merely reserved, for a challenge that was
@@ -365,7 +423,7 @@ impl GameSlots {
     /// is left untouched, so a stray event cannot free an in-progress game's slot.
     fn release_reservation(&self, id: &str) {
         let mut slots = self.0.lock().unwrap();
-        if slots.get(id) == Some(&SlotState::Reserved) {
+        if slots.get(id).map(|slot| slot.state) == Some(SlotState::Reserved) {
             slots.remove(id);
         }
     }
@@ -651,17 +709,36 @@ fn seek_matchmaking_game<T: Transport>(
     // Read the slots count before locking the matchmaker so the two mutexes are
     // never held at once.
     let active_games = slots.len() as u32;
-    {
+    let (action, to_cancel) = {
         let mut matchmaker = matchmaker.lock().unwrap();
         if !matchmaker.is_enabled() {
             return Ok(());
         }
-        if matchmaker.choose(now, active_games) != Action::Seek {
-            return Ok(());
+        let action = matchmaker.choose(now, active_games);
+        // `choose` abandons an outstanding challenge that lapsed unanswered; its id
+        // surfaces here so it can be cancelled on Lichess below.
+        let to_cancel = matchmaker.take_challenge_to_cancel();
+        if action == Action::Seek {
+            // Count this as an attempt up front so a failed lookup or an empty
+            // candidate list still waits out the minimum interval before retrying.
+            matchmaker.record_attempt(now);
         }
-        // Count this as an attempt up front so a failed lookup or an empty
-        // candidate list still waits out the minimum interval before retrying.
-        matchmaker.record_attempt(now);
+        (action, to_cancel)
+    };
+
+    // Cancel an abandoned challenge outside the matchmaker lock (it is an HTTP
+    // call). A realtime challenge auto-expires on Lichess, but a correspondence or
+    // kept-alive one lingers until withdrawn, so an unanswered one is cancelled to
+    // avoid leaving a zombie behind. A transient failure is tolerated.
+    if let Some(id) = to_cancel {
+        log::info!("cancelling unanswered matchmaking challenge {id}");
+        tolerate_recoverable(client.cancel_challenge(&id), || {
+            format!("cancelling challenge {id}")
+        })?;
+    }
+
+    if action != Action::Seek {
+        return Ok(());
     }
 
     let bots = match client.online_bots(ONLINE_BOTS_LIMIT) {
@@ -692,13 +769,14 @@ fn seek_matchmaking_game<T: Transport>(
         if spec.rated { "rated" } else { "casual" }
     );
     match client.create_challenge(&target, &spec) {
-        Ok(()) => matchmaker.lock().unwrap().record_issued(now),
+        // Track the created challenge by id so it can be cancelled if it goes
+        // unanswered past the interval.
+        Ok(challenge_id) => matchmaker.lock().unwrap().record_issued(now, challenge_id),
         Err(error) if error.is_recoverable() => {
             log::warn!("challenging bot {target}: {error}");
             // The challenge did not take (commonly a creation-time rejection).
-            // Back off from this bot so the deterministic first-eligible selection
-            // does not re-pick it every interval and wedge matchmaking on one
-            // unreachable opponent.
+            // Back off from this bot so random selection avoids re-picking it every
+            // interval and wedging matchmaking on one unreachable opponent.
             matchmaker
                 .lock()
                 .unwrap()
@@ -862,6 +940,25 @@ fn process_accept_queue<T: Transport>(
         .max_concurrent_games
         .saturating_sub(config.matchmaking.reserved_human_slots);
     for challenge in pending.drain(..) {
+        // A single account may not exceed its per-account simultaneous-game limit,
+        // so one opponent cannot monopolise the board even below the overall cap.
+        // A limit of zero disables the check. Declined with `later` — the bot is
+        // willing, just not while that account is already at its limit — so a slot
+        // it frees later reopens the door. This is checked before capacity so the
+        // reason reflects the more specific cause.
+        let per_user_limit = config.challenge.max_games_per_user;
+        if per_user_limit > 0 && slots.games_for_user(&challenge.challenger.id) >= per_user_limit {
+            log::info!(
+                "declining challenge {} from {} (per-account game limit)",
+                challenge.id,
+                challenge.challenger.name
+            );
+            tolerate_recoverable(
+                client.decline_challenge(&challenge.id, DeclineReason::Later),
+                || format!("declining challenge {}", challenge.id),
+            )?;
+            continue;
+        }
         let effective_cap = if challenge.challenger.is_bot() {
             max_bot_games
         } else {
@@ -874,8 +971,9 @@ fn process_accept_queue<T: Transport>(
                 challenge.challenger.name
             );
             // Reserve before the POST so the slot counts against the cap for the
-            // rest of this batch and for a concurrent matchmaking check.
-            slots.reserve(&challenge.id);
+            // rest of this batch and for a concurrent matchmaking check. The
+            // challenger owns the slot, for the per-account limit above.
+            slots.reserve(&challenge.id, Some(&challenge.challenger.id));
             match client.accept_challenge(&challenge.id) {
                 Ok(()) => {}
                 // The challenge was canceled or expired before the accept landed —
@@ -948,7 +1046,7 @@ mod tests {
     use std::sync::Condvar;
 
     use super::*;
-    use crate::config::Config;
+    use crate::config::{ChallengePolicy, Config};
     use crate::transport::Transport;
 
     /// A recorded POST: the request path and its form fields (empty for bodiless
@@ -967,6 +1065,9 @@ mod tests {
         /// HTTP error, standing in for a Lichess creation-time rejection so the
         /// failure-recovery path can be exercised offline.
         challenge_create_fails: bool,
+        /// The id returned in the body of a successful challenge-create POST, as
+        /// Lichess assigns one; matchmaking tracks this id to cancel the challenge.
+        created_challenge_id: String,
         /// Challenge ids whose accept POST answers with HTTP 404, standing in for a
         /// challenge that was canceled or expired before the accept landed.
         accept_not_found: HashSet<String>,
@@ -987,6 +1088,7 @@ mod tests {
                 account_json: account_json.to_string(),
                 bots_json: String::new(),
                 challenge_create_fails: false,
+                created_challenge_id: "mmchal".to_string(),
                 accept_not_found: HashSet::new(),
                 streams: RefCell::new(streams.into_iter().map(str::to_string).collect()),
                 posts: RefCell::new(Vec::new()),
@@ -1038,10 +1140,15 @@ mod tests {
             let is_challenge_create = path.starts_with("/api/challenge/")
                 && !path.ends_with("/accept")
                 && !path.ends_with("/decline");
-            if self.challenge_create_fails && is_challenge_create {
-                return Err(Error::Http(
-                    "unexpected status 400: {\"error\":\"nope\"}".to_string(),
-                ));
+            if is_challenge_create {
+                if self.challenge_create_fails {
+                    return Err(Error::Http(
+                        "unexpected status 400: {\"error\":\"nope\"}".to_string(),
+                    ));
+                }
+                // Lichess answers a create with the new challenge object; the id is
+                // all the client reads.
+                return Ok(format!(r#"{{"id":"{}"}}"#, self.created_challenge_id));
             }
             Ok(String::new())
         }
@@ -1586,9 +1693,10 @@ mod tests {
     fn a_failed_challenge_moves_matchmaking_to_a_different_bot() {
         use crate::config::{MatchmakingConfig, MatchmakingMode};
 
-        // The first bot's challenge is rejected at creation; without a penalty the
-        // deterministic first-eligible selection would re-pick it on the second
-        // seek. Instead the second seek must target the other bot.
+        // Each bot's challenge is rejected at creation; without a penalty selection
+        // could re-pick the same bot on the second seek. Instead the failure puts
+        // the first pick into backoff, so the second seek targets the other bot —
+        // the two attempts hit the two distinct bots regardless of which came first.
         let mut transport = FakeTransport::new("{}", "");
         transport.bots_json = concat!(
             r#"{"id":"firstbot","title":"BOT","perfs":{"blitz":{"rating":1600}}}"#,
@@ -1615,15 +1723,121 @@ mod tests {
         let slots = GameSlots::new();
         seek_times(&client, &slots, &matchmaker, 2);
 
-        // Both attempts were made, and the second went to a different bot rather
-        // than re-challenging the one that just failed.
+        // Two attempts were made, to the two distinct bots (order depends on the
+        // random pick), never re-challenging the bot that just failed.
+        let mut paths = client_transport(&client).post_paths();
+        paths.sort();
         assert_eq!(
-            client_transport(&client).post_paths(),
+            paths,
             vec![
                 "/api/challenge/firstbot".to_string(),
                 "/api/challenge/secondbot".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn an_unanswered_matchmaking_challenge_is_cancelled_by_its_tracked_id() {
+        use crate::config::{MatchmakingConfig, MatchmakingMode};
+
+        // The first seek issues a challenge whose id the fake transport reports as
+        // `mmchal`. With a zero interval, the second seek finds that challenge
+        // lapsed, so it cancels it by the tracked id before issuing the next one.
+        let mut transport = FakeTransport::new("{}", "");
+        transport.bots_json =
+            r#"{"id":"maia","title":"BOT","perfs":{"blitz":{"rating":1600}}}"#.to_string();
+        let client = LichessClient::new(transport);
+
+        let config = MatchmakingConfig {
+            enabled: true,
+            variants: vec!["standard".to_string()],
+            initial_seconds: vec![300],
+            increment_seconds: vec![0],
+            mode: MatchmakingMode::Casual,
+            idle_timeout_seconds: 0,
+            min_challenge_interval_seconds: 0,
+            ..MatchmakingConfig::default()
+        };
+        let matchmaker = Mutex::new(Matchmaker::new(config, 1, "me", Instant::now()));
+        let slots = GameSlots::new();
+        seek_times(&client, &slots, &matchmaker, 2);
+
+        // The lapsed challenge is cancelled by its tracked id between the two issues.
+        assert_eq!(
+            client_transport(&client).post_paths(),
+            vec![
+                "/api/challenge/maia".to_string(),
+                "/api/challenge/mmchal/cancel".to_string(),
+                "/api/challenge/maia".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_per_account_game_limit_declines_a_further_challenge_with_later() {
+        // Two challenges from the same account arrive together. With a per-account
+        // limit of one, the first is accepted (holding a slot owned by that account)
+        // and the second is declined with `later`, even though the overall cap has
+        // room. A different account is unaffected.
+        let alice_first = r#"{"type":"challenge","challenge":{"id":"al1","challenger":{"id":"alice","name":"alice","rating":1500},"variant":{"key":"standard"},"rated":false,"timeControl":{"type":"clock","limit":300,"increment":3}}}"#;
+        let alice_second = r#"{"type":"challenge","challenge":{"id":"al2","challenger":{"id":"alice","name":"alice","rating":1500},"variant":{"key":"standard"},"rated":false,"timeControl":{"type":"clock","limit":300,"increment":3}}}"#;
+        let bob = r#"{"type":"challenge","challenge":{"id":"bo1","challenger":{"id":"bob","name":"bob","rating":1500},"variant":{"key":"standard"},"rated":false,"timeControl":{"type":"clock","limit":300,"increment":3}}}"#;
+
+        let config = Config {
+            max_concurrent_games: 5,
+            challenge: ChallengePolicy {
+                max_games_per_user: 1,
+                ..ChallengePolicy::default()
+            },
+            ..Config::default()
+        };
+        let (calls, slots) = drive_batches(
+            &LichessClient::new(FakeTransport::new("{}", "")),
+            SELF_ID,
+            &config,
+            &[&[alice_first, alice_second, bob]],
+        );
+        assert_eq!(
+            calls,
+            vec![
+                OutboundCall::Accept {
+                    id: "al1".to_string()
+                },
+                OutboundCall::Decline {
+                    id: "al2".to_string(),
+                    reason: "later".to_string(),
+                },
+                OutboundCall::Accept {
+                    id: "bo1".to_string()
+                },
+            ]
+        );
+        // Two accepted games are held (alice's first and bob's); alice's second was
+        // declined, not slotted.
+        assert_eq!(slots, 2);
+    }
+
+    #[test]
+    fn a_blocked_account_is_declined_through_the_event_loop() {
+        // A block-listed challenger is refused before any other rule, so a chess960
+        // challenge from a blocked account reports `generic` (the block) rather than
+        // `variant` (what the standard-only policy would otherwise say).
+        let config = Config {
+            challenge: ChallengePolicy {
+                block_list: vec!["bob".to_string()],
+                ..ChallengePolicy::default()
+            },
+            ..Config::default()
+        };
+        let result = replay(SELF_ID, &config, &[&[INCOMING_VARIANT_CHALLENGE]]);
+        assert_eq!(
+            result.calls,
+            vec![OutboundCall::Decline {
+                id: "var01".to_string(),
+                reason: "generic".to_string(),
+            }]
+        );
+        assert_eq!(result.active_slots, 0);
     }
 
     #[test]
@@ -1659,17 +1873,22 @@ mod tests {
         let slots = GameSlots::new();
 
         // A fresh reservation counts; reserving the same id again does not.
-        assert!(slots.reserve("g1"));
+        assert!(slots.reserve("g1", Some("alice")));
         assert!(
-            !slots.reserve("g1"),
+            !slots.reserve("g1", Some("alice")),
             "an id already held must not be reserved again"
         );
         assert_eq!(slots.len(), 1);
+        // The reservation is attributed to its challenger for the per-account limit.
+        assert_eq!(slots.games_for_user("alice"), 1);
+        assert_eq!(slots.games_for_user("bob"), 0);
 
         // Starting the reserved game promotes it in place — still one slot — and
-        // asks for a worker. Starting it again (a replayed gameStart) does not.
+        // asks for a worker. Starting it again (a replayed gameStart) does not. The
+        // recorded owner survives promotion.
         assert!(slots.start("g1"), "the reserved game should spawn a worker");
         assert_eq!(slots.len(), 1, "promotion must not add a second slot");
+        assert_eq!(slots.games_for_user("alice"), 1, "owner survives promotion");
         assert!(
             !slots.start("g1"),
             "a game already running must not spawn a second worker"
@@ -1682,7 +1901,7 @@ mod tests {
 
         // Releasing a reservation only frees a still-reserved slot, never a
         // running game.
-        slots.reserve("g3");
+        slots.reserve("g3", None);
         slots.release_reservation("g3");
         assert_eq!(slots.len(), 2, "the reserved slot was freed");
         slots.release_reservation("g1");
@@ -1814,6 +2033,9 @@ mod tests {
                 while !*released {
                     released = cvar.wait(released).unwrap();
                 }
+                // A create answers with the new challenge's id, which the client
+                // parses; the other posts have no body.
+                return Ok(r#"{"id":"mmchal"}"#.to_string());
             }
             Ok(String::new())
         }
