@@ -4,6 +4,8 @@
 //! crate's domain types and knows the Lichess endpoint paths. It is generic over
 //! the transport so the same logic runs against the live API or a test double.
 
+use serde::Deserialize;
+
 use crate::account::Account;
 use crate::error::{Error, Result};
 use crate::event::{parse_line, Event};
@@ -11,6 +13,15 @@ use crate::game_stream::{parse_game_line, GameEvent};
 use crate::matchmaking::{parse_bot_line, BotInfo, ChallengeSpec};
 use crate::policy::DeclineReason;
 use crate::transport::Transport;
+
+/// The subset of a challenge-create response the bot needs: its id, so an
+/// unanswered outgoing challenge can later be cancelled. `POST /api/challenge/{user}`
+/// answers with the created challenge object at the top level; other fields are
+/// ignored.
+#[derive(Deserialize)]
+struct CreatedChallenge {
+    id: String,
+}
 
 /// A Lichess API client bound to one authenticated account.
 pub struct LichessClient<T: Transport> {
@@ -54,6 +65,18 @@ impl<T: Transport> LichessClient<T> {
             .map(drop)
     }
 
+    /// Cancel an outgoing challenge the bot issued and no longer wants pending.
+    ///
+    /// Used when a matchmaking challenge goes unanswered past its interval: a
+    /// realtime challenge auto-expires on Lichess after about twenty seconds, but a
+    /// correspondence or kept-alive one lingers until explicitly withdrawn, so the
+    /// bot cancels it to avoid leaving a zombie challenge behind.
+    pub fn cancel_challenge(&self, id: &str) -> Result<()> {
+        self.transport
+            .post_empty(&format!("/api/challenge/{id}/cancel"))
+            .map(drop)
+    }
+
     /// Fetch up to `count` currently-online bots for matchmaking.
     ///
     /// `GET /api/bot/online` is an NDJSON stream of one bot per line; this reads it
@@ -66,26 +89,30 @@ impl<T: Transport> LichessClient<T> {
             .collect()
     }
 
-    /// Issue an outgoing challenge to `username` for the game described by `spec`.
+    /// Issue an outgoing challenge to `username` for the game described by `spec`,
+    /// returning the created challenge's id.
     ///
     /// Sends the challenge with a random color so the bot does not always take the
-    /// same side; the clock and rated flag come from the composed spec.
-    pub fn create_challenge(&self, username: &str, spec: &ChallengeSpec) -> Result<()> {
+    /// same side; the clock and rated flag come from the composed spec. The id is
+    /// returned so matchmaking can track the single outstanding challenge and cancel
+    /// it if it goes unanswered.
+    pub fn create_challenge(&self, username: &str, spec: &ChallengeSpec) -> Result<String> {
         let limit = spec.initial_seconds.to_string();
         let increment = spec.increment_seconds.to_string();
         let rated = spec.rated.to_string();
-        self.transport
-            .post_form(
-                &format!("/api/challenge/{username}"),
-                &[
-                    ("rated", rated.as_str()),
-                    ("clock.limit", limit.as_str()),
-                    ("clock.increment", increment.as_str()),
-                    ("variant", spec.variant.as_str()),
-                    ("color", "random"),
-                ],
-            )
-            .map(drop)
+        let body = self.transport.post_form(
+            &format!("/api/challenge/{username}"),
+            &[
+                ("rated", rated.as_str()),
+                ("clock.limit", limit.as_str()),
+                ("clock.increment", increment.as_str()),
+                ("variant", spec.variant.as_str()),
+                ("color", "random"),
+            ],
+        )?;
+        let created: CreatedChallenge = serde_json::from_str(&body)
+            .map_err(|e| Error::Decode(format!("challenge create response: {e}")))?;
+        Ok(created.id)
     }
 
     /// Upgrade the authenticated account to a BOT account.

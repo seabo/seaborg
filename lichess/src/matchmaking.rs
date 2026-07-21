@@ -143,6 +143,10 @@ struct Outstanding {
     /// When the challenge was sent, used to expire a challenge the opponent never
     /// answers so the bot eventually tries someone else.
     issued: Instant,
+    /// The Lichess challenge id, kept so the challenge can be cancelled if it goes
+    /// unanswered past the interval (a correspondence or kept-alive challenge does
+    /// not auto-expire and would otherwise linger).
+    challenge_id: String,
 }
 
 /// Matchmaking state and decisions for one bot session.
@@ -166,6 +170,10 @@ pub struct Matchmaker {
     last_attempt: Option<Instant>,
     /// An issued challenge awaiting acceptance or decline, if any.
     outstanding: Option<Outstanding>,
+    /// The id of an outstanding challenge that has just been abandoned because it
+    /// went unanswered, waiting for the caller to cancel it on Lichess. Set by
+    /// [`Matchmaker::choose`] and drained by [`Matchmaker::take_challenge_to_cancel`].
+    to_cancel: Option<String>,
     /// Bot id -> the instant a decline was recorded; a re-challenge is suppressed
     /// until the configured backoff elapses.
     declined_at: HashMap<String, Instant>,
@@ -177,6 +185,11 @@ pub struct Matchmaker {
     increment_cursor: usize,
     /// Toggles rated/casual for [`MatchmakingMode::Random`].
     rated_toggle: bool,
+    /// State for the internal PRNG that randomises opponent selection, so the bot
+    /// does not fixate on the first eligible bot each interval. Seeded from system
+    /// entropy in production via [`Matchmaker::with_seed`] and left at a fixed
+    /// default otherwise, which keeps tests deterministic.
+    rng_state: u64,
 }
 
 impl Matchmaker {
@@ -196,12 +209,28 @@ impl Matchmaker {
             idle_since: now,
             last_attempt: None,
             outstanding: None,
+            to_cancel: None,
             declined_at: HashMap::new(),
             variant_cursor: 0,
             initial_cursor: 0,
             increment_cursor: 0,
             rated_toggle: false,
+            // A fixed default so `new` alone is deterministic (tests rely on this);
+            // production overrides it with system entropy via `with_seed`.
+            rng_state: 0,
         }
+    }
+
+    /// Seed the opponent-selection PRNG, the injectable seam that makes random
+    /// selection vary between runs while remaining reproducible from a fixed seed.
+    ///
+    /// Production seeds this from system entropy so successive bot sessions do not
+    /// challenge opponents in the same order; tests pass a fixed seed to assert both
+    /// that selection spreads across eligible candidates and that eligibility
+    /// filtering still holds.
+    pub fn with_seed(mut self, seed: u64) -> Matchmaker {
+        self.rng_state = seed;
+        self
     }
 
     /// A disabled matchmaker that never seeks a game, for the reactive-only path
@@ -239,11 +268,12 @@ impl Matchmaker {
     /// minimum interval since the last attempt has elapsed. Because the cap is
     /// reduced by the reserved human slots, matchmaking may stack games up to that
     /// reduced cap while still leaving room for a human to challenge the bot.
+    ///
+    /// The pending-challenge check runs before the cap check so an unanswered
+    /// challenge is abandoned (and offered for cancellation) even while the board
+    /// is temporarily full, rather than lingering until a slot frees.
     pub fn choose(&mut self, now: Instant, active_games: u32) -> Action {
         if !self.config.enabled {
-            return Action::Idle;
-        }
-        if active_games >= self.matchmaking_cap() {
             return Action::Idle;
         }
         if let Some(outstanding) = &self.outstanding {
@@ -253,7 +283,13 @@ impl Matchmaker {
             if now.duration_since(outstanding.issued) < self.min_interval() {
                 return Action::Idle;
             }
-            self.outstanding = None;
+            // Abandon it and remember its id so the caller can cancel it on Lichess
+            // rather than leaving a zombie challenge outstanding.
+            let abandoned = self.outstanding.take().expect("outstanding checked above");
+            self.to_cancel = Some(abandoned.challenge_id);
+        }
+        if active_games >= self.matchmaking_cap() {
+            return Action::Idle;
         }
         if now.duration_since(self.idle_since) < self.idle_timeout() {
             return Action::Idle;
@@ -306,31 +342,52 @@ impl Matchmaker {
     /// the block list, is not currently in decline backoff, and has a rating for
     /// the spec's speed within the configured bounds. A candidate with no rating
     /// for that speed is skipped, since its eligibility against the bounds cannot
-    /// be confirmed. The first qualifying candidate in the supplied order is
-    /// chosen, so selection is deterministic for a given online list.
+    /// be confirmed. One qualifying candidate is chosen at random, so an unchanging
+    /// online pool does not make the bot re-challenge the same opponent every
+    /// interval until it declines; the choice draws on the seeded PRNG, so it is
+    /// reproducible for a fixed seed.
     pub fn select_opponent<'a>(
-        &self,
+        &mut self,
         spec: &ChallengeSpec,
         candidates: &'a [BotInfo],
         now: Instant,
     ) -> Option<&'a BotInfo> {
         let speed = spec.speed();
-        candidates.iter().find(|bot| {
-            bot.is_bot()
-                && bot.id != self.own_id
-                && !self.is_blocked(&bot.id)
-                && !self.in_decline_backoff(&bot.id, now)
-                && bot
-                    .rating_for(speed)
-                    .is_some_and(|rating| self.rating_in_bounds(rating))
-        })
+        let eligible: Vec<&'a BotInfo> = candidates
+            .iter()
+            .filter(|bot| {
+                bot.is_bot()
+                    && bot.id != self.own_id
+                    && !self.is_blocked(&bot.id)
+                    && !self.in_decline_backoff(&bot.id, now)
+                    && bot
+                        .rating_for(speed)
+                        .is_some_and(|rating| self.rating_in_bounds(rating))
+            })
+            .collect();
+        if eligible.is_empty() {
+            return None;
+        }
+        let index = (self.next_rand() % eligible.len() as u64) as usize;
+        Some(eligible[index])
     }
 
-    /// Record that a challenge was just issued to `target`: it starts the
-    /// pending-challenge window and the minimum-interval clock.
-    pub fn record_issued(&mut self, now: Instant) {
+    /// Record that a challenge with id `challenge_id` was just issued: it starts
+    /// the pending-challenge window and the minimum-interval clock, and remembers
+    /// the id so an unanswered challenge can be cancelled when it is abandoned.
+    pub fn record_issued(&mut self, now: Instant, challenge_id: impl Into<String>) {
         self.last_attempt = Some(now);
-        self.outstanding = Some(Outstanding { issued: now });
+        self.outstanding = Some(Outstanding {
+            issued: now,
+            challenge_id: challenge_id.into(),
+        });
+    }
+
+    /// Take the id of a challenge that was abandoned unanswered and needs to be
+    /// cancelled on Lichess, if any. Returns `Some` at most once per abandonment;
+    /// the caller performs the cancel outside the matchmaker lock.
+    pub fn take_challenge_to_cancel(&mut self) -> Option<String> {
+        self.to_cancel.take()
     }
 
     /// Record a seek attempt that found no opponent, so the next attempt still
@@ -350,11 +407,10 @@ impl Matchmaker {
     /// most often the challenge was rejected at creation (an HTTP error), rather
     /// than declined by the opponent.
     ///
-    /// Without this, opponent selection is deterministic (the first eligible bot
-    /// in the online list) and nothing marks a bot that just refused a challenge,
-    /// so matchmaking would re-select the same unreachable bot every interval and
-    /// make no progress. Applying the same backoff a decline uses moves matchmaking
-    /// on to a different opponent instead.
+    /// Without this, nothing marks a bot that just refused a challenge, so random
+    /// selection could keep re-picking the same unreachable bot from a small pool
+    /// and make no progress. Applying the same backoff a decline uses removes it
+    /// from the eligible set so matchmaking moves on to a different opponent.
     pub fn record_challenge_failed(&mut self, bot_id: &str, now: Instant) {
         self.start_backoff(bot_id, now);
     }
@@ -406,6 +462,17 @@ impl Matchmaker {
 
     fn decline_backoff(&self) -> Duration {
         Duration::from_secs(self.config.decline_backoff_seconds)
+    }
+
+    /// Draw the next pseudo-random value, advancing the PRNG. This is SplitMix64,
+    /// a tiny well-distributed generator used here only to spread opponent
+    /// selection; it is not cryptographic and pulls in no dependency.
+    fn next_rand(&mut self) -> u64 {
+        self.rng_state = self.rng_state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.rng_state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
     }
 }
 
@@ -537,7 +604,7 @@ mod tests {
         let mut mm = Matchmaker::new(enabled_config(), 1, "me", start);
         let issued = start + Duration::from_secs(31);
         assert_eq!(mm.choose(issued, 0), Action::Seek);
-        mm.record_issued(issued);
+        mm.record_issued(issued, "c1");
         // Within the interval, the pending challenge blocks another seek.
         assert_eq!(mm.choose(issued + Duration::from_secs(30), 0), Action::Idle);
         // After the interval the pending challenge is abandoned and, the interval
@@ -550,7 +617,7 @@ mod tests {
         let start = Instant::now();
         let mut mm = Matchmaker::new(enabled_config(), 1, "me", start);
         let issued = start + Duration::from_secs(31);
-        mm.record_issued(issued);
+        mm.record_issued(issued, "c1");
         // The challenge is accepted and the game starts, restarting the idle clock.
         mm.record_game_started(issued);
         // While the game runs (active=1) the single slot is full.
@@ -561,8 +628,8 @@ mod tests {
     }
 
     #[test]
-    fn selects_first_eligible_bot_within_rating_bounds() {
-        let mm = Matchmaker::new(enabled_config(), 1, "me", Instant::now());
+    fn selects_an_eligible_bot_within_rating_bounds() {
+        let mut mm = Matchmaker::new(enabled_config(), 1, "me", Instant::now());
         let spec = ChallengeSpec {
             variant: "standard".to_string(),
             initial_seconds: 300,
@@ -574,6 +641,7 @@ mod tests {
             bot("toostrong", Speed::Blitz, 2500), // above max_rating
             bot("justright", Speed::Blitz, 1500),
         ];
+        // Only one candidate is within bounds, so the random pick must land on it.
         let chosen = mm.select_opponent(&spec, &candidates, Instant::now());
         assert_eq!(chosen.map(|b| b.id.as_str()), Some("justright"));
     }
@@ -584,7 +652,7 @@ mod tests {
             block_list: vec!["blocked".to_string()],
             ..enabled_config()
         };
-        let mm = Matchmaker::new(config, 1, "me", Instant::now());
+        let mut mm = Matchmaker::new(config, 1, "me", Instant::now());
         let spec = ChallengeSpec {
             variant: "standard".to_string(),
             initial_seconds: 300,
@@ -599,13 +667,15 @@ mod tests {
             human,
             bot("ok", Speed::Blitz, 1500),
         ];
+        // Self, the blocked bot, and the non-bot are all ineligible, leaving `ok`
+        // as the only valid pick.
         let chosen = mm.select_opponent(&spec, &candidates, Instant::now());
         assert_eq!(chosen.map(|b| b.id.as_str()), Some("ok"));
     }
 
     #[test]
     fn a_candidate_without_a_rating_for_the_speed_is_skipped() {
-        let mm = Matchmaker::new(enabled_config(), 1, "me", Instant::now());
+        let mut mm = Matchmaker::new(enabled_config(), 1, "me", Instant::now());
         let spec = ChallengeSpec {
             variant: "standard".to_string(),
             initial_seconds: 300, // blitz
@@ -642,10 +712,11 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_challenge_makes_selection_move_to_the_next_bot() {
-        // Selection is deterministic (first eligible), so a bot whose challenge
-        // fails must be penalized, or matchmaking re-picks it forever. After
-        // recording a failure the same list yields the next eligible bot instead.
+    fn a_failed_challenge_makes_selection_move_to_another_bot() {
+        // A bot whose challenge fails is put into backoff, so it is skipped until
+        // the window elapses. With two bots, that leaves the other as the only
+        // eligible pick — proving the failure moved selection on rather than
+        // re-picking the unreachable bot.
         let start = Instant::now();
         let mut mm = Matchmaker::new(enabled_config(), 1, "me", start);
         let spec = ChallengeSpec {
@@ -658,24 +729,22 @@ mod tests {
             bot("first", Speed::Blitz, 1500),
             bot("second", Speed::Blitz, 1500),
         ];
-        assert_eq!(
-            mm.select_opponent(&spec, &candidates, start)
-                .map(|b| b.id.as_str()),
-            Some("first")
-        );
-        mm.record_challenge_failed("first", start);
-        // Within the backoff the failed bot is skipped and the next one is chosen.
-        assert_eq!(
-            mm.select_opponent(&spec, &candidates, start + Duration::from_secs(1))
-                .map(|b| b.id.as_str()),
-            Some("second")
-        );
-        // Once the backoff elapses the bot is eligible again.
-        assert_eq!(
-            mm.select_opponent(&spec, &candidates, start + Duration::from_secs(3601))
-                .map(|b| b.id.as_str()),
-            Some("first")
-        );
+        let first_pick = mm
+            .select_opponent(&spec, &candidates, start)
+            .map(|b| b.id.clone())
+            .expect("both bots are eligible, so one is chosen");
+        mm.record_challenge_failed(&first_pick, start);
+        // Within the backoff the failed bot is skipped, so the other one is chosen.
+        let second_pick = mm
+            .select_opponent(&spec, &candidates, start + Duration::from_secs(1))
+            .map(|b| b.id.clone())
+            .expect("the un-penalised bot is still eligible");
+        assert_ne!(second_pick, first_pick);
+        // Once the backoff elapses the penalised bot is eligible again, so a pick
+        // is once more available from the full pool.
+        assert!(mm
+            .select_opponent(&spec, &candidates, start + Duration::from_secs(3601))
+            .is_some());
     }
 
     #[test]
@@ -706,6 +775,116 @@ mod tests {
         assert_eq!((second.initial_seconds, second.increment_seconds), (180, 2));
         // The cursor wraps back to the pool start.
         assert_eq!((third.initial_seconds, third.increment_seconds), (60, 0));
+    }
+
+    #[test]
+    fn selection_spreads_across_eligible_candidates() {
+        // Over many draws against an unchanging eligible pool, selection must not
+        // fixate on one bot. With a fixed seed the run is reproducible, so this is a
+        // stable assertion about spread rather than a flaky one.
+        let spec = ChallengeSpec {
+            variant: "standard".to_string(),
+            initial_seconds: 300,
+            increment_seconds: 0,
+            rated: false,
+        };
+        let candidates = vec![
+            bot("alpha", Speed::Blitz, 1500),
+            bot("bravo", Speed::Blitz, 1500),
+            bot("charlie", Speed::Blitz, 1500),
+        ];
+        let now = Instant::now();
+        let mut mm = Matchmaker::new(enabled_config(), 1, "me", now).with_seed(0xC0FF_EE00);
+        let mut chosen = std::collections::HashSet::new();
+        for _ in 0..30 {
+            let pick = mm
+                .select_opponent(&spec, &candidates, now)
+                .expect("every candidate is eligible");
+            // Only ever picks an eligible candidate.
+            assert!(candidates.iter().any(|c| c.id == pick.id));
+            chosen.insert(pick.id.clone());
+        }
+        assert!(
+            chosen.len() > 1,
+            "selection must spread across eligible bots, got only {chosen:?}"
+        );
+    }
+
+    #[test]
+    fn the_seed_makes_selection_reproducible_and_injectable() {
+        // Two matchmakers with the same seed pick the same sequence; a different
+        // seed can pick a different first opponent. This is the seam tests use to
+        // drive selection deterministically and production uses to vary it per run.
+        let spec = ChallengeSpec {
+            variant: "standard".to_string(),
+            initial_seconds: 300,
+            increment_seconds: 0,
+            rated: false,
+        };
+        let candidates: Vec<BotInfo> = (0..8)
+            .map(|i| bot(&format!("bot{i}"), Speed::Blitz, 1500))
+            .collect();
+        let now = Instant::now();
+        let pick = |seed: u64| -> String {
+            let mut mm = Matchmaker::new(enabled_config(), 1, "me", now).with_seed(seed);
+            mm.select_opponent(&spec, &candidates, now)
+                .unwrap()
+                .id
+                .clone()
+        };
+        assert_eq!(pick(42), pick(42), "same seed is reproducible");
+        assert_ne!(
+            pick(1),
+            pick(2),
+            "distinct seeds can select distinct opponents"
+        );
+    }
+
+    #[test]
+    fn an_abandoned_challenge_is_offered_for_cancellation_by_id() {
+        // When an outstanding challenge lapses unanswered, `choose` abandons it and
+        // surfaces its id exactly once so the caller can cancel it on Lichess.
+        let start = Instant::now();
+        let mut mm = Matchmaker::new(enabled_config(), 1, "me", start);
+        let issued = start + Duration::from_secs(31);
+        assert_eq!(mm.choose(issued, 0), Action::Seek);
+        mm.record_issued(issued, "zombie1");
+        // Nothing to cancel while the challenge is still pending.
+        assert_eq!(mm.choose(issued + Duration::from_secs(10), 0), Action::Idle);
+        assert_eq!(mm.take_challenge_to_cancel(), None);
+        // Past the interval the challenge is abandoned and its id offered once.
+        assert_eq!(mm.choose(issued + Duration::from_secs(61), 0), Action::Seek);
+        assert_eq!(mm.take_challenge_to_cancel().as_deref(), Some("zombie1"));
+        assert_eq!(mm.take_challenge_to_cancel(), None);
+    }
+
+    #[test]
+    fn a_lapsed_challenge_is_cancelled_even_while_the_cap_is_full() {
+        // A full board must not delay cancelling an unanswered challenge: the
+        // pending-challenge check runs before the cap check, so the id is offered
+        // even though `choose` then idles for want of a free slot.
+        let start = Instant::now();
+        let mut mm = Matchmaker::new(enabled_config(), 1, "me", start);
+        let issued = start + Duration::from_secs(31);
+        assert_eq!(mm.choose(issued, 0), Action::Seek);
+        mm.record_issued(issued, "zombie2");
+        // A game now occupies the only slot, so seeking idles, yet the lapsed
+        // challenge is still abandoned and offered for cancellation.
+        let later = issued + Duration::from_secs(61);
+        assert_eq!(mm.choose(later, 1), Action::Idle);
+        assert_eq!(mm.take_challenge_to_cancel().as_deref(), Some("zombie2"));
+    }
+
+    #[test]
+    fn a_challenge_resolved_by_a_game_start_is_not_cancelled() {
+        // A challenge the opponent accepted (a game started) must not be cancelled;
+        // only an unanswered, abandoned one is.
+        let start = Instant::now();
+        let mut mm = Matchmaker::new(enabled_config(), 1, "me", start);
+        let issued = start + Duration::from_secs(31);
+        mm.record_issued(issued, "accepted1");
+        mm.record_game_started(issued);
+        assert_eq!(mm.take_challenge_to_cancel(), None);
     }
 
     #[test]
