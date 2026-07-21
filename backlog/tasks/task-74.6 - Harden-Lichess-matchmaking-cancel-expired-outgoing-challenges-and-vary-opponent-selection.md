@@ -3,11 +3,11 @@ id: TASK-74.6
 title: >-
   Lichess matchmaking robustness and challenge-policy precision, plus a
   conformance-divergence note
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-21 03:56'
-updated_date: '2026-07-21 15:44'
+updated_date: '2026-07-21 15:58'
 labels:
   - lichess
   - conformance
@@ -33,13 +33,13 @@ References: lichess-bot lib/matchmaking.py (outstanding-id cancel, weighted sele
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The id of an issued matchmaking challenge is captured and, when that challenge expires unanswered, a cancel request is sent for it
-- [ ] #2 Opponent selection over an unchanging online pool does not repeatedly pick the same bot every interval (weighted-random or rotation), while still honouring rating bounds, block list, and decline backoff; selection is seedable/injectable for tests
-- [ ] #3 A time-control decline distinguishes too-fast vs too-slow (tooFast/tooSlow) rather than always timeControl, and a mode-mismatch decline offers the alternative mode the bot accepts (or the current mapping is kept with a documented rationale)
-- [ ] #4 Incoming challenges honour an allow_list/block_list and a per-user simultaneous-game limit (decline reason later), matching the config surface added here
-- [ ] #5 A short conformance note records each intentional divergence from the reference (one-line rationale each) so they are not re-flagged as bugs
-- [ ] #6 Pinned tests cover: an expired outstanding challenge triggering a cancel with the tracked id, selection spreading across eligible candidates, the new decline-reason mappings, and the block/allow and per-user-limit paths
-- [ ] #7 cargo fmt --check, cargo clippy --workspace --all-targets --all-features -D warnings, and cargo test --workspace all pass
+- [x] #1 The id of an issued matchmaking challenge is captured and, when that challenge expires unanswered, a cancel request is sent for it
+- [x] #2 Opponent selection over an unchanging online pool does not repeatedly pick the same bot every interval (weighted-random or rotation), while still honouring rating bounds, block list, and decline backoff; selection is seedable/injectable for tests
+- [x] #3 A time-control decline distinguishes too-fast vs too-slow (tooFast/tooSlow) rather than always timeControl, and a mode-mismatch decline offers the alternative mode the bot accepts (or the current mapping is kept with a documented rationale)
+- [x] #4 Incoming challenges honour an allow_list/block_list and a per-user simultaneous-game limit (decline reason later), matching the config surface added here
+- [x] #5 A short conformance note records each intentional divergence from the reference (one-line rationale each) so they are not re-flagged as bugs
+- [x] #6 Pinned tests cover: an expired outstanding challenge triggering a cancel with the tracked id, selection spreading across eligible candidates, the new decline-reason mappings, and the block/allow and per-user-limit paths
+- [x] #7 cargo fmt --check, cargo clippy --workspace --all-targets --all-features -D warnings, and cargo test --workspace all pass
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -87,4 +87,41 @@ Verification:
 - cargo test --workspace: pass (exit 0; lichess 131 tests green)
 Known failures: none
 ---
+
+author: @claude
+created: 2026-07-21 15:58
+---
+Review: APPROVED
+
+Reviewer: independent ($review)
+Branch: task-74.6-lichess-matchmaking-robustness
+Base: a5e52e604b0db0d87346785b1052a9bd268ac937
+Implementation target (code): ac87e0f263f59f3f98da0d877d81279387f9da64
+Immutability: target is an ancestor of the branch tip; the later commit (90549ec) touches only the task file (verified `git diff --stat ac87e0f 90549ec -- ':!backlog'` is empty).
+
+Verification (run on the target code in the task worktree):
+- cargo fmt --check: pass (exit 0)
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (exit 0) on a clean CARGO_TARGET_DIR=/tmp/t746-clippy
+- cargo test --workspace: pass (lichess 131, engine 387, chess 50, all integration/doc tests green)
+- No hot-path (movegen/search) code touched, so speed benchmarks not required.
+
+Acceptance criteria — all proven:
+- #1 Outstanding challenge id captured and cancelled on expiry: unit `an_abandoned_challenge_is_offered_for_cancellation_by_id`, `a_lapsed_challenge_is_cancelled_even_while_the_cap_is_full`, `a_challenge_resolved_by_a_game_start_is_not_cancelled`; integration `an_unanswered_matchmaking_challenge_is_cancelled_by_its_tracked_id` asserts the real `POST /api/challenge/mmchal/cancel`. Independently confirmed against the live Lichess OpenAPI that challengeCreate returns ChallengeJson with `id` at the top level, so `CreatedChallenge { id }` parses correctly in production (not just against the fake transport).
+- #2 Selection spreads and is seedable while honouring bounds/block/backoff: `selection_spreads_across_eligible_candidates`, `the_seed_makes_selection_reproducible_and_injectable`, plus the eligibility-filter tests.
+- #3 tooFast/tooSlow and mode-mismatch mapping: `a_clock_below_the_minimum_is_too_fast`, `a_clock_above_the_maximum_is_too_slow`, `an_out_of_range_increment_keeps_the_generic_time_control_reason`, `a_mode_mismatch_offers_the_mode_the_bot_accepts`, `a_standard_challenge_a_variant_only_bot_declines_reports_standard`.
+- #4 allow/block list + per-account limit: `an_allow_list_admits_only_listed_challengers`, `a_blocked_challenger_is_declined_before_any_other_rule`, `a_blocked_account_is_declined_through_the_event_loop`, `a_per_account_game_limit_declines_a_further_challenge_with_later`; config surface added with serde(default) so existing configs still parse.
+- #5 Conformance note: lichess/REFERENCE_CONFORMANCE.md records each intentional divergence with a one-line rationale.
+- #6 Pinned tests cover all four required areas (see above).
+- #7 fmt/clippy/test all pass (verified above).
+
+Scope/quality: change confined to the lichess crate; no new #[allow]; comments explain rationale rather than restating code or citing task/finding IDs; classify order (block -> allow -> variant -> time -> mode -> bot -> rating) and the choose reordering (pending-challenge check before cap check) are correct and covered by tests.
+
+Approved code target: ac87e0f263f59f3f98da0d877d81279387f9da64. Moving to Ready to Merge.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Hardens the Lichess bot's matchmaking and challenge policy in the lichess crate. create_challenge now returns the created challenge id (parsed top-level from the ChallengeJson response, verified against the live Lichess OpenAPI) and cancel_challenge withdraws it; Matchmaker tracks the outstanding id and, when a challenge lapses unanswered, abandons it (before the cap check) and surfaces the id for run.rs to cancel outside the lock. Opponent selection is uniform-random over the eligible pool via a seedable SplitMix64 PRNG (seeded from the wall clock in production), so an unchanging pool no longer fixates on one bot while still honouring rating bounds, block list, and decline backoff. DeclineReason extends to the 11 Lichess reasons: clock declines split into tooFast/tooSlow, a variant-only bot declining standard reports standard, and a mode mismatch offers the accepted mode. classify consults case-insensitive allow/block lists first (decline generic); process_accept_queue enforces max_games_per_user via per-slot owner tracking, declining the surplus with later. REFERENCE_CONFORMANCE.md and the example TOML document the new surface and the intentional divergences. Verified on target ac87e0f263f59f3f98da0d877d81279387f9da64: cargo fmt --check (pass), cargo clippy --workspace --all-targets --all-features -- -D warnings on a clean CARGO_TARGET_DIR (exit 0), cargo test --workspace (all pass; lichess 131 green). AC #1's production correctness confirmed by checking the real ChallengeJson schema places id at the top level.
+<!-- SECTION:FINAL_SUMMARY:END -->
