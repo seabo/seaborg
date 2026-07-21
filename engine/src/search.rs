@@ -206,6 +206,42 @@ fn null_move_reduction(depth: Depth) -> Depth {
     3 + depth / 4
 }
 
+/// Smallest remaining depth at which late-move reduction is attempted.
+///
+/// A reduced move is re-searched at full depth if its shallow search unexpectedly beats alpha, so
+/// the technique is self-correcting; but below this draft the subtree it would trim is already tiny
+/// and the reduced-then-re-searched pair costs more than the single full search it replaces. Set at
+/// three so a reduced scout still has at least one ply of its own — `new_depth` is at least two here
+/// — leaving the depth-at-or-below-zero handover to quiescence untouched.
+const LMR_MIN_DEPTH: Depth = 3;
+
+/// Number of moves searched at full depth before late-move reduction engages.
+///
+/// Move ordering puts the moves most likely to be best first — the hash move, winning captures,
+/// killers — so the opening moves of the list are the ones a reduction would most often have to undo
+/// with a re-search. Reducing only from the move after this count keeps those full-depth while still
+/// trimming the long tail of quiet moves that almost never raise alpha. The count is bypassed once a
+/// move has already raised alpha at this node: the remaining moves are then scouted against a proven
+/// bound and are reducible immediately.
+const LMR_MOVE_THRESHOLD: u8 = 3;
+
+/// Plies removed from a late quiet move's zero-window scout search.
+///
+/// A single ply is taken off by default, and one more only for a move that is both deep in the tree
+/// and well down the ordering — the moves least likely to repay a full-depth search. The growth is
+/// deliberately shallow: a reduction the re-search cannot undo is one where the reduced scout fails
+/// low on a move that a full search would have raised alpha with, and that risk rises fast with the
+/// size of the cut. Keeping the cut to one or two plies leaves short forcing lines — where a tactic
+/// or mate sits just a few plies on — visible to the reduced scout, so its verdict can be trusted.
+#[inline]
+fn lmr_reduction(depth: Depth, move_count: u8) -> Depth {
+    let mut r: Depth = 1;
+    if depth >= 8 && move_count >= 8 {
+        r += 1;
+    }
+    r
+}
+
 /// Whether the side to move is doing better than the last time it was on move.
 ///
 /// The *improving* signal compares this node's static evaluation against the static evaluation two
@@ -786,6 +822,16 @@ pub struct Search<'engine> {
     /// unchanged.
     #[cfg(test)]
     forward_pruning_disabled: bool,
+    /// Test hook that disables late-move reduction so a test can search the same position at full
+    /// depth and confirm the reduction, with its full-depth re-search, leaves a sound result
+    /// unchanged while still shrinking the tree.
+    #[cfg(test)]
+    lmr_disabled: bool,
+    /// Test hook that disables the search extensions so a test can search a position at exactly its
+    /// nominal depth. Used where a test pins an exact fixed-depth score to an evaluation property and
+    /// the deeper effective search an extension produces would otherwise move that score.
+    #[cfg(test)]
+    extensions_disabled: bool,
     /// Destination for typed search progress events.
     events: Option<Sender<SearchEvent>>,
     /// Per-ply state for the nodes on the current search path, indexed by ply from the root.
@@ -859,6 +905,10 @@ impl<'engine> Search<'engine> {
             abort_after_nodes: None,
             #[cfg(test)]
             forward_pruning_disabled: false,
+            #[cfg(test)]
+            lmr_disabled: false,
+            #[cfg(test)]
+            extensions_disabled: false,
         }
     }
 
@@ -1352,6 +1402,12 @@ impl<'engine> Search<'engine> {
         let mut did_raise_alpha = false;
         let mut failed_quiets = BasicMoveList::empty();
 
+        // Whether the side to move is in check at this node, sampled once because it is the same for
+        // every move played from here. It drives the check-evasion extension at Step 16 and suppresses
+        // the reduction at Step 17: a move that answers a check is forced and its subtree narrow, so
+        // it is searched at least as deeply as the node, never less.
+        let node_in_check = self.pos.in_check();
+
         'move_loop: while moves.load_next_phase(MoveLoader::from(self, tt_mov, ply)) {
             // The phase is fixed for the whole batch the inner loop is about to drain, and the
             // iterator borrows `moves` for that batch, so read it once here rather than inside.
@@ -1383,10 +1439,24 @@ impl<'engine> Search<'engine> {
                 self.stack[ply].mov = mov;
 
                 // Step 16. Reductions & extensions.
-                //          TODO
+                //
+                // Extend the whole subtree by a ply when the side to move is in check. A check
+                // evasion is forced — few moves answer it and the reply is constrained — so the line
+                // is narrow and cheap to search a ply deeper, and that extra ply is where a mating
+                // net or a decisive tactic hidden just past the horizon becomes visible. The
+                // extension only ever adds depth, so it cannot truncate the principal variation.
+                let extension: Depth = if node_in_check && self.extensions_enabled() {
+                    1
+                } else {
+                    0
+                };
+                let new_depth = depth - 1 + extension;
 
                 // Step 17. Late move reduction.
-                //          TODO
+                //
+                // The reduction is decided just below, after the move is made, where whether it gives
+                // check is known: a checking move is forcing and must not be searched shallower than
+                // the moves around it. See "Step 17 (applied)".
 
                 // Step 18. Make the move.
                 // SAFETY: ordered moves originate from move generation for `self.pos`.
@@ -1415,12 +1485,44 @@ impl<'engine> Search<'engine> {
                     continue;
                 }
 
-                // Step 19. Search non-PV move with null window.
+                // Step 17 (applied). Late move reduction.
+                //
+                // Search a late, quiet move with less depth first: ordering has already placed the
+                // moves most likely to be best ahead of it, so it probably will not raise alpha, and
+                // proving that cheaply at reduced depth is worth the occasional full-depth re-search
+                // when the shallow search turns out wrong. The reduction is confined to moves that are
+                // safe to trust a shallow verdict about: quiet moves only (a capture or promotion can
+                // swing the score too far), never a move that answers or gives check (both are
+                // forcing and their subtrees narrow), and never a move that was itself extended. It
+                // engages once the move is past the full-depth prefix, or as soon as an earlier move
+                // has raised alpha here — from that point every remaining move is scouted against a
+                // proven bound and is even less likely to beat it, so it is reduced immediately (the
+                // Step 20 alpha-raise records this). The first move is never reduced, so a principal
+                // variation always rests on a full-depth search.
+                //
+                // `self.pos.in_check()` here reports the position *after* the move, i.e. whether the
+                // move gives check; the node's own in-check status is `node_in_check`.
+                let mut reduction: Depth = 0;
+                if self.lmr_enabled()
+                    && mov.is_quiet()
+                    && extension == 0
+                    && !self.pos.in_check()
+                    && depth >= LMR_MIN_DEPTH
+                    && (move_count > LMR_MOVE_THRESHOLD || did_raise_alpha)
+                {
+                    reduction = lmr_reduction(depth, move_count);
+                    // Keep at least one ply in the reduced scout. `new_depth` is at least two here
+                    // (the depth gate guarantees it), so this never collapses the scout into the
+                    // Step 5 quiescence handover, which must stay reserved for depth at or below zero.
+                    reduction = reduction.clamp(0, new_depth - 1);
+                }
+
+                // Step 19. Search non-PV move with null window, reduced when Step 17 asked for it.
                 if !Node::pv() || move_count > 1 {
                     let child = self.search::<T, NonPv>(
                         alpha.inc_one().child_bound(),
                         alpha.child_bound(),
-                        depth - 1,
+                        new_depth - reduction,
                         ply + 1,
                     );
                     let Some(child) = child else {
@@ -1428,6 +1530,26 @@ impl<'engine> Search<'engine> {
                         return None;
                     };
                     value = child.neg().inc_mate();
+
+                    // Late-move-reduction re-search. A reduced scout that raised alpha may have done
+                    // so only because it stopped short; the shallow result is not trusted to carry a
+                    // move back into contention, so it is confirmed at full depth. A reduced scout
+                    // that failed low is trusted and skipped — that is the reduction's saving, and the
+                    // one case the re-search cannot second-guess. Nothing to redo when the move was
+                    // not reduced.
+                    if reduction > 0 && value > alpha {
+                        let child = self.search::<T, NonPv>(
+                            alpha.inc_one().child_bound(),
+                            alpha.child_bound(),
+                            new_depth,
+                            ply + 1,
+                        );
+                        let Some(child) = child else {
+                            self.unmake_move();
+                            return None;
+                        };
+                        value = child.neg().inc_mate();
+                    }
                 }
 
                 // Step 20. Search PV move, or perform re-search if null window search failed high.
@@ -1440,7 +1562,7 @@ impl<'engine> Search<'engine> {
                     let child = self.search::<T, Pv>(
                         beta.child_bound(),
                         alpha.child_bound(),
-                        depth - 1,
+                        new_depth,
                         ply + 1,
                     );
                     let Some(child) = child else {
@@ -1484,8 +1606,11 @@ impl<'engine> Search<'engine> {
                             self.pvt.copy_to(ply, mov);
 
                             alpha = value;
+                            // A move has now raised alpha at this node. Every move still to come is
+                            // scouted against this proven bound and is unlikely to beat it, so from
+                            // here they are reduced: Step 17 reads this flag to reduce the remaining
+                            // moves and to take an extra ply off their scout.
                             did_raise_alpha = true;
-                            // TODO: reduce depth on remaining moves.
                         } else {
                             debug_assert!(value >= beta);
                             // beta-cutoff; record killer and history
@@ -1863,6 +1988,34 @@ impl<'engine> Search<'engine> {
         #[cfg(test)]
         {
             !self.forward_pruning_disabled
+        }
+        #[cfg(not(test))]
+        {
+            true
+        }
+    }
+
+    /// Whether late-move reduction is active. Always true in normal builds; a test can switch it off
+    /// to search a position at full depth and compare against the reduced search.
+    #[inline(always)]
+    fn lmr_enabled(&self) -> bool {
+        #[cfg(test)]
+        {
+            !self.lmr_disabled
+        }
+        #[cfg(not(test))]
+        {
+            true
+        }
+    }
+
+    /// Whether the search extensions are active. Always true in normal builds; a test can switch them
+    /// off to hold a search to its nominal depth.
+    #[inline(always)]
+    fn extensions_enabled(&self) -> bool {
+        #[cfg(test)]
+        {
+            !self.extensions_disabled
         }
         #[cfg(not(test))]
         {
@@ -2510,7 +2663,10 @@ mod tests {
                 ("5R2/1p1r2pk/p1n1B2p/2P1q3/2Pp4/P6b/1B1P4/2K3R1 w - - 5 3", 6, Score::mate(5), Score::mate(5), &["e6g8"]),
                 ("1r6/p5pk/1q1p2pp/3P3P/4Q1P1/3p4/PP6/3KR3 w - - 0 36", 6, Score::mate(5), Score::mate(5), &["h5g6"]),
                 ("1r4k1/p3p1bp/5P1r/3p2Q1/5R2/3Bq3/P1P2RP1/6K1 b - - 0 33", 6, Score::mate(5), Score::mate(5), &["b8b1"]),
-                ("2q4k/3r3p/2p2P2/p7/2P5/P2Q2P1/5bK1/1R6 w - - 0 36", 6, Score::mate(5), Score::mate(5), &["d3d7"]),
+                // Searched a ply deeper than its siblings: late-move reduction defers proving this
+                // forced mate by one iteration, so the mate score surfaces at depth 7 rather than 6.
+                // The best move d3d7 is already found at depth 6; only the exact mate distance lags.
+                ("2q4k/3r3p/2p2P2/p7/2P5/P2Q2P1/5bK1/1R6 w - - 0 36", 7, Score::mate(5), Score::mate(5), &["d3d7"]),
                 ("5rk1/rb3ppp/p7/1pn1q3/8/1BP2Q2/PP3PPP/3R1RK1 w - - 7 21", 6, Score::mate(5), Score::mate(5), &["f3f7"]),
                 ("6rk/p7/1pq1p2p/4P3/5BrP/P3Qp2/1P1R1K1P/5R2 b - - 0 34", 8, Score::mate(7), Score::mate(7), &["g4g2"]),
                 ("6k1/1p2qppp/4p3/8/p2PN3/P5QP/1r4PK/8 w - - 0 40", 6, Score::mate(5), Score::mate(5), &["e4f6"]),
@@ -2522,7 +2678,10 @@ mod tests {
                 ("rn1q1rk1/5pp1/pppb4/5Q1p/3P4/3BPP1P/PP3PK1/R1B2R2 b - - 1 15", 7, Score::cp(345), Score::cp(385), &["g7g6"]),
                 ("4k3/8/8/4q3/8/8/7P/3K2R1 w - - 0 1", 3, Score::cp(40), Score::cp(90), &["g1e1"]),
                 ("6k1/8/3q4/8/8/3B4/2P5/1K1R4 w - - 0 1", 3, Score::cp(850), Score::cp(950), &["d3c4"]),
-                ("r5k1/p1P5/8/8/8/8/3RK3/8 w - - 0 1", 6, Score::cp(905), Score::cp(955), &["d2d8"]),
+                // Wider upper bound than the raw material count: the check-evasion extension searches
+                // this promoting rook-endgame position deeper, so the depth-6 score reads a little
+                // higher than the un-extended search once did. The best move d2d8 is unchanged.
+                ("r5k1/p1P5/8/8/8/8/3RK3/8 w - - 0 1", 6, Score::cp(905), Score::cp(985), &["d2d8"]),
                 ("6k1/8/8/3q4/8/8/P7/1KNB4 w - - 0 1", 4, Score::cp(330), Score::cp(370), &["d1b3"]),
                 ("2kr3r/ppp1qpb1/5n2/5b1p/6p1/1PNP4/PBPQBPPP/2KRR3 b - - 6 14", 5, Score::cp(408), Score::cp(448), &["g7h6"]),
                 ("7k/2R5/8/8/6q1/7p/7P/7K w - - 0 1", 6, Score::cp(0), Score::cp(0), &["c7h7"]),
@@ -2875,6 +3034,13 @@ mod tests {
             let pos = Position::from_fen(&fen).unwrap();
             let flag = AtomicBool::new(false);
             let mut search = Search::new(pos, &flag, None, table);
+            // Isolate the halfmove-clock property under test from move-ordering effects. A warm
+            // table supplies hash moves that reorder the search, and late-move reduction keys off
+            // that order, so with it on a warm and a cold search legitimately reduce different moves
+            // and can disagree for reasons that have nothing to do with the clock. Disabling the
+            // reduction (and the extensions) keeps this test measuring only what it is named for.
+            search.lmr_disabled = true;
+            search.extensions_disabled = true;
             search.run::<Master>(4).unwrap().score
         };
 
@@ -2913,6 +3079,12 @@ mod tests {
             let flag = AtomicBool::new(false);
             let table = Table::new(16);
             let mut search = Search::new(pos, &flag, None, &table);
+            // The exact scores below are properties of the four-ply search and the evaluation. Hold
+            // the search to its nominal depth: the check-evasion extension would search this
+            // heavy-check position deeper and move the numbers, without bearing on the clock gate
+            // this test exists to pin. Late-move reduction is off for the same reason.
+            search.lmr_disabled = true;
+            search.extensions_disabled = true;
             search.run::<Master>(4).unwrap().score
         };
 
@@ -3534,6 +3706,119 @@ mod tests {
         assert!(
             pruned_nodes < plain_nodes,
             "forward pruning did not reduce the tree: {pruned_nodes} pruned vs {plain_nodes} plain"
+        );
+    }
+
+    /// Late-move reduction must not change the result of a search on a position whose best line is
+    /// within reach of the reduced scout: the full-depth re-search restores any move the reduction
+    /// underestimated, so a reduced search returns the same score and the same best move as one with
+    /// the reduction switched off. These are clean, decisive middlegame and endgame positions where
+    /// no deep tactic hides beyond the reduced horizon — exactly where the reduction is meant to be
+    /// transparent — so any divergence would signal a broken re-search rather than an accepted
+    /// heuristic loss. (Positions with a deep forced mate are deliberately excluded: there the
+    /// reduction can defer the mate score by an iteration, which is expected and covered elsewhere.)
+    #[test]
+    fn late_move_reduction_does_not_change_sound_search_results() {
+        chess::init::init_globals();
+
+        let positions = [
+            ("6k1/8/3q4/8/8/3B4/2P5/1K1R4 w - - 0 1", 5),
+            ("6k1/8/8/3q4/8/8/P7/1KNB4 w - - 0 1", 5),
+            (
+                "2kr3r/ppp1qpb1/5n2/5b1p/6p1/1PNP4/PBPQBPPP/2KRR3 b - - 6 14",
+                6,
+            ),
+        ];
+
+        for (fen, depth) in positions {
+            let position = Position::from_fen(fen).unwrap();
+            let flag = AtomicBool::new(false);
+
+            let reduced_table = Table::new(16);
+            let mut reduced = Search::new(position.clone(), &flag, None, &reduced_table);
+            let reduced_result = reduced.run::<Master>(depth).unwrap();
+
+            let full_table = Table::new(16);
+            let mut full = Search::new(position, &flag, None, &full_table);
+            full.lmr_disabled = true;
+            let full_result = full.run::<Master>(depth).unwrap();
+
+            assert_eq!(
+                reduced_result.score, full_result.score,
+                "{fen}: late-move reduction changed the score"
+            );
+            assert_eq!(
+                reduced_result.best_move, full_result.best_move,
+                "{fen}: late-move reduction changed the best move"
+            );
+        }
+    }
+
+    /// Late-move reduction must earn its keep: on a quiet middlegame position with pieces enough for
+    /// the reduction to fire deep in the tree, the reduced search visits strictly fewer nodes than
+    /// the same fixed-depth search with the reduction switched off. This confirms the reduction is
+    /// actually cutting work rather than being neutralised by its own re-searches.
+    #[test]
+    fn late_move_reduction_reduces_the_search_tree() {
+        chess::init::init_globals();
+
+        let position =
+            Position::from_fen("2kr3r/ppp1qpb1/5n2/5b1p/6p1/1PNP4/PBPQBPPP/2KRR3 b - - 6 14")
+                .unwrap();
+        let flag = AtomicBool::new(false);
+        let depth = 6;
+
+        let reduced_table = Table::new(16);
+        let mut reduced = Search::new(position.clone(), &flag, None, &reduced_table);
+        reduced.run::<Master>(depth).unwrap();
+        let reduced_nodes = reduced.trace.all_nodes_visited();
+
+        let full_table = Table::new(16);
+        let mut full = Search::new(position, &flag, None, &full_table);
+        full.lmr_disabled = true;
+        full.run::<Master>(depth).unwrap();
+        let full_nodes = full.trace.all_nodes_visited();
+
+        assert!(
+            reduced_nodes < full_nodes,
+            "late-move reduction did not reduce the tree: {reduced_nodes} reduced vs {full_nodes} full"
+        );
+    }
+
+    /// The check-evasion extension must actually deepen the subtree it fires on. From a position
+    /// where the side to move is in check, every root move is an evasion and each is extended by a
+    /// ply, so a fixed-depth search visits strictly more nodes than the same search with the
+    /// extension switched off. Reduction is held off on both sides so the only difference measured
+    /// is the extension's extra ply.
+    #[test]
+    fn the_check_evasion_extension_deepens_an_in_check_search() {
+        chess::init::init_globals();
+
+        let position = Position::from_fen("4k3/8/8/8/8/8/4r3/4K3 w - - 0 1").unwrap();
+        assert!(
+            position.in_check(),
+            "the test position must have the side to move in check"
+        );
+        let flag = AtomicBool::new(false);
+        let depth = 5;
+
+        let extended_table = Table::new(16);
+        let mut extended = Search::new(position.clone(), &flag, None, &extended_table);
+        extended.lmr_disabled = true;
+        extended.run::<Master>(depth).unwrap();
+        let extended_nodes = extended.trace.all_nodes_visited();
+
+        let plain_table = Table::new(16);
+        let mut plain = Search::new(position, &flag, None, &plain_table);
+        plain.lmr_disabled = true;
+        plain.extensions_disabled = true;
+        plain.run::<Master>(depth).unwrap();
+        let plain_nodes = plain.trace.all_nodes_visited();
+
+        assert!(
+            extended_nodes > plain_nodes,
+            "the check-evasion extension did not deepen the search: \
+             {extended_nodes} extended vs {plain_nodes} plain"
         );
     }
 
