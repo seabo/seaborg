@@ -5,7 +5,7 @@ status: Ready to Merge
 assignee:
   - '@george'
 created_date: '2026-07-19 13:32'
-updated_date: '2026-07-21 02:33'
+updated_date: '2026-07-21 02:34'
 labels:
   - search
   - pruning
@@ -189,6 +189,16 @@ Verification on the target commit:
 Notes:
 - Score arithmetic is safe: eval is material-only (always cp), margin is cp; the subtraction clamps and compares against the cp-guarded beta. No #[allow] added. Scope limited to engine/src/search.rs plus task metadata.
 - Hot-path benches (perft/movegen) not run: the change is confined to the alpha-beta interior-node path and does not touch move generation, so those benches cannot reflect it; search impact is covered by the AC#4 strength result.
+---
+
+author: @george
+created: 2026-07-21 02:34
+---
+Correction to my approval comment above (AC#4 rationale only; verdict unchanged).
+
+While my checks were running, commit d35db34 (metadata-only, author @george) landed on this branch and retracts the "block-buffered stdout" explanation for why the strength wrapper was bypassed. Per that note the actual blocker was the stale `--engine-arg=-u` flag (the CLI now defaults to UCI; fixed on master 032cc7d) plus smoke mode's 20-game cap, not stdout buffering. My approval comment repeated the now-retracted buffering wording — disregard that sentence.
+
+This does not change the verdict: the code target 1ddd6cc is unchanged (d35db34 touches only the task markdown; target-to-tip source diff is empty), and AC#4 remains proven — the +47.19 +/- 33.68 Elo / 200-game measurement (base 0f73ec8 vs target 1ddd6cc, via fastchess directly) stands as recorded. Approval of code SHA 1ddd6cc is unaffected; this approval commit sits on top of the corrected notes.
 ---
 <!-- COMMENTS:END -->
 
