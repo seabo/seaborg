@@ -1,11 +1,11 @@
 ---
 id: TASK-69.14
 title: Re-bake the default network to gen-001
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-22 22:43'
-updated_date: '2026-07-22 22:43'
+updated_date: '2026-07-22 22:49'
 labels:
   - nnue
   - build
@@ -41,3 +41,45 @@ The promoted network is archived on the training host at ~/rl/run-v1/networks/ge
 4. Run fmt, strict clippy, and the workspace tests with the embedded-net feature on and with --no-default-features, so the hand-crafted build that measures the network's contribution stays green.
 5. Drop the same commit from the TASK-69.12 branch so the change lands once, through this task.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Applied the re-baking procedure from docs/default-network.md as a content change: engine/nets/default.sbnn now holds the promoted gen-001 bytes (sha256 8ebc1381ca166774..., unchanged 394,820-byte size since the architecture is identical), BUILT_IN_NETWORK_ID moves from gen-000 to gen-001, and the pinned parameter-hash assertion moves from 0xdaf8_6bb3_d50c_ec6b to 0x3eef_37ee_f0fe_65bf. The architecture assertions (hidden width 256, qa 255, qb 64, scale 400) are unchanged because gen-001 has the same shape; only its weights differ.
+
+The hash guard behaved exactly as its comment claims. Swapping the bytes before touching the identifier failed the test loudly and printed the actual hash, which is how the new constant was obtained. A bake that changed the weights while leaving the identifier saying gen-000 would still have played fine and misattributed every measurement made against it afterwards.
+
+Recorded rather than asserted, from a release build of the implementation target:
+
+  default build:            evaluator: NNUE built-in gen-001 (hidden width 256, parameter hash 0x3eef37eef0fe65bf)
+  --no-default-features:    evaluator: hand-crafted evaluation
+
+The first line is now what docs/default-network.md shows; it previously showed gen-000 and its hash, which this change would have left stale.
+
+Provenance of the network: promoted by the reinforcement loop on the training host under TASK-69.12, gate at tc=10+0.1 concurrency 11 with SPRT elo0=0 elo1=5, crossing the upper bound after 476 games (259 wins, 159 draws, 58 losses, pentanomial [5, 15, 58, 94, 66], 0 crashes, 0 forfeits, all terminations normal) against gen-000 as baseline. Both sides were the same binary differing only in EvalFile, and the measurement was made on a build predating the embedding feature, so the baseline could not have silently been a network.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @claude
+created: 2026-07-22 22:49
+---
+Implementation handoff
+Branch: task-69.14-rebake-gen-001
+Worktree: /Users/seabo/seaborg-worktrees/task-69.14-rebake-gen-001
+Base: d52a6fb1c9e1a3fd8bbcfa4bb6bbba9ba8ef7f0e
+Implementation target: dd47d088e0e3e4f7e6c85fc051e68acc1105093d
+Resolved findings: none
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (no warnings)
+- cargo clippy --workspace --all-targets --no-default-features -- -D warnings: pass (no warnings)
+- cargo test --workspace: pass (chess 50; engine 426 + 2 ignored; lichess 131; integration suites green)
+- cargo test --workspace --no-default-features: pass (chess 50; engine 425 + 2 ignored; lichess 131)
+- manual: release build prints 'evaluator: NNUE built-in gen-001 (hidden width 256, parameter hash 0x3eef37eef0fe65bf)'; --no-default-features build prints 'evaluator: hand-crafted evaluation'
+Known failures: none
+
+Note for the reviewer: this change is a cherry-pick of the same content from the TASK-69.12 branch, split out at the requester's direction so master can carry gen-001 while the multi-generation programme continues. That commit has been dropped from the TASK-69.12 branch so the change lands once, through this task. The Elo evidence for gen-001 was produced under TASK-69.12 and is summarised in the implementation notes here; it is not re-measured by this task, which only moves committed bytes into the binary.
+---
+<!-- COMMENTS:END -->
