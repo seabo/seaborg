@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:42'
-updated_date: '2026-07-22 03:12'
+updated_date: '2026-07-22 11:23'
 labels:
   - nnue
   - rl
@@ -64,4 +64,14 @@ Gate: 44 games at tc=10+0.1 with --concurrency 11 took 160s = 990 games/hour. A 
 Generation 0 launched on the host: 386,000 games at 5000 nodes (~30M samples, ~3.3h), H=256, 25 epochs, lambda ramp 0.1 -> 0.5 over 8 generations, gate tc=10+0.1 concurrency 11 against the hand-crafted evaluation.
 
 Two observations on the loop worth recording. (1) loop.py passes no per-generation opening seed, so a multi-iteration run replays the same diversification openings every generation; this run drives one iteration per invocation with an explicit --opening-seed to avoid that. (2) The gate inherits strength_test.py's elo0=-5/elo1=0 default, which is a non-regression test rather than a demand for improvement; that is the right bound for the generation-0 bootstrap but should be tightened for later generations.
+
+Generation 0 result: PASS, promoted, +263.2 +/- 32.7 Elo over the hand-crafted evaluation.
+
+Attribution: 386,000 self-play games at 5000 nodes/move produced 31,409,859 filtered samples; H=256, 25 epochs, lambda 0.1; candidate nnue:gen-000:sha256=5a532e9d7d89af1c. Gate was authoritative at tc=10+0.1, concurrency 11, openings seaborg-openings-v1, SPRT elo0=-5 elo1=0 alpha=beta=0.05, crossing the upper bound (LLR 2.95) after 358 games: 247 wins, 93 draws, 18 losses, pentanomial [0, 2, 27, 69, 81].
+
+The result was checked for the ways a large Elo delta is usually an artifact rather than a gain. Both sides are the same binary (sha256 7ddae8ac...), differing only in the candidate's EvalFile option, so the comparison isolates the evaluation. All 358 games terminated normally: zero crashes, disconnections, forfeits, illegal moves, or losses on time, so the margin is not a baseline failing to play. Preflight had both sides answering g1f3. The limit is a time control, not a node budget, so this is not the free-depth artifact that inflates search-change measurements.
+
+Realised cost against the pre-run calibration: datagen ran as predicted at ~9.2M kept samples/hour and took the bulk of the wall clock; the gate resolved in 358 games (~22 min) rather than the ~2h a marginal change would need, because the effect is large. Total generation-0 wall clock was about 3.5h.
+
+Generation 1 launched: 360,000 games seeded differently (--opening-seed 2000), self-play now evaluated by best.sbnn. Datagen with NNUE inference measured at 2965 raw positions/s against 3855 for the hand-crafted evaluation, 23% slower, giving 7.12M kept samples/hour and a ~4.2h datagen step. Its gate is tightened to elo0=0 elo1=5, so a candidate must show improvement rather than merely avoid regressing.
 <!-- SECTION:NOTES:END -->
