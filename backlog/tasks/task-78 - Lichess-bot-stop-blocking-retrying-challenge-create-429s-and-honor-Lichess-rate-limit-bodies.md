@@ -3,11 +3,11 @@ id: TASK-78
 title: >-
   Lichess bot: stop blocking-retrying challenge-create 429s and honor Lichess
   rate-limit bodies
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-22 21:41'
-updated_date: '2026-07-22 23:04'
+updated_date: '2026-07-22 23:11'
 labels: []
 dependencies: []
 priority: high
