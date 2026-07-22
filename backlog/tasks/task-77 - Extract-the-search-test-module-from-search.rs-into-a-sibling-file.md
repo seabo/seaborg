@@ -1,11 +1,11 @@
 ---
 id: TASK-77
 title: Extract the search test module from search.rs into a sibling file
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-22 16:02'
-updated_date: '2026-07-22 16:25'
+updated_date: '2026-07-22 16:31'
 labels:
   - search
   - hygiene
@@ -68,6 +68,8 @@ Fidelity evidence:
 - Workspace passing count unchanged at 629 passed / 0 failed / 2 ignored.
 
 No trait objects, dynamic dispatch or abstraction layers introduced; no search logic split into modules. Behaviour-preserving by construction, so no strength run was needed or claimed.
+
+Merged to master as ac7545c (non-fast-forward merge of approved target 59f1445 onto tip 5a43da2). Integrated result verified before landing: cargo fmt --check clean, cargo clippy --workspace --all-targets --all-features -- -D warnings clean with a fresh CARGO_TARGET_DIR, cargo test --workspace 629 passed / 0 failed.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
