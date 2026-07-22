@@ -1,11 +1,11 @@
 ---
 id: TASK-77
 title: Extract the search test module from search.rs into a sibling file
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-22 16:02'
-updated_date: '2026-07-22 16:17'
+updated_date: '2026-07-22 16:25'
 labels:
   - search
   - hygiene
@@ -34,13 +34,13 @@ Sequencing. Run this only when no other search.rs task is in flight: any concurr
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The #[cfg(test)] module is moved out of engine/src/search.rs into a sibling module file, leaving search.rs containing the search logic plus the module declaration
-- [ ] #2 No test is added, removed, renamed, skipped or otherwise modified: the same 96 #[test] functions exist and run before and after
-- [ ] #3 cargo test --workspace passes with an unchanged passing-test count, verified against the count on the pre-change commit
-- [ ] #4 No search logic is moved or altered; the diff consists of the relocation of the test block plus the module declaration and any imports the moved module needs
-- [ ] #5 cargo fmt --check and cargo clippy --workspace --all-targets --all-features -- -D warnings both pass
-- [ ] #6 No trait objects, dynamic dispatch, or new abstraction layers are introduced, and no search logic is split into modules
-- [ ] #7 No strength run is required and none is claimed; the change is behaviour-preserving by construction
+- [x] #1 The #[cfg(test)] module is moved out of engine/src/search.rs into a sibling module file, leaving search.rs containing the search logic plus the module declaration
+- [x] #2 No test is added, removed, renamed, skipped or otherwise modified: the same 96 #[test] functions exist and run before and after
+- [x] #3 cargo test --workspace passes with an unchanged passing-test count, verified against the count on the pre-change commit
+- [x] #4 No search logic is moved or altered; the diff consists of the relocation of the test block plus the module declaration and any imports the moved module needs
+- [x] #5 cargo fmt --check and cargo clippy --workspace --all-targets --all-features -- -D warnings both pass
+- [x] #6 No trait objects, dynamic dispatch, or new abstraction layers are introduced, and no search logic is split into modules
+- [x] #7 No strength run is required and none is claimed; the change is behaviour-preserving by construction
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -89,4 +89,45 @@ Verification:
 - cargo test -p engine --lib -- --list: 428 test names, diff-clean against the pre-change list
 Known failures: none
 ---
+
+author: @claude
+created: 2026-07-22 16:25
+---
+Review verdict: APPROVED
+
+Attempt: 1
+Base: 5a43da27e0343b2f0a2374f3afeca1c0147dabaa
+Implementation target (code SHA): 59f1445
+Branch: task-77-extract-search-tests
+Worktree: /Users/seabo/seaborg-worktrees/task-77-extract-search-tests
+
+Immutability: 59f1445 is an ancestor of the branch tip; the only later commit (e1d582e) touches the task file alone. No implementation file changes after the target.
+
+Scope: the base-to-target diff touches exactly engine/src/search.rs, engine/src/search/tests.rs, and the task file. Nothing unrelated.
+
+Fidelity verification (done independently, not taken from the handoff):
+- git diff of search.rs across the target adds exactly one line, `mod tests;`, and removes the 3460-line test block. No search logic line is touched.
+- Extracted the original block from 5a43da2, dedented one level, and diffed it against engine/src/search/tests.rs: 10 hunks, every one a rustfmt reflow caused by the four columns freed by the dedent (joined continuation lines, one match arm shedding redundant braces, one .expect() re-wrapped). No semantic difference.
+- No trait objects, dyn dispatch, or new abstraction layers; no search logic split into modules. No #[allow] added.
+
+Checks run on the target:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass, zero warnings, confirmed with a fresh CARGO_TARGET_DIR so no cached lint result is load-bearing
+- cargo test --workspace: 629 passed / 0 failed; identical aggregate on base 5a43da2
+- cargo test -p engine --lib -- --list: 428 names before and after, diff-clean, 113 of them search::tests::*
+
+Benchmarks: not run. The entire diff is inside #[cfg(test)], so no code reaching the release binary or the bench targets changed; there is no hot path for a movegen or perft delta to appear on.
+
+Note for the record: the task description's figures (6301 lines, tests at 657, 96 tests) were stale. The actual pre-change state was 7221 lines, test module at 3761, 113 tests. The implementer flagged this and the scope was unaffected.
+
+Acceptance criteria 1-7: all checked, each proven by the evidence above.
+
+Verdict: Ready to Merge. Approved code target 59f1445.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Relocated the inline `#[cfg(test)] mod tests` block from engine/src/search.rs into engine/src/search/tests.rs, leaving `#[cfg(test)] mod tests;` behind. search.rs drops 7221 -> 3762 lines; the module path crate::search::tests is unchanged so `use super::*` and private-item access still resolve. Verified as a pure relocation: search.rs's diff is one added line (`mod tests;`) plus the removed block, and diffing the original block dedented one level against tests.rs yields only rustfmt reflows of lines that gained four columns (10 hunks, all line-joining or redundant-brace removal, no semantic change). cargo test -p engine --lib -- --list is byte-identical before and after (428 names, 113 under search::tests::), and cargo test --workspace passes 629/629 on both 5a43da2 and the target. cargo fmt --check clean; cargo clippy --workspace --all-targets --all-features -- -D warnings clean with a fresh CARGO_TARGET_DIR.
+<!-- SECTION:FINAL_SUMMARY:END -->
