@@ -3,11 +3,11 @@ id: TASK-40
 title: >-
   Spend the allotted time better: soft/hard limit split and next-iteration
   prediction
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-18 12:17'
-updated_date: '2026-07-22 13:19'
+updated_date: '2026-07-22 13:23'
 labels:
   - engine
   - time
@@ -92,6 +92,8 @@ PASS: LLR 2.95 crossed the +2.94 boundary at 722 games. Elo +76.8 +/- 18.7 (pent
 Artifacts: /tmp/task40-tc10/{report.json,runner.log,games.pgn}.
 
 Both controls are non-negative and both cross the no-regression boundary, so AC#5 is met at 2+0.05 (+92.1) and 10+0.1 (+76.8). The intervals overlap, so the smaller figure at the slower control is the expected shape — the discarded iteration is a smaller fraction of a longer move — rather than a measured difference between the controls. Both are recorded in BENCHMARKS.md.
+
+Merged to master as b9c7f6e (non-fast-forward merge of the approved target f727536 onto tip 45f00c0). Master had advanced mid-review with TASK-69.13, which touched engine/src/engine.rs, engine/src/search.rs and lichess/src/game.rs; all three auto-merged with no conflict and the overlaps are disjoint — 69.13 changed SearchEngine::new/network() and two tests, this task changed the TimeBudget plumbing and the iterative-deepening loop. Integrated checks on the merge commit: cargo fmt --check clean, cargo clippy --workspace --all-targets --all-features -- -D warnings clean (exit 0), cargo test --workspace 629 passed / 0 failed.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
