@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-07-18 12:17'
-updated_date: '2026-07-22 11:22'
+updated_date: '2026-07-22 13:09'
 labels:
   - engine
   - time
@@ -84,4 +84,12 @@ PASS: LLR 2.96 crossed the +2.94 boundary at 614 games. Elo +92.1 +/- 19.7 (pent
 Artifacts: /tmp/task40-tc2/{report.json,runner.log,games.pgn}.
 
 The 10+0.1 control is running now, sequentially rather than concurrently so the two matches do not contend for cores.
+
+Strength, 10+0.1 (AC#5, second of two controls). Same two binaries, run sequentially after the 2+0.05 match so the two could not contend for cores.
+
+PASS: LLR 2.95 crossed the +2.94 boundary at 722 games. Elo +76.8 +/- 18.7 (pentanomial). W-D-L 279-321-122, pentanomial 11-52-116-133-49. Zero crashes, zero forfeits; every game carries Termination "normal" and the runner log contains no illegal-move, forfeit, disconnect or timeout line.
+
+Artifacts: /tmp/task40-tc10/{report.json,runner.log,games.pgn}.
+
+Both controls are non-negative and both cross the no-regression boundary, so AC#5 is met at 2+0.05 (+92.1) and 10+0.1 (+76.8). The intervals overlap, so the smaller figure at the slower control is the expected shape — the discarded iteration is a smaller fraction of a longer move — rather than a measured difference between the controls. Both are recorded in BENCHMARKS.md.
 <!-- SECTION:NOTES:END -->

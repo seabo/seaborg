@@ -376,6 +376,21 @@ changed or the root score fell.
 | Runner | fastchess alpha 1.5.0, `openings-v1.epd`, `target-cpu=native` release, rustc 1.97.1 |
 | Machine | Apple M3 Pro, concurrency 4 |
 
+The same pair of binaries at a slower control, run sequentially rather than
+concurrently so the two matches could not contend for cores:
+
+| Field | Value |
+| --- | --- |
+| Result | **PASS** — SPRT crossed the upper boundary (LLR 2.95, bounds ±2.94) |
+| Elo | **+76.8 ± 18.7** (fastchess pentanomial error) |
+| Games | 722 (W-D-L 279-321-122), pentanomial 11-52-116-133-49, 0 crashes, 0 forfeits |
+| Time control | `tc=10+0.1`, 64 MB hash, one worker per engine |
+
+Every game at both controls terminated normally, and neither runner log contains
+an illegal-move, forfeit, disconnect, or timeout line. The harness fails closed
+on any of those before a result is recorded, so a completed report is itself the
+evidence that none occurred.
+
 Unlike the search-pruning entries above, this change alters no search decision
 at a fixed budget: at `depth=N` or `nodes=N` the two builds visit identical
 trees. Everything it is worth is in where the clock goes, which is why a timed
@@ -392,4 +407,6 @@ the previous iteration's move anyway. Measured directly on the start position at
 discards; the candidate declines depth 16, returns the same move at depth 15 in
 about 1150 ms, and hands the rest to later moves. The shorter the control, the
 larger the share of each move that was going into the discarded iteration, which
-is why 2+0.05 shows the effect most strongly.
+is why 2+0.05 (+92) shows the effect more strongly than 10+0.1 (+77). The two
+intervals overlap, so the ordering is the expected shape rather than a measured
+difference between the controls.
