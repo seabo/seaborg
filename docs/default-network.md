@@ -18,7 +18,7 @@ driver says so again whenever the evaluator changes:
 ```console
 $ seaborg <<< 'quit'
 seaborg 0.1.0 by George Seabridge (commit 30e530a14690)
-evaluator: NNUE built-in gen-000 (hidden width 256, parameter hash 0xdaf86bb3d50cec6b)
+evaluator: NNUE built-in gen-001 (hidden width 256, parameter hash 0x3eef37eef0fe65bf)
 ```
 
 The line names the network's promotion identifier, its hidden width, and the

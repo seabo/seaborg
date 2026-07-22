@@ -44,7 +44,7 @@ const BAKED_BYTES: &[u8] = include_bytes!("../../nets/default.sbnn");
 /// than a rename, which makes this constant the only record of *which* network
 /// a given build carries. Re-baking must update it in the same commit.
 #[cfg(feature = "embedded-net")]
-pub const BUILT_IN_NETWORK_ID: &str = "gen-000";
+pub const BUILT_IN_NETWORK_ID: &str = "gen-001";
 
 /// The built-in default network, or `None` in a build without one.
 ///
@@ -181,7 +181,7 @@ mod tests {
         // Pins the identity of the promoted network: re-baking a different one
         // without updating `BUILT_IN_NETWORK_ID` and this hash together is the
         // mistake that makes a benchmark unattributable.
-        assert_eq!(network.param_hash(), 0xdaf8_6bb3_d50c_ec6b);
+        assert_eq!(network.param_hash(), 0x3eef_37ee_f0fe_65bf);
     }
 
     #[cfg(feature = "embedded-net")]
