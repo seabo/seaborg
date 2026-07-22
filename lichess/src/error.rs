@@ -42,10 +42,31 @@ pub enum Error {
     /// challenger canceled it or it expired before the accept landed — and is
     /// benign rather than a fault.
     NotFound,
-    /// The API returned HTTP 429 (too many requests). `retry_after` carries the
-    /// server's `Retry-After` hint in seconds when it sent one.
+    /// The API returned HTTP 429 (too many requests), so *this* account is over
+    /// one of Lichess's limits. Which limit fired matters to the caller: a limit
+    /// on the account says nothing about the opponent a request happened to name,
+    /// so it must not be mistaken for a refusal by that opponent.
     RateLimited {
-        /// How long the server asked the client to wait, if it said.
+        /// Lichess's identifier for the limit that fired, when the response body
+        /// named one (for example `bot.vsBot.day`, the cap on how many games a
+        /// bot may play against other bots in a day).
+        key: Option<String>,
+        /// How long the server asked the client to wait, if it said. Lichess
+        /// reports this either in the response body or, for some endpoints, in a
+        /// `Retry-After` header.
+        retry_after: Option<Duration>,
+    },
+    /// The API refused a request because the *other* account it names is over a
+    /// Lichess limit, not because this account did anything wrong.
+    ///
+    /// Lichess reports this as an HTTP 400 whose body carries the same rate-limit
+    /// envelope as a 429. It arises when challenging a bot that has already played
+    /// its daily allowance of games against other bots: challenging anyone else is
+    /// still fine, so only the named account should be skipped.
+    OpponentRateLimited {
+        /// Lichess's identifier for the limit the opponent is over.
+        key: String,
+        /// How long until the opponent's limit clears, if the body said.
         retry_after: Option<Duration>,
     },
     /// A response body was not the JSON this crate expected.
@@ -67,7 +88,10 @@ impl Error {
     pub fn is_recoverable(&self) -> bool {
         matches!(
             self,
-            Error::Http(_) | Error::RateLimited { .. } | Error::NotFound
+            Error::Http(_)
+                | Error::RateLimited { .. }
+                | Error::OpponentRateLimited { .. }
+                | Error::NotFound
         )
     }
 }
@@ -100,14 +124,23 @@ impl fmt::Display for Error {
             Error::Config(detail) => write!(f, "configuration error: {detail}"),
             Error::Http(detail) => write!(f, "HTTP request failed: {detail}"),
             Error::NotFound => write!(f, "resource not found (HTTP 404)"),
-            Error::RateLimited { retry_after } => match retry_after {
-                Some(wait) => write!(
-                    f,
-                    "rate limited by Lichess (HTTP 429); retry after {}s",
-                    wait.as_secs()
-                ),
-                None => write!(f, "rate limited by Lichess (HTTP 429)"),
-            },
+            Error::RateLimited { key, retry_after } => {
+                write!(f, "rate limited by Lichess (HTTP 429)")?;
+                if let Some(key) = key {
+                    write!(f, " [{key}]")?;
+                }
+                match retry_after {
+                    Some(wait) => write!(f, "; retry after {}s", wait.as_secs()),
+                    None => Ok(()),
+                }
+            }
+            Error::OpponentRateLimited { key, retry_after } => {
+                write!(f, "opponent is rate limited by Lichess [{key}]")?;
+                match retry_after {
+                    Some(wait) => write!(f, "; clears in {}s", wait.as_secs()),
+                    None => Ok(()),
+                }
+            }
             Error::Decode(detail) => write!(f, "could not decode Lichess response: {detail}"),
         }
     }

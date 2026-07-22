@@ -434,6 +434,11 @@ mod tests {
             panic!("unexpected form POST {path} in game test");
         }
 
+        fn post_form_once(&self, path: &str, form: &[(&str, &str)]) -> Result<String> {
+            // The double never retries, so the two POST flavours are the same call.
+            self.post_form(path, form)
+        }
+
         fn open_stream(&self, path: &str) -> Result<Box<dyn Iterator<Item = Result<String>>>> {
             assert!(
                 path.starts_with("/api/bot/game/stream/"),

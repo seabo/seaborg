@@ -128,6 +128,14 @@ impl ChallengeSpec {
     }
 }
 
+/// The wait applied to the first rate-limited challenge that arrives with no
+/// stated duration. Lichess asks clients to pause about a minute on a bare rate
+/// limit, so that is the floor.
+const CHALLENGE_BACKOFF_BASE: Duration = Duration::from_secs(60);
+/// Ceiling on the escalating wait, so a persistent limit is re-probed about every
+/// ten minutes rather than ever more rarely.
+const CHALLENGE_BACKOFF_MAX: Duration = Duration::from_secs(600);
+
 /// Whether the bot should seek a game right now.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
@@ -174,9 +182,19 @@ pub struct Matchmaker {
     /// went unanswered, waiting for the caller to cancel it on Lichess. Set by
     /// [`Matchmaker::choose`] and drained by [`Matchmaker::take_challenge_to_cancel`].
     to_cancel: Option<String>,
-    /// Bot id -> the instant a decline was recorded; a re-challenge is suppressed
-    /// until the configured backoff elapses.
-    declined_at: HashMap<String, Instant>,
+    /// Bot id -> the instant that bot becomes eligible again. Stored as a deadline
+    /// rather than a start instant because the wait is not always the configured
+    /// one: when Lichess reports that an opponent is over a limit it also says for
+    /// how long, and that duration is honored instead.
+    backoff_until: HashMap<String, Instant>,
+    /// The instant before which no challenge may be created, set when Lichess
+    /// reports that this account is over a limit. `None` once it has passed or was
+    /// never set.
+    challenge_cooldown_until: Option<Instant>,
+    /// The wait to apply for the next rate limit that arrives without a stated
+    /// duration, doubling per consecutive occurrence so repeated refusals escalate
+    /// rather than re-probing at the same short interval.
+    challenge_backoff: Duration,
     /// Rotation cursor over the variant pool.
     variant_cursor: usize,
     /// Rotation cursor over the initial-time pool.
@@ -210,7 +228,9 @@ impl Matchmaker {
             last_attempt: None,
             outstanding: None,
             to_cancel: None,
-            declined_at: HashMap::new(),
+            backoff_until: HashMap::new(),
+            challenge_cooldown_until: None,
+            challenge_backoff: CHALLENGE_BACKOFF_BASE,
             variant_cursor: 0,
             initial_cursor: 0,
             increment_cursor: 0,
@@ -276,6 +296,9 @@ impl Matchmaker {
         if !self.config.enabled {
             return Action::Idle;
         }
+        // The rate-limit cooldown is checked after the pending-challenge block so a
+        // challenge left outstanding when the limit arrived is still withdrawn;
+        // cleaning up on Lichess is not itself rate limited.
         if let Some(outstanding) = &self.outstanding {
             // A challenge is still pending. Give up on it once a full interval has
             // passed with no game starting, so an unanswered challenge does not
@@ -287,6 +310,13 @@ impl Matchmaker {
             // rather than leaving a zombie challenge outstanding.
             let abandoned = self.outstanding.take().expect("outstanding checked above");
             self.to_cancel = Some(abandoned.challenge_id);
+        }
+        match self.challenge_cooldown_until {
+            Some(until) if now < until => return Action::Idle,
+            // Drop a deadline that has passed so the field means "still cooling
+            // down" rather than "was rate limited at some point".
+            Some(_) => self.challenge_cooldown_until = None,
+            None => {}
         }
         if active_games >= self.matchmaking_cap() {
             return Action::Idle;
@@ -375,12 +405,60 @@ impl Matchmaker {
     /// Record that a challenge with id `challenge_id` was just issued: it starts
     /// the pending-challenge window and the minimum-interval clock, and remembers
     /// the id so an unanswered challenge can be cancelled when it is abandoned.
+    ///
+    /// A challenge Lichess accepted also proves the account is not over a limit,
+    /// so the escalating fallback wait returns to its floor: the next unexplained
+    /// refusal, whenever it comes, should pause briefly rather than inherit an
+    /// escalation earned by some earlier and now-cleared limit.
     pub fn record_issued(&mut self, now: Instant, challenge_id: impl Into<String>) {
         self.last_attempt = Some(now);
+        self.challenge_backoff = CHALLENGE_BACKOFF_BASE;
         self.outstanding = Some(Outstanding {
             issued: now,
             challenge_id: challenge_id.into(),
         });
+    }
+
+    /// Record that Lichess refused a challenge because *this* account is over one
+    /// of its limits, and return how long the bot will now wait before trying
+    /// again so the caller can report it.
+    ///
+    /// The wait is Lichess's own `retry_after` when it supplied one, since the
+    /// limits a bot meets can last hours and only the server knows when they
+    /// clear. Without one, an escalating fallback applies and doubles, so repeated
+    /// refusals stop re-probing every minute.
+    ///
+    /// This says nothing about the opponent the refused challenge named — the
+    /// limit is on this account — so no per-opponent backoff is applied and that
+    /// bot stays eligible.
+    pub fn record_rate_limited(&mut self, now: Instant, retry_after: Option<Duration>) -> Duration {
+        let wait = match retry_after {
+            Some(wait) => wait,
+            None => {
+                let wait = self.challenge_backoff;
+                self.challenge_backoff = (self.challenge_backoff * 2).min(CHALLENGE_BACKOFF_MAX);
+                wait
+            }
+        };
+        self.challenge_cooldown_until = Some(now + wait);
+        wait
+    }
+
+    /// Record that Lichess refused a challenge because `bot_id` is over one of its
+    /// limits, and return how long that bot will be skipped.
+    ///
+    /// Only the named bot is affected, so this leaves the account free to
+    /// challenge anyone else immediately. The window is Lichess's stated duration
+    /// when it gave one; otherwise the configured decline backoff stands in.
+    pub fn record_opponent_rate_limited(
+        &mut self,
+        bot_id: &str,
+        now: Instant,
+        retry_after: Option<Duration>,
+    ) -> Duration {
+        let wait = retry_after.unwrap_or_else(|| self.decline_backoff());
+        self.backoff_for(bot_id, now, wait);
+        wait
     }
 
     /// Take the id of a challenge that was abandoned unanswered and needs to be
@@ -415,15 +493,17 @@ impl Matchmaker {
         self.start_backoff(bot_id, now);
     }
 
-    /// Put `bot_id` into the per-opponent backoff, so it is skipped until the
-    /// configured window elapses. Opportunistically drops entries whose backoff
-    /// has already passed, so the map does not grow without bound over a long
-    /// session.
+    /// Put `bot_id` into the per-opponent backoff for the configured window.
     fn start_backoff(&mut self, bot_id: &str, now: Instant) {
-        let backoff = self.decline_backoff();
-        self.declined_at
-            .retain(|_, at| now.duration_since(*at) < backoff);
-        self.declined_at.insert(bot_id.to_string(), now);
+        self.backoff_for(bot_id, now, self.decline_backoff());
+    }
+
+    /// Skip `bot_id` for `window`. Opportunistically drops entries that have
+    /// already expired, so the map does not grow without bound over a long
+    /// session.
+    fn backoff_for(&mut self, bot_id: &str, now: Instant, window: Duration) {
+        self.backoff_until.retain(|_, until| *until > now);
+        self.backoff_until.insert(bot_id.to_string(), now + window);
     }
 
     /// Record that a game started, clearing any pending challenge (the opponent
@@ -440,11 +520,11 @@ impl Matchmaker {
         self.config.block_list.iter().any(|b| b == bot_id)
     }
 
-    /// Whether `bot_id` is still within its decline backoff window.
+    /// Whether `bot_id` is still within a backoff window.
     fn in_decline_backoff(&self, bot_id: &str, now: Instant) -> bool {
-        self.declined_at
+        self.backoff_until
             .get(bot_id)
-            .is_some_and(|at| now.duration_since(*at) < self.decline_backoff())
+            .is_some_and(|until| now < *until)
     }
 
     /// Whether `rating` is within the configured opponent bounds.
@@ -902,5 +982,147 @@ mod tests {
     fn parse_bot_line_treats_blank_as_keepalive() {
         assert_eq!(parse_bot_line("   ").unwrap(), None);
         assert!(parse_bot_line("{not json").is_err());
+    }
+
+    /// A matchmaker that would seek on every tick, so a test observing `Idle`
+    /// knows the cooldown is the only thing holding it back.
+    fn always_ready(start: Instant) -> Matchmaker {
+        Matchmaker::new(
+            MatchmakingConfig {
+                idle_timeout_seconds: 0,
+                min_challenge_interval_seconds: 0,
+                ..enabled_config()
+            },
+            1,
+            "me",
+            start,
+        )
+    }
+
+    #[test]
+    fn a_rate_limit_suspends_seeking_for_the_duration_lichess_states() {
+        // The limits a bot meets last far longer than any local guess: Lichess caps
+        // bot-versus-bot games per day and reports the remaining wait. Honoring it
+        // is what stops the bot from re-challenging into a refusal it already knows
+        // will stand.
+        let start = Instant::now();
+        let mut mm = always_ready(start);
+        assert_eq!(mm.choose(start, 0), Action::Seek);
+
+        let wait = mm.record_rate_limited(start, Some(Duration::from_secs(7200)));
+        assert_eq!(wait, Duration::from_secs(7200));
+        assert_eq!(
+            mm.choose(start + Duration::from_secs(3600), 0),
+            Action::Idle
+        );
+        assert_eq!(
+            mm.choose(start + Duration::from_secs(7199), 0),
+            Action::Idle
+        );
+        assert_eq!(
+            mm.choose(start + Duration::from_secs(7201), 0),
+            Action::Seek
+        );
+    }
+
+    #[test]
+    fn a_rate_limit_with_no_stated_wait_escalates_up_to_the_cap() {
+        // Lichess does not always say how long to wait. Repeating the same short
+        // pause would keep re-probing a limit that has not moved, so the fallback
+        // doubles; the cap keeps a persistent limit re-probed periodically rather
+        // than effectively never.
+        let start = Instant::now();
+        let mut mm = always_ready(start);
+        let waits: Vec<u64> = (0..6)
+            .map(|_| mm.record_rate_limited(start, None).as_secs())
+            .collect();
+        assert_eq!(waits, vec![60, 120, 240, 480, 600, 600]);
+    }
+
+    #[test]
+    fn a_stated_wait_does_not_escalate_the_fallback() {
+        // The escalation exists only to compensate for a missing duration. A limit
+        // that stated its own wait says nothing about how long the next unexplained
+        // one should pause, so it must leave the fallback where it was.
+        let start = Instant::now();
+        let mut mm = always_ready(start);
+        mm.record_rate_limited(start, Some(Duration::from_secs(30)));
+        mm.record_rate_limited(start, Some(Duration::from_secs(30)));
+        assert_eq!(mm.record_rate_limited(start, None), CHALLENGE_BACKOFF_BASE);
+    }
+
+    #[test]
+    fn a_created_challenge_returns_the_fallback_wait_to_its_floor() {
+        // A challenge Lichess accepted proves the limit has cleared, so a later
+        // unexplained refusal should pause briefly rather than inherit an
+        // escalation earned before the account was in good standing again.
+        let start = Instant::now();
+        let mut mm = always_ready(start);
+        mm.record_rate_limited(start, None);
+        mm.record_rate_limited(start, None);
+        mm.record_issued(start, "chal1");
+        assert_eq!(mm.record_rate_limited(start, None), CHALLENGE_BACKOFF_BASE);
+    }
+
+    #[test]
+    fn a_rate_limit_on_this_account_leaves_the_named_opponent_eligible() {
+        // A 429 reports that *this* bot is over a limit. The bot the refused
+        // challenge happened to name did nothing, and penalising it would burn
+        // through the opponent pool over a run of limits that are not its fault.
+        let start = Instant::now();
+        let mut mm = always_ready(start);
+        let spec = ChallengeSpec {
+            variant: "standard".to_string(),
+            initial_seconds: 300,
+            increment_seconds: 0,
+            rated: false,
+        };
+        let candidates = vec![bot("blameless", Speed::Blitz, 1500)];
+        mm.record_rate_limited(start, Some(Duration::from_secs(600)));
+        assert_eq!(
+            mm.select_opponent(&spec, &candidates, start + Duration::from_secs(1))
+                .map(|b| b.id.as_str()),
+            Some("blameless")
+        );
+    }
+
+    #[test]
+    fn an_opponent_rate_limit_skips_only_that_bot_for_the_stated_window() {
+        // The mirror case: Lichess reports the *challenged* bot is over its own
+        // daily allowance. Challenging anyone else is still fine, and the window is
+        // the one Lichess gave rather than the configured decline backoff.
+        let start = Instant::now();
+        let mut mm = always_ready(start);
+        let spec = ChallengeSpec {
+            variant: "standard".to_string(),
+            initial_seconds: 300,
+            increment_seconds: 0,
+            rated: false,
+        };
+        let candidates = vec![bot("maxedout", Speed::Blitz, 1500)];
+        let wait =
+            mm.record_opponent_rate_limited("maxedout", start, Some(Duration::from_secs(90)));
+        assert_eq!(wait, Duration::from_secs(90));
+
+        // Seeking itself is not suspended: only this opponent is unavailable.
+        assert_eq!(mm.choose(start, 0), Action::Seek);
+        assert!(mm
+            .select_opponent(&spec, &candidates, start + Duration::from_secs(10))
+            .is_none());
+        // The stated window is far shorter than the 3600s decline backoff, so
+        // applying the configured one instead would still be skipping it here.
+        assert_eq!(
+            mm.select_opponent(&spec, &candidates, start + Duration::from_secs(91))
+                .map(|b| b.id.as_str()),
+            Some("maxedout")
+        );
+    }
+
+    #[test]
+    fn an_opponent_rate_limit_without_a_window_falls_back_to_the_decline_backoff() {
+        let start = Instant::now();
+        let mut mm = always_ready(start);
+        let wait = mm.record_opponent_rate_limited("quiet", start, None);
+        assert_eq!(wait, Duration::from_secs(3600));
     }
 }
