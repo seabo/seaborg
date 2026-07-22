@@ -1,11 +1,11 @@
 ---
 id: TASK-69.13
 title: Bake a default NNUE network into the binary and report the active evaluator
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-22 12:05'
-updated_date: '2026-07-22 13:11'
+updated_date: '2026-07-22 13:18'
 labels:
   - nnue
   - uci
