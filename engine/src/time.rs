@@ -1,4 +1,8 @@
+use crate::search::TimeBudget;
+
 use chess::position::Player;
+
+use std::time::Duration;
 
 static AVERAGE_GAME_LENGTH: u64 = 40;
 static MINIMUM_REMAINING_MOVES: u64 = 20;
@@ -59,6 +63,61 @@ static RESERVE_INCREMENT_MOVES: u64 = 10;
 /// which it can still be: an increment several times the size of the clock will overrun it.
 static BOUNDARY_CUSHION_MOVES: u64 = 1;
 
+/// How many times its optimum allocation a single move may consume when the position warrants it,
+/// before the share cap has its say.
+///
+/// The optimum is a planning figure: it assumes every move costs about the same, which is false
+/// for the handful of moves in a game where the evaluation is moving. Allowing an unstable
+/// position to draw on several moves' worth of clock is what turns that assumption from a
+/// straitjacket into an average, and the moves that give the time back are the many quiet ones
+/// that finish their last useful iteration early.
+///
+/// Three is chosen so the extension is large enough to change which iteration completes — an
+/// iteration typically costs a few times its predecessor, so anything much smaller cannot buy a
+/// whole one — while leaving a run of consecutive unstable moves unable to drain the clock. It is
+/// a multiplier and not a flat figure so that, like every other term in this module, it degrades
+/// proportionally with the time control rather than dominating a fast one.
+static MAX_EXTENSION_FACTOR: u64 = 3;
+
+/// The two wall-clock figures a timed move is allotted.
+///
+/// Splitting the allotment in two is what lets the search treat time as a decision rather than a
+/// countdown. `optimum` is what this move is worth on the assumption that the rest of the game is
+/// ordinary; `maximum` is what it may cost when the search reports that this move is *not*
+/// ordinary — the root best move is changing, or the score is falling. A search that never sees
+/// such a signal spends the optimum and no more.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MoveBudget {
+    /// Milliseconds this move is planned to cost. The search aims to finish its last iteration
+    /// by here and will not begin an iteration it expects to run past it.
+    pub optimum: u64,
+    /// Milliseconds this move may never exceed, whatever the search finds. Always at least
+    /// `optimum`, and bounded by the same share of the clock the optimum is.
+    pub maximum: u64,
+}
+
+impl MoveBudget {
+    /// A budget with no room to extend, for a caller that asked for an exact duration.
+    fn fixed(milliseconds: u64) -> Self {
+        Self {
+            optimum: milliseconds,
+            maximum: milliseconds,
+        }
+    }
+}
+
+impl From<MoveBudget> for TimeBudget {
+    /// Hand the allocation to the search in the units it runs under. The allocation is the only
+    /// thing that decides what the two figures are; the search only decides how to spend between
+    /// them.
+    fn from(budget: MoveBudget) -> Self {
+        TimeBudget::new(
+            Duration::from_millis(budget.optimum),
+            Duration::from_millis(budget.maximum),
+        )
+    }
+}
+
 /// Milliseconds to spend on a `go movetime` search of the requested duration.
 ///
 /// The requested figure is what the caller expects to elapse between the command and `bestmove`,
@@ -66,8 +125,12 @@ static BOUNDARY_CUSHION_MOVES: u64 = 1;
 /// applies here too. A GUI that enforces `movetime` strictly will flag a search that spends the
 /// whole of it. Requests at or below the margin saturate to a zero budget; the search still
 /// guarantees a completed first ply, so it returns a legal move regardless.
-pub fn move_time_budget(requested: u64) -> u64 {
-    requested.saturating_sub(MOVE_OVERHEAD)
+///
+/// The budget is deliberately unextendable. `movetime` is an instruction about elapsed time, not a
+/// share of a clock the engine is managing, so there is no later move for an overspend here to be
+/// borrowed from and nothing an unstable position entitles us to.
+pub fn move_time_budget(requested: u64) -> MoveBudget {
+    MoveBudget::fixed(requested.saturating_sub(MOVE_OVERHEAD))
 }
 
 #[derive(Clone, Debug)]
@@ -105,9 +168,22 @@ impl TimeControl {
         }
     }
 
-    /// Convert this time control into a fixed number of milliseconds we should allow searching
-    /// for.
+    /// The number of milliseconds this move is planned to cost.
+    ///
+    /// This is the optimum half of [`TimeControl::to_move_budget`]; see there for how far a search
+    /// that finds the position unstable may run past it.
     pub fn to_move_time(&self, curr_move_number: u32, turn: Player) -> u64 {
+        self.to_move_budget(curr_move_number, turn).optimum
+    }
+
+    /// Convert this time control into the pair of durations a timed search runs under: the time
+    /// this move is planned to cost, and the most it may cost.
+    ///
+    /// Both figures come from the same allocation and the same share cap, so the maximum is an
+    /// extension of a policy rather than a second policy. In particular the cap is applied last to
+    /// both, which is what keeps the guarantee the whole module rests on: neither figure ever
+    /// exceeds the share of the clock we are willing to commit to one move.
+    pub fn to_move_budget(&self, curr_move_number: u32, turn: Player) -> MoveBudget {
         // Moves left until the next time grant, if we are under a periodic control at all.
         //
         // UCI does not define `movestogo 0`, and GUIs emit it loosely: sometimes for "no periodic
@@ -133,7 +209,7 @@ impl TimeControl {
         // guarantees a completed first ply, so returning 0 here is safe.
         let usable_time = base_time.saturating_sub(MOVE_OVERHEAD);
         if usable_time == 0 {
-            return 0;
+            return MoveBudget::fixed(0);
         }
 
         let allocation = match moves_to_boundary {
@@ -208,7 +284,19 @@ impl TimeControl {
 
         // With time on the clock we always search for at least a moment; the clamp above keeps
         // this within `usable_time`.
-        allocation.min(max_allocation).max(1)
+        let optimum = allocation.min(max_allocation).max(1);
+
+        // The extension multiplies the untrimmed allocation rather than the trimmed optimum, which
+        // means a move the share cap already trimmed gets no extension at all: its maximum lands
+        // back on the cap, which is its optimum. That is the right answer. The cap binds precisely
+        // when a single move's ask is already most of what we hold, and that is the last situation
+        // in which spending more of it can be afforded. The final `max` keeps the pair ordered.
+        let maximum = allocation
+            .saturating_mul(MAX_EXTENSION_FACTOR)
+            .min(max_allocation)
+            .max(optimum);
+
+        MoveBudget { optimum, maximum }
     }
 }
 
@@ -686,17 +774,116 @@ mod tests {
     /// flag under a GUI that enforces `movetime` strictly.
     #[test]
     fn movetime_holds_back_the_same_overhead_as_the_clock() {
-        assert_eq!(move_time_budget(1_000), 1_000 - MOVE_OVERHEAD);
-        assert_eq!(move_time_budget(MOVE_OVERHEAD + 1), 1);
+        assert_eq!(move_time_budget(1_000).optimum, 1_000 - MOVE_OVERHEAD);
+        assert_eq!(move_time_budget(MOVE_OVERHEAD + 1).optimum, 1);
 
         // Below the overhead there is nothing to spend. The budget saturates at zero rather than
         // wrapping, and the search still returns a legal move under a zero budget.
         for requested in [0, 1, MOVE_OVERHEAD - 1, MOVE_OVERHEAD] {
-            assert_eq!(move_time_budget(requested), 0);
+            assert_eq!(move_time_budget(requested).optimum, 0);
         }
 
         // Nothing narrows on the way through, for a `movetime` beyond a 32-bit range.
         let huge = u64::from(u32::MAX) + 1_000;
-        assert_eq!(move_time_budget(huge), huge - MOVE_OVERHEAD);
+        assert_eq!(move_time_budget(huge).optimum, huge - MOVE_OVERHEAD);
+    }
+
+    /// `movetime` is an instruction about elapsed time, not a share of a clock we are managing, so
+    /// there is no later move an overspend here could be borrowed from. Its budget must therefore
+    /// leave the search no room to extend at all.
+    #[test]
+    fn movetime_leaves_no_room_to_extend() {
+        for requested in [0, 1, MOVE_OVERHEAD, 1_000, 60_000, u64::MAX] {
+            let budget = move_time_budget(requested);
+            assert_eq!(
+                budget.maximum, budget.optimum,
+                "movetime {requested} allowed an extension"
+            );
+        }
+    }
+
+    /// The optimum is what the allocation always was; the maximum is a strict extension of it,
+    /// never a second, looser policy. In particular both obey the same share cap, so the maximum
+    /// cannot commit more of the clock to one move than the overflow-safe cap permits.
+    #[test]
+    fn the_maximum_extends_the_optimum_without_escaping_the_share_cap() {
+        let clocks = [1, 2, 30, 31, 100, 2_000, 60_000, u64::MAX];
+        let increments = [0, 10, 50, 5_000];
+        let moves_to_go = [None, Some(0), Some(1), Some(20), Some(u64::MAX)];
+
+        for &clock in &clocks {
+            for &inc in &increments {
+                for &mtg in &moves_to_go {
+                    let control = TimeControl::new(clock, clock, inc, inc, mtg);
+
+                    for move_number in [1, 41] {
+                        let budget = control.to_move_budget(move_number, Player::WHITE);
+                        let usable = clock.saturating_sub(MOVE_OVERHEAD);
+                        let cap = usable - usable / MAX_CLOCK_SHARE_DIVISOR;
+
+                        assert_eq!(
+                            budget.optimum,
+                            control.to_move_time(move_number, Player::WHITE),
+                            "the optimum must be the allocation the clock-based path always used"
+                        );
+                        assert!(
+                            budget.maximum >= budget.optimum,
+                            "{clock}/{inc}/{mtg:?}: maximum {} below optimum {}",
+                            budget.maximum,
+                            budget.optimum
+                        );
+                        assert!(
+                            budget.maximum <= cap.max(budget.optimum),
+                            "{clock}/{inc}/{mtg:?}: maximum {} escaped the {cap}ms share cap",
+                            budget.maximum
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The extension is what pays for a move the search finds unstable, so on an ordinary clock —
+    /// where the share cap is nowhere near binding — it must actually be available.
+    #[test]
+    fn an_ordinary_clock_leaves_the_full_extension_available() {
+        // The 2+0.05 opening, whose optimum is the 100ms the proportional-allocation test pins.
+        let two_plus_005 = TimeControl::new(2_000, 2_000, 50, 50, None);
+        let budget = two_plus_005.to_move_budget(1, Player::WHITE);
+        assert_eq!(budget.optimum, 100);
+        assert_eq!(budget.maximum, 100 * MAX_EXTENSION_FACTOR);
+
+        // A long clock, where the extension is likewise unconstrained.
+        let ten_minutes = TimeControl::new(600_000, 600_000, 0, 0, None);
+        let budget = ten_minutes.to_move_budget(1, Player::WHITE);
+        assert_eq!(budget.maximum, budget.optimum * MAX_EXTENSION_FACTOR);
+    }
+
+    /// The extension must never turn a legal allocation into one that flags. The optimum already
+    /// obeys this; the point here is that the maximum, which is what actually bounds a search, does
+    /// too — for every clock down to the single millisecond where nothing is affordable.
+    #[test]
+    fn the_maximum_never_exceeds_the_remaining_clock() {
+        let clocks = [1, 2, 5, 10, 29, 30, 31, 50, 100, 500, 2_000, 60_000];
+        let increments = [0, 10, 50, 100, 5_000];
+        let moves_to_go = [None, Some(0), Some(1), Some(5), Some(20), Some(60)];
+
+        for &clock in &clocks {
+            for &inc in &increments {
+                for &mtg in &moves_to_go {
+                    let control = TimeControl::new(clock, clock, inc, inc, mtg);
+
+                    for move_number in [1, 20, 41, 200] {
+                        let maximum = control.to_move_budget(move_number, Player::WHITE).maximum;
+
+                        assert!(
+                            maximum < clock,
+                            "allowed {maximum}ms of a {clock}ms clock \
+                             (inc {inc}, movestogo {mtg:?}, move {move_number})"
+                        );
+                    }
+                }
+            }
+        }
     }
 }

@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use super::options::{EngineConfig, EngineOpt, EMPTY_STRING_OPTION};
+use super::options::{
+    EngineConfig, EngineOpt, EvalFileSetting, EMPTY_STRING_OPTION, HAND_CRAFTED_OPTION,
+};
 use super::time::{TimeControl, TimingMode};
 
 /// A UCI message sent by the GUI to the engine.
@@ -431,23 +433,24 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse `setoption name EvalFile value <path>`.
+    /// Parse `setoption name EvalFile value <path|<empty>|none>`.
     ///
-    /// The value is a filesystem path taken verbatim as a single whitespace-free token; the UCI
-    /// `<empty>` sentinel selects no network, which the driver applies as clearing back to the
-    /// hand-crafted evaluation. The path is not opened here — the driver loads and validates the
-    /// file when it applies the option, so a missing or malformed network surfaces there with a
-    /// diagnostic rather than as a parse error.
+    /// Two words are reserved before the value is read as a path: the UCI `<empty>` sentinel
+    /// restores the evaluator this build starts with, and `none` asks for the hand-crafted
+    /// evaluation. Anything else is a filesystem path taken verbatim as a single whitespace-free
+    /// token. The path is not opened here — the driver loads and validates the file when it applies
+    /// the option, so a missing or malformed network surfaces there with a diagnostic rather than
+    /// as a parse error.
     fn parse_eval_file(&mut self) -> PResult {
         self.expect_kw(Keyword::Value)?;
 
         let value = self.parse_string()?;
-        let option = if value == EMPTY_STRING_OPTION {
-            EngineOpt::EvalFile(None)
-        } else {
-            EngineOpt::EvalFile(Some(PathBuf::from(value)))
+        let setting = match value {
+            EMPTY_STRING_OPTION => EvalFileSetting::BuiltInDefault,
+            HAND_CRAFTED_OPTION => EvalFileSetting::HandCrafted,
+            path => EvalFileSetting::File(PathBuf::from(path)),
         };
-        self.expect_end(Ok(Command::SetOption(option)))
+        self.expect_end(Ok(Command::SetOption(EngineOpt::EvalFile(setting))))
     }
 
     fn parse_hash(&mut self) -> PResult {
@@ -637,20 +640,39 @@ mod tests {
     }
 
     #[test]
-    fn parses_eval_file_path_and_the_empty_sentinel() {
+    fn parses_eval_file_paths_and_both_reserved_words() {
         // A path value selects that network file; the driver, not the parser, opens it.
         match Parser::parse("setoption name EvalFile value networks/gen-001.sbnn") {
-            Ok(Command::SetOption(EngineOpt::EvalFile(Some(path)))) => {
+            Ok(Command::SetOption(EngineOpt::EvalFile(EvalFileSetting::File(path)))) => {
                 assert_eq!(path, PathBuf::from("networks/gen-001.sbnn"));
             }
             other => panic!("expected an EvalFile path, got {other:?}"),
         }
 
-        // The UCI `<empty>` sentinel clears the selection back to the hand-crafted evaluation.
+        // The UCI `<empty>` sentinel restores the evaluator the build starts with.
         assert!(matches!(
             Parser::parse("setoption name EvalFile value <empty>"),
-            Ok(Command::SetOption(EngineOpt::EvalFile(None)))
+            Ok(Command::SetOption(EngineOpt::EvalFile(
+                EvalFileSetting::BuiltInDefault
+            )))
         ));
+
+        // `none` is the only way to ask a build that embeds a network for the hand-crafted
+        // evaluation, so it must not be read as a relative path.
+        assert!(matches!(
+            Parser::parse("setoption name EvalFile value none"),
+            Ok(Command::SetOption(EngineOpt::EvalFile(
+                EvalFileSetting::HandCrafted
+            )))
+        ));
+
+        // The reserved word is exact: a file really called `none` is still reachable.
+        match Parser::parse("setoption name EvalFile value ./none") {
+            Ok(Command::SetOption(EngineOpt::EvalFile(EvalFileSetting::File(path)))) => {
+                assert_eq!(path, PathBuf::from("./none"));
+            }
+            other => panic!("expected an EvalFile path, got {other:?}"),
+        }
     }
 
     #[test]

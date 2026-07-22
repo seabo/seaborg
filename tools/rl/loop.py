@@ -299,8 +299,11 @@ class SubprocessBackend(Backend):
         # The baseline is the current best network — labelled with the generation
         # that actually produced it (``baseline_generation``), which is not in
         # general the previous one, since a rejected candidate promotes nothing.
-        # A baseline of ``None`` is generation 0's hand-crafted bootstrap, expressed
-        # by giving the baseline side no EvalFile option so it runs the default.
+        # A baseline of ``None`` is generation 0's hand-crafted bootstrap. It has to
+        # be asked for explicitly with ``EvalFile=none``: the engine binary embeds a
+        # network and plays with it by default, so omitting the option would silently
+        # gate the candidate against that network instead of the hand-crafted
+        # evaluation, and the recorded "handcrafted" baseline id would be a lie.
         baseline_id = (
             network_id(baseline_network, baseline_generation)
             if baseline_network is not None
@@ -330,8 +333,10 @@ class SubprocessBackend(Backend):
             "--candidate-option",
             f"EvalFile={candidate_network.resolve()}",
         ]
-        if baseline_network is not None:
-            command += ["--baseline-option", f"EvalFile={baseline_network.resolve()}"]
+        baseline_eval = (
+            str(baseline_network.resolve()) if baseline_network is not None else "none"
+        )
+        command += ["--baseline-option", f"EvalFile={baseline_eval}"]
         if self.config.runner is not None:
             command += ["--runner", self.config.runner]
         command += self.config.gate_extra

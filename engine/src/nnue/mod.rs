@@ -22,11 +22,18 @@
 //! scales, header layout, and the rejection rules) is fixed by the NNUE design
 //! contract in `docs/nnue-design-contract.md`.
 
+//! The [`embedded`] submodule owns the network linked into the executable and
+//! the description of whichever evaluator a process is actually running.
+
 mod accumulator;
+mod embedded;
 mod format;
 mod inference;
 
 pub use accumulator::{feature_index, Accumulator};
+#[cfg(feature = "embedded-net")]
+pub use embedded::BUILT_IN_NETWORK_ID;
+pub use embedded::{built_in_network, ActiveEvaluator, NetworkOrigin};
 pub use format::{
     BuildError, LoadError, Network, Parameters, ACTIVATION_CRELU, FEATURE_SET_PERSPECTIVE_768,
     FORMAT_VERSION, HEADER_LEN, INPUT_DIM, MAGIC, OUTPUT_DIM,

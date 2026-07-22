@@ -5,7 +5,7 @@
 //! hand-rolled HTTP layer cannot pass by satisfying an internal signature.
 
 use super::server::{bind, UiConfig, UiError, UiHandle, MAX_CONNECTIONS, MAX_REQUEST_BODY};
-use crate::search::SearchLimit;
+use crate::search::{SearchLimit, TimeBudget};
 use chess::init::init_globals;
 use chess::position::Player;
 use serde_json::Value;
@@ -1319,7 +1319,7 @@ fn reloading_during_a_search_reconstructs_the_game_without_duplicating_it() {
     init_globals();
     let server = TestServer::start_with(&UiConfig {
         // Long enough that the search is still running across the whole reload.
-        search_limit: SearchLimit::Time(Duration::from_secs(3)),
+        search_limit: SearchLimit::Time(TimeBudget::fixed(Duration::from_secs(3))),
         ..test_config()
     })
     .unwrap();
@@ -1386,7 +1386,7 @@ fn reloading_during_a_search_reconstructs_the_game_without_duplicating_it() {
 fn a_thinking_snapshot_carries_a_san_variation_the_browser_can_show() {
     init_globals();
     let server = TestServer::start_with(&UiConfig {
-        search_limit: SearchLimit::Time(Duration::from_secs(3)),
+        search_limit: SearchLimit::Time(TimeBudget::fixed(Duration::from_secs(3))),
         ..test_config()
     })
     .unwrap();

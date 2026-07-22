@@ -435,6 +435,7 @@ pub fn move_to_san(position: &Position, mov: Move) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::search::TimeBudget;
     use chess::init::init_globals;
     use std::time::{Duration, Instant};
 
@@ -558,7 +559,11 @@ mod tests {
         init_globals();
         // The engine (White) is given a zero time budget. It must not stall or forfeit: the
         // guaranteed-minimum search completes a legal move, which the controller applies.
-        let mut game = GameController::new(Player::BLACK, SearchLimit::Time(Duration::ZERO), 1);
+        let mut game = GameController::new(
+            Player::BLACK,
+            SearchLimit::Time(TimeBudget::fixed(Duration::ZERO)),
+            1,
+        );
         let original = game.snapshot();
         assert_eq!(original.side_to_move, Player::WHITE);
 

@@ -167,10 +167,13 @@ impl fmt::Display for EngineConfig {
 /// promise Lazy SMP parallelism the engine does not yet provide. It joins this list when a real
 /// multi-worker search consumes [`EngineConfig::threads`].
 ///
-/// `EvalFile` is a string option naming an `SBNN` network file to evaluate with; its `<empty>`
-/// default is the UCI convention for an empty string, and selecting it leaves the engine on its
-/// hand-crafted evaluation. A GUI or the strength harness points the engine at a specific network
-/// by setting this per engine.
+/// `EvalFile` is a string option naming an `SBNN` network file to evaluate with. Its advertised
+/// `<empty>` default is the UCI convention for an empty string, and it means "whatever this build's
+/// built-in evaluator is" — the embedded network, or the hand-crafted evaluation in a build without
+/// one. Advertising the sentinel rather than a network name keeps the advertisement truthful in
+/// both builds, since setting it back is exactly what returns the engine to its startup state. A
+/// GUI or the strength harness overrides it with a path, or with [`HAND_CRAFTED_OPTION`] to ask for
+/// the hand-crafted evaluation explicitly.
 pub fn advertised_uci_options() -> String {
     format!(
         "option name Hash type spin default {} min {} max {}\n\
@@ -182,9 +185,35 @@ pub fn advertised_uci_options() -> String {
 }
 
 /// The UCI sentinel a GUI sends, and this engine renders as its default, for an empty string
-/// option value. Receiving it for `EvalFile` clears any selected network back to the hand-crafted
-/// evaluation, matching the advertised `default <empty>`.
+/// option value. Receiving it for `EvalFile` restores the built-in evaluator this build started
+/// with, matching the advertised `default <empty>`.
 pub const EMPTY_STRING_OPTION: &str = "<empty>";
+
+/// The `EvalFile` value that selects the hand-crafted evaluation.
+///
+/// A distinct word is needed because `<empty>` now restores the built-in default, which in a normal
+/// build is a network. Without this there would be no way to ask a shipped binary for the
+/// hand-crafted evaluation, and no way to measure what the network is worth. The word shadows a
+/// relative path spelled exactly `none`; such a file is still reachable as `./none`.
+pub const HAND_CRAFTED_OPTION: &str = "none";
+
+/// Which evaluator an `EvalFile` value selects.
+///
+/// The three cases are distinct because "the default" and "no network" stopped being the same
+/// thing once a build can carry a network: restoring the default and asking for the hand-crafted
+/// evaluation are different requests, and a value that conflated them would make one of them
+/// unreachable.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EvalFileSetting {
+    /// The evaluator this build starts with — its embedded network, or the hand-crafted
+    /// evaluation if it has none. Sent as the advertised `<empty>` sentinel.
+    BuiltInDefault,
+    /// The hand-crafted evaluation, regardless of what this build embeds. Sent as
+    /// [`HAND_CRAFTED_OPTION`].
+    HandCrafted,
+    /// An `SBNN` network file, overriding whatever this build embeds.
+    File(PathBuf),
+}
 
 /// Possible options which can be set via the UCI protocol.
 #[derive(Clone, Debug)]
@@ -193,12 +222,11 @@ pub enum EngineOpt {
     Hash(usize),
     /// Whether debug mode is turned on.
     DebugMode(bool),
-    /// The `SBNN` network file to evaluate with, or `None` to use the hand-crafted evaluation.
+    /// Which evaluator the engine should use.
     ///
-    /// `None` carries the advertised `<empty>` default: an operator clears a previously loaded
-    /// network by setting `EvalFile` to the empty value. The driver loads and validates the file
-    /// when it applies this option, so a bad path fails there rather than at parse time.
-    EvalFile(Option<PathBuf>),
+    /// The driver loads and validates a named file when it applies this option, so a bad path
+    /// fails there rather than at parse time.
+    EvalFile(EvalFileSetting),
 }
 
 #[cfg(test)]
@@ -229,7 +257,9 @@ mod tests {
                 EngineConfig::HASH_MAX_MB,
             )
         );
-        // EvalFile is a string option whose empty default keeps the hand-crafted evaluation.
+        // EvalFile's advertised default is the `<empty>` sentinel, which selects the build's
+        // built-in evaluator. That is what a session starts on in every build — with an embedded
+        // network or without one — so the advertisement cannot become a promise the engine breaks.
         assert!(advert.contains("option name EvalFile type string default <empty>"));
         // The advertised bounds are exactly the acceptance boundaries: just inside is valid, just
         // outside is not.

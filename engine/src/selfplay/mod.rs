@@ -723,6 +723,45 @@ mod tests {
         assert_ne!(handcrafted[0], networked[0]);
     }
 
+    /// Self-play with no configured network plays the hand-crafted evaluation even in a build that
+    /// carries one.
+    ///
+    /// A fresh `SearchEngine` evaluates with the built-in network, which is right for playing but
+    /// wrong for generating training data: the bootstrap generation's labels must come from the
+    /// hand-crafted evaluation, and a network leaking in through the constructor would corrupt them
+    /// invisibly — the data would still look well-formed. Self-play therefore sets the evaluator
+    /// from its own config unconditionally, and this pins that.
+    #[test]
+    fn a_config_without_a_network_plays_the_hand_crafted_evaluation() {
+        let Some(built_in) = crate::nnue::built_in_network() else {
+            // Nothing can leak in a build with no built-in network; the risk this test guards
+            // against does not exist there.
+            return;
+        };
+
+        let base = SelfPlayConfig {
+            node_budget: 2_000,
+            workers: 1,
+            games: 1,
+            max_plies: 24,
+            ..SelfPlayConfig::default()
+        };
+        let play = |config: &SelfPlayConfig| {
+            let mut collected = Vec::new();
+            run(config, |record| collected.push(record));
+            collected
+        };
+
+        let unconfigured = play(&base);
+        let with_built_in = play(&SelfPlayConfig {
+            network: Some(built_in),
+            ..base.clone()
+        });
+
+        // Identical games would mean the unconfigured run had in fact used the built-in network.
+        assert_ne!(unconfigured[0], with_built_in[0]);
+    }
+
     #[test]
     fn run_plays_every_game_and_measures_throughput() {
         let config = SelfPlayConfig {

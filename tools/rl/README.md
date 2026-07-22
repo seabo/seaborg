@@ -26,8 +26,11 @@ Generation `g` runs four steps:
 3. **Gate** the candidate against the current best with the strength harness. One
    `seaborg` binary plays both sides; they are told apart only by the `EvalFile`
    UCI option — `--candidate-option EvalFile=candidate.sbnn` against
-   `--baseline-option EvalFile=best.sbnn` (generation 0's baseline has no option,
-   so it plays the hand-crafted evaluation). The candidate is player 1, and only
+   `--baseline-option EvalFile=best.sbnn` (generation 0's baseline is
+   `--baseline-option EvalFile=none`, which asks for the hand-crafted evaluation
+   explicitly: the engine binary embeds a network and plays with it by default,
+   so omitting the option would gate against that network instead). The candidate
+   is player 1, and only
    the harness's `PASS` (exit 0) is a promotion.
 4. **Promote** the candidate to current-best only on `PASS`, and **record** the
    decision and its attribution in the ledger either way.

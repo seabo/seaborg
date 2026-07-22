@@ -91,6 +91,14 @@ pub fn run(config_path: Option<&Path>) -> Result<()> {
 
     let account = require_bot_account(&client)?;
     log::info!("connected to Lichess as bot {}", account.username);
+    // Games played here are the public record of the engine's strength, so the log has to say which
+    // evaluator produced them. The bot deliberately takes the binary's built-in evaluator and offers
+    // no override: a deployment is meant to play at full strength, and a per-deployment network
+    // choice would be one more thing to get wrong silently.
+    log::info!(
+        "evaluator: {}",
+        engine::nnue::ActiveEvaluator::of_built_in(engine::nnue::built_in_network().as_deref())
+    );
     // Lichess reports each game's players by their lowercase account id, which
     // is what identifies the bot's own side once a game starts, and which the
     // account stream echoes as the challenger on the bot's own outgoing

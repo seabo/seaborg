@@ -10,7 +10,7 @@ use super::http::{
 };
 use super::session::{self, Session};
 use super::wire::{command_error_code, parse_engine_limit, parse_player};
-use crate::search::SearchLimit;
+use crate::search::{SearchLimit, TimeBudget};
 use chess::position::Player;
 use serde_json::Value;
 use std::fmt;
@@ -106,7 +106,7 @@ impl Default for UiConfig {
             port: None,
             open_browser: true,
             human_side: Player::WHITE,
-            search_limit: SearchLimit::Time(Duration::from_secs(1)),
+            search_limit: SearchLimit::Time(TimeBudget::fixed(Duration::from_secs(1))),
             hash_size_mb: 16,
         }
     }

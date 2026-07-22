@@ -6,9 +6,17 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+# Mirrors the engine's embedding switch so a `--no-default-features` build
+# actually reaches the engine. Cargo unifies features across the graph, so a
+# dependency edge that took the engine's defaults would silently re-enable the
+# embedded network no matter what the top-level build asked for.
+[features]
+default = ["embedded-net"]
+embedded-net = ["engine/embedded-net"]
+
 [dependencies]
 chess = { path = "../chess" }
-engine = { path = "../engine" }
+engine = { path = "../engine", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
 log = "0.4"
