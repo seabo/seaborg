@@ -355,3 +355,58 @@ search. The four refinements each sit behind a compile-time toggle
 `LMR_FAVOURED_MODULATION`), so a future match can flip one off and rebuild to
 attribute strength to it individually; this entry records the net effect of all
 four against the pre-refinement baseline.
+
+### Soft/hard time limits and next-iteration prediction
+
+Splitting the per-move allotment into an optimum the search plans to spend and a
+maximum it may not exceed, declining an iterative-deepening iteration whose cost
+— extrapolated from the measured growth of the last two iterations — would
+overrun the optimum, and extending past the optimum only when the root best move
+changed or the root score fell.
+
+| Field | Value |
+| --- | --- |
+| Baseline | `git:108c2bd` (the task's merge-base) |
+| Candidate | `git:7b474d2` |
+| Result | **PASS** — SPRT crossed the upper boundary (LLR 2.96, bounds ±2.94) |
+| Elo | **+92.1 ± 19.7** (fastchess pentanomial error) |
+| Games | 614 (W-D-L 255-263-96), pentanomial 6-34-108-113-46, 0 crashes, 0 forfeits |
+| Time control | `tc=2+0.05`, 64 MB hash, one worker per engine |
+| SPRT | `elo0=-5, elo1=0, alpha=0.05, beta=0.05` (the no-regression gate) |
+| Runner | fastchess alpha 1.5.0, `openings-v1.epd`, `target-cpu=native` release, rustc 1.97.1 |
+| Machine | Apple M3 Pro, concurrency 4 |
+
+The same pair of binaries at a slower control, run sequentially rather than
+concurrently so the two matches could not contend for cores:
+
+| Field | Value |
+| --- | --- |
+| Result | **PASS** — SPRT crossed the upper boundary (LLR 2.95, bounds ±2.94) |
+| Elo | **+76.8 ± 18.7** (fastchess pentanomial error) |
+| Games | 722 (W-D-L 279-321-122), pentanomial 11-52-116-133-49, 0 crashes, 0 forfeits |
+| Time control | `tc=10+0.1`, 64 MB hash, one worker per engine |
+
+Every game at both controls terminated normally, and neither runner log contains
+an illegal-move, forfeit, disconnect, or timeout line. The harness fails closed
+on any of those before a result is recorded, so a completed report is itself the
+evidence that none occurred.
+
+Unlike the search-pruning entries above, this change alters no search decision
+at a fixed budget: at `depth=N` or `nodes=N` the two builds visit identical
+trees. Everything it is worth is in where the clock goes, which is why a timed
+match is not merely preferable here but the only measurement that can show
+anything at all.
+
+The size of the gain reflects how much was being discarded. On the baseline the
+iterative-deepening loop began iteration `d+1` whenever the deadline had not yet
+passed, and an aborted iteration is thrown away whole — so the common case was
+starting an iteration with a small fraction of its cost remaining and returning
+the previous iteration's move anyway. Measured directly on the start position at
+`go wtime 60000 winc 500` (an optimum of 1997 ms): the baseline completes depth
+16 at 1623 ms, then spends the remaining ~370 ms on a depth-17 iteration it
+discards; the candidate declines depth 16, returns the same move at depth 15 in
+about 1150 ms, and hands the rest to later moves. The shorter the control, the
+larger the share of each move that was going into the discarded iteration, which
+is why 2+0.05 (+92) shows the effect more strongly than 10+0.1 (+77). The two
+intervals overlap, so the ordering is the expected shape rather than a measured
+difference between the controls.
