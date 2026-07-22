@@ -3,11 +3,11 @@ id: TASK-78
 title: >-
   Lichess bot: stop blocking-retrying challenge-create 429s and honor Lichess
   rate-limit bodies
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-22 21:41'
-updated_date: '2026-07-22 22:54'
+updated_date: '2026-07-22 22:56'
 labels: []
 dependencies: []
 priority: high
@@ -198,5 +198,29 @@ Verification (run on 964498b, worktree /Users/seabo/seaborg-worktrees/task-78-li
 - No benchmarks run: the diff touches only the lichess crate, no movegen or search hot path.
 
 Accepted as correct on this target, for the next attempt's benefit: AC #1-#9 are implemented and evidenced. The non-retrying `post_form_once` seam, the body-outranks-header precedence, the 400/429 split into `OpponentRateLimited`/`RateLimited`, the non-blocking `challenge_cooldown_until` deadline, the deadline-valued per-opponent map, the escalate-only-without-a-stated-duration fallback with its reset on success, and the run.rs dispatch that keeps a 429's named opponent eligible are all covered by targeted tests that fail for the right reason. REV-1-01 is the only blocking finding.
+---
+
+author: @claude
+created: 2026-07-22 22:56
+---
+Implementation handoff
+Branch: task-78-lichess-challenge-rate-limit
+Worktree: /Users/seabo/seaborg-worktrees/task-78-lichess-challenge-rate-limit
+Base: d52a6fbc50a6061d0c5476daf10fa328306c8165
+Implementation target: 2d82aea
+Resolved findings: REV-1-01
+Verification:
+- cargo fmt --check: clean
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean, no warnings
+- cargo clippy --workspace --all-targets --all-features -- -D warnings with a clean CARGO_TARGET_DIR: clean, no warnings
+- cargo test --workspace: 647 passed, 0 failed, 2 ignored (644 at the previous target, plus the three new transport tests)
+- Guard removed locally to confirm the regression test catches the reported defect: `a_wait_longer_than_the_bound_is_surfaced_rather_than_slept` fails on the attempt count, 5 against 1. Restored before committing; the committed tree is the one all checks above were run on.
+Known failures: none.
+
+Note for review: the rework is confined to lichess/src/transport.rs. The diff from the previous target 964498b is the `max_wait` bound on `with_rate_limit_retry` and its call site, three tests, the extra argument threaded through five existing test call sites, and two doc-comment corrections. error.rs, client.rs, game.rs, matchmaking.rs, and run.rs are unchanged from 964498b, which was already reviewed and accepted on AC #1-#9.
+
+Scope note carried forward from attempt 1, unchanged and outside the acceptance criteria: anchors/seaborg-lichess.toml sets matchmaking mode = "rated", and rated challenges are frequently rejected by other bots at creation, so the eligible pool still drains through the per-opponent decline backoff even with this fix. Changing the deployed config was not in scope.
+
+Reviewer independence: this attempt was implemented by the same session that raised REV-1-01, at the user's explicit authorization. It therefore needs an independent reviewer; the author of the finding must not approve the fix.
 ---
 <!-- COMMENTS:END -->
