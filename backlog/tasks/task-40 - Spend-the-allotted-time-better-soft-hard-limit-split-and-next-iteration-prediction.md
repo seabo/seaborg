@@ -3,11 +3,11 @@ id: TASK-40
 title: >-
   Spend the allotted time better: soft/hard limit split and next-iteration
   prediction
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-18 12:17'
-updated_date: '2026-07-22 13:09'
+updated_date: '2026-07-22 13:10'
 labels:
   - engine
   - time
@@ -93,3 +93,27 @@ Artifacts: /tmp/task40-tc10/{report.json,runner.log,games.pgn}.
 
 Both controls are non-negative and both cross the no-regression boundary, so AC#5 is met at 2+0.05 (+92.1) and 10+0.1 (+76.8). The intervals overlap, so the smaller figure at the slower control is the expected shape — the discarded iteration is a smaller fraction of a longer move — rather than a measured difference between the controls. Both are recorded in BENCHMARKS.md.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @claude
+created: 2026-07-22 13:10
+---
+Implementation handoff
+Branch: task-40-soft-hard-time-limits
+Worktree: /Users/seabo/seaborg-worktrees/task-40-soft-hard-time-limits
+Base: 108c2bd1ee99692d9c7bba9149cbbc4d34f772f2
+Implementation target: f727536546e5221c35a11eb6dd9a1a84f3bdb86a
+Resolved findings: none (first implementation attempt)
+Verification:
+- cargo fmt --check: clean
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean, no warnings suppressed and no new #[allow]
+- cargo test --workspace: 622 passed, 0 failed, 2 ignored (pre-existing ignores)
+- self-play SPRT tc=2+0.05 vs the base build: PASS, LLR 2.96, Elo +92.1 +/- 18.7 over 614 games, 0 forfeits, 0 crashes, 0 illegal moves
+- self-play SPRT tc=10+0.1 vs the base build: PASS, LLR 2.95, Elo +76.8 +/- 18.7 over 722 games, 0 forfeits, 0 crashes, 0 illegal moves
+Known failures: none
+
+Notes for the reviewer. The optimum half of the new budget is asserted equal to the previous to_move_time across the whole clock/increment/movestogo grid, so the TASK-7 and TASK-38 allocation tests pin exactly what they pinned before. Search::stopping() is unchanged and still tests only the hard deadline, so TASK-32's guaranteed-first-ply suppression and TASK-39's cancellation responsiveness hold by construction rather than by re-verification. The self-play binaries are at /tmp/task40-builds (sha256 3e8b798c... baseline, 5bc910a7... candidate) with full reports under /tmp/task40-tc2 and /tmp/task40-tc10; these are outside the repository and will not survive a reboot, so the durable record is the BENCHMARKS.md section committed on this branch.
+---
+<!-- COMMENTS:END -->
