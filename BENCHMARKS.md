@@ -317,3 +317,41 @@ unstored key alike — and passes on a target whose prefetch compiles to nothing
 If this machine, or any documented idle machine, later yields a clean
 round-robin, record the quantified figure here and promote the decision from
 mechanism-based to measurement-based.
+
+## Search strength results
+
+Unlike the sections above — which measure per-node cost and fixed-depth node
+counts — this section records **playing-strength** deltas from a round-robin
+match at a real time control. A time control, not a fixed node or depth budget,
+is mandatory for a search-pruning or reduction change: a node budget rewards a
+more aggressive reduction with free extra depth it never pays for, inflating the
+apparent gain. Only a clock charges for the re-searches an over-aggressive
+reduction triggers, so only a timed match reports the true trade.
+
+### Late-move reduction: log-based table with history and node-type modulation
+
+Replacing the coarse two-step late-move reduction with a precomputed
+`ln(depth) * ln(move_count)` reduction table, modulated by the move's own quiet
+history (main plus continuation), the improving signal, and whether the node is
+a PV node or the move is a killer/counter.
+
+| Field | Value |
+| --- | --- |
+| Baseline | `git:708486f` (engine code identical to the task's merge-base `c4a6558`) |
+| Candidate | `git:e8684e9` |
+| Result | **PASS** — SPRT crossed the upper boundary (LLR 2.95, bounds ±2.94) |
+| Elo | **+84.6 ± 20.1** (fastchess pentanomial error) |
+| Games | 670 (W-D-L 280-270-120), pentanomial 9-46-114-108-58, 0 crashes, 0 forfeits |
+| Time control | `tc=8+0.08`, 64 MB hash, one worker per engine |
+| SPRT | `elo0=-5, elo1=0, alpha=0.05, beta=0.05` (the no-regression gate) |
+| Runner | fastchess alpha 1.5.0, `openings-v1.epd`, `target-cpu=native` release, rustc 1.97.1 |
+| Machine | Apple M3 Pro, concurrency 4 |
+
+The large gain is expected rather than surprising: on the baseline the reduction
+was nearly inert — the reduced scout searched at almost the raw depth — so this
+is the first refinement to make late-move reduction actually widen the effective
+search. The four refinements each sit behind a compile-time toggle
+(`LMR_LOG_TABLE`, `LMR_HISTORY_MODULATION`, `LMR_IMPROVING_MODULATION`,
+`LMR_FAVOURED_MODULATION`), so a future match can flip one off and rebuild to
+attribute strength to it individually; this entry records the net effect of all
+four against the pre-refinement baseline.
