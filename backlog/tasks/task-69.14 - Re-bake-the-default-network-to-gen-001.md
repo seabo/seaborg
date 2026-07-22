@@ -1,11 +1,11 @@
 ---
 id: TASK-69.14
 title: Re-bake the default network to gen-001
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-22 22:43'
-updated_date: '2026-07-22 22:55'
+updated_date: '2026-07-22 22:59'
 labels:
   - nnue
   - build
