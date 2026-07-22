@@ -587,13 +587,62 @@ impl Default for StackEntry {
     }
 }
 
+/// The pair of wall-clock durations a timed search runs under.
+///
+/// A single deadline forces one figure to answer two different questions: how much this move is
+/// worth, and how much it may cost. Those diverge exactly where it matters — a position whose root
+/// best move is still changing is worth more than its share, and one whose answer settled three
+/// iterations ago is worth less. Carrying both lets the search spend against the first and be
+/// bounded by the second.
+///
+/// The `soft` figure is advisory and consulted only between iterations, so nothing about it can
+/// abort a search mid-tree. The `hard` figure is the deadline proper: it is what
+/// [`Search::stopping`] tests, and no search exceeds it beyond the guaranteed first ply that a
+/// legal `bestmove` depends on.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TimeBudget {
+    soft: Duration,
+    hard: Duration,
+}
+
+impl TimeBudget {
+    /// A budget the search may extend into, up to `hard`, when the position turns out to warrant
+    /// it. A `hard` below `soft` is raised to it rather than rejected, so the invariant
+    /// `soft <= hard` holds by construction for every caller.
+    pub fn new(soft: Duration, hard: Duration) -> Self {
+        Self {
+            soft,
+            hard: hard.max(soft),
+        }
+    }
+
+    /// A budget with no room to extend: the search plans to spend exactly this and may not exceed
+    /// it. This is what an exact request such as `go movetime` asks for.
+    pub fn fixed(duration: Duration) -> Self {
+        Self {
+            soft: duration,
+            hard: duration,
+        }
+    }
+
+    /// The time the search plans to spend, and will not start a new iteration past.
+    pub fn soft(&self) -> Duration {
+        self.soft
+    }
+
+    /// The time the search may not exceed under any circumstances.
+    pub fn hard(&self) -> Duration {
+        self.hard
+    }
+}
+
 /// A limit controlling how long a search may run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SearchLimit {
     /// Search through the given depth.
     Depth(u8),
-    /// Search until the given amount of wall-clock time has elapsed.
-    Time(Duration),
+    /// Search under the given wall-clock budget.
+    Time(TimeBudget),
     /// Search until the given number of nodes has been visited.
     ///
     /// Unlike a time or depth budget this is reproducible: the same position under the same
@@ -657,6 +706,164 @@ impl SearchOutcome {
 
     pub fn was_cancelled(&self) -> bool {
         matches!(self, Self::Cancelled(_))
+    }
+}
+
+/// Bounds placed on the branching factor measured between two consecutive iterations.
+///
+/// The raw ratio is not trustworthy on its own. A fail-high at the root can make one iteration
+/// several times more expensive than the tree alone justifies, and a transposition table warmed by
+/// the previous iteration can make the next one barely more expensive at all. Left unbounded,
+/// either would be extrapolated into a prediction that stops the search far too early or far too
+/// late. The bounds bracket the range real iterations actually occupy, so an outlier degrades the
+/// prediction rather than dominating it.
+const MIN_BRANCHING_FACTOR: f64 = 1.5;
+const MAX_BRANCHING_FACTOR: f64 = 8.0;
+
+/// The shortest iteration whose cost is taken as a measurement rather than as noise.
+///
+/// The early iterations of a search finish in microseconds, where scheduling jitter and the
+/// clock's own resolution are the same size as the quantity being measured. Dividing by such a
+/// figure produces a ratio that says nothing about the tree. Below this the prediction is
+/// withheld entirely and the loop runs ungated, which is what it did before there was a
+/// prediction at all.
+const MIN_MEASURABLE_ITERATION: Duration = Duration::from_micros(500);
+
+/// How much of its planned spend a search may add for a root best move that just changed.
+///
+/// A changed root move is the strongest evidence available that the previous iteration's answer
+/// was wrong, and it arrives exactly when stopping would commit to the move being abandoned.
+const BEST_MOVE_CHANGE_EXTENSION: f64 = 0.6;
+
+/// The root score drop, in centipawns, that buys one whole extra planned spend.
+///
+/// A falling score means the position is worse than the last iteration believed and the search has
+/// not yet found what to do about it. Scaling with the size of the drop rather than triggering on
+/// any drop keeps the extension proportionate: a two-centipawn wobble between iterations is
+/// ordinary and buys almost nothing.
+const SCORE_DROP_PER_EXTENSION: f64 = 150.0;
+
+/// The most a score drop alone may add, so that a single collapsing evaluation cannot ask for an
+/// unbounded extension. The hard deadline bounds the total regardless; this bounds the request.
+const MAX_SCORE_DROP_EXTENSION: f64 = 1.0;
+
+/// How far past its planned spend a search may run, as a multiple of that spend, given what the
+/// last completed iteration revealed about the position.
+///
+/// Returns 1 for a stable position — same root move, score holding — which is the ordinary case
+/// and spends exactly what was allotted. The result is only ever a *request*: the hard deadline
+/// still bounds the search, so a large scale on a short clock simply resolves to the hard deadline.
+fn instability_scale(best_move_changed: bool, score_drop: i32) -> f64 {
+    let mut scale = 1.0;
+
+    if best_move_changed {
+        scale += BEST_MOVE_CHANGE_EXTENSION;
+    }
+
+    // Only a drop counts. A rising score means the search is finding more than it expected, which
+    // is not a reason to distrust the move it is about to play.
+    if score_drop > 0 {
+        scale += (f64::from(score_drop) / SCORE_DROP_PER_EXTENSION).min(MAX_SCORE_DROP_EXTENSION);
+    }
+
+    scale
+}
+
+/// What the last two iterative-deepening iterations cost, and what that implies the next one will.
+///
+/// The estimate is measured rather than assumed because the branching factor is a property of the
+/// position and the move ordering, not of the engine: a forcing position with one reasonable reply
+/// per node grows far more slowly than an open middlegame, and a fixed constant chosen for one is
+/// wrong for the other in whichever direction is more expensive.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct IterationCost {
+    /// The cost of the iteration before `latest`, or `None` until two have completed.
+    previous: Option<Duration>,
+    latest: Option<Duration>,
+}
+
+impl IterationCost {
+    fn record(&mut self, cost: Duration) {
+        self.previous = self.latest;
+        self.latest = Some(cost);
+    }
+
+    /// What the next iteration is expected to cost, or `None` where no honest estimate exists yet
+    /// — fewer than two completed iterations, or a previous iteration too short to measure.
+    ///
+    /// A `None` means the caller must not gate on the prediction. That is the safe direction: it
+    /// leaves the loop behaving as though there were no prediction at all, which is what the first
+    /// couple of iterations of every search do.
+    fn predict_next(&self) -> Option<Duration> {
+        let (previous, latest) = (self.previous?, self.latest?);
+        if previous < MIN_MEASURABLE_ITERATION {
+            return None;
+        }
+
+        let branching_factor = (latest.as_secs_f64() / previous.as_secs_f64())
+            .clamp(MIN_BRANCHING_FACTOR, MAX_BRANCHING_FACTOR);
+        Some(latest.mul_f64(branching_factor))
+    }
+}
+
+/// The planned spend of a timed search, kept as an origin and a duration rather than a single
+/// instant so that the instability extension can be applied to it as a multiple.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SoftLimit {
+    /// The instant the search's clock started. Shared with the hard deadline, so both describe the
+    /// same zero.
+    start: Instant,
+    /// What the search plans to spend, measured from `start`.
+    budget: Duration,
+}
+
+impl SoftLimit {
+    /// The instant this limit falls at once scaled by an instability factor.
+    ///
+    /// `scale` is at least 1; a value above it is the search's report that this position is worth
+    /// more than its planned share. The result is not clamped to the hard deadline here — the
+    /// caller compares against both, and conflating them would hide which one bound.
+    fn deadline(&self, scale: f64) -> Instant {
+        self.start + self.budget.mul_f64(scale.max(1.0))
+    }
+}
+
+/// A [`TimeBudget`] resolved against the clock, as what a running search compares itself to.
+///
+/// Both are `None` for an untimed search — a depth, node, or infinite limit — which is what makes
+/// every clock-related check in the search a no-op there rather than a branch on the limit kind.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Deadlines {
+    /// When the search intends to have stopped. Advisory: consulted only between iterations.
+    soft: Option<SoftLimit>,
+    /// When the search must have stopped. This is the deadline [`Search::stopping`] enforces.
+    hard: Option<Instant>,
+}
+
+impl Deadlines {
+    /// The deadlines of a search that is not bounded by the clock at all.
+    fn none() -> Self {
+        Self {
+            soft: None,
+            hard: None,
+        }
+    }
+
+    /// A search bounded only by a hard deadline, which therefore never declines to start an
+    /// iteration and simply runs until the deadline aborts it.
+    fn hard_only(hard: Option<Instant>) -> Self {
+        Self { soft: None, hard }
+    }
+
+    fn from_budget(budget: TimeBudget) -> Self {
+        let start = Instant::now();
+        Self {
+            soft: Some(SoftLimit {
+                start,
+                budget: budget.soft(),
+            }),
+            hard: Some(start + budget.hard()),
+        }
     }
 }
 
@@ -778,16 +985,18 @@ impl SearchEngine {
         // block the worker thread on its way out.
         let (finished_tx, finished_rx) = bounded(1);
         let join = std::thread::spawn(move || {
-            let (depth, deadline, node_limit) = match limit {
-                SearchLimit::Depth(depth) => (depth, None, None),
-                SearchLimit::Time(duration) => (MAX_DEPTH, Some(Instant::now() + duration), None),
-                SearchLimit::Nodes(nodes) => (MAX_DEPTH, None, Some(nodes)),
-                SearchLimit::Infinite => (MAX_DEPTH, None, None),
+            // Both deadlines are anchored to a single clock read taken here, on the worker, so the
+            // soft and hard limits describe the same instant zero however long the spawn took.
+            let (depth, deadlines, node_limit) = match limit {
+                SearchLimit::Depth(depth) => (depth, Deadlines::none(), None),
+                SearchLimit::Time(budget) => (MAX_DEPTH, Deadlines::from_budget(budget), None),
+                SearchLimit::Nodes(nodes) => (MAX_DEPTH, Deadlines::none(), Some(nodes)),
+                SearchLimit::Infinite => (MAX_DEPTH, Deadlines::none(), None),
             };
             let mut search = Search::with_events(
                 position,
                 &thread_cancellation.0,
-                deadline,
+                deadlines,
                 node_limit,
                 &table,
                 events,
@@ -1121,8 +1330,16 @@ pub struct Search<'engine> {
     history_draws: u64,
     /// Flag to indicate when the search should start unwinding due to user intervention.
     stopping: &'engine AtomicBool,
-    /// Time to at which to end search.
+    /// Time at which to end search. Nothing may run past this except the guaranteed first ply.
     stop_time: Option<Instant>,
+    /// Time by which the search intends to have finished.
+    ///
+    /// Unlike [`Self::stop_time`] this never aborts anything: it is read once per completed
+    /// iteration, in [`Self::iterative_deepening`], to decide whether the *next* iteration is worth
+    /// beginning. Keeping it out of [`Self::stopping`] is deliberate — an advisory limit that could
+    /// abort mid-tree would throw away the iteration it was trying to protect, which is the exact
+    /// waste the split exists to remove.
+    soft_limit: Option<SoftLimit>,
     /// Total node count at which to end search, if a node budget was set. Honoured on the same
     /// footing as the time deadline: suppressed until the guaranteed first ply completes, so a
     /// budget too small to finish a ply still returns a searched move rather than the unsearched
@@ -1201,25 +1418,33 @@ impl<'engine> Search<'engine> {
         stop_time: Option<Instant>,
         tt: &'engine Table,
     ) -> Self {
-        Self::build(pos, flag, stop_time, None, tt, None, None)
+        Self::build(
+            pos,
+            flag,
+            Deadlines::hard_only(stop_time),
+            None,
+            tt,
+            None,
+            None,
+        )
     }
 
     fn with_events(
         pos: Position,
         flag: &'engine AtomicBool,
-        stop_time: Option<Instant>,
+        deadlines: Deadlines,
         node_limit: Option<u64>,
         tt: &'engine Table,
         events: Sender<SearchEvent>,
         network: Option<Arc<Network>>,
     ) -> Self {
-        Self::build(pos, flag, stop_time, node_limit, tt, Some(events), network)
+        Self::build(pos, flag, deadlines, node_limit, tt, Some(events), network)
     }
 
     fn build(
         pos: Position,
         flag: &'engine AtomicBool,
-        stop_time: Option<Instant>,
+        deadlines: Deadlines,
         node_limit: Option<u64>,
         tt: &'engine Table,
         events: Option<Sender<SearchEvent>>,
@@ -1241,7 +1466,8 @@ impl<'engine> Search<'engine> {
             trace: Tracer::new(),
             history_draws: 0,
             stopping: flag,
-            stop_time,
+            stop_time: deadlines.hard,
+            soft_limit: deadlines.soft,
             node_limit,
             last_deadline_check_nodes: None,
             events,
@@ -1335,9 +1561,25 @@ impl<'engine> Search<'engine> {
         // The exact score of the deepest completed iteration, used to centre the next iteration's
         // aspiration window. `None` before any iteration completes, which forces a full window.
         let mut prev_score = None;
+        // What the root looked like after the previous iteration, and what the last two iterations
+        // cost. Together these decide whether the next iteration is begun at all.
+        let mut prev_best_move = None;
+        let mut cost = IterationCost::default();
+        let mut elapsed_at_last_iteration = Duration::ZERO;
+        let mut instability = 1.0;
 
         for d in 1..=depth {
             if self.stopping() {
+                break;
+            }
+
+            // An iteration that cannot finish inside the budget is worth nothing: an aborted
+            // iteration is discarded whole below, so the alternative to declining it is to spend
+            // the remaining clock and return the previous iteration's move anyway. Declining hands
+            // the unspent time to a later move instead. The guaranteed first ply is never declined
+            // — `IterationCost` has nothing measured to decline it on — so the legal-bestmove
+            // contract is untouched.
+            if !self.next_iteration_fits(&cost, instability) {
                 break;
             }
 
@@ -1348,10 +1590,26 @@ impl<'engine> Search<'engine> {
             };
 
             self.depth_reached = d;
+            let best_move = self.pvt.pv().next().copied();
+
+            // Measure this iteration before deciding anything about the next one. `live_elapsed`
+            // is monotonic within a search, so the difference is this iteration's own cost.
+            let elapsed = self.trace.live_elapsed();
+            cost.record(elapsed.saturating_sub(elapsed_at_last_iteration));
+            elapsed_at_last_iteration = elapsed;
+
+            instability = instability_scale(
+                prev_best_move.is_some_and(|prev| Some(prev) != best_move),
+                prev_score.map_or(0, |prev: Score| {
+                    i32::from(prev.to_i16()) - i32::from(value.to_i16())
+                }),
+            );
+
             prev_score = Some(value);
+            prev_best_move = best_move;
             result = Some(SearchResult {
                 score: value,
-                best_move: self.pvt.pv().next().copied(),
+                best_move,
                 depth: d,
             });
             if T::is_master() {
@@ -1451,6 +1709,36 @@ impl<'engine> Search<'engine> {
                 return Some(value);
             }
         }
+    }
+
+    /// Whether the next iterative-deepening iteration is expected to complete within the budget.
+    ///
+    /// `true` whenever there is nothing to decide on: an untimed search has no soft limit, and a
+    /// search too young to have measured two iterations has no prediction. Both cases leave the
+    /// loop running exactly as it would with no prediction, so the decision only ever *removes*
+    /// work that was going to be discarded.
+    ///
+    /// The deadline compared against is the planned spend scaled by `instability`, but never past
+    /// the hard deadline: an extension the clock cannot fund is not an extension. Note that the
+    /// hard deadline binding here does not by itself stop the search — it stops the *next*
+    /// iteration from starting, and [`Self::stopping`] remains the only thing that aborts one.
+    fn next_iteration_fits(&self, cost: &IterationCost, instability: f64) -> bool {
+        let Some(soft) = self.soft_limit else {
+            return true;
+        };
+        let Some(predicted) = cost.predict_next() else {
+            return true;
+        };
+
+        let mut deadline = soft.deadline(instability);
+        if let Some(hard) = self.stop_time {
+            deadline = deadline.min(hard);
+        }
+
+        // A predicted finish the clock cannot even represent is past every deadline there is.
+        Instant::now()
+            .checked_add(predicted)
+            .is_some_and(|finish| finish <= deadline)
     }
 
     /// Record a legal bestmove for the root position before any node is searched.
@@ -5615,7 +5903,7 @@ mod tests {
             let mut search = Search::with_events(
                 Position::from_fen("2k5/8/b1p5/Pq2r1p1/8/5PpP/3p2P1/Q2R2K1 b - - 1 61").unwrap(),
                 &flag,
-                None,
+                Deadlines::none(),
                 None,
                 &table,
                 sender,
@@ -5648,7 +5936,7 @@ mod tests {
         let mut search = Search::with_events(
             Position::from_fen("2k5/8/b1p5/Pq2r1p1/8/5PpP/3p2P1/Q2R2K1 b - - 1 61").unwrap(),
             &flag,
-            None,
+            Deadlines::none(),
             None,
             &table,
             sender,
@@ -5672,7 +5960,15 @@ mod tests {
         let flag = AtomicBool::new(false);
         let table = Table::new(1);
         let (sender, events) = unbounded();
-        let search = Search::with_events(position, &flag, None, None, &table, sender, None);
+        let search = Search::with_events(
+            position,
+            &flag,
+            Deadlines::none(),
+            None,
+            &table,
+            sender,
+            None,
+        );
 
         search.emit_current_move(7, &current_move, 4);
 
@@ -5788,7 +6084,10 @@ mod tests {
 
         let position = Position::start_pos();
         let engine = SearchEngine::new(1);
-        let search = engine.start(position.clone(), SearchLimit::Time(Duration::ZERO));
+        let search = engine.start(
+            position.clone(),
+            SearchLimit::Time(TimeBudget::fixed(Duration::ZERO)),
+        );
         let outcome = search.wait();
 
         // A zero budget must never forfeit: the guaranteed-minimum ply completes and yields a
@@ -5811,7 +6110,10 @@ mod tests {
 
         let position = Position::start_pos();
         let engine = SearchEngine::new(1);
-        let search = engine.start(position.clone(), SearchLimit::Time(Duration::from_nanos(1)));
+        let search = engine.start(
+            position.clone(),
+            SearchLimit::Time(TimeBudget::fixed(Duration::from_nanos(1))),
+        );
         let result = search.wait().result().cloned();
 
         let result = result.expect("near-zero budget must still return a legal move");
@@ -5906,7 +6208,10 @@ mod tests {
         let budget = Duration::from_millis(20);
         let started = Instant::now();
         let engine = SearchEngine::new(1);
-        let search = engine.start(Position::start_pos(), SearchLimit::Time(budget));
+        let search = engine.start(
+            Position::start_pos(),
+            SearchLimit::Time(TimeBudget::fixed(budget)),
+        );
         let outcome = search.wait();
         let elapsed = started.elapsed();
 
@@ -5922,6 +6227,231 @@ mod tests {
             elapsed <= budget + Duration::from_millis(100),
             "{budget:?} search exceeded deadline tolerance: {elapsed:?}"
         );
+    }
+
+    /// A budget that permits an extension must still be bounded by its hard half. This is the
+    /// property a real game depends on: the soft limit is what the search *plans* to spend, so
+    /// only the hard limit stands between an unstable position and a flag.
+    #[test]
+    fn an_extendable_budget_is_still_bounded_by_its_hard_half() {
+        chess::init::init_globals();
+
+        // A position sharp enough that the root move and score genuinely move between iterations,
+        // so the instability extension is live rather than hypothetical.
+        let position = Position::from_fen(
+            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+        )
+        .expect("valid FEN");
+        let budget = TimeBudget::new(Duration::from_millis(20), Duration::from_millis(60));
+
+        let started = Instant::now();
+        let engine = SearchEngine::new(1);
+        let outcome = engine.start(position, SearchLimit::Time(budget)).wait();
+        let elapsed = started.elapsed();
+
+        assert!(outcome.result().is_some_and(|r| r.best_move.is_some()));
+        // The same tolerance the fixed-budget deadline test uses, for the same reason: deadline
+        // samples are up to eight nodes apart and a descheduled worker must not fail the test.
+        assert!(
+            elapsed <= budget.hard() + Duration::from_millis(100),
+            "search ran to {elapsed:?}, past its {:?} hard limit",
+            budget.hard()
+        );
+    }
+
+    /// The prediction must not fire until it has something to predict from. Gating on a guess
+    /// would risk declining the guaranteed first ply, which is what makes a legal `bestmove`
+    /// unconditional.
+    #[test]
+    fn no_iteration_is_declined_before_two_have_been_measured() {
+        let mut cost = IterationCost::default();
+        assert_eq!(cost.predict_next(), None);
+
+        cost.record(Duration::from_millis(10));
+        assert_eq!(cost.predict_next(), None);
+
+        cost.record(Duration::from_millis(30));
+        assert!(cost.predict_next().is_some());
+    }
+
+    /// The estimate is the observed growth between the last two iterations, applied to the last —
+    /// not a constant, because a forcing position and an open middlegame grow at quite different
+    /// rates and a constant is wrong for one of them.
+    #[test]
+    fn the_prediction_extrapolates_the_measured_growth() {
+        let mut cost = IterationCost::default();
+        cost.record(Duration::from_millis(10));
+        cost.record(Duration::from_millis(30));
+
+        // Growth of 3x, applied to the 30ms iteration.
+        assert_eq!(cost.predict_next(), Some(Duration::from_millis(90)));
+    }
+
+    /// A single anomalous iteration — a root fail-high, or a transposition table that happened to
+    /// hold the whole line — must degrade the prediction rather than dominate it.
+    #[test]
+    fn an_outlying_growth_ratio_is_clamped_to_a_plausible_range() {
+        let mut shrinking = IterationCost::default();
+        shrinking.record(Duration::from_millis(100));
+        shrinking.record(Duration::from_millis(10));
+        assert_eq!(
+            shrinking.predict_next(),
+            Some(Duration::from_millis(10).mul_f64(MIN_BRANCHING_FACTOR)),
+            "an iteration cheaper than its predecessor must not predict a cheaper one still"
+        );
+
+        let exploding = {
+            let mut cost = IterationCost::default();
+            cost.record(Duration::from_millis(1));
+            cost.record(Duration::from_millis(500));
+            cost
+        };
+        assert_eq!(
+            exploding.predict_next(),
+            Some(Duration::from_millis(500).mul_f64(MAX_BRANCHING_FACTOR))
+        );
+    }
+
+    /// The opening iterations of a search finish in microseconds, where the measurement is
+    /// dominated by clock resolution and scheduling. Extrapolating from one would decline
+    /// iterations on the strength of noise.
+    #[test]
+    fn an_unmeasurably_short_iteration_yields_no_prediction() {
+        let mut cost = IterationCost::default();
+        cost.record(MIN_MEASURABLE_ITERATION - Duration::from_nanos(1));
+        cost.record(Duration::from_millis(50));
+
+        assert_eq!(cost.predict_next(), None);
+    }
+
+    /// A settled root spends what it was allotted and no more. Anything else would make the
+    /// extension the normal case, which is the same as having allotted more in the first place.
+    #[test]
+    fn a_stable_root_asks_for_no_extension() {
+        assert_eq!(instability_scale(false, 0), 1.0);
+        // A rising score — a negative drop — is the search finding more than it expected, not a
+        // reason to distrust the move it is about to play.
+        assert_eq!(instability_scale(false, -400), 1.0);
+    }
+
+    #[test]
+    fn a_changed_best_move_or_a_falling_score_asks_for_an_extension() {
+        assert!(instability_scale(true, 0) > 1.0);
+        assert!(instability_scale(false, 50) > 1.0);
+
+        // The two compound, and a larger drop asks for more than a smaller one.
+        assert!(instability_scale(true, 300) > instability_scale(true, 50));
+        assert!(instability_scale(true, 50) > instability_scale(false, 50));
+
+        // A collapsing evaluation cannot ask without bound.
+        assert_eq!(
+            instability_scale(true, 30_000),
+            1.0 + BEST_MOVE_CHANGE_EXTENSION + MAX_SCORE_DROP_EXTENSION
+        );
+    }
+
+    /// Without a soft limit there is nothing to decline against, so an untimed search — depth,
+    /// nodes, or infinite — must reach every iteration it is asked for.
+    #[test]
+    fn an_untimed_search_never_declines_an_iteration() {
+        chess::init::init_globals();
+
+        let flag = AtomicBool::new(false);
+        let table = Table::new(1);
+        let search = Search::new(Position::start_pos(), &flag, None, &table);
+
+        let mut cost = IterationCost::default();
+        cost.record(Duration::from_secs(1));
+        cost.record(Duration::from_secs(10));
+
+        assert!(search.next_iteration_fits(&cost, 1.0));
+    }
+
+    /// The point of the whole prediction: an iteration whose expected cost overruns the budget is
+    /// declined, because an aborted iteration is discarded whole and the time spent on it buys
+    /// nothing.
+    #[test]
+    fn an_iteration_predicted_to_overrun_the_budget_is_declined() {
+        chess::init::init_globals();
+
+        let flag = AtomicBool::new(false);
+        let table = Table::new(1);
+        let mut search = Search::new(Position::start_pos(), &flag, None, &table);
+
+        // Half a second of budget remaining, against an iteration expected to cost three.
+        let start = Instant::now();
+        search.soft_limit = Some(SoftLimit {
+            start,
+            budget: Duration::from_millis(500),
+        });
+        search.stop_time = Some(start + Duration::from_millis(500));
+
+        let mut cost = IterationCost::default();
+        cost.record(Duration::from_millis(10));
+        cost.record(Duration::from_secs(1));
+
+        assert!(!search.next_iteration_fits(&cost, 1.0));
+
+        // The same prediction against a budget that comfortably accommodates it.
+        search.soft_limit = Some(SoftLimit {
+            start,
+            budget: Duration::from_secs(60),
+        });
+        search.stop_time = Some(start + Duration::from_secs(60));
+        assert!(search.next_iteration_fits(&cost, 1.0));
+    }
+
+    /// Instability is what buys the extra iteration: the same prediction that does not fit the
+    /// planned spend fits once the position has earned the extension.
+    #[test]
+    fn instability_buys_an_iteration_the_planned_spend_could_not() {
+        chess::init::init_globals();
+
+        let flag = AtomicBool::new(false);
+        let table = Table::new(1);
+        let mut search = Search::new(Position::start_pos(), &flag, None, &table);
+
+        let start = Instant::now();
+        search.soft_limit = Some(SoftLimit {
+            start,
+            budget: Duration::from_millis(100),
+        });
+        search.stop_time = Some(start + Duration::from_millis(400));
+
+        // Predicted at 200ms: twice the planned spend, half the hard limit.
+        let mut cost = IterationCost::default();
+        cost.record(Duration::from_millis(50));
+        cost.record(Duration::from_millis(100));
+        assert_eq!(cost.predict_next(), Some(Duration::from_millis(200)));
+
+        assert!(!search.next_iteration_fits(&cost, 1.0));
+        assert!(search.next_iteration_fits(&cost, 3.0));
+    }
+
+    /// However unstable the position, an iteration that would run past the hard deadline is still
+    /// declined. The extension draws on time the clock holds; it does not create any.
+    #[test]
+    fn no_extension_starts_an_iteration_that_would_pass_the_hard_deadline() {
+        chess::init::init_globals();
+
+        let flag = AtomicBool::new(false);
+        let table = Table::new(1);
+        let mut search = Search::new(Position::start_pos(), &flag, None, &table);
+
+        let start = Instant::now();
+        search.soft_limit = Some(SoftLimit {
+            start,
+            budget: Duration::from_millis(100),
+        });
+        search.stop_time = Some(start + Duration::from_millis(150));
+
+        let mut cost = IterationCost::default();
+        cost.record(Duration::from_millis(50));
+        cost.record(Duration::from_millis(100));
+
+        // A scale large enough that the soft deadline alone would admit the 200ms prediction many
+        // times over. The hard deadline is what refuses it.
+        assert!(!search.next_iteration_fits(&cost, 100.0));
     }
 
     #[test]
@@ -6170,7 +6700,7 @@ mod tests {
         let engine = SearchEngine::new(1);
         let search = engine.start(
             Position::start_pos(),
-            SearchLimit::Time(Duration::from_millis(10)),
+            SearchLimit::Time(TimeBudget::fixed(Duration::from_millis(10))),
         );
         let outcome = search.wait();
 

@@ -9,7 +9,7 @@
 
 use crate::game::{CommandError, DrawReason, EngineStatus, GameSnapshot, GameStatus, MoveRecord};
 use crate::score::Score;
-use crate::search::{SearchLimit, SearchProgress};
+use crate::search::{SearchLimit, SearchProgress, TimeBudget};
 use chess::position::Player;
 use serde::Serialize;
 use std::time::Duration;
@@ -72,7 +72,9 @@ pub fn parse_engine_limit(kind: &str, value: u64) -> Result<SearchLimit, &'stati
             if !(MIN_ENGINE_TIME_MS..=MAX_ENGINE_TIME_MS).contains(&value) {
                 return Err("invalid_engine_limit");
             }
-            Ok(SearchLimit::Time(Duration::from_millis(value)))
+            Ok(SearchLimit::Time(TimeBudget::fixed(Duration::from_millis(
+                value,
+            ))))
         }
         "depth" => {
             if !(1..=MAX_ENGINE_DEPTH).contains(&value) {
@@ -98,8 +100,10 @@ enum EngineLimitDto {
 impl From<SearchLimit> for EngineLimitDto {
     fn from(limit: SearchLimit) -> Self {
         match limit {
-            SearchLimit::Time(duration) => EngineLimitDto::Time {
-                milliseconds: duration.as_millis(),
+            // The hard bound, which is how long the board can be locked for. The browser's
+            // limits are exact durations, so the two halves of the budget coincide anyway.
+            SearchLimit::Time(budget) => EngineLimitDto::Time {
+                milliseconds: budget.hard().as_millis(),
             },
             SearchLimit::Depth(plies) => EngineLimitDto::Depth { plies },
             SearchLimit::Nodes(nodes) => EngineLimitDto::Nodes { nodes },
@@ -325,7 +329,7 @@ mod tests {
             move_history: Vec::new(),
             game_status: GameStatus::Ongoing,
             engine_status: EngineStatus::Idle,
-            engine_limit: SearchLimit::Time(Duration::from_millis(1_500)),
+            engine_limit: SearchLimit::Time(TimeBudget::fixed(Duration::from_millis(1_500))),
         }
     }
 
@@ -451,7 +455,7 @@ mod tests {
     fn serializes_each_engine_limit_with_its_unit() {
         let mut snapshot = start_snapshot();
 
-        snapshot.engine_limit = SearchLimit::Time(Duration::from_millis(2_500));
+        snapshot.engine_limit = SearchLimit::Time(TimeBudget::fixed(Duration::from_millis(2_500)));
         let value = parse(&snapshot_to_json(&snapshot));
         let limit = value.get("engineLimit").unwrap();
         assert_eq!(limit.get("kind").unwrap().as_str(), Some("time"));
@@ -482,15 +486,21 @@ mod tests {
     fn accepts_engine_limits_inside_their_bounds_and_rejects_the_rest() {
         assert_eq!(
             parse_engine_limit("time", 1_000),
-            Ok(SearchLimit::Time(Duration::from_millis(1_000)))
+            Ok(SearchLimit::Time(TimeBudget::fixed(Duration::from_millis(
+                1_000
+            ))))
         );
         assert_eq!(
             parse_engine_limit("time", MIN_ENGINE_TIME_MS),
-            Ok(SearchLimit::Time(Duration::from_millis(MIN_ENGINE_TIME_MS)))
+            Ok(SearchLimit::Time(TimeBudget::fixed(Duration::from_millis(
+                MIN_ENGINE_TIME_MS,
+            ))))
         );
         assert_eq!(
             parse_engine_limit("time", MAX_ENGINE_TIME_MS),
-            Ok(SearchLimit::Time(Duration::from_millis(MAX_ENGINE_TIME_MS)))
+            Ok(SearchLimit::Time(TimeBudget::fixed(Duration::from_millis(
+                MAX_ENGINE_TIME_MS,
+            ))))
         );
         assert_eq!(parse_engine_limit("depth", 1), Ok(SearchLimit::Depth(1)));
         assert_eq!(

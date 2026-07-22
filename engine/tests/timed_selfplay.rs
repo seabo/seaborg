@@ -72,16 +72,14 @@ fn play_timed_game(engine: &SearchEngine, start: Position, control: &Control, ma
             control.inc_ms,
             None,
         );
-        // `to_move_time` takes a full-move number; two plies to a full move.
+        // `to_move_budget` takes a full-move number; two plies to a full move.
         let move_number = (ply as u32) / 2 + 1;
-        let budget_ms = control_now.to_move_time(move_number, turn);
+        let budget = control_now.to_move_budget(move_number, turn);
+        let budget_ms = budget.optimum;
 
         let started = Instant::now();
         let outcome = engine
-            .start(
-                position.clone(),
-                SearchLimit::Time(Duration::from_millis(budget_ms)),
-            )
+            .start(position.clone(), SearchLimit::Time(budget.into()))
             .wait();
         let elapsed = started.elapsed();
 
@@ -120,6 +118,21 @@ fn play_timed_game(engine: &SearchEngine, start: Position, control: &Control, ma
             "{}+{}: search took {elapsed:?} at ply {ply} (budget {budget_ms}ms) — a hang",
             control.base_ms,
             control.inc_ms
+        );
+
+        // The maximum is what the clock can actually fund, so overrunning it is what turns into a
+        // flag in a real game. The search may extend past its optimum when the position is
+        // unstable, but nothing entitles it to run past the maximum; the tolerance covers the
+        // completed-first-ply guarantee, which outranks every deadline, plus scheduling jitter and
+        // the `bestmove` handover.
+        let overrun_ceiling =
+            Duration::from_millis(budget.maximum) + MOVE_ANSWER_CEILING.min(Duration::from_secs(1));
+        assert!(
+            elapsed < overrun_ceiling,
+            "{}+{}: search took {elapsed:?} at ply {ply}, past its {}ms maximum",
+            control.base_ms,
+            control.inc_ms,
+            budget.maximum
         );
 
         // Step the mover's clock as a runner would: charge the wall-clock the

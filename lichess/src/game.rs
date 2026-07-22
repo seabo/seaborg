@@ -366,8 +366,8 @@ fn search_limit(state: &GameState, position: &Position, move_overhead_ms: u32) -
         state.binc,
         None,
     );
-    let budget_ms = control.to_move_time(position.move_number(), position.turn());
-    SearchLimit::Time(Duration::from_millis(budget_ms))
+    let budget = control.to_move_budget(position.move_number(), position.turn());
+    SearchLimit::Time(budget.into())
 }
 
 #[cfg(test)]
@@ -767,15 +767,19 @@ mod tests {
         };
         let expected = TimeControl::new(299_900, 299_900, 3_000, 3_000, None)
             .to_move_time(position.move_number(), position.turn());
-        assert_eq!(budget, Duration::from_millis(expected));
-        assert!(budget > Duration::ZERO);
-        assert!(budget < Duration::from_millis(300_000));
+        assert_eq!(budget.soft(), Duration::from_millis(expected));
+        assert!(budget.soft() > Duration::ZERO);
+        // Neither half of the budget may reach the clock: the extension the search may draw on
+        // when the position is unstable is bounded by the same share cap the planned spend is.
+        assert!(budget.hard() >= budget.soft());
+        assert!(budget.hard() < Duration::from_millis(300_000));
 
         // A larger safety margin can only shrink the budget.
         let SearchLimit::Time(smaller) = search_limit(&state, &position, 5_000) else {
             panic!("expected a time limit");
         };
-        assert!(smaller <= budget);
+        assert!(smaller.soft() <= budget.soft());
+        assert!(smaller.hard() <= budget.hard());
     }
 
     #[test]
@@ -793,6 +797,7 @@ mod tests {
         let SearchLimit::Time(budget) = search_limit(&state, &Position::start_pos(), 100) else {
             panic!("expected a time limit");
         };
-        assert_eq!(budget, Duration::ZERO);
+        assert_eq!(budget.soft(), Duration::ZERO);
+        assert_eq!(budget.hard(), Duration::ZERO);
     }
 }

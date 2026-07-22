@@ -210,11 +210,10 @@ where
                     TimingMode::Nodes(nodes) => SearchLimit::Nodes(nodes),
                     TimingMode::Infinite => SearchLimit::Infinite,
                     TimingMode::Timed(tc) => {
-                        let move_time = tc.to_move_time(pos.move_number(), pos.turn());
-                        SearchLimit::Time(Duration::from_millis(move_time))
+                        SearchLimit::Time(tc.to_move_budget(pos.move_number(), pos.turn()).into())
                     }
                     TimingMode::MoveTime(time) => {
-                        SearchLimit::Time(Duration::from_millis(time::move_time_budget(time)))
+                        SearchLimit::Time(time::move_time_budget(time).into())
                     }
                 };
                 active_search = Some(search_engine.start(pos.clone(), limit));
