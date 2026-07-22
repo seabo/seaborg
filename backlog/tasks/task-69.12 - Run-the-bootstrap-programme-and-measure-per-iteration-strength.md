@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:42'
-updated_date: '2026-07-22 11:23'
+updated_date: '2026-07-22 21:47'
 labels:
   - nnue
   - rl
@@ -74,4 +74,16 @@ The result was checked for the ways a large Elo delta is usually an artifact rat
 Realised cost against the pre-run calibration: datagen ran as predicted at ~9.2M kept samples/hour and took the bulk of the wall clock; the gate resolved in 358 games (~22 min) rather than the ~2h a marginal change would need, because the effect is large. Total generation-0 wall clock was about 3.5h.
 
 Generation 1 launched: 360,000 games seeded differently (--opening-seed 2000), self-play now evaluated by best.sbnn. Datagen with NNUE inference measured at 2965 raw positions/s against 3855 for the hand-crafted evaluation, 23% slower, giving 7.12M kept samples/hour and a ~4.2h datagen step. Its gate is tightened to elo0=0 elo1=5, so a candidate must show improvement rather than merely avoid regressing.
+
+Generation 1 result: PASS, promoted, +156.5 +/- 26.1 Elo over generation 0.
+
+Attribution: 360,000 self-play games evaluated by nnue:gen-000, 5000 nodes/move, 44,133,929 raw positions filtered to 29,532,992 samples in 15,134s (2916 positions/s, against 2965 measured on the pre-run probe, so the cost model held at full scale). Training converged by roughly epoch 19 of 25 (final val_loss 0.004424). Candidate nnue:gen-001:sha256=8ebc1381ca166774. Gate at tc=10+0.1 concurrency 11 under the tightened SPRT (elo0=0, elo1=5) crossed the upper bound after 476 games: 259 wins, 159 draws, 58 losses, pentanomial [5, 15, 58, 94, 66], 0 crashes, 0 forfeits, all terminations normal.
+
+The tightened bound did what it was meant to: unlike generation 0 it demanded evidence of improvement rather than mere non-regression, and the candidate supplied it.
+
+Note that generation 1's val_loss (0.004424) is higher than generation 0's (0.002736) and the two are not comparable. The models fit different targets: generation 1's labels come from an evaluator 263 Elo stronger, and the schedule moved lambda from 0.10 to 0.15. Only the gate compares generations meaningfully.
+
+Curve so far, each measured against the immediately preceding best at the same time control: gen 0 +263.2 over the hand-crafted evaluation, gen 1 +156.5 over gen 0. Still climbing steeply; no sign of flattening at two generations.
+
+Operational correction: the host idled 5h16m after generation 1 finished (17:30 BST) because each generation was being launched by hand and the watching process died. Generations 2 through 7 now run from ~/rl/chain.sh, which invokes loop.py once per generation with a distinct opening seed and stops the chain only on an infrastructure failure, treating a failed or inconclusive gate as a normal outcome that the next generation still follows.
 <!-- SECTION:NOTES:END -->
