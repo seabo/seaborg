@@ -2,13 +2,25 @@
 //!
 //! [`Transport`] is the seam between the bot logic and the network. The real
 //! implementation, [`HttpTransport`], talks to Lichess over a single shared
-//! `ureq::Agent` (one connection pool for the whole bot) and turns HTTP 429
-//! responses into a bounded, shutdown-aware backoff. Tests substitute a fake
-//! transport that replays recorded NDJSON and records the requests the bot makes,
-//! so challenge and game handling run with no network access.
+//! `ureq::Agent` (one connection pool for the whole bot).
+//!
+//! Most calls turn an HTTP 429 into a bounded, shutdown-aware backoff here, which
+//! suits an endpoint whose limits clear in seconds. Some limits do not: Lichess
+//! caps outgoing challenges and bot-versus-bot games per day, and a request over
+//! one of those can be refused for hours. Waiting that out inside a call would
+//! strand the caller on a request certain to fail, so those callers use the
+//! non-retrying entry point and act on the refusal themselves. Either way the
+//! response body is parsed for the rate-limit detail Lichess supplies — which
+//! limit fired, and how long it lasts.
+//!
+//! Tests substitute a fake transport that replays recorded NDJSON and records the
+//! requests the bot makes, so challenge and game handling run with no network
+//! access.
 
 use std::io::BufRead;
 use std::time::Duration;
+
+use serde::Deserialize;
 
 use crate::backoff::Backoff;
 use crate::error::{Error, Result};
@@ -52,6 +64,17 @@ pub trait Transport {
 
     /// Perform a POST with a URL-encoded form body.
     fn post_form(&self, path: &str, form: &[(&str, &str)]) -> Result<String>;
+
+    /// Perform a POST with a URL-encoded form body, surfacing a rate-limit
+    /// response to the caller instead of waiting it out here.
+    ///
+    /// Retrying inside the transport is right only when the wait is short and the
+    /// caller has nothing better to do meanwhile. Neither holds for a request the
+    /// server may refuse for hours: the caller is the only party that knows how
+    /// long the limit lasts (the response says so), can spend the interval on
+    /// other work, and can avoid re-sending a request that is certain to fail.
+    /// Such callers use this instead of [`post_form`](Transport::post_form).
+    fn post_form_once(&self, path: &str, form: &[(&str, &str)]) -> Result<String>;
 
     /// Open a streaming endpoint and yield its response one line at a time.
     ///
@@ -124,6 +147,17 @@ impl HttpTransport {
             op,
         )
     }
+
+    /// Send one form POST, shared by the retrying and non-retrying entry points so
+    /// they can differ in retry policy alone.
+    fn send_form(&self, url: &str, form: &[(&str, &str)]) -> Result<String> {
+        let response = self
+            .agent
+            .post(url)
+            .header("Authorization", &self.bearer)
+            .send_form(form.iter().copied());
+        read_response(response)
+    }
 }
 
 impl Transport for HttpTransport {
@@ -153,14 +187,11 @@ impl Transport for HttpTransport {
 
     fn post_form(&self, path: &str, form: &[(&str, &str)]) -> Result<String> {
         let url = self.url(path);
-        self.with_rate_limit_retry(|| {
-            let response = self
-                .agent
-                .post(url.as_str())
-                .header("Authorization", &self.bearer)
-                .send_form(form.iter().copied());
-            read_response(response)
-        })
+        self.with_rate_limit_retry(|| self.send_form(&url, form))
+    }
+
+    fn post_form_once(&self, path: &str, form: &[(&str, &str)]) -> Result<String> {
+        self.send_form(&self.url(path), form)
     }
 
     fn open_stream(&self, path: &str) -> Result<Box<dyn Iterator<Item = Result<String>>>> {
@@ -205,12 +236,12 @@ fn with_rate_limit_retry<T>(
 ) -> Result<T> {
     let mut attempt = 1u32;
     loop {
-        let retry_after = match op() {
-            Err(Error::RateLimited { retry_after }) => retry_after,
+        let (key, retry_after) = match op() {
+            Err(Error::RateLimited { key, retry_after }) => (key, retry_after),
             other => return other,
         };
         if attempt >= max_attempts || shutdown.is_requested() {
-            return Err(Error::RateLimited { retry_after });
+            return Err(Error::RateLimited { key, retry_after });
         }
         sleep(retry_after.unwrap_or_else(|| backoff.next_delay()));
         attempt += 1;
@@ -242,18 +273,78 @@ fn check_status(
         // challenge was canceled or expired before the accept landed), so it gets
         // its own variant the caller can single out instead of an opaque body.
         404 => Err(Error::NotFound),
-        429 => Err(Error::RateLimited {
-            retry_after: retry_after(&response),
-        }),
+        429 => {
+            // The header is the fallback, not the primary source: for the limits a
+            // bot actually meets, Lichess states the wait in the body and sends no
+            // `Retry-After` at all. Read the header before consuming the response,
+            // then let the body override it.
+            let header_wait = retry_after(&response);
+            let limit = response
+                .into_body()
+                .read_to_string()
+                .ok()
+                .and_then(|body| parse_rate_limit(&body));
+            Err(Error::RateLimited {
+                key: limit.as_ref().map(|l| l.key.clone()),
+                retry_after: limit.and_then(|l| l.retry_after).or(header_wait),
+            })
+        }
         // Lichess explains a rejected request in the response body (typically
         // `{"error":"..."}`), which is the only thing that says *why* a 400
         // happened. Read it so the reason reaches the caller instead of a bare
         // status code.
         other => {
             let body = response.into_body().read_to_string().ok();
+            // A 400 carrying a rate-limit envelope is not a rejected request at
+            // all: it reports that the account this request names has exhausted a
+            // Lichess allowance. Only that account is affected, so it gets its own
+            // variant rather than being folded into an opaque HTTP failure.
+            if other == 400 {
+                if let Some(limit) = body.as_deref().and_then(parse_rate_limit) {
+                    return Err(Error::OpponentRateLimited {
+                        key: limit.key,
+                        retry_after: limit.retry_after,
+                    });
+                }
+            }
             Err(unexpected_status_error(other, body.as_deref()))
         }
     }
+}
+
+/// The rate-limit detail Lichess attaches to a limited response.
+struct RateLimitBody {
+    /// Lichess's identifier for the limit, such as `bot.vsBot.day`.
+    key: String,
+    /// How long until the limit clears.
+    retry_after: Option<Duration>,
+}
+
+/// The shape Lichess uses to describe which limit was hit and for how long. It
+/// appears on both the 429 that reports this account's own limit and the 400 that
+/// reports the addressed account's, so one parser serves both.
+#[derive(Deserialize)]
+struct RateLimitEnvelope {
+    ratelimit: RateLimitFields,
+}
+
+#[derive(Deserialize)]
+struct RateLimitFields {
+    key: String,
+    /// Seconds until the limit clears. Modeled as optional so a response that
+    /// omits it still yields the limit's identity rather than parsing to nothing.
+    #[serde(default)]
+    seconds: Option<u64>,
+}
+
+/// Extract the rate-limit detail from a response body, or `None` when the body is
+/// not JSON or carries no rate-limit envelope.
+fn parse_rate_limit(body: &str) -> Option<RateLimitBody> {
+    let envelope: RateLimitEnvelope = serde_json::from_str(body).ok()?;
+    Some(RateLimitBody {
+        key: envelope.ratelimit.key,
+        retry_after: envelope.ratelimit.seconds.map(Duration::from_secs),
+    })
 }
 
 /// Longest body prefix folded into an [`Error::Http`]. Error bodies from Lichess
@@ -286,6 +377,8 @@ mod tests {
     use std::cell::RefCell;
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     use std::thread;
 
     use super::*;
@@ -406,6 +499,7 @@ mod tests {
                 *calls += 1;
                 if *calls == 1 {
                     Err(Error::RateLimited {
+                        key: None,
                         retry_after: Some(Duration::from_secs(7)),
                     })
                 } else {
@@ -429,7 +523,10 @@ mod tests {
             3,
             || {
                 *calls.borrow_mut() += 1;
-                Err(Error::RateLimited { retry_after: None })
+                Err(Error::RateLimited {
+                    key: None,
+                    retry_after: None,
+                })
             },
         );
         assert!(matches!(result, Err(Error::RateLimited { .. })));
@@ -448,7 +545,10 @@ mod tests {
             4,
             || {
                 *calls.borrow_mut() += 1;
-                Err(Error::RateLimited { retry_after: None })
+                Err(Error::RateLimited {
+                    key: None,
+                    retry_after: None,
+                })
             },
         );
         assert_eq!(
@@ -476,7 +576,10 @@ mod tests {
             5,
             || {
                 *calls.borrow_mut() += 1;
-                Err(Error::RateLimited { retry_after: None })
+                Err(Error::RateLimited {
+                    key: None,
+                    retry_after: None,
+                })
             },
         );
         assert_eq!(calls.into_inner(), 1);
@@ -538,5 +641,135 @@ mod tests {
         );
         assert!(matches!(result, Err(Error::Unauthorized)));
         assert_eq!(calls.into_inner(), 1, "no retry on a non-429 error");
+    }
+
+    /// The body Lichess returns when an account is over the cap on games against
+    /// other bots. The wait lives in the body; no `Retry-After` header accompanies
+    /// it, which is why the body has to be read.
+    const BOT_VS_BOT_BODY: &str = r#"{"error":"You played 100 games against other bots today, please wait before challenging another bot.","ratelimit":{"key":"bot.vsBot.day","seconds":7200}}"#;
+
+    /// Bind a loopback server that answers every request with `status`, `body`, and
+    /// any `extra_headers` (each already CRLF-terminated), closing each connection
+    /// so one request means one accept. Returns the port and the count of requests
+    /// served so far.
+    fn serve_repeating(
+        status: &'static str,
+        extra_headers: &'static str,
+        body: &'static str,
+    ) -> (u16, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().expect("local addr").port();
+        let served = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&served);
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                read_request_headers(&mut stream);
+                counter.fetch_add(1, Ordering::SeqCst);
+                let response = format!(
+                    "HTTP/1.1 {status}\r\n\
+                     Content-Type: application/json\r\n\
+                     Content-Length: {}\r\n\
+                     {extra_headers}\
+                     Connection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+        (port, served)
+    }
+
+    fn transport_for(port: u16) -> HttpTransport {
+        HttpTransport::new(format!("http://127.0.0.1:{port}"), "token", Shutdown::new())
+    }
+
+    #[test]
+    fn a_non_retrying_post_surfaces_a_rate_limit_after_one_request() {
+        // Sleeping out a limit that can stand for hours would strand the caller for
+        // no benefit, and each re-send is a request the server has already refused.
+        // The caller gets the refusal immediately and decides what to do with it.
+        let (port, served) = serve_repeating("429 Too Many Requests", "", BOT_VS_BOT_BODY);
+        let result = transport_for(port).post_form_once("/api/challenge/somebot", &[]);
+        match result {
+            Err(Error::RateLimited { key, retry_after }) => {
+                assert_eq!(key.as_deref(), Some("bot.vsBot.day"));
+                assert_eq!(retry_after, Some(Duration::from_secs(7200)));
+            }
+            other => panic!("expected a rate-limit error, got {other:?}"),
+        }
+        assert_eq!(
+            served.load(Ordering::SeqCst),
+            1,
+            "the refused request must not be re-sent"
+        );
+    }
+
+    #[test]
+    fn a_rate_limit_body_outranks_a_retry_after_header() {
+        // Both can be present. The body describes the specific limit that fired,
+        // so it is the one to trust.
+        let (port, _) = serve_repeating(
+            "429 Too Many Requests",
+            "Retry-After: 60\r\n",
+            BOT_VS_BOT_BODY,
+        );
+        match transport_for(port).post_form_once("/api/challenge/somebot", &[]) {
+            Err(Error::RateLimited { retry_after, .. }) => {
+                assert_eq!(retry_after, Some(Duration::from_secs(7200)));
+            }
+            other => panic!("expected a rate-limit error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_retry_after_header_still_applies_when_the_body_says_nothing() {
+        let (port, _) = serve_repeating("429 Too Many Requests", "Retry-After: 45\r\n", "{}");
+        match transport_for(port).post_form_once("/api/challenge/somebot", &[]) {
+            Err(Error::RateLimited { key, retry_after }) => {
+                assert_eq!(key, None);
+                assert_eq!(retry_after, Some(Duration::from_secs(45)));
+            }
+            other => panic!("expected a rate-limit error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_opponents_limit_arrives_as_a_400_carrying_the_same_envelope() {
+        // Lichess reports the challenged account's exhausted allowance with a 400,
+        // not a 429. Read as a plain rejection it would look like this bot's fault;
+        // it is the opponent that is unavailable, and only for a stated while.
+        const BODY: &str = r#"{"error":"someone played 100 games against other bots today, please wait until 2026-07-23 to challenge them.","ratelimit":{"key":"bot.vsBot.day","seconds":3600}}"#;
+        let (port, _) = serve_repeating("400 Bad Request", "", BODY);
+        match transport_for(port).post_form_once("/api/challenge/somebot", &[]) {
+            Err(Error::OpponentRateLimited { key, retry_after }) => {
+                assert_eq!(key, "bot.vsBot.day");
+                assert_eq!(retry_after, Some(Duration::from_secs(3600)));
+            }
+            other => panic!("expected an opponent rate-limit error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_400_without_a_rate_limit_envelope_stays_a_plain_http_error() {
+        let (port, _) = serve_repeating("400 Bad Request", "", r#"{"error":"No such user"}"#);
+        match transport_for(port).post_form_once("/api/challenge/nobody", &[]) {
+            Err(Error::Http(detail)) => assert!(
+                detail.contains("No such user"),
+                "the rejection reason must survive, got {detail}"
+            ),
+            other => panic!("expected an HTTP error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_rate_limit_envelope_without_seconds_still_names_the_limit() {
+        let parsed = parse_rate_limit(r#"{"error":"nope","ratelimit":{"key":"some.limit"}}"#)
+            .expect("an envelope with no duration still parses");
+        assert_eq!(parsed.key, "some.limit");
+        assert_eq!(parsed.retry_after, None);
+        assert!(parse_rate_limit(r#"{"error":"nope"}"#).is_none());
+        assert!(parse_rate_limit("not json").is_none());
     }
 }

@@ -780,6 +780,35 @@ fn seek_matchmaking_game<T: Transport>(
         // Track the created challenge by id so it can be cancelled if it goes
         // unanswered past the interval.
         Ok(challenge_id) => matchmaker.lock().unwrap().record_issued(now, challenge_id),
+        // A 429 is a limit on this account, not a refusal by the bot the challenge
+        // named, so the opponent stays eligible and the whole endpoint pauses
+        // instead. The pause is recorded as a deadline rather than slept through:
+        // these limits can last hours, and this thread has an event loop to keep
+        // serving in the meantime.
+        Err(Error::RateLimited { key, retry_after }) => {
+            let wait = matchmaker
+                .lock()
+                .unwrap()
+                .record_rate_limited(now, retry_after);
+            log::warn!(
+                "Lichess rate limited this bot's challenges{}; issuing none for {}s",
+                key.map(|k| format!(" [{k}]")).unwrap_or_default(),
+                wait.as_secs()
+            );
+        }
+        // The opposite case: the limit belongs to the bot that was challenged, so
+        // only it is skipped and the next interval can challenge someone else.
+        Err(Error::OpponentRateLimited { key, retry_after }) => {
+            let wait =
+                matchmaker
+                    .lock()
+                    .unwrap()
+                    .record_opponent_rate_limited(&target, now, retry_after);
+            log::info!(
+                "bot {target} is over a Lichess limit [{key}]; skipping it for {}s",
+                wait.as_secs()
+            );
+        }
         Err(error) if error.is_recoverable() => {
             log::warn!("challenging bot {target}: {error}");
             // The challenge did not take (commonly a creation-time rejection).
@@ -1061,6 +1090,27 @@ mod tests {
     /// posts).
     type RecordedPost = (String, Vec<(String, String)>);
 
+    /// How the fake answers an outgoing challenge-create POST. The rate-limit
+    /// outcomes yield the errors the real transport produces from Lichess's
+    /// responses; the mapping from status and body to those errors is covered in
+    /// the transport's own tests.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum CreateOutcome {
+        /// Lichess creates the challenge and answers with its id.
+        Created,
+        /// A creation-time rejection, as when the addressed bot refuses this kind
+        /// of challenge outright.
+        Rejected,
+        /// Lichess refuses because this account is over one of its own limits.
+        SelfRateLimited,
+        /// Lichess refuses because the challenged bot is over one of its limits.
+        OpponentRateLimited,
+    }
+
+    /// The Lichess limit on how many games a bot may play against other bots in a
+    /// day, the limit these tests stand a rate-limit refusal on.
+    const BOT_VS_BOT_DAY: &str = "bot.vsBot.day";
+
     /// A [`Transport`] that replays a canned account response and one recorded
     /// event stream per connection (in order, so a reconnect is fed the next
     /// stream), recording the POSTs the bot makes. It never touches the network,
@@ -1069,10 +1119,9 @@ mod tests {
         account_json: String,
         /// NDJSON returned for `GET /api/bot/online`, for the matchmaking tests.
         bots_json: String,
-        /// When set, an outgoing challenge-create POST fails with a recoverable
-        /// HTTP error, standing in for a Lichess creation-time rejection so the
-        /// failure-recovery path can be exercised offline.
-        challenge_create_fails: bool,
+        /// How an outgoing challenge-create POST is answered, so each way Lichess
+        /// can refuse one is exercisable offline.
+        challenge_create: CreateOutcome,
         /// The id returned in the body of a successful challenge-create POST, as
         /// Lichess assigns one; matchmaking tracks this id to cancel the challenge.
         created_challenge_id: String,
@@ -1095,7 +1144,7 @@ mod tests {
             FakeTransport {
                 account_json: account_json.to_string(),
                 bots_json: String::new(),
-                challenge_create_fails: false,
+                challenge_create: CreateOutcome::Created,
                 created_challenge_id: "mmchal".to_string(),
                 accept_not_found: HashSet::new(),
                 streams: RefCell::new(streams.into_iter().map(str::to_string).collect()),
@@ -1149,16 +1198,30 @@ mod tests {
                 && !path.ends_with("/accept")
                 && !path.ends_with("/decline");
             if is_challenge_create {
-                if self.challenge_create_fails {
-                    return Err(Error::Http(
+                return match self.challenge_create {
+                    // Lichess answers a create with the new challenge object; the
+                    // id is all the client reads.
+                    CreateOutcome::Created => {
+                        Ok(format!(r#"{{"id":"{}"}}"#, self.created_challenge_id))
+                    }
+                    CreateOutcome::Rejected => Err(Error::Http(
                         "unexpected status 400: {\"error\":\"nope\"}".to_string(),
-                    ));
-                }
-                // Lichess answers a create with the new challenge object; the id is
-                // all the client reads.
-                return Ok(format!(r#"{{"id":"{}"}}"#, self.created_challenge_id));
+                    )),
+                    CreateOutcome::SelfRateLimited => Err(Error::RateLimited {
+                        key: Some(BOT_VS_BOT_DAY.to_string()),
+                        retry_after: Some(Duration::from_secs(7200)),
+                    }),
+                    CreateOutcome::OpponentRateLimited => Err(Error::OpponentRateLimited {
+                        key: BOT_VS_BOT_DAY.to_string(),
+                        retry_after: Some(Duration::from_secs(3600)),
+                    }),
+                };
             }
             Ok(String::new())
+        }
+
+        fn post_form_once(&self, path: &str, form: &[(&str, &str)]) -> Result<String> {
+            self.post_form(path, form)
         }
 
         fn open_stream(&self, path: &str) -> Result<Box<dyn Iterator<Item = Result<String>>>> {
@@ -1712,7 +1775,7 @@ mod tests {
             r#"{"id":"secondbot","title":"BOT","perfs":{"blitz":{"rating":1600}}}"#,
         )
         .to_string();
-        transport.challenge_create_fails = true;
+        transport.challenge_create = CreateOutcome::Rejected;
         let client = LichessClient::new(transport);
 
         // Zero idle timeout and zero interval so both seeks fire. A 5+0 (blitz)
@@ -1741,6 +1804,110 @@ mod tests {
                 "/api/challenge/firstbot".to_string(),
                 "/api/challenge/secondbot".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn a_rate_limited_challenge_pauses_seeking_without_blaming_the_opponent() {
+        use crate::config::{MatchmakingConfig, MatchmakingMode};
+
+        // Lichess refuses because this account is over its own limit. Two things
+        // must follow: the bot stops issuing challenges for the stated wait rather
+        // than immediately re-challenging, and the bot it happened to name is not
+        // penalised for a refusal that was never about it.
+        let mut transport = FakeTransport::new("{}", "");
+        transport.bots_json =
+            r#"{"id":"maia","title":"BOT","perfs":{"blitz":{"rating":1600}}}"#.to_string();
+        transport.challenge_create = CreateOutcome::SelfRateLimited;
+        let client = LichessClient::new(transport);
+
+        // Zero idle timeout and zero interval, so nothing but the rate-limit
+        // cooldown can hold the later seeks back.
+        let config = MatchmakingConfig {
+            enabled: true,
+            variants: vec!["standard".to_string()],
+            initial_seconds: vec![300],
+            increment_seconds: vec![0],
+            mode: MatchmakingMode::Casual,
+            idle_timeout_seconds: 0,
+            min_challenge_interval_seconds: 0,
+            ..MatchmakingConfig::default()
+        };
+        let matchmaker = Mutex::new(Matchmaker::new(config, 1, "me", Instant::now()));
+        let slots = GameSlots::new();
+        seek_times(&client, &slots, &matchmaker, 4);
+
+        assert_eq!(
+            client_transport(&client).post_paths(),
+            vec!["/api/challenge/maia".to_string()],
+            "after the refusal the bot must stop challenging, not retry every tick"
+        );
+        let spec = crate::matchmaking::ChallengeSpec {
+            variant: "standard".to_string(),
+            initial_seconds: 300,
+            increment_seconds: 0,
+            rated: false,
+        };
+        let candidates = vec![crate::matchmaking::BotInfo {
+            id: "maia".to_string(),
+            title: Some("BOT".to_string()),
+            perfs: [(
+                "blitz".to_string(),
+                crate::matchmaking::Perf { rating: Some(1600) },
+            )]
+            .into_iter()
+            .collect(),
+        }];
+        assert!(
+            matchmaker
+                .lock()
+                .unwrap()
+                .select_opponent(&spec, &candidates, Instant::now())
+                .is_some(),
+            "an account-wide limit must leave the challenged bot eligible"
+        );
+    }
+
+    #[test]
+    fn an_opponents_rate_limit_moves_matchmaking_to_a_different_bot() {
+        use crate::config::{MatchmakingConfig, MatchmakingMode};
+
+        // Here the limit belongs to the bot being challenged. Seeking continues
+        // immediately; only that bot is skipped, so the second seek reaches the
+        // other one.
+        let mut transport = FakeTransport::new("{}", "");
+        transport.bots_json = concat!(
+            r#"{"id":"firstbot","title":"BOT","perfs":{"blitz":{"rating":1600}}}"#,
+            "\n",
+            r#"{"id":"secondbot","title":"BOT","perfs":{"blitz":{"rating":1600}}}"#,
+        )
+        .to_string();
+        transport.challenge_create = CreateOutcome::OpponentRateLimited;
+        let client = LichessClient::new(transport);
+
+        let config = MatchmakingConfig {
+            enabled: true,
+            variants: vec!["standard".to_string()],
+            initial_seconds: vec![300],
+            increment_seconds: vec![0],
+            mode: MatchmakingMode::Casual,
+            idle_timeout_seconds: 0,
+            min_challenge_interval_seconds: 0,
+            ..MatchmakingConfig::default()
+        };
+        let matchmaker = Mutex::new(Matchmaker::new(config, 1, "me", Instant::now()));
+        let slots = GameSlots::new();
+        seek_times(&client, &slots, &matchmaker, 2);
+
+        let mut paths = client_transport(&client).post_paths();
+        paths.sort();
+        assert_eq!(
+            paths,
+            vec![
+                "/api/challenge/firstbot".to_string(),
+                "/api/challenge/secondbot".to_string()
+            ],
+            "only the limited bot is skipped; seeking itself continues"
         );
     }
 
@@ -2048,6 +2215,10 @@ mod tests {
             Ok(String::new())
         }
 
+        fn post_form_once(&self, path: &str, form: &[(&str, &str)]) -> Result<String> {
+            self.post_form(path, form)
+        }
+
         fn open_stream(&self, path: &str) -> Result<Box<dyn Iterator<Item = Result<String>>>> {
             assert_eq!(path, "/api/stream/event", "unexpected stream path in test");
             let lines = self
@@ -2271,6 +2442,10 @@ mod tests {
 
         fn post_form(&self, _path: &str, _form: &[(&str, &str)]) -> Result<String> {
             Ok(String::new())
+        }
+
+        fn post_form_once(&self, path: &str, form: &[(&str, &str)]) -> Result<String> {
+            self.post_form(path, form)
         }
 
         fn open_stream(&self, _path: &str) -> Result<Box<dyn Iterator<Item = Result<String>>>> {
