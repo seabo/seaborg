@@ -5,7 +5,7 @@ status: To Do
 assignee:
   - '@claude'
 created_date: '2026-07-19 13:33'
-updated_date: '2026-07-22 02:59'
+updated_date: '2026-07-22 16:02'
 labels:
   - search
   - extensions
@@ -15,7 +15,7 @@ dependencies:
 references:
   - engine/src/search.rs
 parent_task_id: TASK-64
-priority: high
+priority: low
 type: feature
 ordinal: 76000
 ---
