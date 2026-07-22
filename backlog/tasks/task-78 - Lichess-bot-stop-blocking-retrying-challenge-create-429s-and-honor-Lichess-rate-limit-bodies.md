@@ -3,11 +3,11 @@ id: TASK-78
 title: >-
   Lichess bot: stop blocking-retrying challenge-create 429s and honor Lichess
   rate-limit bodies
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-22 21:41'
-updated_date: '2026-07-22 22:56'
+updated_date: '2026-07-22 23:04'
 labels: []
 dependencies: []
 priority: high
@@ -41,16 +41,16 @@ Note also that anchors/seaborg-lichess.toml sets matchmaking mode = "rated", and
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A 429 or 400 response body from Lichess carrying a `ratelimit` object is parsed, and its `key` and `seconds` values are available to the caller rather than discarded
-- [ ] #2 POST /api/challenge/{user} is never retried in-transport on a 429; the error surfaces to the matchmaking caller on the first response
-- [ ] #3 A challenge-create rate limit records a non-blocking cooldown deadline that suppresses further seek attempts until it expires, instead of sleeping inside the matchmaking thread
-- [ ] #4 The cooldown duration comes from the Lichess-supplied `ratelimit.seconds` when present, falling back to Retry-After and then to an exponential backoff floor when it is not
-- [ ] #5 A 429 carrying key `bot.vsBot.day` is treated as an account-wide limit and does not place the challenged opponent into the per-opponent decline backoff
-- [ ] #6 A 400 carrying key `bot.vsBot.day` is recognised as an opponent-side daily limit and places only that opponent into a backoff for the supplied duration
-- [ ] #7 A rate-limit log line identifies which limit fired and how long the bot will wait, so a production log is diagnosable without reproducing the run
-- [ ] #8 A successful challenge creation resets any accumulated challenge-endpoint backoff to its floor
-- [ ] #9 Unit tests cover: no in-transport retry on a challenge-create 429, ratelimit-body parsing for both the 429 and 400 shapes, cooldown suppression of seeking, and that a bot.vsBot.day 429 leaves the opponent eligible
-- [ ] #10 Rate-limit handling for other endpoints (streams, moves, accept/decline) is unchanged unless a divergence from the reference is documented
+- [x] #1 A 429 or 400 response body from Lichess carrying a `ratelimit` object is parsed, and its `key` and `seconds` values are available to the caller rather than discarded
+- [x] #2 POST /api/challenge/{user} is never retried in-transport on a 429; the error surfaces to the matchmaking caller on the first response
+- [x] #3 A challenge-create rate limit records a non-blocking cooldown deadline that suppresses further seek attempts until it expires, instead of sleeping inside the matchmaking thread
+- [x] #4 The cooldown duration comes from the Lichess-supplied `ratelimit.seconds` when present, falling back to Retry-After and then to an exponential backoff floor when it is not
+- [x] #5 A 429 carrying key `bot.vsBot.day` is treated as an account-wide limit and does not place the challenged opponent into the per-opponent decline backoff
+- [x] #6 A 400 carrying key `bot.vsBot.day` is recognised as an opponent-side daily limit and places only that opponent into a backoff for the supplied duration
+- [x] #7 A rate-limit log line identifies which limit fired and how long the bot will wait, so a production log is diagnosable without reproducing the run
+- [x] #8 A successful challenge creation resets any accumulated challenge-endpoint backoff to its floor
+- [x] #9 Unit tests cover: no in-transport retry on a challenge-create 429, ratelimit-body parsing for both the 429 and 400 shapes, cooldown suppression of seeking, and that a bot.vsBot.day 429 leaves the opponent eligible
+- [x] #10 Rate-limit handling for other endpoints (streams, moves, accept/decline) is unchanged unless a divergence from the reference is documented
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -223,4 +223,47 @@ Scope note carried forward from attempt 1, unchanged and outside the acceptance 
 
 Reviewer independence: this attempt was implemented by the same session that raised REV-1-01, at the user's explicit authorization. It therefore needs an independent reviewer; the author of the finding must not approve the fix.
 ---
+
+author: @claude
+created: 2026-07-22 23:04
+---
+Review attempt: 2
+Reviewed branch: task-78-lichess-challenge-rate-limit
+Reviewed implementation: 2d82aea
+Verdict: approved
+
+Independent review by a session that did not raise or fix REV-1-01. The full base-to-target diff (d52a6fb..2d82aea) was inspected, not only the rework.
+
+REV-1-01 resolved. `with_rate_limit_retry` now takes a `max_wait` bound, given `RATE_LIMIT_MAX`, and ends the loop when the server states a wait longer than it (transport.rs, the `retry_after.is_some_and(|wait| wait > max_wait)` arm) instead of sleeping it. `check_status` is untouched, so the error still carries Lichess's true remaining time and the matchmaker cooldown is unaffected. The regression test `a_wait_longer_than_the_bound_is_surfaced_rather_than_slept` asserts one attempt and no sleep; without the guard the loop would run the full 5-attempt budget, so the assertion fails on the call count — the test catches exactly the reported defect. `a_retrying_post_also_refuses_to_sleep_out_a_day_long_limit` covers the same property through `post_empty` against a loopback server returning the real `bot.vsBot.day` body, which is the endpoint class the finding was about.
+
+Acceptance criteria, evidence:
+- #1 `parse_rate_limit` and the 429/400 arms of `check_status`; `a_rate_limit_envelope_without_seconds_still_names_the_limit`, `an_opponents_limit_arrives_as_a_400_carrying_the_same_envelope`, `a_400_without_a_rate_limit_envelope_stays_a_plain_http_error`.
+- #2 `create_challenge` routes to `post_form_once`; `a_non_retrying_post_surfaces_a_rate_limit_after_one_request` drives the `/api/challenge/...` path against a real 429 and asserts one served request.
+- #3 `challenge_cooldown_until` checked in `choose`; `a_rate_limit_suspends_seeking_for_the_duration_lichess_states` and the end-to-end `a_rate_limited_challenge_pauses_seeking_without_blaming_the_opponent`, which asserts a single POST across four seeks.
+- #4 Body outranks header outranks fallback: `a_rate_limit_body_outranks_a_retry_after_header`, `a_retry_after_header_still_applies_when_the_body_says_nothing`, `a_rate_limit_with_no_stated_wait_escalates_up_to_the_cap` (60/120/240/480/600/600).
+- #5 `a_rate_limit_on_this_account_leaves_the_named_opponent_eligible` and the run.rs test above.
+- #6 `an_opponent_rate_limit_skips_only_that_bot_for_the_stated_window` pins the 90s window against the 3600s configured backoff; `an_opponents_rate_limit_moves_matchmaking_to_a_different_bot` shows seeking continues.
+- #7 Both run.rs arms format the limit key and the applied wait. The wait is the value `record_rate_limited`/`record_opponent_rate_limited` return, which the matchmaking tests pin, and the key comes from the parsed envelope, which the transport tests pin, so the log content follows from tested values rather than from code presence.
+- #8 `record_issued` resets `challenge_backoff`; `a_created_challenge_returns_the_fallback_wait_to_its_floor`, with `a_stated_wait_does_not_escalate_the_fallback` as its counterpart.
+- #9 All four listed areas are covered and pass.
+- #10 The divergence is now bounded and documented in code: the module doc and the `with_rate_limit_retry` doc comment state that a stated wait beyond the bound is surfaced rather than slept, and the `RATE_LIMIT_MAX` doc states its second role. No retrying endpoint can be held for hours.
+
+Other checks: `Error::OpponentRateLimited` is recoverable, and every non-challenge call site dispatches through `is_recoverable()`, so the new variant cannot fall through to a hard error on the endpoints that were not changed. The 429 arm reads `Retry-After` before consuming the body, so the header fallback survives. `choose` places the cooldown check after the pending-challenge block, so an outstanding challenge is still withdrawn while the account is limited. No `#[allow]` is added; no code comment cites a task ID, acceptance criterion, or finding ID.
+
+One observation, not blocking: for a 429 that carries a body-stated wait of at most `RATE_LIMIT_MAX` and no header, a retrying endpoint can now sleep 4 x 600s where the base commit's local backoff summed to 900s. That case is a limit Lichess says will clear inside ten minutes, and the base commit already honored an unbounded `Retry-After` header identically, so the ceiling is not newly reachable.
+
+Verification (run in /Users/seabo/seaborg-worktrees/task-78-lichess-challenge-rate-limit, tree identical to 2d82aea):
+- cargo fmt --check: clean
+- cargo clippy --workspace --all-targets --all-features -- -D warnings with a clean CARGO_TARGET_DIR: clean, no warnings
+- cargo test --workspace: 647 passed, 0 failed, 2 ignored
+- One earlier workspace run saw `run::tests::incoming_challenge_is_handled_while_a_matchmaking_call_is_blocked` miss its 5s channel deadline at 5.01s while the 428-test engine suite was saturating the machine. It passed on two further workspace runs and three isolated runs at 0.01-0.02s. The test exists at the base commit and its 5s deadline is unrelated to this change.
+- git diff --stat 2d82aea..56350e8: task file only, so the code target is immutable.
+- No benchmarks run: the diff touches only the lichess crate, no movegen or search hot path.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Challenge-create rate limits are now owned by the matchmaking caller instead of being slept out in the transport. The 429/400 rate-limit envelope Lichess sends is parsed for its key and seconds; create_challenge uses a new non-retrying post_form_once; the matchmaker holds a non-blocking challenge_cooldown_until deadline with an escalating fallback used only when Lichess states no duration and reset on a successful create; the per-opponent map stores an expiry so a 400 opponent limit is honored for exactly the stated window while a 429 leaves the named bot eligible; run.rs dispatches by kind and logs which limit fired and the wait applied. The retrying endpoints keep their policy but no longer sleep a server-stated wait beyond RATE_LIMIT_MAX. Verified at 2d82aea with cargo fmt --check, cargo clippy --workspace --all-targets --all-features -- -D warnings (also on a clean CARGO_TARGET_DIR), and cargo test --workspace (647 passed, 0 failed, 2 ignored), plus targeted lichess transport, matchmaking, and run tests.
+<!-- SECTION:FINAL_SUMMARY:END -->
