@@ -1,11 +1,11 @@
 ---
 id: TASK-69.13
 title: Bake a default NNUE network into the binary and report the active evaluator
-status: In Review
+status: Ready to Merge
 assignee:
   - '@codex'
 created_date: '2026-07-22 12:05'
-updated_date: '2026-07-22 12:41'
+updated_date: '2026-07-22 13:11'
 labels:
   - nnue
   - uci
@@ -38,15 +38,15 @@ Why now. TASK-69.11 and TASK-69.12 produce promoted networks that the shipped bi
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A release build with default features and no runtime options evaluates with the embedded network; this is demonstrated by a test or a documented reproducible check rather than asserted
-- [ ] #2 Building with `--no-default-features` produces a working hand-crafted-eval binary, and the workspace builds, clippy-passes, and tests cleanly both with the embedding feature on and off
-- [ ] #3 The embedded network is validated by the same loader used for EvalFile, and a test parses the embedded bytes and asserts the resulting architecture
-- [ ] #4 At startup the engine reports the active evaluator, naming the embedded network with its parameter hash and hidden width, or stating explicitly that the build uses the hand-crafted evaluation
-- [ ] #5 The evaluator report is re-emitted whenever the active evaluator changes via `setoption name EvalFile`, and stdout remains valid UCI at all times (verified by a driver-level test over the command stream)
-- [ ] #6 An explicit `setoption name EvalFile value <path>` overrides the embedded default; `value <empty>` restores the built-in default; `value none` selects the hand-crafted evaluation; each case is covered by a test
-- [ ] #7 The `uci` option advertisement states a default consistent with the actual built-in default
-- [ ] #8 Behaviour of `datagen --network`, the lichess client, and self-play under an embedded-net build is deliberate, documented, and covered by a test where it differs from the UCI driver; the hand-crafted-eval datagen path used by the bootstrap programme remains reachable
-- [ ] #9 Documentation records how to promote and re-bake a default network, how to build without one, and how to read the evaluator identity of a binary from its output
+- [x] #1 A release build with default features and no runtime options evaluates with the embedded network; this is demonstrated by a test or a documented reproducible check rather than asserted
+- [x] #2 Building with `--no-default-features` produces a working hand-crafted-eval binary, and the workspace builds, clippy-passes, and tests cleanly both with the embedding feature on and off
+- [x] #3 The embedded network is validated by the same loader used for EvalFile, and a test parses the embedded bytes and asserts the resulting architecture
+- [x] #4 At startup the engine reports the active evaluator, naming the embedded network with its parameter hash and hidden width, or stating explicitly that the build uses the hand-crafted evaluation
+- [x] #5 The evaluator report is re-emitted whenever the active evaluator changes via `setoption name EvalFile`, and stdout remains valid UCI at all times (verified by a driver-level test over the command stream)
+- [x] #6 An explicit `setoption name EvalFile value <path>` overrides the embedded default; `value <empty>` restores the built-in default; `value none` selects the hand-crafted evaluation; each case is covered by a test
+- [x] #7 The `uci` option advertisement states a default consistent with the actual built-in default
+- [x] #8 Behaviour of `datagen --network`, the lichess client, and self-play under an embedded-net build is deliberate, documented, and covered by a test where it differs from the UCI driver; the hand-crafted-eval datagen path used by the bootstrap programme remains reachable
+- [x] #9 Documentation records how to promote and re-bake a default network, how to build without one, and how to read the evaluator identity of a binary from its output
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -103,4 +103,45 @@ Verification:
 - release-binary smoke (cargo build --release): startup reports 'evaluator: NNUE built-in gen-000 (hidden width 256, parameter hash 0xdaf86bb3d50cec6b)'; EvalFile none then <empty> re-report hand-crafted and the built-in in turn with stdout carrying only uci/info/bestmove; --no-default-features release binary reports 'evaluator: hand-crafted evaluation'; datagen on the embedded build reports 'evaluator: hand-crafted'
 Known failures: none
 ---
+
+author: @codex
+created: 2026-07-22 13:11
+---
+Review verdict: APPROVED
+
+Implementation target: aa3cefc (immutable; the only later commit, 042f67c, touches the task file alone)
+Base: 30e530a
+Branch/worktree: task-69.13-bake-default-network at /Users/seabo/seaborg-worktrees/task-69.13-bake-default-network
+
+Verification run by the reviewer on aa3cefc:
+- cargo fmt --check: pass
+- CARGO_TARGET_DIR=/tmp/t6913-clean cargo clippy --workspace --all-targets --all-features -- -D warnings: clean from a cold target dir
+- CARGO_TARGET_DIR=/tmp/t6913-clean cargo clippy --workspace --all-targets --no-default-features -- -D warnings: clean
+- cargo test --workspace: 614 passed, 0 failed
+- cargo test --workspace --no-default-features: 613 passed, 0 failed
+- python3 -m unittest discover in tools/rl (15) and tools/strength (21): pass
+- Release binaries built both ways and driven over stdin. Embedded build: startup stderr 'evaluator: NNUE built-in gen-000 (hidden width 256, parameter hash 0xdaf86bb3d50cec6b)'; 'EvalFile none' then 'EvalFile <empty>' re-report hand-crafted and the built-in in turn; every stdout line is id/uciok/option/readyok/info/bestmove; advertisement is 'option name EvalFile type string default <empty>'. --no-default-features build: 'evaluator: hand-crafted evaluation' with the same advertisement. 'seaborg datagen' on the embedded build reports 'evaluator: hand-crafted'.
+
+Acceptance criteria, with the evidence that proves each:
+- #1 engine.rs::a_session_with_no_options_evaluates_with_the_embedded_network compares the reported scores of an untouched session against an explicit EvalFile=none session and requires them to differ, so this is a behavioural check rather than a wiring check; confirmed on the release binary.
+- #2 Both clippy configurations clean from a cold target dir, both test runs green, both release builds produced and driven.
+- #3 embedded.rs::the_baked_bytes_parse_through_the_one_loader_with_the_expected_architecture parses BAKED_BYTES through Network::read and pins hidden width, qa, qb, scale and the parameter hash. The bytes are reachable only through built_in_network(); there is no second parser.
+- #4 engine.rs::startup_names_the_evaluator_the_build_actually_runs asserts the startup line against the network the build actually holds, so it holds in both feature configurations; confirmed on both binaries.
+- #5/#6 engine.rs::eval_file_selects_a_file_the_built_in_default_and_the_hand_crafted_evaluation drives file, none and <empty> through the driver in one stream, asserts the four evaluator reports in order on stderr, and asserts every stdout line is a legal UCI message. uci.rs::parses_eval_file_paths_and_both_reserved_words covers the parse side including './none' still reaching the path arm.
+- #7 The advertisement is '<empty>', which is by construction the state a session starts in, so it is truthful in both builds; verified against both release binaries.
+- #8 selfplay::a_config_without_a_network_plays_the_hand_crafted_evaluation shows an unconfigured self-play run differs from one given the built-in network, so nothing leaks in through SearchEngine::new. tools/rl GateCommandTests pins '--baseline-option EvalFile=none' on the real SubprocessBackend command builder. Datagen smoke confirms the hand-crafted bootstrap path is still reachable from an embedded build, and lichess logs its evaluator at connect.
+- #9 docs/default-network.md covers identity reporting, the three EvalFile values, building without a network, the non-UCI entry points, and the promote/re-bake procedure; README, docs/strength-testing.md and tools/rl/README.md move with the changed default.
+
+Benchmarks were not run: the diff touches no move generation code, and benches/search.rs builds Search directly rather than through SearchEngine, so it is unaffected by the changed constructor default. The per-node search path is unchanged.
+
+No new #[allow] is introduced. No comment in the diff cites a task id, acceptance criterion or finding id; the two 'Acceptance #N' comments that existed at the base were rewritten into standalone statements.
+
+Non-blocking observation, offered for a future edit rather than as a finding: docs/default-network.md says 'Every entry point says so on its diagnostic channel at startup' and then 'These reports go to stderr, never to stdout'. That holds for the UCI driver and the Lichess bot; datagen's pre-existing evaluator line goes to stdout in a different format. The document's own datagen section states that behaviour correctly, so nothing is misleading in substance.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Bakes the promoted gen-000 network (engine/nets/default.sbnn, 768x256, param hash 0xdaf86bb3d50cec6b) into the binary with include_bytes! behind a default-on 'embedded-net' feature, parsed once through the same Network::read an EvalFile path takes. SearchEngine::new now starts on the built-in network, so a plain release build plays at full strength; lichess and the root package take engine with default-features=false and re-export the feature, so --no-default-features really reaches the engine. EvalFile becomes three-valued (<empty> = built-in default, 'none' = hand-crafted, path = override) and the driver reports the active evaluator (id/path, hidden width, parameter hash) on stderr at startup and after every change that took effect, leaving stdout protocol-clean. Datagen and self-play keep naming their evaluator explicitly so the bootstrap generation stays hand-crafted; tools/rl now passes --baseline-option EvalFile=none for generation 0. Documented in docs/default-network.md plus README, docs/strength-testing.md and tools/rl/README.md. Verified on aa3cefc: cargo fmt --check pass; clean-target-dir cargo clippy --workspace --all-targets --all-features and --no-default-features both clean under -D warnings; cargo test --workspace 614 pass and --no-default-features 613 pass; tools/rl 15 and tools/strength 21 unittest pass; release binaries built both ways smoke-tested (embedded reports 'NNUE built-in gen-000 (hidden width 256, parameter hash 0xdaf86bb3d50cec6b)', none/<empty> round-trip through hand-crafted and back, stdout carries only UCI lines, --no-default-features reports 'hand-crafted evaluation', datagen on the embedded build stays hand-crafted).
+<!-- SECTION:FINAL_SUMMARY:END -->
