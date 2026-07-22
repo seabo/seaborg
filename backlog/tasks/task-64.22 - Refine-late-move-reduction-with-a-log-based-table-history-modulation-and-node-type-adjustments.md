@@ -3,11 +3,11 @@ id: TASK-64.22
 title: >-
   Refine late move reduction with a log-based table, history modulation, and
   node-type adjustments
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-21 21:22'
-updated_date: '2026-07-21 22:53'
+updated_date: '2026-07-22 00:13'
 labels:
   - search
   - strength
@@ -81,5 +81,22 @@ author: @codex
 created: 2026-07-21 22:23
 ---
 Revisit flag from TASK-64.21 (main-search SEE pruning, closed as a negative result): a properly-gated Stockfish-style main-search SEE prune measured NO gain at a fair time control (-17 +/- 31 Elo; the +137 at nodes=100000 was a node-budget artifact). Diagnostics showed the prune is well-targeted (flagged quiets cut off at 1.35% vs a 4.03% baseline) but LOW-LEVERAGE precisely because the current lmr_reduction this task replaces is nearly a no-op (lmr_depth ~ raw depth), so the lmrDepth-scaled prune is inert. Once this LMR refinement lands (aggressive, history/depth-scaled reductions), main-search SEE pruning becomes worth re-measuring — its leverage in Stockfish comes from exactly that kind of LMR plus continuation-history pre-filtering. Suggestion for whoever picks up this task: after it merges, file a fresh ticket to re-attempt main-search SEE pruning; the prior implementation + mechanism diagnostics live in branch task-64.21-main-search-see-pruning (target 2353acb).
+---
+
+author: @codex
+created: 2026-07-22 00:13
+---
+Implementation handoff
+Branch: task-64.22-lmr-refinement
+Worktree: /Users/seabo/seaborg-worktrees/task-64.22-lmr-refinement
+Base: c4a655825bb4306557458fa82e4730cd0c5b8b12
+Implementation target: dc943ffd9d76497ecc9c8b76cada9df0395927b8
+Resolved findings: none (initial implementation)
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (no warnings)
+- cargo test --workspace: pass (all suites; engine lib 404 passed, 2 ignored)
+- Strength (AC7): round-robin base-vs-target SPRT tc=8+0.08, elo0=-5 elo1=0 alpha=beta=0.05 -> PASS at 670 games, +84.6 +/- 20.1 Elo (W-D-L 280-270-120, 0 crashes/forfeits). Baseline git:708486f (engine code identical to merge-base c4a6558) vs candidate git:e8684e9; recorded in BENCHMARKS.md. Report archived at /tmp/lmr-strength/report (report.json, games.pgn, runner.log).
+Known failures: none
 ---
 <!-- COMMENTS:END -->
