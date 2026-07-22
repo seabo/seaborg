@@ -1,9 +1,11 @@
 ---
 id: TASK-77
 title: Extract the search test module from search.rs into a sibling file
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-22 16:02'
+updated_date: '2026-07-22 16:12'
 labels:
   - search
   - hygiene
@@ -40,3 +42,14 @@ Sequencing. Run this only when no other search.rs task is in flight: any concurr
 - [ ] #6 No trait objects, dynamic dispatch, or new abstraction layers are introduced, and no search logic is split into modules
 - [ ] #7 No strength run is required and none is claimed; the change is behaviour-preserving by construction
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Create task branch/worktree from master (done).
+2. Move the inline `#[cfg(test)] mod tests` block (engine/src/search.rs lines 3761-7221, 113 #[test] fns) verbatim into engine/src/search/tests.rs, dedenting one level.
+3. Replace it in search.rs with `#[cfg(test)]\nmod tests;`. Module path crate::search::tests is unchanged, so `use super::*` and access to search.rs private items still resolve identically.
+4. Record pre-change `cargo test --workspace` passing count, then confirm the post-change count matches.
+5. Run cargo fmt --check, clippy -D warnings, cargo test --workspace; hand off to review.
+Note: the task description's line/test counts (6301 lines, tests at 657, 96 tests) are stale; master today has search.rs at 7221 lines with the test module at 3761 and 113 tests. Scope is unchanged.
+<!-- SECTION:PLAN:END -->
