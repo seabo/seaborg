@@ -6,6 +6,15 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+# Linking the promoted NNUE network into the binary is on by default, so a fresh
+# clone builds a full-strength engine with no operator setup. Turning it off
+# builds an engine that evaluates with the hand-crafted evaluation, which is how
+# the network's contribution is measured and how a build avoids carrying ~400 KB
+# of weights it does not want.
+[features]
+default = ["embedded-net"]
+embedded-net = []
+
 [dependencies]
 chess = { path = "../chess" }
 crossbeam-channel = "0.5.16"

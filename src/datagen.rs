@@ -90,6 +90,12 @@ pub struct DatagenArgs {
     /// evaluation. Unset is the reinforcement loop's generation-0 bootstrap, and
     /// each later generation passes the previous generation's promoted network so
     /// the games are labelled by the engine playing with it.
+    ///
+    /// Unset means the hand-crafted evaluation even in a build that embeds a
+    /// network. Data generation names its evaluator explicitly, unlike play,
+    /// because the generation a sample belongs to is defined by which network
+    /// produced it; picking up whatever the binary happened to embed would make
+    /// the labels untraceable.
     #[clap(long)]
     network: Option<PathBuf>,
 }
@@ -144,7 +150,7 @@ pub fn datagen(args: &DatagenArgs) {
 
     // Load the evaluator network before any games run so a bad path or malformed file fails the
     // whole run up front rather than after generating samples. Absent means generation-0 bootstrap:
-    // the engine plays with its hand-crafted evaluation.
+    // the engine plays with its hand-crafted evaluation, regardless of what this binary embeds.
     let network = match args.network.as_ref() {
         Some(path) => match load_network(path) {
             Ok(network) => Some(Arc::new(network)),

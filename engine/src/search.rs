@@ -686,17 +686,30 @@ pub struct SearchEngine {
     ///
     /// Held here so the choice outlives any single search: each move builds a fresh [`Search`] in
     /// [`SearchEngine::start_inner`], which clones this reference-counted handle rather than the
-    /// weights. It stays `None` by default, so an engine that is never pointed at a network keeps
-    /// evaluating with the hand-crafted score.
+    /// weights.
     network: Option<Arc<Network>>,
 }
 
 impl SearchEngine {
+    /// A fresh engine evaluating with the network built into this binary, or with the hand-crafted
+    /// evaluation in a build that has none.
+    ///
+    /// Full strength is the default rather than something a caller opts into: every consumer that
+    /// forgot to select a network would otherwise silently play weaker than the engine can. A
+    /// caller that genuinely wants the hand-crafted evaluation — self-play generating the
+    /// bootstrap generation's data, for one — says so with [`SearchEngine::set_network`].
     pub fn new(hash_size_mb: usize) -> Self {
         Self {
             table: Arc::new(Table::new(hash_size_mb)),
-            network: None,
+            network: nnue::built_in_network(),
         }
+    }
+
+    /// The network every subsequently started search will evaluate with, or `None` for the
+    /// hand-crafted evaluation. Reported to the operator so a running process can be attributed to
+    /// a specific evaluator.
+    pub fn network(&self) -> Option<&Network> {
+        self.network.as_deref()
     }
 
     /// Select the network every subsequently started search evaluates with, or `None` to restore
@@ -4095,6 +4108,15 @@ mod tests {
         };
 
         let mut engine = SearchEngine::new(1);
+        // A fresh engine starts on whatever this build embeds, so the hand-crafted baseline this
+        // test compares against has to be asked for.
+        assert_eq!(
+            engine.network().map(|n| n.param_hash()),
+            nnue::built_in_network().map(|n| n.param_hash()),
+            "a fresh engine must evaluate with the built-in network"
+        );
+        engine.set_network(None);
+        engine.new_game();
         let handcrafted = score_of(&engine);
 
         // Clear the shared table alongside each evaluator change, as the driver does: the table
@@ -5423,7 +5445,11 @@ mod tests {
 
         let position =
             Position::from_fen("2k5/8/b1p5/Pq2r1p1/8/5PpP/3p2P1/Q2R2K1 b - - 1 61").unwrap();
-        let engine = SearchEngine::new(1);
+        // Which iteration the mate first appears at follows from the leaf values, so the evaluator
+        // is pinned to the hand-crafted one this position was chosen against rather than left to
+        // whatever network the build embeds.
+        let mut engine = SearchEngine::new(1);
+        engine.set_network(None);
         let search = engine.start(position, SearchLimit::Depth(7));
         let events = search.events().clone();
         let outcome = search.wait();

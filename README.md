@@ -10,6 +10,13 @@ inspired by the approach used in [Pleco](https://github.com/sfleischman105/Pleco
 reported in the startup banner that `seaborg --uci` writes to the diagnostic
 channel. UCI traffic on stdout carries only the name and version.
 
+The build also embeds a trained NNUE network and plays with it, so there is no
+network file to ship alongside the binary and nothing to configure before it
+plays at full strength. The startup banner is followed by a line naming the
+active evaluator. `--no-default-features` builds an engine that carries no
+network and evaluates with the hand-crafted evaluation. See
+[docs/default-network.md](docs/default-network.md).
+
 Git is optional. Building from a source archive, or on a machine without Git
 installed, succeeds and embeds the commit as `unknown`. To pin a known revision
 in that situation — for a release tarball or a distribution package — set
@@ -27,6 +34,14 @@ Seaborg advertises exactly the options it implements:
   table. A change takes effect only at a quiescent boundary: any running search
   is stopped and joined before the table is reallocated, so a resize never pulls
   the allocation out from under a live search.
+- `EvalFile` (string, default `<empty>`) — which evaluator to play with.
+  `<empty>` is this build's built-in default (its embedded network, or the
+  hand-crafted evaluation in a build without one), `none` selects the
+  hand-crafted evaluation explicitly, and any other value is the path to an
+  `SBNN` network file that overrides the embedded one. A change takes effect at
+  a quiescent boundary and clears the hash, since cached static evaluations
+  belong to the evaluation function rather than to the position. See
+  [docs/default-network.md](docs/default-network.md).
 
 `Threads` is not advertised. The search currently runs a single worker, so there
 is no worker count to configure; a `Threads` option appears once Lazy SMP

@@ -262,6 +262,73 @@ class LoopTests(unittest.TestCase):
         self.assertFalse((self.state / rl.BEST_NETWORK).exists())
 
 
+class GateCommandTests(unittest.TestCase):
+    """Pin the per-side EvalFile options the real backend puts on the gate command.
+
+    The FakeBackend overrides ``gate`` wholesale, so nothing else exercises the
+    command construction — and the option that says which evaluator each side
+    plays with is exactly the thing a silent change would corrupt: the games
+    would still run and the report would still parse.
+    """
+
+    def _gate_command(self, baseline_network):
+        recorded = []
+
+        class RecordingBackend(rl.SubprocessBackend):
+            """The real command builder with only the subprocess call stubbed out."""
+
+            def _run(self, command, log, *, cwd=None):
+                recorded.append([str(part) for part in command])
+                return 0
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "gate"
+            # The gate hashes both networks to build their ids, so real bytes
+            # have to exist even though nothing plays a game here.
+            candidate = Path(tmp) / "candidate.sbnn"
+            candidate.write_bytes(b"candidate")
+            if baseline_network is not None:
+                baseline_network.write_bytes(b"baseline")
+            backend = RecordingBackend(
+                rl.LoopConfig(
+                    state_dir=Path(tmp),
+                    engine=Path("/engine/seaborg"),
+                    trainer_dir=Path("/trainer"),
+                    strength_script=Path("/trainer/strength_test.py"),
+                )
+            )
+            backend.gate(
+                baseline_network=baseline_network,
+                baseline_generation=0 if baseline_network is not None else None,
+                candidate_network=candidate,
+                output_dir=output,
+                generation=1,
+            )
+        return recorded[0]
+
+    def _option_after(self, command, flag):
+        return command[command.index(flag) + 1]
+
+    def test_bootstrap_baseline_asks_for_the_hand_crafted_evaluation(self):
+        # The engine binary embeds a network and plays with it by default, so
+        # generation 0's hand-crafted baseline must be requested explicitly. Left
+        # implicit, the gate would compare the candidate against the baked-in
+        # network while the ledger recorded the baseline as "handcrafted".
+        command = self._gate_command(None)
+        self.assertEqual(
+            self._option_after(command, "--baseline-option"), "EvalFile=none"
+        )
+
+    def test_a_promoted_baseline_is_named_by_absolute_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            best = Path(tmp) / "best.sbnn"
+            command = self._gate_command(best)
+        self.assertEqual(
+            self._option_after(command, "--baseline-option"),
+            f"EvalFile={best.resolve()}",
+        )
+
+
 class GateReportParsingTests(unittest.TestCase):
     """Pin the contract between the strength harness's report.json and the loop.
 
