@@ -1,11 +1,11 @@
 ---
 id: TASK-69.13
 title: Bake a default NNUE network into the binary and report the active evaluator
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-22 12:05'
-updated_date: '2026-07-22 12:11'
+updated_date: '2026-07-22 12:41'
 labels:
   - nnue
   - uci
@@ -63,3 +63,44 @@ Why now. TASK-69.11 and TASK-69.12 produce promoted networks that the shipped bi
 9. Update tools/rl gen-0 bootstrap to pass EvalFile=none for the hand-crafted baseline, which no longer follows from omitting the option.
 10. Document promotion/re-baking, building without a net, and reading evaluator identity; run fmt, clippy, and tests with the feature on and off.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implementation
+- Committed the promoted gen-000 network as engine/nets/default.sbnn (768x256, qa 255, qb 64, scale 400, parameter hash 0xdaf86bb3d50cec6b) and linked it in with include_bytes! from the new engine/src/nnue/embedded.rs, behind the default-on 'embedded-net' feature. The bytes are parsed by Network::read — the same loader an EvalFile path takes — once per process and shared behind an Arc.
+- Feature plumbing: lichess and the root seaborg package depend on engine with default-features = false and re-export their own 'embedded-net', because Cargo unifies features across the graph and a single edge left on the engine's defaults would silently undo --no-default-features for the whole build.
+- SearchEngine::new now starts on the built-in network, so full strength is the default rather than something each consumer opts into. Self-play sets its evaluator from SelfPlayConfig unconditionally, so datagen remains hand-crafted unless --network names a file; the Lichess bot picks the built-in network up and logs it at connect.
+- EvalFile is now three-valued (EvalFileSetting::BuiltInDefault / HandCrafted / File): <empty> restores the build's built-in evaluator, 'none' selects the hand-crafted evaluation, a path overrides. The advertised 'default <empty>' is truthful in both builds because <empty> is by definition the state a session starts in.
+- New nnue::ActiveEvaluator names the live evaluator (built-in id or file path, hidden width, parameter hash from Network::param_hash()). The UCI driver reports it at startup and after every evaluator change that took effect, on the diagnostic channel — stdout stays protocol-clean, and stderr is legal before the uci handshake where 'info string' would not be.
+- tools/rl now passes --baseline-option EvalFile=none for the generation-0 bootstrap; omitting the option would have gated candidates against the baked-in network while the ledger recorded the baseline as 'handcrafted'. Pinned by a new GateCommandTests case against the real SubprocessBackend command builder.
+- Docs: new docs/default-network.md (identity reporting, EvalFile semantics, building without a net, non-UCI entry points, the promote/re-bake procedure); README build + UCI-option sections; docs/strength-testing.md and tools/rl/README.md corrected for the changed default.
+
+Two pre-existing tests assumed a fresh SearchEngine evaluates hand-crafted and now ask for it explicitly: search_engine_starts_searches_with_the_configured_network (which also asserts the fresh engine carries the built-in network) and child_mate_windows_preserve_distance_parity (whose expected iteration depends on the leaf values).
+
+Real-binary smoke on the release build: startup prints 'evaluator: NNUE built-in gen-000 (hidden width 256, parameter hash 0xdaf86bb3d50cec6b)'; setoption EvalFile none then <empty> re-report 'hand-crafted evaluation' and the built-in in turn, with stdout carrying only uci/info/bestmove; --no-default-features prints 'evaluator: hand-crafted evaluation'; datagen on the embedded build still reports 'evaluator: hand-crafted'.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @codex
+created: 2026-07-22 12:41
+---
+Implementation handoff
+Branch: task-69.13-bake-default-network
+Worktree: /Users/seabo/seaborg-worktrees/task-69.13-bake-default-network
+Base: 30e530a14690aff8ec4e1a46508d8c4d990b28cd
+Implementation target: aa3cefc
+Resolved findings: none
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean
+- cargo clippy --workspace --all-targets --no-default-features -- -D warnings: clean
+- cargo test --workspace: pass (614 passed, 0 failed)
+- cargo test --workspace --no-default-features: pass (613 passed, 0 failed; the embedded-net-only test does not compile in that build)
+- python3 -m unittest in tools/rl: 15 pass; in tools/strength: 21 pass
+- release-binary smoke (cargo build --release): startup reports 'evaluator: NNUE built-in gen-000 (hidden width 256, parameter hash 0xdaf86bb3d50cec6b)'; EvalFile none then <empty> re-report hand-crafted and the built-in in turn with stdout carrying only uci/info/bestmove; --no-default-features release binary reports 'evaluator: hand-crafted evaluation'; datagen on the embedded build reports 'evaluator: hand-crafted'
+Known failures: none
+---
+<!-- COMMENTS:END -->
