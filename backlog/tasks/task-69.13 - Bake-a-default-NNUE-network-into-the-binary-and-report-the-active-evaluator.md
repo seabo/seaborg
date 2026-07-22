@@ -1,10 +1,11 @@
 ---
 id: TASK-69.13
 title: Bake a default NNUE network into the binary and report the active evaluator
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-22 12:05'
-updated_date: '2026-07-22 12:05'
+updated_date: '2026-07-22 12:11'
 labels:
   - nnue
   - uci
@@ -47,3 +48,18 @@ Why now. TASK-69.11 and TASK-69.12 produce promoted networks that the shipped bi
 - [ ] #8 Behaviour of `datagen --network`, the lichess client, and self-play under an embedded-net build is deliberate, documented, and covered by a test where it differs from the UCI driver; the hand-crafted-eval datagen path used by the bootstrap programme remains reachable
 - [ ] #9 Documentation records how to promote and re-bake a default network, how to build without one, and how to read the evaluator identity of a binary from its output
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Commit the promoted network as engine/nets/default.sbnn (gen-000: H=256, qa=255, qb=64, scale=400, param hash 0xdaf86bb3d50cec6b) and record its provenance identifier in source.
+2. Add a default-on 'embedded-net' Cargo feature to engine; set default-features=false on the engine dependency in lichess and the root seaborg package and re-export the feature from each, so --no-default-features at the root actually reaches engine rather than being re-enabled by feature unification.
+3. New engine module (nnue::embedded) exposing the include_bytes! blob, its stable identifier, and a OnceLock-cached Option<Arc<Network>> parsed through Network::read — no second parser. Test: the embedded bytes parse and the architecture matches.
+4. Add Network::param_hash() so the header identity a file declares can be reported from a loaded network.
+5. Introduce an Evaluator identity value (hand-crafted / built-in net / file net, each with hidden width and parameter hash) with a Display used for the report.
+6. SearchEngine::new starts from the built-in default network. Self-play already calls set_network explicitly from SelfPlayConfig, so datagen stays hand-crafted unless --network is given; pin that with a test. Lichess picks up the built-in default by construction.
+7. UCI: EngineOpt::EvalFile carries a three-way setting (Default / HandCrafted / Path). <empty> restores the built-in default, 'none' selects the hand-crafted evaluation, a path overrides. Parser + driver tests for all three.
+8. Report the active evaluator on the diagnostic channel at startup and on every successful evaluator change, leaving stdout protocol-clean; driver-level test over the command stream asserts both the report and stdout validity.
+9. Update tools/rl gen-0 bootstrap to pass EvalFile=none for the hand-crafted baseline, which no longer follows from omitting the option.
+10. Document promotion/re-baking, building without a net, and reading evaluator identity; run fmt, clippy, and tests with the feature on and off.
+<!-- SECTION:PLAN:END -->
