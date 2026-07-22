@@ -8,10 +8,17 @@
 //! suits an endpoint whose limits clear in seconds. Some limits do not: Lichess
 //! caps outgoing challenges and bot-versus-bot games per day, and a request over
 //! one of those can be refused for hours. Waiting that out inside a call would
-//! strand the caller on a request certain to fail, so those callers use the
-//! non-retrying entry point and act on the refusal themselves. Either way the
-//! response body is parsed for the rate-limit detail Lichess supplies — which
-//! limit fired, and how long it lasts.
+//! strand the caller on a request certain to fail.
+//!
+//! Two things keep that from happening. Challenge creation, where a day-long
+//! refusal is the expected case, uses the non-retrying entry point and acts on
+//! the refusal itself. Every other call still retries, but only through waits
+//! short enough to be worth sitting out; a longer one the server states is
+//! surfaced rather than slept, so no limit can hold a thread for hours whichever
+//! endpoint it arrives on.
+//!
+//! Either way the response body is parsed for the rate-limit detail Lichess
+//! supplies — which limit fired, and how long it lasts.
 //!
 //! Tests substitute a fake transport that replays recorded NDJSON and records the
 //! requests the bot makes, so challenge and game handling run with no network
@@ -44,7 +51,9 @@ const RESPONSE_TIMEOUT: Duration = Duration::from_secs(15);
 /// First wait applied after an HTTP 429, before any doubling. Lichess asks
 /// clients to wait about a minute on a 429, so honor that as the floor.
 const RATE_LIMIT_BASE: Duration = Duration::from_secs(60);
-/// Ceiling for the 429 backoff.
+/// Ceiling for the 429 backoff, and the longest server-stated wait this
+/// transport will sit out on the caller's behalf. Beyond it, waiting inside the
+/// request stops being a transient hiccup and becomes a stalled thread.
 const RATE_LIMIT_MAX: Duration = Duration::from_secs(600);
 /// How many times a single request is retried through 429s before giving up and
 /// surfacing the rate-limit error to the caller.
@@ -143,6 +152,7 @@ impl HttpTransport {
             &self.shutdown,
             |wait| self.shutdown.sleep(wait),
             Backoff::new(RATE_LIMIT_BASE, RATE_LIMIT_MAX),
+            RATE_LIMIT_MAX,
             RATE_LIMIT_MAX_ATTEMPTS,
             op,
         )
@@ -223,14 +233,24 @@ impl Transport for HttpTransport {
 /// Retry `op` through HTTP 429s with `backoff`, waiting via `sleep`.
 ///
 /// Any error other than [`Error::RateLimited`] propagates at once. After each
-/// 429 the wait is the server's `Retry-After` when present, else the next
-/// backoff step. The loop stops once `max_attempts` requests have been made or
-/// shutdown is requested, returning the last rate-limit error so the caller can
-/// decide what to do.
+/// 429 the wait is the one the server stated — from the response body, or from
+/// `Retry-After` when the body said nothing — else the next backoff step.
+///
+/// A stated wait longer than `max_wait` ends the loop instead of being slept.
+/// Retrying inside the request only makes sense for a limit that clears while
+/// the caller waits, and the limits Lichess reports in seconds-to-clear form can
+/// stand for hours: sleeping one out would block the calling thread far past the
+/// point of usefulness, on a retry the server has already told us will be
+/// refused. The caller gets the full stated duration and can act on it.
+///
+/// The loop otherwise stops once `max_attempts` requests have been made or
+/// shutdown is requested, returning the last rate-limit error either way so the
+/// caller can decide what to do.
 fn with_rate_limit_retry<T>(
     shutdown: &Shutdown,
     mut sleep: impl FnMut(Duration),
     mut backoff: Backoff,
+    max_wait: Duration,
     max_attempts: u32,
     mut op: impl FnMut() -> Result<T>,
 ) -> Result<T> {
@@ -240,7 +260,10 @@ fn with_rate_limit_retry<T>(
             Err(Error::RateLimited { key, retry_after }) => (key, retry_after),
             other => return other,
         };
-        if attempt >= max_attempts || shutdown.is_requested() {
+        if attempt >= max_attempts
+            || shutdown.is_requested()
+            || retry_after.is_some_and(|wait| wait > max_wait)
+        {
             return Err(Error::RateLimited { key, retry_after });
         }
         sleep(retry_after.unwrap_or_else(|| backoff.next_delay()));
@@ -380,6 +403,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::thread;
+    use std::time::Instant;
 
     use super::*;
 
@@ -493,6 +517,7 @@ mod tests {
             &Shutdown::new(),
             |wait| waits.borrow_mut().push(wait),
             Backoff::new(Duration::from_secs(1), Duration::from_secs(30)),
+            Duration::from_secs(30),
             5,
             || {
                 let mut calls = calls.borrow_mut();
@@ -512,6 +537,81 @@ mod tests {
     }
 
     #[test]
+    fn a_wait_longer_than_the_bound_is_surfaced_rather_than_slept() {
+        // Some Lichess limits are stated in hours, not seconds: the per-day caps
+        // on challenges and on games against other bots both report the time
+        // remaining. Sleeping one of those inside the request would park the
+        // calling thread for the rest of the day on a retry the server has
+        // already refused. The limit is real, so the error is the right outcome —
+        // it just belongs to the caller, who can pause the one activity affected
+        // and keep serving everything else.
+        let waits = RefCell::new(Vec::new());
+        let calls = RefCell::new(0u32);
+        let result = with_rate_limit_retry::<()>(
+            &Shutdown::new(),
+            |wait| waits.borrow_mut().push(wait),
+            Backoff::new(Duration::from_secs(1), Duration::from_secs(30)),
+            Duration::from_secs(30),
+            5,
+            || {
+                *calls.borrow_mut() += 1;
+                Err(Error::RateLimited {
+                    key: Some("bot.vsBot.day".to_string()),
+                    retry_after: Some(Duration::from_secs(7200)),
+                })
+            },
+        );
+        match result {
+            // The full duration reaches the caller: a clamped one would have it
+            // resume far too early, straight into the same refusal.
+            Err(Error::RateLimited { key, retry_after }) => {
+                assert_eq!(key.as_deref(), Some("bot.vsBot.day"));
+                assert_eq!(retry_after, Some(Duration::from_secs(7200)));
+            }
+            other => panic!("expected a rate-limit error, got {other:?}"),
+        }
+        assert_eq!(
+            calls.into_inner(),
+            1,
+            "the refused request must not be re-sent"
+        );
+        assert!(
+            waits.into_inner().is_empty(),
+            "the calling thread must not sleep out a limit this long"
+        );
+    }
+
+    #[test]
+    fn a_wait_at_the_bound_is_still_slept() {
+        // The boundary belongs to the retrying side: a limit that clears within
+        // the bound is exactly the transient case in-transport retrying exists
+        // for, so it must still be waited out transparently.
+        let waits = RefCell::new(Vec::new());
+        let calls = RefCell::new(0u32);
+        let result = with_rate_limit_retry(
+            &Shutdown::new(),
+            |wait| waits.borrow_mut().push(wait),
+            Backoff::new(Duration::from_secs(1), Duration::from_secs(30)),
+            Duration::from_secs(30),
+            5,
+            || {
+                let mut calls = calls.borrow_mut();
+                *calls += 1;
+                if *calls == 1 {
+                    Err(Error::RateLimited {
+                        key: None,
+                        retry_after: Some(Duration::from_secs(30)),
+                    })
+                } else {
+                    Ok("ok".to_string())
+                }
+            },
+        );
+        assert_eq!(result.unwrap(), "ok");
+        assert_eq!(waits.into_inner(), vec![Duration::from_secs(30)]);
+    }
+
+    #[test]
     fn gives_up_after_the_attempt_budget() {
         // Always rate limited: the op runs exactly `max_attempts` times and then
         // the rate-limit error surfaces.
@@ -520,6 +620,7 @@ mod tests {
             &Shutdown::new(),
             |_| {},
             Backoff::new(Duration::from_secs(1), Duration::from_secs(30)),
+            Duration::from_secs(30),
             3,
             || {
                 *calls.borrow_mut() += 1;
@@ -542,6 +643,7 @@ mod tests {
             &Shutdown::new(),
             |wait| waits.borrow_mut().push(wait),
             Backoff::new(Duration::from_secs(1), Duration::from_secs(30)),
+            Duration::from_secs(30),
             4,
             || {
                 *calls.borrow_mut() += 1;
@@ -573,6 +675,7 @@ mod tests {
             &shutdown,
             |wait| waits.borrow_mut().push(wait),
             Backoff::new(Duration::from_secs(1), Duration::from_secs(30)),
+            Duration::from_secs(30),
             5,
             || {
                 *calls.borrow_mut() += 1;
@@ -633,6 +736,7 @@ mod tests {
             &Shutdown::new(),
             |_| {},
             Backoff::new(Duration::from_secs(1), Duration::from_secs(30)),
+            Duration::from_secs(30),
             5,
             || {
                 *calls.borrow_mut() += 1;
@@ -703,6 +807,39 @@ mod tests {
             served.load(Ordering::SeqCst),
             1,
             "the refused request must not be re-sent"
+        );
+    }
+
+    #[test]
+    fn a_retrying_post_also_refuses_to_sleep_out_a_day_long_limit() {
+        // The endpoints that still retry in-transport — accepting and declining
+        // challenges, moves, cancels — share the response parsing with the
+        // challenge path, so they see these hours-long durations too. Accepting a
+        // bot's challenge starts a game, which is what the per-day bot-versus-bot
+        // cap is charged against, so this is a response the accept endpoint can
+        // genuinely return. Retrying it would block the thread that runs the
+        // event loop for the rest of the day.
+        let (port, served) = serve_repeating("429 Too Many Requests", "", BOT_VS_BOT_BODY);
+        let started = Instant::now();
+        let result = transport_for(port).post_empty("/api/challenge/abcd1234/accept");
+        match result {
+            Err(Error::RateLimited { key, retry_after }) => {
+                assert_eq!(key.as_deref(), Some("bot.vsBot.day"));
+                assert_eq!(retry_after, Some(Duration::from_secs(7200)));
+            }
+            other => panic!("expected a rate-limit error, got {other:?}"),
+        }
+        assert_eq!(
+            served.load(Ordering::SeqCst),
+            1,
+            "the refused request must not be re-sent"
+        );
+        // Belt and braces: the assertion above already rules out a retry, but a
+        // wall-clock bound states the property the test actually protects, which
+        // is that the caller is not held while the limit runs.
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the call must return promptly rather than waiting out the limit"
         );
     }
 
