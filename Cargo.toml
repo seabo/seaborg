@@ -41,10 +41,17 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+# The shipped binary embeds the promoted network by default. Both paths into the
+# engine must be switched together — a single edge left on its defaults would
+# re-enable embedding for the whole build through Cargo's feature unification.
+[features]
+default = ["embedded-net"]
+embedded-net = ["engine/embedded-net", "lichess/embedded-net"]
+
 [dependencies]
 chess = { path = "./chess" }
-engine = { path = "./engine" }
-lichess = { path = "./lichess" }
+engine = { path = "./engine", default-features = false }
+lichess = { path = "./lichess", default-features = false }
 clap = { version = "4.6.2", features = ["derive"] }
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_trace"] }
 separator.workspace = true

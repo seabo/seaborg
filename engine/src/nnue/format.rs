@@ -182,6 +182,18 @@ impl Network {
         &self.b_out
     }
 
+    /// The FNV-1a hash of the parameter blob — the value this network's header
+    /// records, and the field that distinguishes two networks of identical
+    /// architecture.
+    ///
+    /// Recomputed from the weights rather than remembered from the file, so it
+    /// describes the network in memory and is equally available for one that was
+    /// built rather than loaded. That costs an encode of the blob, which is why
+    /// this is for reporting and not for a hot path.
+    pub fn param_hash(&self) -> u64 {
+        fnv1a_64(&self.encode_blob())
+    }
+
     /// Number of bytes the parameter blob occupies on disk.
     fn param_bytes(&self) -> u64 {
         2 * self.w_ft.len() as u64

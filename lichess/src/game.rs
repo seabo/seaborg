@@ -41,6 +41,10 @@ pub struct EngineMoveChooser {
 
 impl EngineMoveChooser {
     /// Build a chooser whose engine uses a `hash_mb`-mebibyte hash table.
+    ///
+    /// It evaluates with the network built into the binary, which is what a deployment should play
+    /// at; the bot has no evaluator option of its own, so which network it used is settled by which
+    /// binary was deployed and is recorded in the startup log.
     pub fn new(hash_mb: usize) -> EngineMoveChooser {
         EngineMoveChooser {
             engine: SearchEngine::new(hash_mb),

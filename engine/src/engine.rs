@@ -1,6 +1,6 @@
 use super::info::{format_search_event, format_search_outcome};
-use super::nnue::Network;
-use super::options::{advertised_uci_options, EngineConfig, EngineOpt};
+use super::nnue::{built_in_network, ActiveEvaluator, Network, NetworkOrigin};
+use super::options::{advertised_uci_options, EngineConfig, EngineOpt, EvalFileSetting};
 use super::search::{SearchEngine, SearchEvent, SearchHandle, SearchLimit};
 use super::time::{self, TimingMode};
 use super::uci::{self, Command};
@@ -125,6 +125,17 @@ where
         info.short_commit()
     );
 
+    // Two binaries built from the same commit play very differently depending on which evaluator is
+    // live, and nothing else in the output reveals it. Naming it at startup, and again on every
+    // change, is what makes a game or a benchmark attributable after the fact. The report shares the
+    // diagnostic channel with the banner: `info string` would be the protocol-native form, but no
+    // `info` line may precede the `uci` handshake, and stderr is legal at every point in the session.
+    let _ = writeln!(
+        errors,
+        "evaluator: {}",
+        ActiveEvaluator::of_built_in(search_engine.network())
+    );
+
     loop {
         let event = next_event(&uci_rx, active_search.as_ref());
         match event {
@@ -170,7 +181,7 @@ where
                 // weights never race a worker mid-search. A file that will not load leaves the
                 // current selection untouched and reports the reason, exactly as a rejected hash
                 // does.
-                EngineOpt::EvalFile(path) => {
+                EngineOpt::EvalFile(setting) => {
                     if let Some(search) = active_search.take() {
                         stop_search(search, &mut output);
                     }
@@ -179,15 +190,23 @@ where
                     // therefore invalidates those cached values, so a successful change clears the
                     // hash — as `ucinewgame` does — before the next search can read a stale eval. A
                     // file that fails to load changes nothing and leaves the hash intact.
-                    match path {
-                        None => {
-                            search_engine.set_network(None);
-                            search_engine.new_game();
+                    let applied = match setting {
+                        EvalFileSetting::BuiltInDefault => {
+                            let network = built_in_network();
+                            let evaluator = ActiveEvaluator::of_built_in(network.as_deref());
+                            search_engine.set_network(network);
+                            Some(evaluator)
                         }
-                        Some(path) => match load_network(&path) {
+                        EvalFileSetting::HandCrafted => {
+                            search_engine.set_network(None);
+                            Some(ActiveEvaluator::HandCrafted)
+                        }
+                        EvalFileSetting::File(path) => match load_network(&path) {
                             Ok(network) => {
+                                let evaluator =
+                                    ActiveEvaluator::of(&network, NetworkOrigin::File(path));
                                 search_engine.set_network(Some(Arc::new(network)));
-                                search_engine.new_game();
+                                Some(evaluator)
                             }
                             Err(err) => {
                                 let _ = writeln!(
@@ -195,8 +214,15 @@ where
                                     "error: could not load EvalFile {}: {err}",
                                     path.display()
                                 );
+                                None
                             }
                         },
+                    };
+                    // Only a change that actually took effect clears the hash and is reported, so
+                    // the last evaluator line always names what the engine is really using.
+                    if let Some(evaluator) = applied {
+                        search_engine.new_game();
+                        let _ = writeln!(errors, "evaluator: {evaluator}");
                     }
                 }
             },
@@ -438,6 +464,41 @@ mod tests {
         (output.contents(), errors.contents())
     }
 
+    /// Runs a script, letting the search it starts run to completion before quitting.
+    ///
+    /// [`run_script`] feeds the whole script at once, which queues `quit` behind `go`; the driver
+    /// then cancels the search the moment it reaches the quit, and the reported move is whatever
+    /// was current at cancellation rather than what the search concluded. A test about *which move
+    /// an evaluator chooses* needs the search to finish, so `quit` is withheld until a `bestmove`
+    /// has been emitted.
+    fn run_to_bestmove(script: &str) -> (String, String) {
+        let (input_tx, input_rx) = unbounded::<Vec<u8>>();
+        let output = SharedWriter::default();
+        let errors = SharedWriter::default();
+        let (thread_output, thread_errors) = (output.clone(), errors.clone());
+        let driver = thread::spawn(move || {
+            run(
+                TEST_INFO,
+                ChannelReader(input_rx),
+                thread_output,
+                thread_errors,
+            )
+        });
+
+        input_tx.send(script.as_bytes().to_vec()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !output.contents().contains("bestmove ") {
+            assert!(
+                Instant::now() < deadline,
+                "the search never reported a bestmove"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        input_tx.send(b"quit\n".to_vec()).unwrap();
+        driver.join().unwrap();
+        (output.contents(), errors.contents())
+    }
+
     fn bestmove_from(output: &str) -> &str {
         let mut bestmoves = output
             .lines()
@@ -462,22 +523,63 @@ mod tests {
         assert_eq!(diagnostics_after_banner(&errors), "");
     }
 
-    /// Diagnostics emitted after the startup banner has been stripped.
+    /// The two lines every run emits before it processes any command: the identity banner and the
+    /// report of the evaluator the build starts with. Built from the same value the driver reports,
+    /// so these tests hold in a build with an embedded network and in one without.
+    fn startup_preamble() -> String {
+        format!(
+            "{TEST_BANNER}evaluator: {}\n",
+            ActiveEvaluator::of_built_in(built_in_network().as_deref())
+        )
+    }
+
+    /// Diagnostics emitted after the fixed startup preamble has been stripped.
     fn diagnostics_after_banner(errors: &str) -> &str {
-        errors
-            .strip_prefix(TEST_BANNER)
-            .expect("stderr must begin with the startup banner")
+        let preamble = startup_preamble();
+        assert!(
+            errors.starts_with(preamble.as_str()),
+            "stderr must begin with the startup banner and evaluator report, got {errors:?}"
+        );
+        &errors[preamble.len()..]
     }
 
     #[test]
     fn startup_emits_no_stdout_and_a_trimmed_stderr_banner() {
         let (output, errors) = run_script("");
-        // Acceptance #1: no unsolicited non-UCI stdout before the uci command.
+        // No unsolicited non-UCI stdout before the uci command.
         assert_eq!(output, "");
-        // Acceptance #4: commit metadata is trimmed and lives on the
-        // diagnostic channel, never on protocol stdout.
-        assert_eq!(errors, TEST_BANNER);
+        // Commit metadata is trimmed and lives on the diagnostic channel, never on protocol stdout.
+        assert_eq!(errors, startup_preamble());
         assert!(!errors.contains("0123456789abcdef"));
+    }
+
+    /// Startup names the evaluator the process will actually play with.
+    ///
+    /// Without this line nothing in a session's output distinguishes a binary running a network
+    /// from one running the hand-crafted evaluation, and a recorded game or benchmark cannot be
+    /// attributed to an evaluator after the fact.
+    #[test]
+    fn startup_names_the_evaluator_the_build_actually_runs() {
+        let (_, errors) = run_script("");
+        let report = errors
+            .lines()
+            .find_map(|line| line.strip_prefix("evaluator: "))
+            .expect("startup must name the active evaluator");
+
+        match built_in_network() {
+            Some(network) => {
+                assert!(report.starts_with("NNUE built-in "), "got {report:?}");
+                assert!(
+                    report.contains(&format!("hidden width {}", network.hidden_width())),
+                    "got {report:?}"
+                );
+                assert!(
+                    report.contains(&format!("parameter hash {:#018x}", network.param_hash())),
+                    "got {report:?}"
+                );
+            }
+            None => assert_eq!(report, "hand-crafted evaluation"),
+        }
     }
 
     #[test]
@@ -599,17 +701,108 @@ mod tests {
 
     #[test]
     fn eval_file_option_loads_a_valid_network_and_keeps_searching() {
-        // The committed golden network is a valid SBNN file. Selecting it must be accepted silently
-        // (no diagnostics beyond the banner) and leave the engine able to search and report a move,
-        // proving the load reached the search path rather than merely being parsed. The path is
-        // relative to the package directory, the working directory of a cargo test binary.
+        // The committed golden network is a valid SBNN file. Selecting it must leave the engine able
+        // to search and report a move, proving the load reached the search path rather than merely
+        // being parsed. The path is relative to the package directory, the working directory of a
+        // cargo test binary.
         let (output, errors) = run_script(
             "setoption name EvalFile value tests/fixtures/golden_v1.sbnn\n\
              go depth 4\nisready\nquit\n",
         );
         assert!(output.contains("bestmove "));
         assert!(output.contains("readyok"));
-        assert_eq!(diagnostics_after_banner(&errors), "");
+        // The only diagnostic is the report of the evaluator that took effect, naming the file the
+        // operator asked for.
+        assert_eq!(
+            diagnostics_after_banner(&errors),
+            "evaluator: NNUE file tests/fixtures/golden_v1.sbnn \
+             (hidden width 16, parameter hash 0xf6cfbb686714f961)\n"
+        );
+    }
+
+    /// A driver given no options plays with the embedded network, not the hand-crafted evaluation.
+    ///
+    /// The point of embedding is that the strength is there without anyone asking for it, so this
+    /// checks behaviour rather than wiring: the scores a plain session reports must be the ones the
+    /// network produces, which differ from the hand-crafted evaluation's on any position the two
+    /// disagree about.
+    #[test]
+    fn a_session_with_no_options_evaluates_with_the_embedded_network() {
+        let scores = |prefix: &str| {
+            let (output, _) = run_to_bestmove(&format!(
+                "{prefix}position fen \
+                 r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1\n\
+                 go depth 4\n"
+            ));
+            let scores: Vec<String> = output
+                .lines()
+                .filter_map(|line| line.split(" score cp ").nth(1))
+                .filter_map(|rest| rest.split_whitespace().next())
+                .map(str::to_owned)
+                .collect();
+            assert!(!scores.is_empty(), "a completed search reports scores");
+            scores
+        };
+
+        let default_session = scores("");
+        let hand_crafted = scores("setoption name EvalFile value none\n");
+
+        match built_in_network() {
+            // Identical scores would mean the build shipped weights it never consults.
+            Some(_) => assert_ne!(
+                default_session, hand_crafted,
+                "an untouched session did not evaluate with the embedded network"
+            ),
+            // Without an embedded network the built-in default *is* the hand-crafted evaluation, so
+            // asking for it explicitly must change nothing.
+            None => assert_eq!(default_session, hand_crafted),
+        }
+    }
+
+    /// The three `EvalFile` values each select a distinct evaluator, and each change is reported.
+    ///
+    /// The distinction only exists because a build can embed a network: restoring the default and
+    /// asking for the hand-crafted evaluation are then different requests, and a binary with no way
+    /// to express the second could not be measured against its own network.
+    #[test]
+    fn eval_file_selects_a_file_the_built_in_default_and_the_hand_crafted_evaluation() {
+        let (output, errors) = run_script(
+            "setoption name EvalFile value tests/fixtures/golden_v1.sbnn\n\
+             setoption name EvalFile value none\n\
+             setoption name EvalFile value <empty>\n\
+             go depth 2\nisready\nquit\n",
+        );
+
+        // Every line of protocol output is a legal UCI message: the evaluator reports went to the
+        // diagnostic channel and never entered the stream a GUI parses.
+        assert!(output.contains("bestmove "));
+        assert!(output.contains("readyok"));
+        for line in output.lines() {
+            assert!(
+                line.starts_with("info ") || line.starts_with("bestmove ") || line == "readyok",
+                "non-UCI line on stdout: {line:?}"
+            );
+        }
+
+        let reports: Vec<&str> = errors
+            .lines()
+            .filter_map(|line| line.strip_prefix("evaluator: "))
+            .collect();
+        let built_in = ActiveEvaluator::of_built_in(built_in_network().as_deref()).to_string();
+        assert_eq!(
+            reports,
+            [
+                // Startup: whatever this build embeds.
+                built_in.as_str(),
+                // An explicit path overrides it.
+                "NNUE file tests/fixtures/golden_v1.sbnn \
+                 (hidden width 16, parameter hash 0xf6cfbb686714f961)",
+                // `none` reaches the hand-crafted evaluation even in a build that embeds a network.
+                "hand-crafted evaluation",
+                // `<empty>` returns to the build's own default, matching the startup report.
+                built_in.as_str(),
+            ]
+        );
     }
 
     #[test]

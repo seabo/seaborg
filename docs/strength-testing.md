@@ -79,6 +79,12 @@ against `--candidate-option EvalFile=candidate.sbnn`. Both binaries may then be
 the same file; the report still records each side's identity, options, and the
 shared byte hash.
 
+A seaborg binary embeds a network and plays with it by default, so a side given
+no `EvalFile` plays that network, not the hand-crafted evaluation. Measuring
+against the hand-crafted evaluation requires `EvalFile=none` on that side. Which
+evaluator a build carries is printed at startup and is what a result must be
+attributed to; see [default-network.md](default-network.md).
+
 ## Resource limits
 
 `--limit` sets the FastChess resource budget applied equally to both engines.
