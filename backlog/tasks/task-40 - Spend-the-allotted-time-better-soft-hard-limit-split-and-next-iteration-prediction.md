@@ -3,9 +3,11 @@ id: TASK-40
 title: >-
   Spend the allotted time better: soft/hard limit split and next-iteration
   prediction
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-18 12:17'
+updated_date: '2026-07-22 02:57'
 labels:
   - engine
   - time
@@ -43,3 +45,15 @@ Strength impact should be measured, not assumed. TASK-27 tooling and the TASK-38
 - [ ] #4 TASK-7 overflow safety, TASK-32 guaranteed-legal-move behavior, and TASK-38 proportional allocation all still hold, evidenced by their existing regression tests passing
 - [ ] #5 A self-play match against the pre-change build at 2+0.05 and 10+0.1 shows a non-negative Elo delta with zero time forfeits and zero illegal moves
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Allocation (engine/src/time.rs): add `MoveBudget { optimum, maximum }` and `TimeControl::to_move_budget`. The optimum is exactly today's `to_move_time` (which stays, delegating to the budget, so the TASK-7/TASK-38 allocation tests keep pinning it byte-for-byte). The maximum is a multiple of the optimum, clamped by the same max-clock-share cap the optimum already obeys, so the hard limit can never ask for more of the clock than the existing overflow-safe cap allows. `go movetime` stays strict: optimum == maximum.
+2. Plumbing (engine/src/search.rs): replace `SearchLimit::Time(Duration)` with `SearchLimit::Time(TimeBudget)` carrying soft and hard durations (`TimeBudget::fixed` for the strict case). Convert to a `Deadlines { soft, hard }` pair of `Instant`s at thread spawn. `Search::stopping()` keeps using the hard deadline only, so the abort path — and therefore TASK-32's guaranteed-first-ply and TASK-39's stop responsiveness — is unchanged.
+3. Iteration prediction (`Search::iterative_deepening`): time each completed iteration, derive a branching factor from the ratio of the last two iteration costs (clamped, and only once two real samples exist), and decline to start iteration d+1 when `elapsed + cost_d * ebf` exceeds the effective soft deadline. With fewer than two samples the loop is ungated, as today.
+4. Instability extension: after each iteration compute whether the root best move changed and how far the root score dropped, and scale the soft deadline up by a bounded factor, clamped to the hard deadline. This is what lets the prediction gate spend past the optimum only where the position warrants it.
+5. Update callers: engine/src/engine.rs, engine/src/game.rs, lichess/src/game.rs, benches/search.rs, engine/tests/timed_selfplay.rs and the search/uci unit tests.
+6. Tests: unit tests for the budget arithmetic (optimum unchanged, maximum bounded by the clock-share cap, movetime strict), for the branching-factor gate (deterministic, injected iteration costs), and for the instability scale. Assert the hard deadline is never exceeded and the existing TASK-7/32/38 regression tests still pass.
+7. Required checks (fmt, strict clippy, workspace tests), then a self-play round robin against the merge-base build at 2+0.05 and 10+0.1 recorded in BENCHMARKS.md.
+<!-- SECTION:PLAN:END -->
