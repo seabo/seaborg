@@ -1,11 +1,11 @@
 ---
 id: TASK-77
 title: Extract the search test module from search.rs into a sibling file
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-22 16:02'
-updated_date: '2026-07-22 16:12'
+updated_date: '2026-07-22 16:17'
 labels:
   - search
   - hygiene
@@ -53,3 +53,40 @@ Sequencing. Run this only when no other search.rs task is in flight: any concurr
 5. Run cargo fmt --check, clippy -D warnings, cargo test --workspace; hand off to review.
 Note: the task description's line/test counts (6301 lines, tests at 657, 96 tests) are stale; master today has search.rs at 7221 lines with the test module at 3761 and 113 tests. Scope is unchanged.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Relocated the inline `#[cfg(test)] mod tests` block from engine/src/search.rs into engine/src/search/tests.rs, replacing it with `#[cfg(test)] mod tests;`. search.rs goes 7221 -> 3762 lines; tests.rs is 3458 lines. The module path crate::search::tests is unchanged, so `use super::*` and the tests' access to search.rs private items resolve identically; no import changes were needed.
+
+Note on the task description's figures: they were stale. On master 5a43da2 search.rs was 7221 lines (not 6301), the test module began at line 3761 (not 657), and it held 113 #[test] functions (not 96). Scope was unchanged; the counts below are against the actual pre-change commit.
+
+Fidelity evidence:
+- git diff of search.rs is 1 insertion / 3460 deletions and contains nothing but the removed test block plus `mod tests;`. No search logic touched.
+- Normalising away whitespace, braces and commas, the moved block is character-identical to the original (108675 == 108675 chars). The only textual changes are rustfmt reflowing lines that gained four columns from the one-level dedent (e.g. a collapsed trailing comma, a match arm losing redundant braces).
+- `cargo test -p engine --lib -- --list` name lists before and after diff clean: 428 names, of which 113 are search::tests::*.
+- Workspace passing count unchanged at 629 passed / 0 failed / 2 ignored.
+
+No trait objects, dynamic dispatch or abstraction layers introduced; no search logic split into modules. Behaviour-preserving by construction, so no strength run was needed or claimed.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @claude
+created: 2026-07-22 16:17
+---
+Implementation handoff
+Branch: task-77-extract-search-tests
+Worktree: /Users/seabo/seaborg-worktrees/task-77-extract-search-tests
+Base: 5a43da27e0343b2f0a2374f3afeca1c0147dabaa
+Implementation target: 59f1445
+Resolved findings: none
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass, no warnings
+- cargo test --workspace: pass, 629 passed / 0 failed / 2 ignored, identical to the pre-change count on 5a43da2
+- cargo test -p engine --lib -- --list: 428 test names, diff-clean against the pre-change list
+Known failures: none
+---
+<!-- COMMENTS:END -->
