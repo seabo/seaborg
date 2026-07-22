@@ -3,11 +3,11 @@ id: TASK-64.22
 title: >-
   Refine late move reduction with a log-based table, history modulation, and
   node-type adjustments
-status: Ready to Merge
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-21 21:22'
-updated_date: '2026-07-22 00:29'
+updated_date: '2026-07-22 01:22'
 labels:
   - search
   - strength
