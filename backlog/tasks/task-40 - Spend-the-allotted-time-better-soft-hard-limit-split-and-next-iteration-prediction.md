@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-07-18 12:17'
-updated_date: '2026-07-22 02:57'
+updated_date: '2026-07-22 11:22'
 labels:
   - engine
   - time
@@ -57,3 +57,31 @@ Strength impact should be measured, not assumed. TASK-27 tooling and the TASK-38
 6. Tests: unit tests for the budget arithmetic (optimum unchanged, maximum bounded by the clock-share cap, movetime strict), for the branching-factor gate (deterministic, injected iteration costs), and for the instability scale. Assert the hard deadline is never exceeded and the existing TASK-7/32/38 regression tests still pass.
 7. Required checks (fmt, strict clippy, workspace tests), then a self-play round robin against the merge-base build at 2+0.05 and 10+0.1 recorded in BENCHMARKS.md.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implementation complete; strength measurement in progress.
+
+Allocation. `TimeControl::to_move_budget` returns `MoveBudget { optimum, maximum }`. The optimum is byte-for-byte the figure `to_move_time` always produced — `to_move_time` now delegates to it, and a test asserts the two agree across the full clock/increment/movestogo grid, so the TASK-7 overflow tests and TASK-38 proportional-allocation tests keep pinning exactly what they pinned before. The maximum multiplies the *untrimmed* allocation by 3 and then applies the same `MAX_CLOCK_SHARE_DIVISOR` cap, which means a move the cap already trimmed gets no extension at all. `go movetime` returns optimum == maximum.
+
+Plumbing. `SearchLimit::Time` carries a `TimeBudget { soft, hard }` (`TimeBudget::fixed` for the strict case; `new` raises a hard below soft so `soft <= hard` holds by construction). At thread spawn both resolve against one clock read into `Deadlines`. `Search::stopping()` is unchanged and still tests only the hard deadline, so TASK-32's guaranteed-first-ply suppression and TASK-39's cancellation responsiveness are untouched by construction, not by re-verification.
+
+Prediction. `IterationCost` keeps the last two iteration durations; `predict_next` extrapolates the observed ratio, clamped to [1.5, 8.0], and withholds an estimate entirely when the earlier of the two ran under 500us (where clock resolution dominates) or when fewer than two have completed. A withheld estimate leaves the loop ungated, which is the pre-change behaviour, so the first ply can never be declined.
+
+Instability. After each iteration, `instability_scale` combines a changed root best move (+0.6) with the root score drop (drop/150cp, capped at +1.0) into a multiplier on the soft limit, clamped by the hard deadline in `next_iteration_fits`.
+
+Observed effect (startpos, `go wtime 60000 winc 500`, optimum 1997ms): baseline completes depth 16 at 1623ms then burns to ~2000ms on a depth-17 iteration it discards. The candidate declines depth 16, returns the same move e2e4 at depth 15 in ~1150ms, and hands ~850ms back to later moves.
+
+Checks: `cargo fmt --check` clean, `cargo clippy --workspace --all-targets --all-features -- -D warnings` clean, `cargo test --workspace` 622 passed / 0 failed.
+
+Strength, 2+0.05 (AC#5, first of two controls). Round-robin SPRT against the merge-base build, recorded in BENCHMARKS.md.
+
+Baseline git:108c2bd (sha256 3e8b798c...), candidate git:7b474d2 (sha256 5bc910a7...), fastchess alpha 1.5.0, openings-v1.epd, tc=2+0.05, 64MB hash, one worker per engine, concurrency 4, Apple M3 Pro.
+
+PASS: LLR 2.96 crossed the +2.94 boundary at 614 games. Elo +92.1 +/- 19.7 (pentanomial). W-D-L 255-263-96, pentanomial 6-34-108-113-46. Zero crashes, zero forfeits; all 614 games carry Termination "normal" and the runner log contains no illegal-move, forfeit, disconnect or timeout line — the harness fails closed on any of these before recording a result.
+
+Artifacts: /tmp/task40-tc2/{report.json,runner.log,games.pgn}.
+
+The 10+0.1 control is running now, sequentially rather than concurrently so the two matches do not contend for cores.
+<!-- SECTION:NOTES:END -->
