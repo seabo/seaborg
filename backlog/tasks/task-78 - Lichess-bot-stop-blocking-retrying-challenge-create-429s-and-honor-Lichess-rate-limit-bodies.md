@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-07-22 21:41'
-updated_date: '2026-07-22 22:49'
+updated_date: '2026-07-22 22:54'
 labels: []
 dependencies: []
 priority: high
@@ -101,6 +101,50 @@ Measured against production: the reported 15m16s gap between a challenge and its
 Behavioral note for review, outside the acceptance criteria: `anchors/seaborg-lichess.toml` sets matchmaking `mode = "rated"`, and rated challenges are frequently rejected by other bots at creation. Each rejection spends one of the 200/day `challenge.create.user` credits and triggers the hour-long per-opponent backoff, so the eligible pool drains even with this fix in place. Changing the deployed config was not in scope.
 
 A second residual: cancelling a lapsed outgoing challenge still goes through the retrying `post_empty`. That path is a different Lichess route with its own limits, not the per-day challenge caps, so it was left on the existing policy.
+
+Rework attempt 2 (REV-1-01).
+
+Resolved REV-1-01. The body parsing added in attempt 1 sits in `check_status`,
+shared by every entry point, so it also changed the retry policy of the
+endpoints that still retry in-transport: `with_rate_limit_retry` slept the
+server-stated wait with no bound, since only the local `Backoff` was capped by
+`RATE_LIMIT_MAX`. A 429 carrying the `bot.vsBot.day` envelope would have slept
+4 x 7200s inside one call, against 900s from the local backoff before the
+change. The accept endpoint can return that response — the cap is charged on
+game start, and accepting a bot's challenge starts a game — and accepts run on
+the event-consumer loop.
+
+Behavior changed: `with_rate_limit_retry` takes a `max_wait` bound, given
+`RATE_LIMIT_MAX`. A server-stated wait longer than that ends the loop instead
+of being slept, and the error carries the full stated duration so the caller
+can act on the real remaining time. A stated wait within the bound is slept
+exactly as before, so short limits still clear transparently, and the
+worst-case in-transport block for streams, moves, and accept/decline is back to
+what it was at the base commit. `check_status` is untouched, so the matchmaker
+still sets its cooldown from Lichess's true duration.
+
+Also corrected the `with_rate_limit_retry` doc comment, which still described
+the wait as coming from `Retry-After` alone, and the module doc, which
+described the non-retrying entry point as the only protection against a
+day-long wait.
+
+Verification: three new tests, and the guard was removed locally to confirm
+what each one actually catches.
+
+- `a_wait_longer_than_the_bound_is_surfaced_rather_than_slept` asserts one
+  attempt, no sleep, and the full 7200s reaching the caller. Without the guard
+  it fails on the attempt count, 5 against the expected 1 — in production those
+  five attempts are the four 7200s sleeps. This is the regression test.
+- `a_retrying_post_also_refuses_to_sleep_out_a_day_long_limit` drives
+  `post_empty` against a loopback server returning the real `bot.vsBot.day`
+  body and asserts a single request, covering the same guard through a real
+  retrying entry point rather than the free function. It was not run against
+  the unguarded code: doing so would sleep out the four real 7200s waits.
+- `a_wait_at_the_bound_is_still_slept` passes with or without the guard, as
+  expected. It is a boundary characterization test, not a regression test: it
+  pins the stated wait equal to the bound on the retrying side, so a later
+  tightening of the bound cannot silently stop short limits from being waited
+  out.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
