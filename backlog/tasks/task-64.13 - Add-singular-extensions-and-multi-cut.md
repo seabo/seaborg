@@ -4,7 +4,7 @@ title: Add singular extensions and multi-cut
 status: To Do
 assignee: []
 created_date: '2026-07-19 13:33'
-updated_date: '2026-07-21 22:34'
+updated_date: '2026-07-22 02:55'
 labels:
   - search
   - extensions
@@ -14,7 +14,7 @@ dependencies:
 references:
   - engine/src/search.rs
 parent_task_id: TASK-64
-priority: high
+priority: low
 type: feature
 ordinal: 76000
 ---
