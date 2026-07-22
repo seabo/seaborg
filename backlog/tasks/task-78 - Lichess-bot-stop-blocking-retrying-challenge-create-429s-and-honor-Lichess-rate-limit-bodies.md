@@ -3,11 +3,11 @@ id: TASK-78
 title: >-
   Lichess bot: stop blocking-retrying challenge-create 429s and honor Lichess
   rate-limit bodies
-status: In Review
+status: Changes Requested
 assignee:
   - '@claude'
 created_date: '2026-07-22 21:41'
-updated_date: '2026-07-22 21:54'
+updated_date: '2026-07-22 22:46'
 labels: []
 dependencies: []
 priority: high
@@ -110,5 +110,39 @@ Verification:
 - cargo clippy --workspace --all-targets --all-features -- -D warnings: clean, no warnings
 - cargo test --workspace: 644 passed, 0 failed, 2 ignored
 Known failures: none. One note: an early run of `cargo test -p lichess` on this branch saw `run::tests::incoming_challenge_is_handled_while_a_matchmaking_call_is_blocked` time out on its 5s channel deadline while a workspace compile was still saturating the machine (that run took 5.01s versus 0.62s normally). It then passed 6 further runs, including 3 with the machine deliberately CPU-loaded. The test predates this task and its timing is unrelated to the change.
+---
+
+author: @claude
+created: 2026-07-22 22:46
+---
+Review attempt: 1
+Reviewed branch: task-78-lichess-challenge-rate-limit
+Reviewed implementation: 964498b09b2157e889b9402126226fadb8268bc8
+Verdict: changes_requested
+
+REV-1-01 [P1] Body-supplied rate-limit wait now drives the in-transport retry sleep on every other endpoint, unbounded
+Location: lichess/src/transport.rs:276-292 (429 arm of `check_status`) feeding lichess/src/transport.rs:236-249 (`with_rate_limit_retry`)
+Impact: `check_status` is shared by every entry point, so the new body parsing changes the retry policy of `get`, `post_empty`, `post_form`, and `open_stream`, not just the non-retrying challenge path. `with_rate_limit_retry` sleeps `retry_after.unwrap_or_else(|| backoff.next_delay())`, and `retry_after` is never clamped: only the local `Backoff` is bounded by `RATE_LIMIT_MAX`. Before this change a 429 that carried the rate-limit envelope but no `Retry-After` header — the exact shape the task establishes Lichess sends for `bot.vsBot.day` — slept the local backoff, 60+120+240+480 = 900s worst case. After it, the same response sleeps the server-stated duration on every attempt: with the `seconds: 7200` body used in the new tests, `RATE_LIMIT_MAX_ATTEMPTS = 5` gives 4 x 7200s = 8 hours inside one call.
+
+The task's own research makes that response reachable on a retrying endpoint: `bot.vsBot.day` is charged on StartGame, and accepting a bot's challenge starts a game, so `POST /api/challenge/{id}/accept` (client.rs:54, `post_empty`, retrying) can return it. That call runs on the event-consumer loop (run.rs:651 `process_accept_queue`, driven by the `while !shutdown.is_requested()` loop at run.rs:608), so the loop would stop handling events, slot bookkeeping, and drain progress for hours. `Shutdown::sleep` still polls out at 200ms granularity, so shutdown is unaffected, but nothing else is. `make_move` (client.rs:164) and `cancel_challenge` (client.rs:76) are on the same policy.
+
+This is the failure mode the task exists to remove — a self-inflicted multi-minute block in a thread with other work — reintroduced on the endpoints the fix did not touch, and made an order of magnitude worse. It also leaves AC #10 unproven: rate-limit handling for streams, moves, and accept/decline is materially changed (the wait source moved from the header/local backoff to the response body, uncapped), and neither the implementation notes nor a code comment documents that divergence. The implementation note about `cancel_challenge` reasons only about which Lichess limits apply to that route, not about the new unbounded body-sourced sleep.
+
+Related: the doc comment on `with_rate_limit_retry` (transport.rs:227-232) still states "the wait is the server's `Retry-After` when present, else the next backoff step", which no longer describes the code — the wait can now come from the body and outrank the header.
+
+Reproduction: no test covers a retrying endpoint against a 429 carrying the envelope. Reasoning from the code path is exact: `check_status` (transport.rs:276) returns `retry_after: Some(Duration::from_secs(7200))` for `BOT_VS_BOT_BODY` regardless of caller — the new test `a_non_retrying_post_surfaces_a_rate_limit_after_one_request` already asserts that mapping — and `with_rate_limit_retry` (transport.rs:247) passes that value straight to `sleep` on each of the first four attempts. A test mirroring `serve_repeating("429 Too Many Requests", "", BOT_VS_BOT_BODY)` against `post_empty` with an injected `sleep` recorder would observe the four 7200s waits.
+
+Expected: the in-transport retry must stay bounded. Clamp the honored wait in `with_rate_limit_retry` to `RATE_LIMIT_MAX` (or use the body duration only on the non-retrying path and leave the retrying loop on header-or-backoff), so the worst-case blocking time for streams, moves, and accept/decline is unchanged from the base commit. Cover it with a test on a retrying entry point, and correct the stale `with_rate_limit_retry` doc comment. If keeping an unbounded server-supplied wait on those endpoints is deliberate, AC #10 requires the divergence to be documented with the reasoning stated in the code, not only in the task notes.
+
+Verification (run on 964498b, worktree /Users/seabo/seaborg-worktrees/task-78-lichess-challenge-rate-limit):
+- cargo fmt --check: clean
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean, no warnings
+- cargo clippy --workspace --all-targets --all-features -- -D warnings with a clean CARGO_TARGET_DIR: clean, no warnings (confirms the fast run was not a cache artifact)
+- cargo test --workspace: 644 passed, 0 failed, 2 ignored
+- git diff --stat 964498b..c633e08: task file only, so the target is immutable
+- No #[allow] added by the diff; no comment cites a task ID, acceptance criterion, or finding ID.
+- No benchmarks run: the diff touches only the lichess crate, no movegen or search hot path.
+
+Accepted as correct on this target, for the next attempt's benefit: AC #1-#9 are implemented and evidenced. The non-retrying `post_form_once` seam, the body-outranks-header precedence, the 400/429 split into `OpponentRateLimited`/`RateLimited`, the non-blocking `challenge_cooldown_until` deadline, the deadline-valued per-opponent map, the escalate-only-without-a-stated-duration fallback with its reset on success, and the run.rs dispatch that keeps a 429's named opponent eligible are all covered by targeted tests that fail for the right reason. REV-1-01 is the only blocking finding.
 ---
 <!-- COMMENTS:END -->
