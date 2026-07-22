@@ -3,11 +3,11 @@ id: TASK-78
 title: >-
   Lichess bot: stop blocking-retrying challenge-create 429s and honor Lichess
   rate-limit bodies
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-22 21:41'
-updated_date: '2026-07-22 21:43'
+updated_date: '2026-07-22 21:54'
 labels: []
 dependencies: []
 priority: high
@@ -74,3 +74,41 @@ Note also that anchors/seaborg-lichess.toml sets matchmaking mode = "rated", and
 
 9. Run `cargo fmt --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, and `cargo test --workspace`.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented the fix across four layers.
+
+- `error.rs`: `RateLimited` now carries the limit key alongside the resolved wait, and a new `OpponentRateLimited` models the HTTP 400 Lichess uses to report that the *challenged* account is over a limit. Both are recoverable.
+- `transport.rs`: the response body is read on 429 and on 400 and parsed for the `{"ratelimit":{"key":..,"seconds":..}}` envelope. The body`s duration outranks `Retry-After`, which Lichess does not send for these limits. A new `post_form_once` performs a POST without the in-transport 429 retry; `post_form` and every other endpoint keep the existing retry, which suits limits that clear in seconds.
+- `client.rs`: `create_challenge` uses `post_form_once`.
+- `matchmaking.rs`: the wait became a non-blocking deadline (`challenge_cooldown_until`) checked by `choose`, with an escalating fallback (60s doubling to a 600s cap) used only when Lichess states no duration, reset to its floor by a successful create. The per-opponent map now stores an expiry instant rather than a start instant, so an opponent-side limit can be honored for exactly the window Lichess gave while a plain decline keeps the configured one.
+- `run.rs`: the challenge-create error is dispatched by kind. A 429 sets the cooldown and leaves the named bot eligible; a 400 opponent limit backs off only that bot; other recoverable errors keep the existing `record_challenge_failed` behavior. Both paths log which limit fired and the wait applied.
+
+Measured against production: the reported 15m16s gap between a challenge and its logged 429 is exactly the 60+120+240+480 = 900s the transport slept, plus request time. That sleep is gone.
+
+Behavioral note for review, outside the acceptance criteria: `anchors/seaborg-lichess.toml` sets matchmaking `mode = "rated"`, and rated challenges are frequently rejected by other bots at creation. Each rejection spends one of the 200/day `challenge.create.user` credits and triggers the hour-long per-opponent backoff, so the eligible pool drains even with this fix in place. Changing the deployed config was not in scope.
+
+A second residual: cancelling a lapsed outgoing challenge still goes through the retrying `post_empty`. That path is a different Lichess route with its own limits, not the per-day challenge caps, so it was left on the existing policy.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @claude
+created: 2026-07-22 21:54
+---
+Implementation handoff
+Branch: task-78-lichess-challenge-rate-limit
+Worktree: /Users/seabo/seaborg-worktrees/task-78-lichess-challenge-rate-limit
+Base: d52a6fbc50a6061d0c5476daf10fa328306c8165
+Implementation target: 964498b09b2157e889b9402126226fadb8268bc8
+Resolved findings: none
+Verification:
+- cargo fmt --check: clean
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean, no warnings
+- cargo test --workspace: 644 passed, 0 failed, 2 ignored
+Known failures: none. One note: an early run of `cargo test -p lichess` on this branch saw `run::tests::incoming_challenge_is_handled_while_a_matchmaking_call_is_blocked` time out on its 5s channel deadline while a workspace compile was still saturating the machine (that run took 5.01s versus 0.62s normally). It then passed 6 further runs, including 3 with the machine deliberately CPU-loaded. The test predates this task and its timing is unrelated to the change.
+---
+<!-- COMMENTS:END -->
