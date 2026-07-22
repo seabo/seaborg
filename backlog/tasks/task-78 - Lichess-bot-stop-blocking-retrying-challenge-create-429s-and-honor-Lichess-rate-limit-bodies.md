@@ -3,11 +3,11 @@ id: TASK-78
 title: >-
   Lichess bot: stop blocking-retrying challenge-create 429s and honor Lichess
   rate-limit bodies
-status: Changes Requested
+status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-07-22 21:41'
-updated_date: '2026-07-22 22:46'
+updated_date: '2026-07-22 22:49'
 labels: []
 dependencies: []
 priority: high
@@ -56,23 +56,33 @@ Note also that anchors/seaborg-lichess.toml sets matchmaking mode = "rated", and
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. error.rs: give the rate-limit errors the information Lichess actually sends. Extend `Error::RateLimited` with the limit key alongside the resolved wait, and add `Error::OpponentRateLimited` for the HTTP 400 shape that reports the *challenged* account is at its daily cap. Both stay recoverable.
+Rework for REV-1-01. The original change is otherwise accepted; this attempt
+only bounds the in-transport wait it inadvertently unbounded.
 
-2. transport.rs: read the response body on 429 and on 400, and parse the `{"error":..., "ratelimit":{"key":..,"seconds":..}}` envelope Lichess returns for the bot-vs-bot daily limit. Prefer the body`s `seconds` over the `Retry-After` header (Lichess does not send the header for these limits). A 400 that carries a ratelimit key becomes `OpponentRateLimited`; a 400 without one keeps its current `Error::Http` mapping.
+Approach: the retry loop is willing to spend a bounded amount of time, and a
+server-stated wait longer than the ceiling it already applies to its own backoff
+cannot clear within the attempt budget. Sleeping such a wait blocks the calling
+thread for a retry that is certain to be refused again. So the loop gives up on
+it immediately and hands the caller the full stated duration to act on, which is
+what the non-retrying challenge path already does.
 
-3. transport.rs: add a `post_form_once` operation to the `Transport` trait that performs the POST without the in-transport 429 retry, so the caller owns the wait. Implement it for `HttpTransport` and for each test double. Leave `with_rate_limit_retry` and its constants in place for every other endpoint.
-
-4. client.rs: route `create_challenge` through `post_form_once`.
-
-5. matchmaking.rs: move the challenge-endpoint wait into the matchmaker as a non-blocking deadline. Add a cooldown instant checked by `choose`, and an escalating fallback (60s floor doubling to a 600s cap) used only when Lichess does not supply a duration. `record_rate_limited` sets the deadline and returns the wait applied so the caller can log it; a successful create resets the fallback to its floor.
-
-6. matchmaking.rs: change the per-opponent backoff map to store an expiry instant rather than a start instant, so an opponent-side limit can be honored for the exact duration Lichess supplies while a plain decline keeps the configured window. Add `record_opponent_rate_limited`.
-
-7. run.rs: dispatch on the challenge-create error. A 429 is account-wide, so it sets the cooldown and must not put the opponent into backoff; a 400 opponent limit backs off only that opponent; every other recoverable error keeps the existing `record_challenge_failed` behavior. Log which limit fired and how long the bot will wait.
-
-8. Tests: transport parses both body shapes and does not retry a challenge-create 429; the matchmaker stays idle until the cooldown expires, escalates only without a server duration, resets on success, and leaves the opponent eligible after an account-wide 429; run.rs drives a 429 challenge-create end to end and asserts no per-opponent backoff was applied.
-
-9. Run `cargo fmt --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, and `cargo test --workspace`.
+1. transport.rs: give the free `with_rate_limit_retry` a `max_wait` bound, passed
+   `RATE_LIMIT_MAX` by the `HttpTransport` method. When the server states a wait
+   longer than `max_wait`, return the rate-limit error instead of sleeping. A
+   stated wait within the bound is still slept, exactly as before, so short
+   limits keep clearing transparently.
+2. transport.rs: the error must carry the true stated duration, not a clamped
+   one, so `check_status` is left alone and the matchmaker keeps setting its
+   cooldown from Lichess's real remaining time.
+3. transport.rs: correct the `with_rate_limit_retry` doc comment, which still
+   describes the wait as coming from `Retry-After` only, and state the bound.
+4. Tests: a retrying entry point against a 429 carrying the `bot.vsBot.day`
+   envelope makes exactly one request and surfaces the full 7200s; a stated wait
+   within the bound is still retried and slept for the stated time; the existing
+   no-header backoff, attempt-budget, and shutdown tests still hold.
+5. Confirm the non-retrying challenge path, the matchmaker cooldown, and every
+   other behavior the previous attempt established are untouched, then run the
+   required checks.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
