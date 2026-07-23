@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:42'
-updated_date: '2026-07-23 06:54'
+updated_date: '2026-07-23 07:46'
 labels:
   - nnue
   - rl
@@ -104,4 +104,14 @@ A methodological note worth keeping. Two minutes into this gate the running scor
 Cost per generation is now stable and dominated by datagen and, increasingly, by the gate: roughly 4h06m datagen, 28min training and export, and a gate whose duration scales inversely with the margin being measured (22min at generation 1, 1h17m here).
 
 Generation 3 started 05:38 with seed 4000 and is mid-datagen.
+
+Programme scope decision (agreed with the requester): stop after generation 3 rather than running the planned 8.
+
+Rationale is the measured curve, not impatience. Generation 2 returned +22.3 Elo and needed 5.3x the games of generation 1 to prove it; the gate cost now scales inversely with the margin, so a generation worth single-digit Elo could occupy the full 10,000-game cap, roughly 8-10 hours, to return a result that may not even promote under elo0=0/elo1=5. Generations 3 through 7 on the same recipe were estimated at 2-3 further days for perhaps 30 Elo in total. The plateau is much more likely to be a property of the recipe (30M samples per generation, H=256, 5000 nodes per move) than something four more iterations of it would break, so exploring a wider network or better labels belongs in separate work rather than at the tail of this programme.
+
+Generation 3 was already past half its datagen when the decision was taken, and its verdict is the fourth point that makes the flattening rate estimable rather than inferred, so it runs to completion.
+
+Mechanics: the chain script's shell was terminated while leaving the in-flight loop.py running, so generation 3 continues (reparented to init) and no generation 4 follows. Verified after the kill that the datagen child was still writing samples.
+
+Queued behind it, so the host does not idle: an anchoring gauntlet of the final promoted network directly against the hand-crafted evaluation at tc=10+0.1, 1000 games, concurrency 11. Its SPRT bounds are set to -1000/1000 so the likelihood ratio cannot reach either boundary and the full game budget is played; the run reports an Elo estimate with its error, and its INCONCLUSIVE verdict is an artifact of that construction rather than a finding. This is a measurement, not a gate, and promotes nothing. It exists because the per-generation deltas are each against a different opponent and do not compose into a figure against the hand-crafted baseline.
 <!-- SECTION:NOTES:END -->
