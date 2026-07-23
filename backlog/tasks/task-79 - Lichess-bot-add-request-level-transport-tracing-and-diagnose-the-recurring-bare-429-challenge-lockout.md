@@ -3,11 +3,11 @@ id: TASK-79
 title: >-
   Lichess bot: add request-level transport tracing and diagnose the recurring
   bare-429 challenge lockout
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-23 00:08'
-updated_date: '2026-07-23 01:14'
+updated_date: '2026-07-23 01:16'
 labels: []
 dependencies: []
 priority: high
@@ -285,5 +285,53 @@ Verification:
 - diff audit: no new #[allow], no comment citing a task ID, criterion, or finding
   ID; no unrelated changes. src/logging.rs is out of the transport but justified,
   since AC #6 is unreachable without it.
+---
+
+author: @claude
+created: 2026-07-23 01:16
+---
+Implementation handoff
+Branch: task-79-lichess-transport-tracing
+Worktree: /Users/seabo/seaborg-worktrees/task-79-lichess-transport-tracing
+Base: bada986c932ba144835cc941d29263f64f2a22f6
+Implementation target: dd1a8320c0ec5c1b6a5cd4372d3e00f9e2f31bd2
+Resolved findings: REV-1-01, REV-1-02
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass, no warnings
+- cargo test --workspace: pass, 661 passed / 0 failed / 2 ignored (one new test)
+- live capture against lichess.org with the operator-supplied token: the lockout was still in force and reproduced on the first request; see the diagnosis in the notes
+Known failures: none
+
+REV-1-01 resolution: the 401 and 404 arms of check_status are merged and now read
+their body once and trace it under the request id at debug, via a new shared
+log_body helper that the catch-all arm also uses. The typed Error::Unauthorized
+and Error::NotFound returns are unchanged. New test
+a_401_traces_its_body_even_though_the_error_drops_it serves a 401 with a
+non-empty body from serve_repeating and asserts the body text reaches a Debug
+record on the transport target; the 404 arm shares the path. The 404 body log was
+also seen live (POST /api/bot/game/zzzzzzzz/abort -> 404 {"error":"No such game"}).
+
+REV-1-02 resolution: no code change, and the finding said none was implied. The
+operator supplied a token, so the capture the finding asked for was made rather
+than deferred. Answer to AC #8: the 429s are endpoint-specific, not global per
+token. In one 65-second run, GET /api/account, GET /api/stream/event and two
+GET /api/bot/online?nb=50 all returned 200 while two POST /api/challenge/{user}
+requests interleaved between them returned 429 — same token, same run. Three
+further opponents were refused by direct probe, so it is not per-opponent, and
+three non-challenge-creation POSTs (including POST /api/challenge/{id}/cancel)
+passed the limiter to reach 404 handler logic, so it is not writes-in-general
+either. The preserved body reads {"error":"Too many requests. Try again later."}
+and the full header dump names nothing beyond it: no Retry-After, no
+X-RateLimit-* of any kind. Reproduction needed no waiting because the restriction
+was still in force ~85 minutes after the bot last ran, which independently
+confirms the earlier conclusion that this is a persistent restriction and not a
+burst limiter the bot re-arms.
+
+The notes append a "Rework — review attempt 1" section that explicitly supersedes
+the "two facts remain unestablished" paragraph of the original diagnosis. The
+hypothesis the task was created on — a global per-token limiter re-armed by the
+bot other traffic — is refuted, and the reviewer should treat any follow-up that
+inherits it as wrong.
 ---
 <!-- COMMENTS:END -->
