@@ -1,11 +1,11 @@
 ---
 id: TASK-69.15
 title: Re-bake the default network to gen-002
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-23 18:14'
-updated_date: '2026-07-23 18:20'
+updated_date: '2026-07-23 20:17'
 labels:
   - nnue
   - build
@@ -26,10 +26,10 @@ The promoted network is archived on the training host at ~/rl/run-v1/networks/ge
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 engine/nets/default.sbnn contains the promoted gen-002 network and BUILT_IN_NETWORK_ID names it, updated in the same commit
-- [ ] #2 The architecture and parameter-hash assertions pin gen-002, so a later bake that swaps bytes without updating the identifier still fails loudly
-- [ ] #3 A default release build reports the gen-002 evaluator line at startup, and docs/default-network.md shows what the binary actually prints
-- [ ] #4 The workspace passes fmt, strict clippy, and tests both with the embedded-net feature on and with --no-default-features
+- [x] #1 engine/nets/default.sbnn contains the promoted gen-002 network and BUILT_IN_NETWORK_ID names it, updated in the same commit
+- [x] #2 The architecture and parameter-hash assertions pin gen-002, so a later bake that swaps bytes without updating the identifier still fails loudly
+- [x] #3 A default release build reports the gen-002 evaluator line at startup, and docs/default-network.md shows what the binary actually prints
+- [x] #4 The workspace passes fmt, strict clippy, and tests both with the embedded-net feature on and with --no-default-features
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -79,4 +79,38 @@ Known failures: none
 
 Note for the reviewer: same content-only re-bake as the merged TASK-69.14, now targeting the programme's final network gen-002. The strength evidence (per-generation deltas and the ~337 Elo absolute gauntlet) was produced under TASK-69.12 and is summarised in the notes here; this task moves committed bytes into the binary and does not re-measure it.
 ---
+
+author: @claude
+created: 2026-07-23 20:17
+---
+Review attempt: 1
+Reviewed branch: task-69.15-rebake-gen-002
+Reviewed implementation: 3ed63f8bbf43d51fbc0f8033dea99b25b244261e
+Verdict: approved
+
+All four acceptance criteria proven objectively against the base(4f9bb94)->target(3ed63f8) diff. The diff is minimal and in scope: engine/nets/default.sbnn (binary swap), BUILT_IN_NETWORK_ID and the pinned param-hash test constant in engine/src/nnue/embedded.rs, and one evaluator line in docs/default-network.md. Post-target commit 8b3af30 changes only the task file.
+
+AC1: default.sbnn sha256 = f076dc4674eedd4295f4ef3ca999404cfb1b6c39fa2d4493029113df38addfd5 (the promoted gen-002), 394820 bytes; BUILT_IN_NETWORK_ID = gen-002, both in 3ed63f8.
+AC2: the_baked_bytes_parse_through_the_one_loader_with_the_expected_architecture parses the embedded bytes and asserts hidden_width 256, qa 255, qb 64, scale 400, and param_hash 0x6ad0_73be_2b68_99cb; a byte swap without updating the id/hash fails this test loudly.
+AC3: default release binary prints 'evaluator: NNUE built-in gen-002 (hidden width 256, parameter hash 0x6ad073be2b6899cb)', matching docs/default-network.md; --no-default-features release binary prints 'evaluator: hand-crafted evaluation'.
+AC4: cargo fmt --check clean; clippy --workspace --all-targets --all-features and --no-default-features both clean with -D warnings; cargo test --workspace passes (chess 57, engine 426 +2 ignored, lichess 157, integration green) and --no-default-features passes (engine 425 +2 ignored).
+
+No movegen/search hot path is touched (data + constants + doc only), so hot-path benchmarks are not warranted. Comments in the diff are self-contained and do not reference task/finding IDs.
+
+Verification (run on target in the task worktree):
+- shasum -a 256 engine/nets/default.sbnn: f076dc46...addfd5
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass
+- cargo clippy --workspace --all-targets --no-default-features -- -D warnings: pass
+- cargo test --workspace: pass
+- cargo test --workspace --no-default-features: pass
+- printf 'quit' | ./target/release/seaborg (default): gen-002 line
+- printf 'quit' | ./target/release/seaborg (--no-default-features): hand-crafted evaluation
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Re-baked the default embedded network to the programme's final promoted net gen-002. engine/nets/default.sbnn now holds gen-002 (sha256 f076dc46...79fd, 394,820 bytes), BUILT_IN_NETWORK_ID and the pinned param-hash assertion (0x6ad0_73be_2b68_99cb) move to gen-002 in the same commit (3ed63f8), and the architecture assertions (256/255/64/400) are unchanged. docs/default-network.md now shows the gen-002 evaluator line. Verified: guard test parses the baked bytes and asserts the gen-002 hash; default release binary prints 'evaluator: NNUE built-in gen-002 (hidden width 256, parameter hash 0x6ad073be2b6899cb)' matching the doc, and --no-default-features prints 'hand-crafted evaluation'; fmt clean, strict clippy clean (all-features and no-default-features), tests pass in both feature configs.
+<!-- SECTION:FINAL_SUMMARY:END -->
