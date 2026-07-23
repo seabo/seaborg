@@ -1,11 +1,11 @@
 ---
 id: TASK-69.15
 title: Re-bake the default network to gen-002
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-23 18:14'
-updated_date: '2026-07-23 18:15'
+updated_date: '2026-07-23 18:20'
 labels:
   - nnue
   - build
@@ -40,3 +40,43 @@ The promoted network is archived on the training host at ~/rl/run-v1/networks/ge
 3. Build a default release binary and record the evaluator line it actually prints; build --no-default-features and confirm it still reports the hand-crafted evaluation.
 4. Run fmt, strict clippy, and workspace tests with the embedded-net feature on and with --no-default-features.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Applied the re-baking procedure as a content change. engine/nets/default.sbnn now holds gen-002 (sha256 f076dc4674eedd42..., 394,820 bytes, same size as gen-000/gen-001 since the architecture is identical). BUILT_IN_NETWORK_ID moves from gen-001 to gen-002; the pinned parameter-hash assertion moves from 0x3eef_37ee_f0fe_65bf to 0x6ad0_73be_2b68_99cb. Architecture assertions (hidden width 256, qa 255, qb 64, scale 400) unchanged.
+
+The guard test failed loudly on the swapped bytes before the identifier was updated, printing the new hash, which is how the constant was obtained. That is the intended behaviour of the assertion.
+
+Recorded from release builds of the implementation target, not asserted:
+  default build:          evaluator: NNUE built-in gen-002 (hidden width 256, parameter hash 0x6ad073be2b6899cb)
+  --no-default-features:  evaluator: hand-crafted evaluation
+docs/default-network.md now shows the first line; it previously showed gen-001.
+
+Provenance: gen-002 was promoted by the reinforcement loop under TASK-69.12, gate at tc=10+0.1 concurrency 11 SPRT elo0=0 elo1=5, crossing the upper bound after 2544 games against gen-001. gen-003 subsequently failed (-17.3 Elo, not promoted), making gen-002 the programme's final best. A direct 1000-game gauntlet against the hand-crafted evaluation measured gen-002 at 334.1 +/- 24.4 and 339.6 +/- 25.9 Elo across two runs; both sides were the same binary differing only in EvalFile, on the pre-embedding build so the baseline was genuinely hand-crafted.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @claude
+created: 2026-07-23 18:20
+---
+Implementation handoff
+Branch: task-69.15-rebake-gen-002
+Worktree: /Users/seabo/seaborg-worktrees/task-69.15-rebake-gen-002
+Base: 4f9bb94d86adb078dec2568ce33777a52fdef9e4
+Implementation target: 3ed63f8bbf43d51fbc0f8033dea99b25b244261e
+Resolved findings: none
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (no warnings)
+- cargo clippy --workspace --all-targets --no-default-features -- -D warnings: pass (no warnings)
+- cargo test --workspace: pass (chess 57; engine 426 + 2 ignored; lichess 157; integration green)
+- cargo test --workspace --no-default-features: pass (chess 57; engine 425 + 2 ignored; lichess 157)
+- manual: default release build prints 'evaluator: NNUE built-in gen-002 (hidden width 256, parameter hash 0x6ad073be2b6899cb)'; --no-default-features prints 'evaluator: hand-crafted evaluation'
+Known failures: none
+
+Note for the reviewer: same content-only re-bake as the merged TASK-69.14, now targeting the programme's final network gen-002. The strength evidence (per-generation deltas and the ~337 Elo absolute gauntlet) was produced under TASK-69.12 and is summarised in the notes here; this task moves committed bytes into the binary and does not re-measure it.
+---
+<!-- COMMENTS:END -->
