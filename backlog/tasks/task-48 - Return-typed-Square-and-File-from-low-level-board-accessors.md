@@ -1,11 +1,11 @@
 ---
 id: TASK-48
 title: Return typed Square and File from low-level board accessors
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-18 18:30'
-updated_date: '2026-07-23 00:19'
+updated_date: '2026-07-23 00:23'
 labels: []
 dependencies: []
 references:
