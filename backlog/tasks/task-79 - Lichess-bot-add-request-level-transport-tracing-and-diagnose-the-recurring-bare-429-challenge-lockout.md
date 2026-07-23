@@ -3,11 +3,11 @@ id: TASK-79
 title: >-
   Lichess bot: add request-level transport tracing and diagnose the recurring
   bare-429 challenge lockout
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-23 00:08'
-updated_date: '2026-07-23 01:22'
+updated_date: '2026-07-23 01:30'
 labels: []
 dependencies: []
 priority: high
