@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:42'
-updated_date: '2026-07-22 21:47'
+updated_date: '2026-07-23 06:54'
 labels:
   - nnue
   - rl
@@ -86,4 +86,22 @@ Note that generation 1's val_loss (0.004424) is higher than generation 0's (0.00
 Curve so far, each measured against the immediately preceding best at the same time control: gen 0 +263.2 over the hand-crafted evaluation, gen 1 +156.5 over gen 0. Still climbing steeply; no sign of flattening at two generations.
 
 Operational correction: the host idled 5h16m after generation 1 finished (17:30 BST) because each generation was being launched by hand and the watching process died. Generations 2 through 7 now run from ~/rl/chain.sh, which invokes loop.py once per generation with a distinct opening seed and stops the chain only on an infrastructure failure, treating a failed or inconclusive gate as a normal outcome that the next generation still follows.
+
+Generation 2 result: PASS, promoted, +22.3 +/- 9.8 Elo over generation 1.
+
+Attribution: 360,000 games evaluated by nnue:gen-001, 5000 nodes/move, 28,419,372 samples in 4h06m (datagen rate 6.94M samples/hour, steady across the whole run). Candidate nnue:gen-002:sha256=f076dc4674eedd42. Gate at tc=10+0.1 concurrency 11, SPRT elo0=0 elo1=5, crossed the upper bound after 2544 games: 774 wins, 1159 draws, 611 losses, pentanomial [71, 273, 462, 354, 112], 0 crashes, 0 forfeits.
+
+The strength curve, each generation against its immediate predecessor at tc=10+0.1:
+
+  gen 0 vs hand-crafted   +263.2 +/- 32.7   (358 games)
+  gen 1 vs gen 0          +156.5 +/- 26.1   (476 games)
+  gen 2 vs gen 1          +22.3 +/- 9.8     (2544 games)
+
+This is where the curve begins to flatten, which the task exists in part to locate. Three corroborating signals, not just the point estimate: the gate needed 5.3x more games than generation 1 to separate the same hypotheses, the draw rate rose from 33% to 46%, and the pentanomial mass moved from the winning tail toward the centre.
+
+A methodological note worth keeping. Two minutes into this gate the running score over 45 games was 0.567, implying roughly +47 Elo; the resolved figure over 2544 games was +22.3. The early sample was consistent with anything from about -50 to +150 at that sample size. Interim gate scores are not results, and the gap between the two numbers here is the concrete reminder.
+
+Cost per generation is now stable and dominated by datagen and, increasingly, by the gate: roughly 4h06m datagen, 28min training and export, and a gate whose duration scales inversely with the margin being measured (22min at generation 1, 1h17m here).
+
+Generation 3 started 05:38 with seed 4000 and is mid-datagen.
 <!-- SECTION:NOTES:END -->
