@@ -3,9 +3,11 @@ id: TASK-79
 title: >-
   Lichess bot: add request-level transport tracing and diagnose the recurring
   bare-429 challenge lockout
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-23 00:08'
+updated_date: '2026-07-23 00:10'
 labels: []
 dependencies: []
 priority: high
@@ -42,3 +44,23 @@ The deliverable of this task is the instrumentation plus a written diagnosis; th
 - [ ] #7 Tracing verbosity choices are covered by tests that assert on emitted records without requiring network access
 - [ ] #8 The task records a written diagnosis stating whether the observed 429s are endpoint-specific or global per token, with the evidence supporting that conclusion
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Add a per-request trace context to `HttpTransport`: a process-wide `AtomicU64` counter yields a request id; a small `RequestTrace` value carries id, HTTP method, and path so the request line and its response line correlate. Log the request at `debug!` (module target `lichess::transport`, so `RUST_LOG=lichess::transport=debug` enables it and the default `Info` stays quiet).
+
+2. Log every response at `debug!` with the correlating id, status code, and elapsed wall time measured from just before the request is sent.
+
+3. Thread the trace context into `read_response`/`check_status`, which are currently free functions with no request context. Restructure `check_status` so a non-2xx body is read exactly once into a value that is always available, instead of the current 429 path that reads the body, tries `parse_rate_limit`, and drops it when the shape does not match.
+
+4. Emit the unexplained-429 body at `warn!` verbatim (reusing the existing `MAX_ERROR_BODY_CHARS` cap) when a 429 carries no `ratelimit` envelope. This is the diagnostic artifact the bug turns on and it is rare by construction, so it belongs above the `debug` tracing threshold alongside the existing rate-limit warning in `run.rs`.
+
+5. Dump the complete response header set of any 429 at `debug!`, so Lichess limiter hints beyond `Retry-After` become observable.
+
+6. Log stream lifecycle in `open_stream`: the open at `debug!`, and the close by wrapping the returned line iterator in a guard that logs on `Drop`, which covers normal exhaustion and early abandonment alike. Add the pending wait duration to the two existing reconnect warnings in `run.rs` and `game.rs` so reconnect churn is measurable rather than merely visible.
+
+7. Test with a capture logger installed once per test process behind a `Once`, recording level, target, and message. Tests filter captured records by their own unique request path so parallel execution cannot cross-contaminate, and assert both that request/response lines are `Debug` (absent at `Info`) and that an unexplained 429 body reaches `Warn`. No network: the existing loopback `serve_repeating` helper backs these.
+
+8. Record the diagnosis in the task. Static evidence bounds the conclusion; naming what a live trace must show to settle it is part of the deliverable.
+<!-- SECTION:PLAN:END -->
