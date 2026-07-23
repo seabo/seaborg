@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-07-23 00:08'
-updated_date: '2026-07-23 01:02'
+updated_date: '2026-07-23 01:14'
 labels: []
 dependencies: []
 priority: high
@@ -87,6 +87,104 @@ Two facts remain unestablished, and both are answered by the body and headers th
 To settle it, run with `RUST_LOG=info,lichess::transport=debug` until the lockout reproduces and capture the `was rate limited with no rate-limit envelope` warning together with the `header` lines sharing its `req#` id. The corrective change belongs in a follow-up task once that body is known; guessing a fix ahead of it would repeat the mistake this task exists to correct.
 
 Verification of the tracing itself was done against the live API with an invalid token: `RUST_LOG=lichess::transport=debug` produced exactly the correlated pair (`req#1 -> GET /api/account`, `req#1 <- GET /api/account 401 in 80ms`) and the default level produced nothing.
+
+Rework — review attempt 1
+=========================
+
+Resolved REV-1-01 — a 401 or 404 body is no longer discarded
+------------------------------------------------------------
+
+`check_status` merged the `401` and `404` arms so both read the response body
+once and trace it under the request id at `debug`, through a new shared
+`log_body` helper the catch-all arm now uses too. Behaviour to callers is
+unchanged: the arms still return `Error::Unauthorized` and `Error::NotFound`,
+whose typed meaning is the point of having them. What changes is that the body
+survives to the log, which matters because a token-scoped restriction can arrive
+as a 401 and the body is the only place the server names it.
+
+Covered by `a_401_traces_its_body_even_though_the_error_drops_it`, which serves
+`401 Unauthorized` with a non-empty body from `serve_repeating` and asserts the
+body text reaches a `Debug` record on the transport target. The 404 arm shares
+the same code path.
+
+Verified incidentally against the live API while capturing the evidence below:
+`POST /api/bot/game/zzzzzzzz/abort` returned `404 {"error":"No such game"}`, and
+the body was logged rather than dropped.
+
+Resolved REV-1-02 — the 429s are endpoint-specific, not global per token
+------------------------------------------------------------------------
+
+Captured live. The lockout was still in force roughly 85 minutes after the bot
+had last run, so it reproduced on the first attempt with no waiting.
+
+Under one token, in one 65-second run at `RUST_LOG=info,lichess::transport=debug`:
+
+    req#1 -> GET  /api/account                     200 in 1530ms
+    req#2 -> GET  /api/stream/event                200 in  100ms   (stream open, held 70s)
+    req#3 -> GET  /api/bot/online?nb=50            200 in  949ms
+    req#4 -> POST /api/challenge/humaia-strong     429 in   15ms
+    req#5 -> GET  /api/bot/online?nb=50            200 in  350ms
+    req#6 -> POST /api/challenge/turochamp-1ply    429 in   48ms
+
+Every GET succeeds while every challenge POST is refused, interleaved, on the
+same token and the same connection pool. **The restriction is scoped to
+challenge creation, not to the token.** A limiter that governed the token would
+have refused `req#3` and `req#5` between the two refusals; it did not.
+
+It is not per-opponent either. Three distinct opponents were refused
+(`humaia-strong`, `turochamp-1ply`, and, in a direct probe, `maia1`, `maia9` and
+`leelaalien`), and the two bot ids the run drew were ones the bot had never
+challenged.
+
+It is not writes-under-this-token generally. Three non-challenge-creation POSTs
+passed the limiter and reached handler logic:
+
+    POST /api/bot/game/zzzzzzzz/abort   -> 404 {"error":"No such game"}
+    POST /api/bot/game/zzzzzzzz/resign  -> 404 {"error":"No such game"}
+    POST /api/challenge/zzzzzzzz/cancel -> 404 {"error":"Not found"}
+
+Note the last one: even a POST under `/api/challenge/` is allowed, so the
+limiter sits on challenge *creation* specifically rather than on the URL prefix.
+
+What Lichess actually says, now that the body is preserved:
+
+    req#4 POST /api/challenge/humaia-strong was rate limited with no rate-limit
+    envelope; body: {"error":"Too many requests. Try again later."}
+
+The full header dump names nothing further. There is no `Retry-After`, no
+`X-RateLimit-*` of any kind, and no `ratelimit` envelope — the response carries
+`server`, `date`, `content-type`, `content-length: 47`, `connection`, `vary`,
+`x-oauth-scopes: bot:play`, `x-accepted-oauth-scopes`, three CORS headers,
+`strict-transport-security`, `x-frame-options`, and `permissions-policy`, and
+that is the whole set. So the generic body is genuinely all Lichess offers, and
+the code that reads `Retry-After` and the envelope was reading the only two
+places that could ever have carried an answer, both of which are absent here.
+
+Authorization is not the issue: `x-accepted-oauth-scopes` lists `bot:play`,
+which the token holds, and an unscoped request would be a 401 rather than a 429.
+
+This supersedes the "two facts remain unestablished" paragraph in the original
+diagnosis above; both are now established. It also refines rather than
+contradicts that diagnosis: the earlier conclusion that this is a persistent
+restriction rather than a burst limiter the bot keeps re-arming is confirmed
+independently, since the first probe came after roughly 85 minutes of zero
+challenge traffic and was refused immediately.
+
+Consequences for the follow-up fix, which remains out of scope here:
+
+1. `Matchmaker` resets `challenge_backoff` only on a successful challenge, so a
+   restriction outlasting the 600s cap leaves the bot probing every ten minutes
+   indefinitely. That is the observed never-clears symptom and it is real.
+2. Backing off all API traffic on a generic 429, as `lichess-bot` does, would
+   not have helped and is the wrong fix: the other traffic was never limited.
+   The hypothesis the task was created on is dead, and the fix should not
+   inherit it.
+3. What is still unknown is why challenge creation is restricted for this
+   account and over what window it clears — a question about the account rather
+   than about the bots code, and one the API declines to answer in any header.
+   A follow-up should treat a bare 429 on challenge creation as an
+   indefinite-duration condition rather than something a doubling backoff will
+   outlast.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
