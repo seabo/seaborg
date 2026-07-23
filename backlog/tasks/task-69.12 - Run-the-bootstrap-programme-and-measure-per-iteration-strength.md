@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:42'
-updated_date: '2026-07-23 07:46'
+updated_date: '2026-07-23 16:38'
 labels:
   - nnue
   - rl
@@ -114,4 +114,19 @@ Generation 3 was already past half its datagen when the decision was taken, and 
 Mechanics: the chain script's shell was terminated while leaving the in-flight loop.py running, so generation 3 continues (reparented to init) and no generation 4 follows. Verified after the kill that the datagen child was still writing samples.
 
 Queued behind it, so the host does not idle: an anchoring gauntlet of the final promoted network directly against the hand-crafted evaluation at tc=10+0.1, 1000 games, concurrency 11. Its SPRT bounds are set to -1000/1000 so the likelihood ratio cannot reach either boundary and the full game budget is played; the run reports an Elo estimate with its error, and its INCONCLUSIVE verdict is an artifact of that construction rather than a finding. This is a measurement, not a gate, and promotes nothing. It exists because the per-generation deltas are each against a different opponent and do not compose into a figure against the hand-crafted baseline.
+
+Generation 3 result: FAIL, not promoted, -17.3 +/- 9.8 Elo against generation 2, over 2858 games. Generation 2 remains best.
+
+The completed curve, each generation against the best network at the time:
+
+  gen 0 vs hand-crafted   +263.2 +/- 32.7   (358 games)
+  gen 1 vs gen 0          +156.5 +/- 26.1   (476 games)
+  gen 2 vs gen 1          +22.3 +/- 9.8     (2544 games)
+  gen 3 vs gen 2          -17.3 +/- 9.8     (2858 games, FAIL)
+
+The programme did not merely flatten, it turned over: generation 3 was measurably worse than its parent and the gate correctly refused to promote it. This is the answer to the task's question about where the curve flattens, and it is a firmer answer than a stop-because-gains-are-small would have been. The decision to stop after generation 3 was taken before this verdict was known, on the strength of generation 2's +22.3; the verdict confirms it rather than having motivated it.
+
+Anchoring measurement, first attempt: an operator error of mine, worth recording because the failure mode is not obvious. To obtain a fixed-length match rather than an early SPRT stop, the bounds were set to elo0=-1000 elo1=1000. Those bounds drive the SPRT variance term to zero, FastChess emitted 'LLR: -nan (nan%)', and the harness rejected the run as malformed runner output with an INFRASTRUCTURE ERROR verdict. The match itself was unaffected and played all 1000 games; the raw runner output recorded Elo 334.10 +/- 24.35, 778 wins, 189 draws, 33 losses, 87.25%, pentanomial [0, 4, 51, 141, 304], draw ratio 10.2%, over 49m32s. That evidence is archived at ~/rl/anchor-gen-002 with its PGN and runner log, but it has no report.json, so it is not archived in the form the strength-testing docs require.
+
+Re-run with bounds that bracket the observed effect (elo0=250, elo1=450) instead of trying to escape the test: the likelihood ratio then wanders between well-defined boundaries, the full budget is played, and the report parses. Any verdict it prints concerns those bracketing hypotheses and is not a promotion decision.
 <!-- SECTION:NOTES:END -->
