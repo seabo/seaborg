@@ -3,11 +3,11 @@ id: TASK-79
 title: >-
   Lichess bot: add request-level transport tracing and diagnose the recurring
   bare-429 challenge lockout
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-23 00:08'
-updated_date: '2026-07-23 01:16'
+updated_date: '2026-07-23 01:22'
 labels: []
 dependencies: []
 priority: high
@@ -35,14 +35,14 @@ The deliverable of this task is the instrumentation plus a written diagnosis; th
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Every HTTP request issued by HttpTransport is logged with method, request path, and a per-request identifier that correlates the request with its response
-- [ ] #2 Every HTTP response is logged with status code and elapsed duration, correlated to its request by identifier
-- [ ] #3 A non-2xx response body is preserved and logged verbatim (subject to an existing-style length cap) rather than discarded, including a 429 body that does not parse as a rate-limit envelope
-- [ ] #4 A 429 response logs its full set of response headers so Lichess limiter hints beyond Retry-After become observable
-- [ ] #5 Stream lifecycle events (open, close, and reconnect) are logged, so stream churn is visible as a source of request volume
-- [ ] #6 Request-level tracing is off at the default Info level and is enabled by RUST_LOG targeting the transport module, so ordinary operation is not made noisy
-- [ ] #7 Tracing verbosity choices are covered by tests that assert on emitted records without requiring network access
-- [ ] #8 The task records a written diagnosis stating whether the observed 429s are endpoint-specific or global per token, with the evidence supporting that conclusion
+- [x] #1 Every HTTP request issued by HttpTransport is logged with method, request path, and a per-request identifier that correlates the request with its response
+- [x] #2 Every HTTP response is logged with status code and elapsed duration, correlated to its request by identifier
+- [x] #3 A non-2xx response body is preserved and logged verbatim (subject to an existing-style length cap) rather than discarded, including a 429 body that does not parse as a rate-limit envelope
+- [x] #4 A 429 response logs its full set of response headers so Lichess limiter hints beyond Retry-After become observable
+- [x] #5 Stream lifecycle events (open, close, and reconnect) are logged, so stream churn is visible as a source of request volume
+- [x] #6 Request-level tracing is off at the default Info level and is enabled by RUST_LOG targeting the transport module, so ordinary operation is not made noisy
+- [x] #7 Tracing verbosity choices are covered by tests that assert on emitted records without requiring network access
+- [x] #8 The task records a written diagnosis stating whether the observed 429s are endpoint-specific or global per token, with the evidence supporting that conclusion
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -334,4 +334,89 @@ hypothesis the task was created on — a global per-token limiter re-armed by th
 bot other traffic — is refuted, and the reviewer should treat any follow-up that
 inherits it as wrong.
 ---
+
+author: @claude
+created: 2026-07-23 01:22
+---
+Review attempt: 2
+Reviewed branch: task-79-lichess-transport-tracing
+Reviewed implementation: dd1a832b5b6fdee951a67258efbcaffb7563677d
+Verdict: approved
+
+Note on the target: comment #3 records the target SHA as
+dd1a8320c0ec5c1b6a5cd4372d3e00f9e2f31bd2, which is not a commit in this
+repository. The abbreviated prefix dd1a832 is unambiguous and resolves to
+dd1a832b5b6fdee951a67258efbcaffb7563677d, "fix(lichess): trace the body of a 401
+or 404 response", which is the commit the described rework is in. That commit is
+the approved code target. Only the full-SHA transcription in the handoff was
+wrong; nothing about the reviewed content is in doubt.
+
+Target is immutable and clean. dd1a832 descends from the recorded base bada986
+and is an ancestor of the branch tip 9aaeddd; the two later commits (02ed9dd,
+9aaeddd) touch the task file alone, 148 insertions / 2 deletions. The worktree is
+clean.
+
+Both attempt-1 findings are resolved.
+
+REV-1-01 resolved. check_status merges the 401 and 404 arms, reads the body once,
+and traces it through the new shared log_body helper under the request id at
+debug before returning the unchanged typed Error::Unauthorized /
+Error::NotFound. Verified by running a_401_traces_its_body_even_though_the_error_drops_it,
+which serves a 401 with a non-empty body from serve_repeating and asserts the
+body text reaches a Debug record on the lichess::transport target; the 404 arm
+shares the path. The catch-all arm was refactored onto the same helper, so the
+body still reaches both the log and the error there.
+
+REV-1-02 resolved. The notes now record a live capture that answers the question
+AC #8 asks: in one run on one token, GET /api/account, GET /api/stream/event and
+two GET /api/bot/online?nb=50 all returned 200 while two POST
+/api/challenge/{user} requests interleaved between them returned 429, so the
+restriction is scoped to challenge creation rather than to the token. The capture
+also excludes per-opponent scoping (three further opponents refused, two of them
+never previously challenged) and writes-in-general (three non-challenge-creation
+POSTs, including POST /api/challenge/{id}/cancel, reached 404 handler logic). The
+preserved body reads {"error":"Too many requests. Try again later."} and the
+header dump names nothing further, which is itself the finding: no Retry-After
+and no X-RateLimit-* of any kind, so the two fields the code already inspected
+were the only ones that could ever have carried an answer. The rework section
+explicitly supersedes the "two facts remain unestablished" paragraph, so the
+notes do not read as self-contradictory. I could not re-run this capture — it
+needs the operator's token and a live lockout — but the record is specific,
+internally consistent, and consistent with the code paths it cites.
+
+All eight acceptance criteria are proven and checked.
+
+One non-blocking observation, recorded rather than raised as a finding. A 429
+that does carry a ratelimit envelope, and a 400 that parses as
+OpponentRateLimited, return without calling log_body, so those two bodies are not
+logged verbatim. That is deliberate and defensible — in both cases the limit is
+identified, the key and retry_after reach the caller, and run.rs logs them, which
+is why a_429_that_names_its_limit_does_not_warn_about_the_body exists — and it
+does not touch the case AC #3 names. Worth knowing only if a future envelope
+gains fields this crate does not parse.
+
+Verification (all run in this worktree, at the branch tip, whose code tree is
+byte-identical to dd1a832):
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass, no
+  warnings, on a fresh CARGO_TARGET_DIR so the result is not a cache artifact
+- cargo test --workspace: pass, 661 passed / 0 failed / 2 ignored, including all
+  eight transport tracing tests and the six logging-directive tests
+- cargo test -p lichess a_401_traces_its_body: pass, the REV-1-01 regression test
+- git merge-base --is-ancestor bada986 dd1a832: pass
+- git merge-base --is-ancestor dd1a832 HEAD: pass
+- git diff --stat dd1a832 HEAD: task file only
+- diff audit: no #[allow] added anywhere in the change; no comment cites a task
+  id, acceptance criterion, or finding id; no unrelated changes. src/logging.rs
+  remains outside the transport and remains justified, since AC #6 is unreachable
+  through simple_logger's own env() parsing.
+- benchmarks not run: the change touches the lichess crate and the binary's
+  logger setup only, with no movegen or search code in the diff.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+HttpTransport now traces every request: a process-wide request id ties an opening "req#N -> METHOD /path" line to its outcome line carrying status and elapsed ms, or to a failure line when the request never gets a status. Non-2xx bodies survive to the log — a 429 with no rate-limit envelope is warned verbatim under the existing length cap, its full header set dumped at debug, and 401, 404 and unhandled statuses trace their bodies at debug. Streams log open and, from Drop, close with lifetime and lines carried; both reconnect loops now report the pending wait. New src/logging.rs parses RUST_LOG target=level directives, which simple_logger silently discards, and holds ureq, ureq_proto and rustls at Info unless named explicitly, so RUST_LOG=info,lichess::transport=debug yields a readable trace while the default Info level stays silent. Verified by eight loopback tracing tests plus six logging-directive tests (cargo test --workspace: 661 passed, 0 failed, 2 ignored), cargo fmt --check and cargo clippy --workspace --all-targets --all-features -- -D warnings clean on a fresh CARGO_TARGET_DIR. The diagnosis AC #8 asks for is recorded from a live capture: the 429s are endpoint-specific to challenge creation, not global per token.
+<!-- SECTION:FINAL_SUMMARY:END -->
