@@ -3,11 +3,11 @@ id: TASK-79
 title: >-
   Lichess bot: add request-level transport tracing and diagnose the recurring
   bare-429 challenge lockout
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-23 00:08'
-updated_date: '2026-07-23 00:23'
+updated_date: '2026-07-23 00:25'
 labels: []
 dependencies: []
 priority: high
@@ -97,3 +97,29 @@ To settle it, run with `RUST_LOG=info,lichess::transport=debug` until the lockou
 
 Verification of the tracing itself was done against the live API with an invalid token: `RUST_LOG=lichess::transport=debug` produced exactly the correlated pair (`req#1 -> GET /api/account`, `req#1 <- GET /api/account 401 in 80ms`) and the default level produced nothing.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+created: 2026-07-23 00:25
+---
+Implementation handoff
+Branch: task-79-lichess-transport-tracing
+Worktree: /Users/seabo/seaborg-worktrees/task-79-lichess-transport-tracing
+Base: bada986c932ba144835cc941d29263f64f2a22f6
+Implementation target: c9f1ec33b3bf42adeb335d79b9855c3252fe459a
+Resolved findings: none (initial implementation)
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass, no warnings
+- cargo test --workspace: pass, 660 passed / 0 failed / 2 ignored
+- live smoke against lichess.org with an invalid token: RUST_LOG=lichess::transport=debug emitted the correlated pair (req#1 -> GET /api/account, req#1 <- GET /api/account 401 in 80ms); default level emitted nothing; RUST_LOG=info,ureq=debug still produced ureq output, confirming an explicit directive overrides the dependency default
+Known failures: none
+
+Reviewer notes:
+
+Scope grew by one file beyond the transport, and deliberately. The tracing was written first and did not work from the operator side: simple_logger env() parses only a bare level word and silently drops the target=level form, so the acceptance criterion asking for RUST_LOG targeting the transport module could not be met without src/logging.rs. Raising the level globally instead surfaced the trace but buried it under roughly a dozen Debug lines per request from ureq/ureq_proto/rustls, so those are held at Info unless RUST_LOG names them. This was caught by running the binary rather than trusting the unit tests, which passed throughout.
+
+Acceptance criterion 8 asks for a written diagnosis. It is recorded in the implementation notes and reaches a conclusion that contradicts the hypothesis the task was created on: the timeline shows one challenge request in an eight-minute window with no other account traffic, which rules out the volume-based global limiter theory. It does not identify the actual limit, because the response body that would name it has never been read; the change makes it readable. Whether that satisfies the criterion, or whether the criterion should hold until a live capture exists, is a reviewer call I should not make for myself.
+---
+<!-- COMMENTS:END -->
