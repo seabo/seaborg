@@ -3,11 +3,11 @@ id: TASK-79
 title: >-
   Lichess bot: add request-level transport tracing and diagnose the recurring
   bare-429 challenge lockout
-status: Changes Requested
+status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-07-23 00:08'
-updated_date: '2026-07-23 00:59'
+updated_date: '2026-07-23 01:02'
 labels: []
 dependencies: []
 priority: high
@@ -48,21 +48,12 @@ The deliverable of this task is the instrumentation plus a written diagnosis; th
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Add a per-request trace context to `HttpTransport`: a process-wide `AtomicU64` counter yields a request id; a small `RequestTrace` value carries id, HTTP method, and path so the request line and its response line correlate. Log the request at `debug!` (module target `lichess::transport`, so `RUST_LOG=lichess::transport=debug` enables it and the default `Info` stays quiet).
+Rework for review attempt 1.
 
-2. Log every response at `debug!` with the correlating id, status code, and elapsed wall time measured from just before the request is sent.
-
-3. Thread the trace context into `read_response`/`check_status`, which are currently free functions with no request context. Restructure `check_status` so a non-2xx body is read exactly once into a value that is always available, instead of the current 429 path that reads the body, tries `parse_rate_limit`, and drops it when the shape does not match.
-
-4. Emit the unexplained-429 body at `warn!` verbatim (reusing the existing `MAX_ERROR_BODY_CHARS` cap) when a 429 carries no `ratelimit` envelope. This is the diagnostic artifact the bug turns on and it is rare by construction, so it belongs above the `debug` tracing threshold alongside the existing rate-limit warning in `run.rs`.
-
-5. Dump the complete response header set of any 429 at `debug!`, so Lichess limiter hints beyond `Retry-After` become observable.
-
-6. Log stream lifecycle in `open_stream`: the open at `debug!`, and the close by wrapping the returned line iterator in a guard that logs on `Drop`, which covers normal exhaustion and early abandonment alike. Add the pending wait duration to the two existing reconnect warnings in `run.rs` and `game.rs` so reconnect churn is measurable rather than merely visible.
-
-7. Test with a capture logger installed once per test process behind a `Once`, recording level, target, and message. Tests filter captured records by their own unique request path so parallel execution cannot cross-contaminate, and assert both that request/response lines are `Debug` (absent at `Info`) and that an unexplained 429 body reaches `Warn`. No network: the existing loopback `serve_repeating` helper backs these.
-
-8. Record the diagnosis in the task. Static evidence bounds the conclusion; naming what a live trace must show to settle it is part of the deliverable.
+1. REV-1-01: restructure `check_status` so the 401 and 404 arms read their response body once and log it through `body_snippet` under the request's trace id at `debug`, matching the catch-all arm, before returning `Error::Unauthorized` / `Error::NotFound`. A token-scoped restriction can surface as a 401, and this task exists because a discarded body destroyed the only evidence of which limit fired.
+2. Cover the 401 body log with a test in the style of the existing tracing tests, using the loopback `serve_repeating` helper and the `records_mentioning` / `expect_record` capture helpers.
+3. Re-run the repository-required checks.
+4. REV-1-02: the finding asks for a live capture of the lockout (the unexplained-429 warning plus its correlated header lines) to state whether the restriction is endpoint-scoped or token-scoped. That capture requires the operator's Lichess token and a reproduction of the lockout in live play; no token is available to this session and no static evidence settles endpoint-vs-token scope. Resolve REV-1-01, then hand the task to Needs Human with the exact capture procedure rather than guessing the scope or deferring the finding to a follow-up.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes

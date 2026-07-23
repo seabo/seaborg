@@ -439,11 +439,21 @@ fn check_status(
     trace.finish(status);
     match status {
         200..=299 => Ok(response),
-        401 => Err(Error::Unauthorized),
         // 404 is a distinct, expected outcome on the challenge-accept path (the
-        // challenge was canceled or expired before the accept landed), so it gets
-        // its own variant the caller can single out instead of an opaque body.
-        404 => Err(Error::NotFound),
+        // challenge was canceled or expired before the accept landed), and 401
+        // means the token was refused; both get their own variant the caller can
+        // single out instead of an opaque body. The body is still read and
+        // traced: a restriction scoped to the token can arrive as a 401, and its
+        // body is then the only statement of which restriction that was.
+        401 | 404 => {
+            let body = response.into_body().read_to_string().ok();
+            log_body(trace, body.as_deref());
+            if status == 401 {
+                Err(Error::Unauthorized)
+            } else {
+                Err(Error::NotFound)
+            }
+        }
         429 => {
             // Which limit fired is the whole question on a 429, and this crate
             // reads only two of the several places Lichess might answer it. Dump
@@ -501,17 +511,9 @@ fn check_status(
                     });
                 }
             }
-            // 401 and 404 carry their meaning in the status alone, so only the
-            // statuses that explain themselves in the body reach here; the body
-            // is folded into the error, and traced too so it is attributable to
-            // its request even when a caller swallows the error.
-            log::debug!(
-                "req#{} {} {} body: {}",
-                trace.id,
-                trace.method,
-                trace.path,
-                body_snippet(body.as_deref())
-            );
+            // Unlike the statuses above, these have no variant of their own, so
+            // the body is folded into the error as well as traced.
+            log_body(trace, body.as_deref());
             Err(unexpected_status_error(other, body.as_deref()))
         }
     }
@@ -533,6 +535,22 @@ fn log_headers(trace: &RequestTrace, response: &ureq::http::Response<ureq::Body>
             value.to_str().unwrap_or("<non-ascii>")
         );
     }
+}
+
+/// Trace the body of a failed response under its request's id.
+///
+/// Every non-2xx body is logged, including those whose status already has a
+/// typed error and so never carries the text to the caller. A discarded body is
+/// what made a live rate-limit lockout undiagnosable: whichever limit or
+/// restriction fired, the server names it in the body and nowhere else.
+fn log_body(trace: &RequestTrace, body: Option<&str>) {
+    log::debug!(
+        "req#{} {} {} body: {}",
+        trace.id,
+        trace.method,
+        trace.path,
+        body_snippet(body)
+    );
 }
 
 /// Render a response body for a log line, capped and with missing or unreadable
@@ -1288,6 +1306,28 @@ mod tests {
             record.level,
             log::Level::Warn,
             "an unexplained 429 must not need RUST_LOG to be seen: {}",
+            record.message
+        );
+    }
+
+    #[test]
+    fn a_401_traces_its_body_even_though_the_error_drops_it() {
+        // `Error::Unauthorized` carries no text, so the body is the only record
+        // of what the server actually objected to — and a restriction scoped to
+        // the token can arrive this way rather than as a 429. Dropping it would
+        // leave the same blind spot this change exists to close.
+        install_capture_logger();
+        const PATH: &str = "/traced-401";
+        const BODY: &str = r#"{"error":"No such token"}"#;
+        let (port, _) = serve_repeating("401 Unauthorized", "", BODY);
+        let result = transport_for(port).post_form_once(PATH, &[]);
+        assert!(matches!(result, Err(Error::Unauthorized)));
+
+        let record = expect_record(PATH, BODY);
+        assert_eq!(
+            record.level,
+            log::Level::Debug,
+            "a routine 401 belongs with the request tracing, not above it: {}",
             record.message
         );
     }
