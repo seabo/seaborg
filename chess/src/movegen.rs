@@ -358,7 +358,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
 
         // If there is only one checking square, we can block or capture the piece
         if !(self.position.checkers().more_than_one()) {
-            let checking_sq = Square(self.position.checkers().bsf() as u8);
+            let checking_sq = self.position.checkers().bsf();
 
             // Squares that allow a block or captures of the sliding piece
             let target =
@@ -415,7 +415,7 @@ impl<'a, MP: MoveList> InnerMoveGen<'a, MP> {
         } else {
             // If there is only one checking square, we can block or capture the piece
             if !(self.position.checkers().more_than_one()) {
-                let checking_sq = Square(self.position.checkers().bsf() as u8);
+                let checking_sq = self.position.checkers().bsf();
 
                 // Squares that allow a block or captures of the sliding piece
                 let tgt = target & (Bitboard(between_bb(checking_sq, ksq)) | checking_sq.to_bb());

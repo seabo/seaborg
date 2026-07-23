@@ -9,6 +9,10 @@ use std::ops::*;
 #[repr(transparent)]
 pub struct Bitboard(pub u64);
 
+/// Shared by every operation that needs a lowest set bit, so callers see one
+/// message whichever entry point they reached it through.
+const EMPTY_BITBOARD_MSG: &str = "empty bitboard has no lowest set bit";
+
 impl Bitboard {
     /// Bitboard of all squares
     pub const ALL: Bitboard = Bitboard(ALL);
@@ -67,14 +71,29 @@ impl Bitboard {
         self.0.count_ones()
     }
 
-    /// Returns the number of trailing zeros in the `Bitboard`. In the case where
-    /// this is not 64 (ie the `Bitboard` is not empty), the return value of this
-    /// function represents the index of the lowest set bit.
-    // TODO: change this to return a `Square`. May need to be a panicking and
-    // non-panicking version.
+    /// Returns the `Square` of the lowest set bit.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `Bitboard` is empty, which has no lowest set bit and so no
+    /// square to name. See [`Bitboard::some_bsf`] for a non-panicking version of
+    /// the method.
     #[inline(always)]
-    pub fn bsf(&self) -> u32 {
-        self.0.trailing_zeros()
+    pub fn bsf(&self) -> Square {
+        self.some_bsf().expect(EMPTY_BITBOARD_MSG)
+    }
+
+    /// Returns the `Square` of the lowest set bit, or `None` if the `Bitboard`
+    /// is empty.
+    #[inline(always)]
+    pub fn some_bsf(&self) -> Option<Square> {
+        // Testing the trailing-zero count for its empty-bitboard value of 64,
+        // rather than testing the bitboard for zero first, keeps this to the
+        // single count instruction the iteration hot path is built around.
+        match self.0.trailing_zeros() {
+            64 => None,
+            idx => Some(Square(idx as u8)),
+        }
     }
 
     /// Toggles off the current lowest significant bit which is set.
@@ -107,7 +126,7 @@ impl Bitboard {
     #[inline(always)]
     pub fn to_square(&self) -> Option<Square> {
         if self.popcnt() == 1 {
-            Some(Square(self.bsf() as u8))
+            self.some_bsf()
         } else {
             None
         }
@@ -130,8 +149,7 @@ impl Bitboard {
     /// non-panicking version of the method.
     #[inline(always)]
     pub fn pop_lsb_and_bit(&mut self) -> (Square, Bitboard) {
-        assert!(self.is_not_empty(), "cannot pop an empty bitboard");
-        let sq: Square = Square(self.bsf() as u8);
+        let sq = self.bsf();
         *self &= *self - 1;
         (sq, sq.to_bb())
     }
@@ -156,13 +174,9 @@ impl std::iter::Iterator for Bitboard {
 
     #[inline(always)]
     fn next(&mut self) -> Option<Square> {
-        match self.bsf() {
-            64 => None,
-            x => {
-                self.toggle_lsb();
-                Some(Square(x as u8))
-            }
-        }
+        let sq = self.some_bsf()?;
+        self.toggle_lsb();
+        Some(sq)
     }
 }
 
@@ -222,9 +236,25 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "cannot pop an empty bitboard")]
+    #[should_panic(expected = "empty bitboard has no lowest set bit")]
     fn direct_pop_rejects_an_empty_bitboard() {
         Bitboard::empty().pop_lsb_and_bit();
+    }
+
+    #[test]
+    #[should_panic(expected = "empty bitboard has no lowest set bit")]
+    fn direct_bsf_rejects_an_empty_bitboard() {
+        Bitboard::empty().bsf();
+    }
+
+    #[test]
+    fn bsf_names_the_lowest_set_bit() {
+        let bb = Square::C4.to_bb() | Square::F4.to_bb() | Square::G1.to_bb();
+        assert_eq!(bb.bsf(), Square::G1);
+        assert_eq!(bb.some_bsf(), Some(Square::G1));
+
+        assert_eq!(Square::H8.to_bb().bsf(), Square::H8);
+        assert_eq!(Bitboard::empty().some_bsf(), None);
     }
 
     #[test]

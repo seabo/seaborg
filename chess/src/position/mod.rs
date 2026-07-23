@@ -1,6 +1,7 @@
 mod board;
 mod castling;
 mod fen;
+mod file;
 mod notation;
 mod piece;
 mod square;
@@ -18,6 +19,7 @@ use crate::precalc::boards::{aligned, between_bb, king_moves, knight_moves, pawn
 pub use board::Board;
 pub use castling::{CastleType, CastlingRights};
 pub use fen::{FenError, START_POSITION};
+pub use file::File;
 pub use piece::{Piece, PieceType, PIECE_TYPES, PROMO_PIECES};
 pub use square::Square;
 pub use state::State;
@@ -1396,15 +1398,14 @@ pub fn rank_idx_of_sq(s: u8) -> u8 {
 /// corresponding file as a u64.
 #[inline(always)]
 pub fn file_bb(s: u8) -> u64 {
-    FILE_BB[file_of_sq(s) as usize]
+    FILE_BB[file_of_sq(s).index() as usize]
 }
 
 /// For whatever file the bit (inner value of a `Square`) is, returns the
 /// corresponding file.
-// TODO: make this return a dedicated `File` enum
 #[inline(always)]
-pub fn file_of_sq(s: u8) -> u8 {
-    s & 0b0000_0111
+pub fn file_of_sq(s: u8) -> File {
+    File::from_low_bits(s)
 }
 
 /// Given a valid raw square index, returns its bitboard representation.
@@ -1599,6 +1600,21 @@ mod tests {
 
             assert_eq!(position, original, "{fen}");
             assert_eq!(position.zobrist(), original.zobrist(), "{fen}");
+        }
+    }
+
+    /// The file of a square is the low three bits of its index, and the mask
+    /// looked up through that file is the one holding exactly that square.
+    #[test]
+    fn every_square_reports_its_own_file() {
+        for idx in 0..64u8 {
+            let square = Square::try_from(idx).unwrap();
+            let file = file_of_sq(idx);
+
+            assert_eq!(file.index(), square.file_idx_of_sq(), "{square}");
+            assert_eq!(file.to_char(), square.to_string().chars().next().unwrap());
+            assert_ne!(file_bb(idx) & square.to_bb().0, 0, "{square}");
+            assert_eq!(file_bb(idx).count_ones(), 8, "{square}");
         }
     }
 }
