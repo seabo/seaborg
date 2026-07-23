@@ -122,8 +122,15 @@ where
                 if made_progress {
                     backoff.reset();
                 }
-                log::warn!("game {game_id}: stream disconnected; reconnecting");
-                sleep(backoff.next_delay());
+                // Reporting the wait makes reconnect rate measurable from the
+                // log; a game stream that reopens continually is a request
+                // source large enough to matter when diagnosing a rate limit.
+                let wait = backoff.next_delay();
+                log::warn!(
+                    "game {game_id}: stream disconnected; reconnecting in {}ms",
+                    wait.as_millis()
+                );
+                sleep(wait);
             }
         }
     }

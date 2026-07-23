@@ -20,12 +20,26 @@
 //! Either way the response body is parsed for the rate-limit detail Lichess
 //! supplies — which limit fired, and how long it lasts.
 //!
+//! Every request is traced. A rate limit is a statement about request volume, so
+//! diagnosing one needs the traffic that provoked it and not just the refusal
+//! that ended it: each request carries an id that ties its start to its outcome,
+//! and streams announce when they open and close because a stream that keeps
+//! reconnecting is itself a source of requests. The tracing sits at `debug`, off
+//! under the bot's default `Info` level and enabled with
+//! `RUST_LOG=lichess::transport=debug`.
+//!
+//! One case is loud by default: a 429 whose body carries no rate-limit envelope.
+//! Lichess describes the per-day caps a bot expects to meet in that envelope, so
+//! a 429 without one came from a limit this crate cannot name, and the raw body
+//! is the only evidence of which. It is rare by construction and worth a warning.
+//!
 //! Tests substitute a fake transport that replays recorded NDJSON and records the
 //! requests the bot makes, so challenge and game handling run with no network
 //! access.
 
 use std::io::BufRead;
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
@@ -58,6 +72,65 @@ const RATE_LIMIT_MAX: Duration = Duration::from_secs(600);
 /// How many times a single request is retried through 429s before giving up and
 /// surfacing the rate-limit error to the caller.
 const RATE_LIMIT_MAX_ATTEMPTS: u32 = 5;
+
+/// Source of request ids. Process-wide rather than per-transport so ids stay
+/// unique across every request in a log, which matters because the bot runs one
+/// transport per process but reads it from several threads at once.
+static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+
+/// One request's identity and start time, tying its trace lines together.
+///
+/// A retried request gets a fresh trace per attempt: each attempt is a distinct
+/// round trip with its own status and duration, and collapsing them under one id
+/// would hide exactly the repetition a rate-limit investigation is looking for.
+struct RequestTrace {
+    id: u64,
+    method: &'static str,
+    /// The request path, owned because the trace outlives the borrow the caller
+    /// built its URL from.
+    path: String,
+    started: Instant,
+}
+
+impl RequestTrace {
+    /// Record the start of `method path` and log it.
+    fn begin(method: &'static str, path: &str) -> RequestTrace {
+        let trace = RequestTrace {
+            id: NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed),
+            method,
+            path: path.to_string(),
+            started: Instant::now(),
+        };
+        log::debug!("req#{} -> {} {}", trace.id, trace.method, trace.path);
+        trace
+    }
+
+    /// Log the outcome of the request: its status and how long it took.
+    fn finish(&self, status: u16) {
+        log::debug!(
+            "req#{} <- {} {} {} in {}ms",
+            self.id,
+            self.method,
+            self.path,
+            status,
+            self.started.elapsed().as_millis()
+        );
+    }
+
+    /// Log a request that produced no HTTP status at all — a connection, TLS, or
+    /// timeout failure. Without this a failed request would show only an opening
+    /// line, making a stalled connection indistinguishable from a lost log.
+    fn fail(&self, error: &str) {
+        log::debug!(
+            "req#{} <- {} {} failed after {}ms: {}",
+            self.id,
+            self.method,
+            self.path,
+            self.started.elapsed().as_millis(),
+            error
+        );
+    }
+}
 
 /// The HTTP operations the bot needs from Lichess.
 ///
@@ -160,13 +233,14 @@ impl HttpTransport {
 
     /// Send one form POST, shared by the retrying and non-retrying entry points so
     /// they can differ in retry policy alone.
-    fn send_form(&self, url: &str, form: &[(&str, &str)]) -> Result<String> {
+    fn send_form(&self, path: &str, form: &[(&str, &str)]) -> Result<String> {
+        let trace = RequestTrace::begin("POST", path);
         let response = self
             .agent
-            .post(url)
+            .post(self.url(path))
             .header("Authorization", &self.bearer)
             .send_form(form.iter().copied());
-        read_response(response)
+        read_response(response, &trace)
     }
 }
 
@@ -174,39 +248,41 @@ impl Transport for HttpTransport {
     fn get(&self, path: &str) -> Result<String> {
         let url = self.url(path);
         self.with_rate_limit_retry(|| {
+            let trace = RequestTrace::begin("GET", path);
             let response = self
                 .agent
                 .get(url.as_str())
                 .header("Authorization", &self.bearer)
                 .call();
-            read_response(response)
+            read_response(response, &trace)
         })
     }
 
     fn post_empty(&self, path: &str) -> Result<String> {
         let url = self.url(path);
         self.with_rate_limit_retry(|| {
+            let trace = RequestTrace::begin("POST", path);
             let response = self
                 .agent
                 .post(url.as_str())
                 .header("Authorization", &self.bearer)
                 .send_empty();
-            read_response(response)
+            read_response(response, &trace)
         })
     }
 
     fn post_form(&self, path: &str, form: &[(&str, &str)]) -> Result<String> {
-        let url = self.url(path);
-        self.with_rate_limit_retry(|| self.send_form(&url, form))
+        self.with_rate_limit_retry(|| self.send_form(path, form))
     }
 
     fn post_form_once(&self, path: &str, form: &[(&str, &str)]) -> Result<String> {
-        self.send_form(&self.url(path), form)
+        self.send_form(path, form)
     }
 
     fn open_stream(&self, path: &str) -> Result<Box<dyn Iterator<Item = Result<String>>>> {
         let url = self.url(path);
         self.with_rate_limit_retry(|| {
+            let trace = RequestTrace::begin("GET", path);
             // Clear the shared agent's recv-response deadline for this request
             // only. That deadline stays active while the body is read, so on a
             // long-lived NDJSON stream it would fire mid-stream and kill a
@@ -220,13 +296,74 @@ impl Transport for HttpTransport {
                 .build()
                 .header("Authorization", &self.bearer)
                 .call();
-            let response = check_status(response)?;
+            let response = check_status(response, &trace)?;
             let reader = std::io::BufReader::new(response.into_body().into_reader());
             let lines = reader
                 .lines()
                 .map(|line| line.map_err(|e| Error::Http(e.to_string())));
-            Ok(Box::new(lines) as Box<dyn Iterator<Item = Result<String>>>)
+            // A stream's cost is the time it stays open, not the request that
+            // opened it: a stream that reconnects every few seconds issues far
+            // more requests than its one opening line suggests. Pairing the open
+            // with a close makes that visible as a lifetime.
+            Ok(Box::new(TracedStream::new(trace, lines))
+                as Box<dyn Iterator<Item = Result<String>>>)
         })
+    }
+}
+
+/// A stream's line iterator, logging how long the stream stayed open once it
+/// ends.
+///
+/// The close is reported from `Drop` rather than on exhaustion because a stream
+/// is at least as often abandoned as it is drained — the reader stops on
+/// shutdown, or on an error mid-body — and a close line that only appeared for
+/// cleanly finished streams would systematically miss the failures worth seeing.
+struct TracedStream<I> {
+    trace: RequestTrace,
+    lines: I,
+    /// Lines yielded so far, to distinguish a stream that carried traffic before
+    /// dropping from one that produced nothing at all.
+    yielded: u64,
+}
+
+impl<I> TracedStream<I> {
+    fn new(trace: RequestTrace, lines: I) -> TracedStream<I> {
+        log::debug!(
+            "req#{} stream open {} {}",
+            trace.id,
+            trace.method,
+            trace.path
+        );
+        TracedStream {
+            trace,
+            lines,
+            yielded: 0,
+        }
+    }
+}
+
+impl<I: Iterator<Item = Result<String>>> Iterator for TracedStream<I> {
+    type Item = Result<String>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let item = self.lines.next();
+        if item.is_some() {
+            self.yielded += 1;
+        }
+        item
+    }
+}
+
+impl<I> Drop for TracedStream<I> {
+    fn drop(&mut self) {
+        log::debug!(
+            "req#{} stream closed {} {} after {}ms, {} lines",
+            self.trace.id,
+            self.trace.method,
+            self.trace.path,
+            self.trace.started.elapsed().as_millis(),
+            self.yielded
+        );
     }
 }
 
@@ -274,8 +411,9 @@ fn with_rate_limit_retry<T>(
 /// Map a completed request to a body string or a typed error by its status.
 fn read_response(
     result: std::result::Result<ureq::http::Response<ureq::Body>, ureq::Error>,
+    trace: &RequestTrace,
 ) -> Result<String> {
-    let mut response = check_status(result)?;
+    let mut response = check_status(result, trace)?;
     response
         .body_mut()
         .read_to_string()
@@ -287,9 +425,19 @@ fn read_response(
 /// unhandled non-success status both become [`Error::Http`].
 fn check_status(
     result: std::result::Result<ureq::http::Response<ureq::Body>, ureq::Error>,
+    trace: &RequestTrace,
 ) -> Result<ureq::http::Response<ureq::Body>> {
-    let response = result.map_err(|e| Error::Http(e.to_string()))?;
-    match response.status().as_u16() {
+    let response = match result {
+        Ok(response) => response,
+        Err(error) => {
+            let error = error.to_string();
+            trace.fail(&error);
+            return Err(Error::Http(error));
+        }
+    };
+    let status = response.status().as_u16();
+    trace.finish(status);
+    match status {
         200..=299 => Ok(response),
         401 => Err(Error::Unauthorized),
         // 404 is a distinct, expected outcome on the challenge-accept path (the
@@ -297,16 +445,32 @@ fn check_status(
         // its own variant the caller can single out instead of an opaque body.
         404 => Err(Error::NotFound),
         429 => {
+            // Which limit fired is the whole question on a 429, and this crate
+            // reads only two of the several places Lichess might answer it. Dump
+            // the rest so a limit that names itself in an unexpected header is
+            // visible rather than silently dropped.
+            log_headers(trace, &response);
             // The header is the fallback, not the primary source: for the limits a
             // bot actually meets, Lichess states the wait in the body and sends no
             // `Retry-After` at all. Read the header before consuming the response,
             // then let the body override it.
             let header_wait = retry_after(&response);
-            let limit = response
-                .into_body()
-                .read_to_string()
-                .ok()
-                .and_then(|body| parse_rate_limit(&body));
+            let body = response.into_body().read_to_string().ok();
+            let limit = body.as_deref().and_then(parse_rate_limit);
+            if limit.is_none() {
+                // Lichess describes the per-day caps a bot expects to meet in a
+                // `ratelimit` envelope. A 429 without one came from some other
+                // limit, and since nothing else here names it, the raw body is
+                // the only remaining evidence of which — and of whether the limit
+                // is scoped to this endpoint or to the token as a whole.
+                log::warn!(
+                    "req#{} {} {} was rate limited with no rate-limit envelope; body: {}",
+                    trace.id,
+                    trace.method,
+                    trace.path,
+                    body_snippet(body.as_deref())
+                );
+            }
             Err(Error::RateLimited {
                 key: limit.as_ref().map(|l| l.key.clone()),
                 retry_after: limit.and_then(|l| l.retry_after).or(header_wait),
@@ -324,14 +488,61 @@ fn check_status(
             // variant rather than being folded into an opaque HTTP failure.
             if other == 400 {
                 if let Some(limit) = body.as_deref().and_then(parse_rate_limit) {
+                    log::debug!(
+                        "req#{} {} {} refused for the addressed account's limit [{}]",
+                        trace.id,
+                        trace.method,
+                        trace.path,
+                        limit.key
+                    );
                     return Err(Error::OpponentRateLimited {
                         key: limit.key,
                         retry_after: limit.retry_after,
                     });
                 }
             }
+            // 401 and 404 carry their meaning in the status alone, so only the
+            // statuses that explain themselves in the body reach here; the body
+            // is folded into the error, and traced too so it is attributable to
+            // its request even when a caller swallows the error.
+            log::debug!(
+                "req#{} {} {} body: {}",
+                trace.id,
+                trace.method,
+                trace.path,
+                body_snippet(body.as_deref())
+            );
             Err(unexpected_status_error(other, body.as_deref()))
         }
+    }
+}
+
+/// Log every response header, for a status whose cause the bot could not name
+/// from the fields it knows to read.
+fn log_headers(trace: &RequestTrace, response: &ureq::http::Response<ureq::Body>) {
+    // Skip the formatting entirely when the level is off: this walks every header
+    // on a response that, during a rate-limit episode, arrives repeatedly.
+    if !log::log_enabled!(log::Level::Debug) {
+        return;
+    }
+    for (name, value) in response.headers() {
+        log::debug!(
+            "req#{} header {}: {}",
+            trace.id,
+            name,
+            value.to_str().unwrap_or("<non-ascii>")
+        );
+    }
+}
+
+/// Render a response body for a log line, capped and with missing or unreadable
+/// bodies stated explicitly rather than logged as an empty string — "the server
+/// sent nothing" and "the body could not be read" are different findings.
+fn body_snippet(body: Option<&str>) -> String {
+    match body.map(str::trim) {
+        None => "<unreadable>".to_string(),
+        Some("") => "<empty>".to_string(),
+        Some(body) => body.chars().take(MAX_ERROR_BODY_CHARS).collect(),
     }
 }
 
@@ -401,11 +612,98 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex, Once};
     use std::thread;
     use std::time::Instant;
 
     use super::*;
+
+    /// One log record the capture logger kept, flattened to the parts the tracing
+    /// tests assert on.
+    #[derive(Clone)]
+    struct Captured {
+        level: log::Level,
+        target: String,
+        message: String,
+    }
+
+    /// Every record emitted since the process started. A single global buffer is
+    /// forced by `log`, which permits one logger per process; tests therefore
+    /// share it and select their own records rather than getting a private one.
+    static CAPTURED: Mutex<Vec<Captured>> = Mutex::new(Vec::new());
+    static INSTALL: Once = Once::new();
+
+    struct CaptureLogger;
+
+    impl log::Log for CaptureLogger {
+        fn enabled(&self, _: &log::Metadata) -> bool {
+            true
+        }
+
+        fn log(&self, record: &log::Record) {
+            CAPTURED.lock().unwrap().push(Captured {
+                level: record.level(),
+                target: record.target().to_string(),
+                message: record.args().to_string(),
+            });
+        }
+
+        fn flush(&self) {}
+    }
+
+    /// Install the capture logger, once per test process.
+    ///
+    /// The max level is raised to `Trace` so nothing is filtered before it
+    /// reaches the buffer; the tests assert on each record's own level instead,
+    /// which is what actually decides visibility under an operator's `RUST_LOG`.
+    fn install_capture_logger() {
+        // Registered by reference rather than boxed: `log`'s boxed installer is
+        // behind its `std` feature, which this crate does not enable.
+        static LOGGER: CaptureLogger = CaptureLogger;
+        INSTALL.call_once(|| {
+            log::set_logger(&LOGGER).expect("no logger installed yet");
+            log::set_max_level(log::LevelFilter::Trace);
+        });
+    }
+
+    /// This module's captured records whose message mentions `needle`.
+    ///
+    /// Selecting by substring rather than draining the buffer is what makes these
+    /// tests safe under the parallel test harness: every tracing test uses a
+    /// request path unique to it, so concurrent tests cannot claim each other's
+    /// records however their execution interleaves.
+    ///
+    /// Records from other targets are excluded because `ureq` logs the full URL
+    /// too, so a path-only filter would return this crate's tracing mixed with
+    /// the HTTP client's and let assertions about what the transport emits pass
+    /// or fail on a dependency's logging.
+    fn records_mentioning(needle: &str) -> Vec<Captured> {
+        CAPTURED
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|record| record.target == TRANSPORT_TARGET && record.message.contains(needle))
+            .cloned()
+            .collect()
+    }
+
+    /// The log target this module's records carry, which is also the selector an
+    /// operator writes in `RUST_LOG` to turn request tracing on.
+    const TRANSPORT_TARGET: &str = "lichess::transport";
+
+    /// Assert that some captured record mentioning `needle` also contains
+    /// `fragment`, and return it.
+    fn expect_record(needle: &str, fragment: &str) -> Captured {
+        let records = records_mentioning(needle);
+        records
+            .iter()
+            .find(|record| record.message.contains(fragment))
+            .unwrap_or_else(|| {
+                let seen: Vec<&str> = records.iter().map(|r| r.message.as_str()).collect();
+                panic!("no record containing {fragment:?}; captured for {needle:?}: {seen:#?}")
+            })
+            .clone()
+    }
 
     /// Bind a throwaway HTTP/1.1 server on loopback that handles exactly one
     /// connection with `handle`, returning the port it listens on. The spawned
@@ -908,5 +1206,198 @@ mod tests {
         assert_eq!(parsed.retry_after, None);
         assert!(parse_rate_limit(r#"{"error":"nope"}"#).is_none());
         assert!(parse_rate_limit("not json").is_none());
+    }
+
+    #[test]
+    fn a_request_and_its_response_share_one_traced_id() {
+        // A rate limit is a claim about request volume, so the trace has to
+        // support counting and attributing requests, not merely noting that some
+        // happened. That needs each response tied to the request it answers.
+        install_capture_logger();
+        const PATH: &str = "/traced-round-trip";
+        let (port, _) = serve_repeating("200 OK", "", "{}");
+        transport_for(port).get(PATH).expect("the request succeeds");
+
+        let sent = expect_record(PATH, "->");
+        let received = expect_record(PATH, "<-");
+        assert!(
+            sent.message.contains("GET") && received.message.contains("GET"),
+            "the method appears on both lines: {} / {}",
+            sent.message,
+            received.message
+        );
+        assert!(
+            received.message.contains("200"),
+            "the response line carries the status: {}",
+            received.message
+        );
+        let id = sent
+            .message
+            .split_whitespace()
+            .next()
+            .expect("the request line opens with its id");
+        assert!(
+            received.message.starts_with(id),
+            "response {} must carry the request's id {id}",
+            received.message
+        );
+    }
+
+    #[test]
+    fn request_tracing_stays_below_the_operator_default_level() {
+        // The bot runs at `Info` so its lifecycle is legible without `RUST_LOG`.
+        // Per-request tracing at that level would bury it: a single game is
+        // hundreds of requests. It belongs behind
+        // `RUST_LOG=lichess::transport=debug` instead.
+        install_capture_logger();
+        const PATH: &str = "/traced-below-info";
+        let (port, _) = serve_repeating("200 OK", "", "{}");
+        transport_for(port).get(PATH).expect("the request succeeds");
+
+        let records = records_mentioning(PATH);
+        assert!(!records.is_empty(), "the request was traced at all");
+        for record in records {
+            assert_eq!(
+                record.level,
+                log::Level::Debug,
+                "a successful request must add nothing at Info: {}",
+                record.message
+            );
+            assert_eq!(
+                record.target, TRANSPORT_TARGET,
+                "the module target is what RUST_LOG selects on"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unexplained_429_preserves_its_body_at_warn() {
+        // The body of a 429 that names no limit is the only evidence of which
+        // limit fired. It used to be read and dropped, which is why a live
+        // lockout could not be diagnosed at all; it must now survive, and at a
+        // level the operator sees without having opted into tracing.
+        install_capture_logger();
+        const PATH: &str = "/unexplained-429";
+        const BODY: &str = "Too many requests. Please wait a minute.";
+        let (port, _) = serve_repeating("429 Too Many Requests", "", BODY);
+        let result = transport_for(port).post_form_once(PATH, &[]);
+        assert!(matches!(result, Err(Error::RateLimited { key: None, .. })));
+
+        let record = expect_record(PATH, BODY);
+        assert_eq!(
+            record.level,
+            log::Level::Warn,
+            "an unexplained 429 must not need RUST_LOG to be seen: {}",
+            record.message
+        );
+    }
+
+    #[test]
+    fn a_429_that_names_its_limit_does_not_warn_about_the_body() {
+        // When the envelope is present the limit is already identified, and the
+        // caller logs it. Warning again would make the routine per-day caps look
+        // like the anomaly the bare-body warning is reserved for.
+        install_capture_logger();
+        const PATH: &str = "/explained-429";
+        let (port, _) = serve_repeating("429 Too Many Requests", "", BOT_VS_BOT_BODY);
+        let result = transport_for(port).post_form_once(PATH, &[]);
+        assert!(matches!(
+            result,
+            Err(Error::RateLimited { key: Some(_), .. })
+        ));
+
+        let shouted: Vec<String> = records_mentioning(PATH)
+            .into_iter()
+            .filter(|record| matches!(record.level, log::Level::Warn | log::Level::Error))
+            .map(|record| record.message)
+            .collect();
+        assert!(
+            shouted.is_empty(),
+            "an identified limit is not an anomaly, but got {shouted:#?}"
+        );
+    }
+
+    #[test]
+    fn a_429_logs_every_response_header() {
+        // This crate reads only `Retry-After` and the body envelope. A limit that
+        // announces itself anywhere else — a scope, a window, a remaining count —
+        // would otherwise be invisible precisely when it is the answer.
+        install_capture_logger();
+        const PATH: &str = "/header-dump-429";
+        let (port, _) = serve_repeating(
+            "429 Too Many Requests",
+            "X-RateLimit-Scope: token\r\n",
+            "nope",
+        );
+        let _ = transport_for(port).post_form_once(PATH, &[]);
+
+        // Headers are logged under the request id rather than the path, so find
+        // the id from the request line and select the headers that follow it.
+        let sent = expect_record(PATH, "->");
+        let id = sent
+            .message
+            .split_whitespace()
+            .next()
+            .expect("the request line opens with its id")
+            .to_string();
+        let header = expect_record(&id, "x-ratelimit-scope");
+        assert!(
+            header.message.contains("token"),
+            "the header value is logged, not just its name: {}",
+            header.message
+        );
+        assert_eq!(header.level, log::Level::Debug);
+    }
+
+    #[test]
+    fn a_stream_traces_its_open_and_its_close() {
+        // A stream costs requests over its lifetime, not at its open: one that
+        // reconnects continually can dominate a token's request budget while
+        // showing up as a single innocuous line. Pairing open with close, and
+        // reporting the lines carried, makes that churn measurable.
+        install_capture_logger();
+        const PATH: &str = "/traced-stream";
+        let port = serve_once(|mut stream| {
+            read_request_headers(&mut stream);
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nfirst\nsecond\n")
+                .unwrap();
+        });
+        let transport =
+            HttpTransport::new(format!("http://127.0.0.1:{port}"), "token", Shutdown::new());
+        let lines: Vec<String> = transport
+            .open_stream(PATH)
+            .expect("stream opens")
+            .collect::<Result<Vec<_>>>()
+            .expect("both lines arrive");
+        assert_eq!(lines, vec!["first".to_string(), "second".to_string()]);
+
+        assert_eq!(expect_record(PATH, "stream open").level, log::Level::Debug);
+        let closed = expect_record(PATH, "stream closed");
+        assert!(
+            closed.message.contains("2 lines"),
+            "the close reports what the stream carried: {}",
+            closed.message
+        );
+    }
+
+    #[test]
+    fn a_request_that_never_gets_a_status_is_still_traced() {
+        // A connection or TLS failure produces no status, so the status-keyed
+        // response line never fires. Without its own line the request would show
+        // an open and no outcome, which reads as a lost log rather than a failure.
+        install_capture_logger();
+        const PATH: &str = "/unreachable";
+        // Bind and immediately release a port, so connecting to it is refused
+        // rather than merely slow.
+        let port = {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+            listener.local_addr().expect("local addr").port()
+        };
+        let result = transport_for(port).get(PATH);
+        assert!(matches!(result, Err(Error::Http(_))));
+
+        let failed = expect_record(PATH, "failed after");
+        assert_eq!(failed.level, log::Level::Debug);
     }
 }

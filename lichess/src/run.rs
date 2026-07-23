@@ -495,8 +495,16 @@ where
                 if made_progress {
                     backoff.reset();
                 }
-                log::warn!("event stream disconnected; reconnecting");
-                sleep(backoff.next_delay());
+                // The wait is part of the message because reconnect rate is what
+                // makes stream churn matter: a stream that reopens every second
+                // issues requests at a rate that can provoke a rate limit the
+                // reconnects themselves then look like an innocent bystander to.
+                let wait = backoff.next_delay();
+                log::warn!(
+                    "event stream disconnected; reconnecting in {}ms",
+                    wait.as_millis()
+                );
+                sleep(wait);
             }
         }
     }
