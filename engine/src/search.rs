@@ -747,26 +747,70 @@ const SCORE_DROP_PER_EXTENSION: f64 = 150.0;
 /// unbounded extension. The hard deadline bounds the total regardless; this bounds the request.
 const MAX_SCORE_DROP_EXTENSION: f64 = 1.0;
 
-/// How far past its planned spend a search may run, as a multiple of that spend, given what the
-/// last completed iteration revealed about the position.
+/// The floor the soft-limit multiplier may be contracted to.
 ///
-/// Returns 1 for a stable position — same root move, score holding — which is the ordinary case
-/// and spends exactly what was allotted. The result is only ever a *request*: the hard deadline
-/// still bounds the search, so a large scale on a short clock simply resolves to the hard deadline.
-fn instability_scale(best_move_changed: bool, score_drop: i32) -> f64 {
+/// A settled position spends less than its planned share, but never so little that a genuine
+/// resolution is starved of the depth to find it: a position that merely *looks* quiet for a few
+/// iterations can still hide a reply that only surfaces deeper, and half the planned spend leaves
+/// ample room to find it while still handing the rest of the clock to later moves. The hard
+/// deadline is unaffected either way; this bounds only the planned spend.
+const MIN_STABILITY_SCALE: f64 = 0.5;
+
+/// The largest inter-iteration score swing, in centipawns, a position may show and still count as
+/// flat.
+///
+/// A settled search returns very nearly the same score iteration to iteration; a couple of
+/// centipawns is ordinary aspiration-window noise. A swing past this in *either* direction — not
+/// only a drop — is evidence the answer is still moving, which resets the contraction rather than
+/// deepening it.
+const STABILITY_FLAT_MARGIN: i32 = 8;
+
+/// How many consecutive settled iterations must accumulate before contraction begins.
+///
+/// One quiet iteration is not evidence the answer has stopped moving; a position often looks
+/// settled for a ply just before the search finds the reply that unsettles it. Requiring a streak
+/// keeps the guaranteed early plies at their full planned spend and only contracts once stability
+/// is established.
+const STABILITY_CONTRACTION_ONSET: u32 = 3;
+
+/// How much of the planned spend each settled iteration past the onset removes, until the floor.
+const STABILITY_CONTRACTION_PER_ITER: f64 = 0.1;
+
+/// The multiplier applied to the planned spend, given what the last completed iteration revealed
+/// about the position — in both directions.
+///
+/// Above 1 for an *unsettled* position — a root move that just changed, or a falling score — which
+/// is worth more than its planned share and may run into the extension budget up to the hard
+/// deadline. Below 1 for a *settled* one — the same root move and a flat score held across several
+/// consecutive iterations — which is worth less than its share and hands the unspent clock to later
+/// moves. Exactly 1 in between, spending precisely what was allotted.
+///
+/// The result is only ever a *request*. The hard deadline still bounds an extension, so a large
+/// scale on a short clock simply resolves to the hard deadline; and [`MIN_STABILITY_SCALE`] bounds
+/// how far a settled position may pull its spend below optimum.
+fn stability_scale(best_move_changed: bool, score_drop: i32, stable_iterations: u32) -> f64 {
     let mut scale = 1.0;
 
     if best_move_changed {
         scale += BEST_MOVE_CHANGE_EXTENSION;
     }
 
-    // Only a drop counts. A rising score means the search is finding more than it expected, which
-    // is not a reason to distrust the move it is about to play.
+    // Only a drop counts toward an extension. A rising score means the search is finding more than
+    // it expected, which is not a reason to distrust the move it is about to play.
     if score_drop > 0 {
         scale += (f64::from(score_drop) / SCORE_DROP_PER_EXTENSION).min(MAX_SCORE_DROP_EXTENSION);
     }
 
-    scale
+    if scale > 1.0 {
+        // An unsettled position extends; contraction never competes with an extension, so an
+        // unstable position spends exactly what it did before contraction existed.
+        return scale;
+    }
+
+    // A settled position contracts, one step per iteration held past the onset, down to the floor.
+    let steps = stable_iterations.saturating_sub(STABILITY_CONTRACTION_ONSET);
+    let contraction = f64::from(steps) * STABILITY_CONTRACTION_PER_ITER;
+    (1.0 - contraction).max(MIN_STABILITY_SCALE)
 }
 
 /// What the last two iterative-deepening iterations cost, and what that implies the next one will.
@@ -807,7 +851,7 @@ impl IterationCost {
 }
 
 /// The planned spend of a timed search, kept as an origin and a duration rather than a single
-/// instant so that the instability extension can be applied to it as a multiple.
+/// instant so that the stability multiplier can be applied to it as a multiple.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SoftLimit {
     /// The instant the search's clock started. Shared with the hard deadline, so both describe the
@@ -818,13 +862,16 @@ struct SoftLimit {
 }
 
 impl SoftLimit {
-    /// The instant this limit falls at once scaled by an instability factor.
+    /// The instant this limit falls at once scaled by a stability factor.
     ///
-    /// `scale` is at least 1; a value above it is the search's report that this position is worth
-    /// more than its planned share. The result is not clamped to the hard deadline here — the
-    /// caller compares against both, and conflating them would hide which one bound.
+    /// `scale` above 1 is the search's report that this position is worth more than its planned
+    /// share; below 1, that it is worth less and the unspent clock should go to later moves. The
+    /// factor is applied verbatim — [`stability_scale`] has already bounded it below by
+    /// [`MIN_STABILITY_SCALE`], so there is no floor to reapply here. The result is not clamped to
+    /// the hard deadline either: the caller compares against both, and conflating them would hide
+    /// which one bound.
     fn deadline(&self, scale: f64) -> Instant {
-        self.start + self.budget.mul_f64(scale.max(1.0))
+        self.start + self.budget.mul_f64(scale)
     }
 }
 
@@ -1579,7 +1626,10 @@ impl<'engine> Search<'engine> {
         let mut prev_best_move = None;
         let mut cost = IterationCost::default();
         let mut elapsed_at_last_iteration = Duration::ZERO;
-        let mut instability = 1.0;
+        let mut stability = 1.0;
+        // Consecutive iterations whose root move held and whose score barely moved. Drives the
+        // contraction: a position settled for long enough spends less than its planned share.
+        let mut stable_iterations: u32 = 0;
 
         for d in 1..=depth {
             if self.stopping() {
@@ -1592,7 +1642,7 @@ impl<'engine> Search<'engine> {
             // the unspent time to a later move instead. The guaranteed first ply is never declined
             // — `IterationCost` has nothing measured to decline it on — so the legal-bestmove
             // contract is untouched.
-            if !self.next_iteration_fits(&cost, instability) {
+            if !self.next_iteration_fits(&cost, stability) {
                 break;
             }
 
@@ -1611,12 +1661,21 @@ impl<'engine> Search<'engine> {
             cost.record(elapsed.saturating_sub(elapsed_at_last_iteration));
             elapsed_at_last_iteration = elapsed;
 
-            instability = instability_scale(
-                prev_best_move.is_some_and(|prev| Some(prev) != best_move),
-                prev_score.map_or(0, |prev: Score| {
-                    i32::from(prev.to_i16()) - i32::from(value.to_i16())
-                }),
-            );
+            let best_move_changed = prev_best_move.is_some_and(|prev| Some(prev) != best_move);
+            let score_delta = prev_score.map_or(0, |prev: Score| {
+                i32::from(prev.to_i16()) - i32::from(value.to_i16())
+            });
+
+            // This iteration counts as settled only when there was a previous one to compare
+            // against, the root move held, and the score barely moved in either direction. A large
+            // swing either way — not only a drop — means the answer is still moving, so the streak
+            // restarts rather than continuing to contract.
+            let settled = prev_best_move.is_some()
+                && !best_move_changed
+                && score_delta.abs() <= STABILITY_FLAT_MARGIN;
+            stable_iterations = if settled { stable_iterations + 1 } else { 0 };
+
+            stability = stability_scale(best_move_changed, score_delta, stable_iterations);
 
             prev_score = Some(value);
             prev_best_move = best_move;
@@ -1731,11 +1790,13 @@ impl<'engine> Search<'engine> {
     /// loop running exactly as it would with no prediction, so the decision only ever *removes*
     /// work that was going to be discarded.
     ///
-    /// The deadline compared against is the planned spend scaled by `instability`, but never past
-    /// the hard deadline: an extension the clock cannot fund is not an extension. Note that the
-    /// hard deadline binding here does not by itself stop the search — it stops the *next*
-    /// iteration from starting, and [`Self::stopping`] remains the only thing that aborts one.
-    fn next_iteration_fits(&self, cost: &IterationCost, instability: f64) -> bool {
+    /// The deadline compared against is the planned spend scaled by `scale`, but never past the
+    /// hard deadline: an extension the clock cannot fund is not an extension. A `scale` below 1
+    /// contracts the deadline instead, declining a next iteration a settled position no longer
+    /// needs. Note that the hard deadline binding here does not by itself stop the search — it
+    /// stops the *next* iteration from starting, and [`Self::stopping`] remains the only thing that
+    /// aborts one.
+    fn next_iteration_fits(&self, cost: &IterationCost, scale: f64) -> bool {
         let Some(soft) = self.soft_limit else {
             return true;
         };
@@ -1743,7 +1804,7 @@ impl<'engine> Search<'engine> {
             return true;
         };
 
-        let mut deadline = soft.deadline(instability);
+        let mut deadline = soft.deadline(scale);
         if let Some(hard) = self.stop_time {
             deadline = deadline.min(hard);
         }
