@@ -49,11 +49,6 @@ impl Bitboard {
     /// Bitboard Rank 1.
     pub const RANK_8: Bitboard = Bitboard(RANK_8);
 
-    // TODO: rename this to `from()` - OR DELETE?
-    pub fn new(bb: u64) -> Self {
-        Bitboard(bb)
-    }
-
     /// The empty bitboard.
     pub fn empty() -> Self {
         Bitboard(0)

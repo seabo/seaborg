@@ -1,4 +1,4 @@
-use super::{Board, CastlingRights, Piece, Player, Position, Square, State, Zobrist};
+use super::{Board, CastlingRights, CheckInfo, Piece, Player, Position, Square, Zobrist};
 
 use crate::bb::Bitboard;
 
@@ -90,7 +90,7 @@ impl Position {
             move_number,
             bbs,
             player_occ,
-            state: State::blank(), // Temporary. The real `State` is generated below.
+            state: CheckInfo::blank(), // Temporary. The real `CheckInfo` is generated below.
             history: Vec::new(),
             zobrist: Zobrist(0),
         };
@@ -150,18 +150,18 @@ impl Position {
         piece_positions: &str,
     ) -> Result<([Bitboard; 13], [Bitboard; 2], Board), FenError> {
         let mut board: [Piece; 64] = [Piece::None; 64];
-        let mut white_pawns: Bitboard = Bitboard::new(0);
-        let mut white_knights: Bitboard = Bitboard::new(0);
-        let mut white_bishops: Bitboard = Bitboard::new(0);
-        let mut white_rooks: Bitboard = Bitboard::new(0);
-        let mut white_queens: Bitboard = Bitboard::new(0);
-        let mut white_king: Bitboard = Bitboard::new(0);
-        let mut black_pawns: Bitboard = Bitboard::new(0);
-        let mut black_knights: Bitboard = Bitboard::new(0);
-        let mut black_bishops: Bitboard = Bitboard::new(0);
-        let mut black_rooks: Bitboard = Bitboard::new(0);
-        let mut black_queens: Bitboard = Bitboard::new(0);
-        let mut black_king: Bitboard = Bitboard::new(0);
+        let mut white_pawns: Bitboard = Bitboard(0);
+        let mut white_knights: Bitboard = Bitboard(0);
+        let mut white_bishops: Bitboard = Bitboard(0);
+        let mut white_rooks: Bitboard = Bitboard(0);
+        let mut white_queens: Bitboard = Bitboard(0);
+        let mut white_king: Bitboard = Bitboard(0);
+        let mut black_pawns: Bitboard = Bitboard(0);
+        let mut black_knights: Bitboard = Bitboard(0);
+        let mut black_bishops: Bitboard = Bitboard(0);
+        let mut black_rooks: Bitboard = Bitboard(0);
+        let mut black_queens: Bitboard = Bitboard(0);
+        let mut black_king: Bitboard = Bitboard(0);
 
         let rows: Vec<&str> = piece_positions.split('/').collect();
         if rows.len() != 8 {

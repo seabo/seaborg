@@ -51,7 +51,6 @@ impl Piece {
     /// Panics if the given `Piece` is `Piece::None`. This function
     /// should only be used when the `Piece` is guaranteed to not be
     /// `Piece::None`.
-    // TODO: this can be converted to a single arithmetic op using the underlying representation.
     pub fn player(&self) -> Player {
         match *self {
             Piece::None => panic!(),
