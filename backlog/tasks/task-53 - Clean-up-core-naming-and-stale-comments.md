@@ -1,11 +1,11 @@
 ---
 id: TASK-53
 title: Clean up core naming and stale comments
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-18 19:38'
-updated_date: '2026-07-24 11:30'
+updated_date: '2026-07-24 15:09'
 labels: []
 dependencies:
   - TASK-48
@@ -36,12 +36,12 @@ Gated on TASK-48 because both touch bb.rs and position/mod.rs signatures; doing 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Bitboard::new is either replaced by a From impl or removed, with all call sites migrated
-- [ ] #2 Board::new is renamed to Board::empty with all call sites migrated
-- [ ] #3 The State struct is renamed to describe its contents
-- [ ] #4 The stale pub-fields, Arc-wrapping and impl_bit_ops TODO comments are deleted, with the Arc and impl_bit_ops reasoning recorded in the implementation notes
-- [ ] #5 Piece::player is either optimised with benchmark evidence of a gain, or left unchanged with the TODO removed and the benchmark result recorded
-- [ ] #6 No behaviour changes: the full test suite passes unchanged and the perft benchmarks show no regression
+- [x] #1 Bitboard::new is either replaced by a From impl or removed, with all call sites migrated
+- [x] #2 Board::new is renamed to Board::empty with all call sites migrated
+- [x] #3 The State struct is renamed to describe its contents
+- [x] #4 The stale pub-fields, Arc-wrapping and impl_bit_ops TODO comments are deleted, with the Arc and impl_bit_ops reasoning recorded in the implementation notes
+- [x] #5 Piece::player is either optimised with benchmark evidence of a gain, or left unchanged with the TODO removed and the benchmark result recorded
+- [x] #6 No behaviour changes: the full test suite passes unchanged and the perft benchmarks show no regression
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -94,4 +94,33 @@ Verification:
 - cargo bench --bench perft (Piece::player match vs arithmetic): arithmetic within noise (+1.90% point estimate), no gain -> match kept
 Known failures: engine::search::tests::an_extendable_budget_is_still_bounded_by_its_hard_half — pre-existing load-sensitive wall-clock timing test. Passes 10/10 in isolation on this branch; reproduces at base commit c831d5a under equal interleaved load (base 1/3, branch 1/3 in back-to-back A/B). Diff touches zero engine/ files and only makes chess equal-or-faster in debug, so it is unrelated to this task.
 ---
+
+author: @claude
+created: 2026-07-24 15:09
+---
+Review attempt: 1
+Reviewed branch: task-53-cleanup-core-naming
+Reviewed implementation: 642c724
+Verdict: approved
+
+Code target 642c724 is immutable: it descends from base c831d5a, and the only post-target commit (edca33f) touches solely the task file. All six acceptance criteria proven by objective evidence:
+- AC#1/2/3: no remaining Bitboard::new, Board::new, or bare position::State references anywhere in the workspace (grep clean); all renames compile.
+- AC#4: the three mod.rs TODOs and the macros.rs impl_bit_ops TODO are deleted; Arc and impl_bit_ops reasoning recorded in implementation notes and in self-contained code comments (no bare task-ID references).
+- AC#5: Piece::player left unchanged, TODO removed, benchmark recorded (arithmetic variant within noise, no gain).
+- AC#6: full suite 425 passed; the sole failure (an_extendable_budget_is_still_bounded_by_its_hard_half) is a pre-existing load-sensitive wall-clock flake — passes 5/5 in isolation on the target and engine/ is byte-identical to base, so it is not patch-introduced. perft 5 base-vs-target back-to-back within noise.
+
+Scope is disciplined: changes confined to the chess crate plus benches/bb.rs; the CheckInfo type is not referenced outside chess.
+
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings (fresh CARGO_TARGET_DIR): clean
+- cargo test --workspace: 425 passed; 1 pre-existing load flake (unrelated, engine byte-identical to base)
+- cargo bench --bench perft (base c831d5a vs target 642c724, back-to-back): change [-1.73% -0.35% +0.80%], p=0.63, No change in performance detected
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Cleaned up seven core-naming/stale-comment items in the chess crate. Removed the redundant Bitboard::new wrapper (migrated all 18 call sites to the Bitboard(x) tuple constructor); renamed Board::new to Board::empty (4 call sites); renamed position::State to CheckInfo to describe its checkers/blockers/pinners contents; deleted the stale pub-fields, Arc-wrapping, and impl_bit_ops TODOs, recording the Arc and impl_bit_ops decisions in both the implementation notes and self-contained code comments; and removed the Piece::player TODO after benchmarking showed the arithmetic form is within noise (no gain), so the match stays. Verified on target 642c724: cargo fmt --check clean; cargo clippy --workspace --all-targets --all-features -D warnings clean (fresh CARGO_TARGET_DIR); cargo test --workspace 425 passed with only the pre-existing load-sensitive timing flake an_extendable_budget_is_still_bounded_by_its_hard_half failing (passes 5/5 in isolation on the target, and engine/ is byte-identical to base c831d5a so it cannot be patch-introduced); perft 5 base-vs-target back-to-back within noise (change [-1.73%, -0.35%, +0.80%], p=0.63, 'No change in performance detected').
+<!-- SECTION:FINAL_SUMMARY:END -->
