@@ -45,6 +45,8 @@ pub enum Command {
     Config,
     /// Run perft to the given depth.
     Perft(usize),
+    /// Print the static evaluation of the current position, with no search.
+    Eval,
 }
 
 /// The reserved keywords which can be sent from the GUI to the engine.
@@ -94,6 +96,8 @@ enum Keyword {
     Config,
     /// Run a perft test.
     Perft,
+    /// Print the static evaluation of the current position.
+    Eval,
 }
 
 /// A parsing error.
@@ -211,6 +215,7 @@ impl<'a> Parser<'a> {
                 Token::Kw(Keyword::Move) => self.parse_move(),
                 Token::Kw(Keyword::Config) => self.parse_config(),
                 Token::Kw(Keyword::Perft) => self.parse_perft(),
+                Token::Kw(Keyword::Eval) => self.parse_eval(),
                 Token::String(_) | Token::Kw(_) => self.unexpected_token(),
             },
             None => Err(Error::NoInput),
@@ -492,6 +497,10 @@ impl<'a> Parser<'a> {
         let d = self.parse_integer()?;
         self.expect_end(Ok(Command::Perft(d)))
     }
+
+    fn parse_eval(&mut self) -> PResult {
+        self.expect_end(Ok(Command::Eval))
+    }
 }
 
 #[derive(PartialEq)]
@@ -540,6 +549,7 @@ impl<'a> Token<'a> {
             "move" => Token::Kw(Keyword::Move),
             "config" => Token::Kw(Keyword::Config),
             "perft" => Token::Kw(Keyword::Perft),
+            "eval" => Token::Kw(Keyword::Eval),
             _ => Token::String(t),
         }
     }
@@ -622,9 +632,15 @@ mod tests {
             "go nodes 1 extra",
             "move e2e4 extra",
             "perft 1 extra",
+            "eval extra",
         ] {
             assert!(Parser::parse(input).is_err(), "parser accepted {input:?}");
         }
+    }
+
+    #[test]
+    fn parses_eval() {
+        assert!(matches!(Parser::parse("eval"), Ok(Command::Eval)));
     }
 
     #[test]

@@ -3446,3 +3446,36 @@ fn a_drawn_root_still_reports_a_legal_move() {
         "the reported move {mov:?} is not legal in the position",
     );
 }
+
+/// The static evaluation reported for a position must be the leaf value the search would use,
+/// expressed from the side to move's perspective — a positive score favouring the side to move —
+/// so that one position's evaluation can be inspected apart from any search.
+#[test]
+fn static_eval_reports_the_hand_crafted_leaf_from_the_side_to_moves_view() {
+    use crate::eval::Evaluation;
+
+    // The same board with each side to move. Black is up a rook, so the hand-crafted evaluation,
+    // which is from White's perspective, is negative for this board regardless of whose turn it is.
+    let white_to_move = Position::from_fen("r5k1/8/8/8/8/8/8/6K1 w - - 0 1").unwrap();
+    let black_to_move = Position::from_fen("r5k1/8/8/8/8/8/8/6K1 b - - 0 1").unwrap();
+
+    let mut engine = SearchEngine::new(1);
+    // Pin the hand-crafted evaluation so the assertion holds whether or not this build embeds a net.
+    engine.set_network(None);
+
+    let white_view = engine.static_eval(&white_to_move);
+    let black_view = engine.static_eval(&black_to_move);
+
+    // The White-perspective evaluation is a property of the board, not of whose turn it is; the
+    // side-to-move report equals it for White and negates it for Black.
+    assert_eq!(white_view, white_to_move.static_eval());
+    assert_eq!(black_view, -white_to_move.static_eval());
+    assert!(
+        white_view < 0,
+        "with Black up a rook, White's own view is negative"
+    );
+    assert!(
+        black_view > 0,
+        "with Black up a rook, Black's own view is positive"
+    );
+}
