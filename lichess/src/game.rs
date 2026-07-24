@@ -122,8 +122,15 @@ where
                 if made_progress {
                     backoff.reset();
                 }
-                log::warn!("game {game_id}: stream disconnected; reconnecting");
-                sleep(backoff.next_delay());
+                // Reporting the wait makes reconnect rate measurable from the
+                // log; a game stream that reopens continually is a request
+                // source large enough to matter when diagnosing a rate limit.
+                let wait = backoff.next_delay();
+                log::warn!(
+                    "game {game_id}: stream disconnected; reconnecting in {}ms",
+                    wait.as_millis()
+                );
+                sleep(wait);
             }
         }
     }
@@ -432,6 +439,11 @@ mod tests {
 
         fn post_form(&self, path: &str, _form: &[(&str, &str)]) -> Result<String> {
             panic!("unexpected form POST {path} in game test");
+        }
+
+        fn post_form_once(&self, path: &str, form: &[(&str, &str)]) -> Result<String> {
+            // The double never retries, so the two POST flavours are the same call.
+            self.post_form(path, form)
         }
 
         fn open_stream(&self, path: &str) -> Result<Box<dyn Iterator<Item = Result<String>>>> {

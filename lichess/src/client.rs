@@ -96,11 +96,17 @@ impl<T: Transport> LichessClient<T> {
     /// same side; the clock and rated flag come from the composed spec. The id is
     /// returned so matchmaking can track the single outstanding challenge and cancel
     /// it if it goes unanswered.
+    ///
+    /// A rate-limit refusal surfaces to the caller rather than being waited out
+    /// here. Lichess caps outgoing challenges and bot-versus-bot games per day, so
+    /// a refusal can stand for hours; the response says for how long, and only the
+    /// caller can act on that by seeking later instead of blocking on a request
+    /// that is certain to fail again.
     pub fn create_challenge(&self, username: &str, spec: &ChallengeSpec) -> Result<String> {
         let limit = spec.initial_seconds.to_string();
         let increment = spec.increment_seconds.to_string();
         let rated = spec.rated.to_string();
-        let body = self.transport.post_form(
+        let body = self.transport.post_form_once(
             &format!("/api/challenge/{username}"),
             &[
                 ("rated", rated.as_str()),
