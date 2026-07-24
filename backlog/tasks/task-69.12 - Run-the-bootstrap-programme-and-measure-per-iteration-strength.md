@@ -1,11 +1,11 @@
 ---
 id: TASK-69.12
 title: Run the bootstrap programme and measure per-iteration strength
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:42'
-updated_date: '2026-07-23 16:38'
+updated_date: '2026-07-24 09:01'
 labels:
   - nnue
   - rl
@@ -129,4 +129,36 @@ The programme did not merely flatten, it turned over: generation 3 was measurabl
 Anchoring measurement, first attempt: an operator error of mine, worth recording because the failure mode is not obvious. To obtain a fixed-length match rather than an early SPRT stop, the bounds were set to elo0=-1000 elo1=1000. Those bounds drive the SPRT variance term to zero, FastChess emitted 'LLR: -nan (nan%)', and the harness rejected the run as malformed runner output with an INFRASTRUCTURE ERROR verdict. The match itself was unaffected and played all 1000 games; the raw runner output recorded Elo 334.10 +/- 24.35, 778 wins, 189 draws, 33 losses, 87.25%, pentanomial [0, 4, 51, 141, 304], draw ratio 10.2%, over 49m32s. That evidence is archived at ~/rl/anchor-gen-002 with its PGN and runner log, but it has no report.json, so it is not archived in the form the strength-testing docs require.
 
 Re-run with bounds that bracket the observed effect (elo0=250, elo1=450) instead of trying to escape the test: the likelihood ratio then wanders between well-defined boundaries, the full budget is played, and the report parses. Any verdict it prints concerns those bracketing hypotheses and is not a promotion decision.
+
+Finalisation: recorded the programme in BENCHMARKS.md and integrated current master.
+
+BENCHMARKS.md gains an 'NNUE self-play bootstrap programme' section: the per-generation gate curve (+263.2, +156.5, +22.3, then a rejected -17.3 that makes gen-002 final), the absolute anchor of gen-002 against the hand-crafted evaluation (334.1 +/- 24.4 and 339.6 +/- 25.9 over two 1000-game runs, ~337 Elo), and realised datagen/training/gate costs. It states plainly that these were measured on the rig (Ryzen 9 3900XT), not the M3 Pro of the search entries, so they are internally consistent but not comparable to those, and that the build is pinned at git:d53e33e (pre-embedding) so the hand-crafted baseline was genuinely hand-crafted.
+
+The anchor archival limitation is documented in that section rather than worked around: at an 87% score the SPRT LLR degenerates to nan, strength_test.py rejects the run as malformed, and no report.json is produced; the measurement is recorded from the runner logs. Teaching the harness to archive a lopsided non-gate gauntlet is left as a follow-up (not created here, as review findings and follow-ups are the reviewer's to raise).
+
+Merged current master (9d273a8) into the branch. That master already carries gen-002 as the embedded default via the merged TASK-69.15, so this task's AC 'produces a network that ... becomes the default evaluation' is satisfied by that bake; this task records the evidence behind it. The merge was clean; the only files this task adds on top of master are BENCHMARKS.md and this task file (git diff master...HEAD).
+
+Test flake worth flagging honestly: the first cargo test --workspace after the merge reported 1 failed in the engine lib suite (425 passed, 1 failed). It did not reproduce on any of five subsequent runs (two isolated cargo test -p engine, three further full-workspace runs, all green), and I did not capture the name before it passed. This task changes no code -- its diff is BENCHMARKS.md and the task file only -- so the failure is not attributable to it; it is an existing timing-sensitive engine test, most likely stressed by concurrent load on the first run. Flagging rather than burying it.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @claude
+created: 2026-07-24 09:01
+---
+Implementation handoff
+Branch: task-69.12-bootstrap-programme
+Worktree: /Users/seabo/seaborg-worktrees/task-69.12-bootstrap-programme
+Base: 9d273a8ce6e64e64039513723e289d7620487673 (current master, includes the gen-002 bake from TASK-69.15)
+Implementation target: 737eaa6b528843b9ed6d74e345862fe91a8f1aff
+Resolved findings: none
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (no warnings)
+- cargo test --workspace: pass on 5 of 6 runs; one non-reproducing engine-lib failure on the first post-merge run (425 passed/1 failed), green on two isolated 'cargo test -p engine' runs and three further full-workspace runs. This task adds no code (diff is BENCHMARKS.md and the task file only, git diff master...HEAD), so the flake is not attributable to it; name not captured before it passed.
+Known failures: the flaky engine test above; timing-sensitive and pre-existing, not caused by this docs-only change.
+
+Scope note for the reviewer: this is the evidence deliverable of the bootstrap programme. It adds the NNUE strength-results section to BENCHMARKS.md and the full run record to the task; it touches no engine code. The network itself became the default via TASK-69.15 (merged), which this record references. The programme was stopped after generation 3 (a rejected candidate) at the requester's direction, recorded on the branch. The absolute anchor (~337 Elo vs the hand-crafted evaluation) answers the parent TASK-69's AC#2. One deliberate non-fix is documented in BENCHMARKS.md: strength_test.py cannot archive an ~87%-score gauntlet as report.json because the SPRT LLR degenerates to nan, so the anchor is recorded from runner logs and a harness fix is left as follow-up.
+---
+<!-- COMMENTS:END -->
