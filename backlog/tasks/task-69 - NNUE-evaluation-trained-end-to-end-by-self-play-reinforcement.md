@@ -1,9 +1,10 @@
 ---
 id: TASK-69
 title: NNUE evaluation trained end-to-end by self-play reinforcement
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-07-20 19:39'
+updated_date: '2026-07-24 10:41'
 labels:
   - nnue
   - eval
@@ -35,3 +36,9 @@ Scope. This task tracks the programme and carries no implementation of its own; 
 - [ ] #3 The self-play purity constraint (no external games, positions, or evaluations) is upheld across the whole pipeline and documented
 - [ ] #4 The TASK-64 search-foundation programme is complete, or a recorded decision fixes the search baseline the training run distils from
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Bootstrap complete. Self-play reinforcement from the tapered hand-crafted eval produced gen-000 (+263 vs HCE), gen-001 (+157 vs gen-000), gen-002 (+22 vs gen-001); gen-003 regressed (-17) and the promote-on-improvement SPRT gate rejected it, so gen-002 is the final network and is baked as the default evaluator (TASK-69.13/.15). Direct gauntlet: gen-002 is ~337 Elo stronger than the hand-crafted evaluation (+334.1 and +339.6 in two independent runs at tc=10+0.1). Full per-generation curve and cost accounting in BENCHMARKS.md (TASK-69.12). The RL curve turned over at gen-3, so further NNUE gains require an architecture or training-data change rather than additional generations of the current loop.
+<!-- SECTION:FINAL_SUMMARY:END -->
