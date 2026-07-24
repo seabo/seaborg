@@ -1,11 +1,11 @@
 ---
 id: TASK-69.12
 title: Run the bootstrap programme and measure per-iteration strength
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:42'
-updated_date: '2026-07-24 09:22'
+updated_date: '2026-07-24 10:33'
 labels:
   - nnue
   - rl
