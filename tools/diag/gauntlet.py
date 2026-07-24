@@ -36,7 +36,7 @@ def build_cmd(args) -> list[str]:
         *args.seaborg_limit.split(),
         "-engine", "name=stockfish", f"cmd={args.stockfish}", "proto=uci",
         "option.Threads=1", *args.sf_limit.split(),
-        "-each", "restart=on", f"option.Hash={args.hash}",
+        "-each", f"restart={getattr(args, 'restart', 'on')}", f"option.Hash={args.hash}",
         "-rounds", str(args.games // 2), "-games", "2", "-repeat", "2",
         "-concurrency", str(args.concurrency),
         "-openings", f"file={args.openings}", "format=epd", "order=random",
@@ -83,6 +83,8 @@ def main() -> None:
     ap.add_argument("--games", type=int, default=400)
     ap.add_argument("--concurrency", type=int, default=8)
     ap.add_argument("--hash", type=int, default=64)
+    ap.add_argument("--restart", default="on", choices=["on", "off"],
+                    help="restart engines between games (off is faster for many short games)")
     ap.add_argument("--openings", required=True)
     ap.add_argument("--pgnout", default=None)
     ap.add_argument("--out", default=None)

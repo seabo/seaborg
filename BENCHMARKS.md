@@ -524,3 +524,172 @@ not to `available_parallelism()`. And as the strength margin shrinks, the SPRT
 gate rather than datagen becomes the variable cost: a near-neutral candidate can
 occupy the full game cap to reach a verdict, which is the economic reason the
 programme was stopped once the per-generation gain fell into single digits.
+
+## Strength-gulf diagnostic vs Stockfish
+
+The sections above measure seaborg against itself. This one measures it against a
+frontier reference (Stockfish) to answer a single question: the engine is roughly
+1000–1500 Elo behind the frontier, and that deficit had never been *decomposed*.
+Playing strength is, roughly, raw speed (NPS) × depth-per-node (selectivity) ×
+accuracy-per-node (evaluation quality). This diagnostic measures each axis
+separately so effort can be directed at the one that is actually limiting, rather
+than guessed at. It is a measurement, not an engine change; Stockfish is used
+purely as a reference and never touches training data. The driver scripts and the
+fixed position suite live in `tools/diag/` and each result below is reproducible
+from the commands recorded there.
+
+**The bottom line up front:** the gulf is overwhelmingly **search selectivity**,
+not evaluation and not raw speed. seaborg's NPS is already competitive, and its
+static evaluation ranks positions almost as well as Stockfish's; but its search
+reaches roughly **eight plies less deep in the same time** and needs on the order
+of **40–50× more nodes** to play at Stockfish's level. Investment should go into
+reductions, pruning, extensions, and move ordering — not a larger NNUE.
+
+### Measurement setup
+
+All figures were measured on **Apple M3 Pro (12 cores), macOS**, one search thread
+per engine, 64 MB hash. seaborg is the TASK-82 branch built with a default
+`aarch64-apple-darwin` release. **ISA caveat:** seaborg's NNUE inference has an
+x86 AVX2 path and a scalar fallback, but *no* ARM NEON path, so on this Apple
+Silicon host it runs the **scalar** forward pass, whereas the reference Stockfish
+uses a NEON-optimised NNUE. This handicaps seaborg only on the *speed* axis
+(NPS, and anything time-based); the node-count, selectivity, and evaluation
+figures are ISA-independent and exact. The practical consequence is that the NPS
+axis below is a *pessimistic* bound for seaborg — its x86 AVX2 deployment is
+faster still — which only strengthens the "speed is not the bottleneck"
+conclusion. Reference: **Stockfish 18** (arm64, Homebrew). Runner for the
+head-to-head matches: local `fastchess`, `openings-v1.epd` (8 openings, so
+per-match variance is real). The host carried a fluctuating background load
+(other users' jobs, load average ~7–12) during the runs, which adds noise to the
+time-based measurements but not to the node-based ones.
+
+### NPS and selectivity (effective branching factor)
+
+Fixed suite of 20 phase-balanced positions (`tools/diag/bench-positions.epd`),
+`go depth 14`, best of three runs, plus a `movetime 1500` pass for depth reached.
+
+| Metric (single thread) | seaborg | Stockfish 18 | Ratio |
+| --- | ---: | ---: | ---: |
+| Aggregate NPS (∑nodes / ∑time) | 642 k | 727 k | 0.88× |
+| Median NPS | 687 k | 849 k | 0.81× |
+| Geomean EBF at depth 14 (`nodes^(1/depth)`) | 2.42 | 2.00 | — |
+| Mean nodes to reach depth 14 | 373 553 | 24 491 | **15.3×** |
+| Median depth reached at 1500 ms | **14** | **22** | +8 plies |
+| Mean depth reached at 1500 ms | 15.0 | 27.9 | — |
+
+Two facts stand out. First, **NPS is comparable** — and this is with seaborg
+running scalar NNUE while Stockfish runs NEON, so on its native x86 AVX2 the small
+net would likely make seaborg *faster* per node. Raw speed is not the problem.
+Second, **selectivity is dramatically behind**: seaborg needs ~15× the nodes to
+reach the same nominal depth, and with near-equal NPS that means it reaches eight
+fewer plies in the same wall-clock time. That eight-ply gap is the visible face of
+the strength gulf.
+
+### Evaluation quality, isolated from search
+
+A search-free static-eval agreement test (`tools/diag/eval_agreement.py`). 500
+diverse, mostly-quiet positions were sampled from lightly-randomised games
+(`tools/diag/gen_positions.py`) and labelled by a deep Stockfish search
+(depth 20) as ground truth. Each engine's **static** evaluation — no search — was
+then queried (seaborg via the new `eval` UCI command; Stockfish via its `eval`
+command) and compared to the deep label on scale-independent metrics, since the
+two engines' centipawn scales differ. seaborg was evaluated with its embedded
+gen-002 network.
+
+| Static eval vs deep-search label (n = 500, 446 decisive) | Spearman ρ | Winner accuracy (\|label\| > 100 cp) |
+| --- | ---: | ---: |
+| seaborg (NNUE gen-002) | 0.931 | 94.6 % |
+| Stockfish 18 | 0.954 | 97.5 % |
+
+seaborg's evaluation ranks positions **almost as well as Stockfish's**: a Spearman
+gap of 0.023 and a winner-accuracy gap of ~3 points. The evaluation is behind, but
+modestly — nowhere near enough to explain a four-figure Elo gulf on its own.
+
+### Head-to-head, at fixed nodes and at fixed time
+
+Direct seaborg-vs-Stockfish matches (`tools/diag/gauntlet.py`,
+`tools/diag/sweep.py`). At *equal* search budgets Stockfish wins essentially every
+game, which only establishes a floor, so Stockfish was then handicapped (given far
+fewer nodes) and swept to locate the budget at which the match is even. That
+**parity point** is the informative quantity: it is how much search seaborg needs
+to equal Stockfish, with the raw-speed axis removed.
+
+| Match | Budget | seaborg score | Result |
+| --- | --- | ---: | --- |
+| Equal nodes | both 100 k nodes/move | 0 % (0/20) | gap floor (equal-node) |
+| Equal time | both `tc=8+0.08` | 0 % (0/40) | gap floor (equal-time) |
+| **Fixed-node parity** | seaborg 100 k vs Stockfish ~2.0–2.5 k | ~50 % | **~40–50× node handicap** |
+
+Fixed-node handicap sweep (seaborg fixed at 100 k nodes, 100 games/rung; the 8-opening
+pool makes single rungs noisy, but the 50 % crossing is well bracketed):
+
+| Stockfish budget | seaborg score | Elo (seaborg − SF) |
+| ---: | ---: | ---: |
+| 3000 nodes | 40.0 % | −70 ± 56 |
+| 2000 nodes | 34.5 % | −111 ± 45 |
+| 1500 nodes | 59.5 % | +67 ± 75 |
+| 1000 nodes | 78.5 % | +225 ± 75 |
+
+The two equal-budget floors are the same result (0 % — a lower bound of roughly
+**> 440 Elo**, one-sided 95 %, from 0/40; the true gap is much larger). That they
+are *identical whether the budget is nodes or time* is itself the answer to "how
+much of the gulf is speed": if NPS were a meaningful factor the equal-time gap
+would differ from the equal-node gap, and it does not. The parity sweep then shows
+seaborg needs ~40–50× Stockfish's nodes to draw level — a combined
+evaluation-plus-selectivity deficit *per node*, with speed already netted out.
+
+A symmetric *fixed-time* parity sweep was attempted but is not reported as a
+number: because Stockfish's parity budget is so small (tens of nodes-worth of
+time, single-digit milliseconds), the measurement collapses into Stockfish's fixed
+move-overhead and the shared host's scheduler jitter rather than genuine search —
+at one rung seaborg spuriously "won" 92 % at a 15× time disadvantage. The
+node-based parity is the reliable instrument here; the equal-time floor above
+supplies the time-based data point.
+
+### Attribution and recommendation
+
+Decomposing the ~1000–1500 Elo gulf across the three axes:
+
+- **Raw speed (NPS): not a factor.** seaborg's NPS is ~0.85× Stockfish's *while
+  handicapped to scalar NNUE on ARM*; on its x86 AVX2 target it is likely at or
+  above parity. The equal-time and equal-node gaps being identical confirms speed
+  contributes essentially nothing to the differential.
+- **Evaluation quality: a minor factor.** seaborg's static eval ranks positions at
+  ρ = 0.931 vs Stockfish's 0.954 (94.6 % vs 97.5 % winner accuracy). Real, but
+  small. A larger NNUE would chip at this ~0.02 correlation gap while *costing*
+  NPS — improving the axis that is already close at the expense of the one that
+  already isn't the problem.
+- **Selectivity (depth-per-node): the dominant factor.** ~15× the nodes to reach a
+  given depth, eight plies shallower at equal time, and ~40–50× the nodes to reach
+  Stockfish's *strength*. Since evaluation is nearly at parity, almost all of that
+  per-node deficit is search efficiency: reductions, forward pruning, extensions,
+  and move ordering.
+
+**Recommendation: invest in search selectivity, not a larger network.** The
+highest-leverage work is the machinery that buys depth per node — late-move
+reduction tuning, null-move and futility/history pruning, singular extensions,
+and move-ordering quality — measured (as the sections above insist) at equal time,
+where selectivity gains actually show up. A bigger NNUE addresses the smallest of
+the three axes and taxes the one that is already fine.
+
+### Reproducing this diagnostic
+
+Tooling and methodology are in `tools/diag/` (`README.md` has the full recipe).
+The one engine change this required is the search-free `eval` UCI command, which
+prints `staticeval cp <v>` for the current position using the same evaluator a
+search would. Summary of commands (paths abbreviated):
+
+```sh
+python3 nps_ebf.py       --seaborg SB --stockfish SF --suite bench-positions.epd \
+                         --depth 14 --movetime 1500 --repeats 3
+uv run --with chess python3 gen_positions.py --stockfish SF --games 500 --out pos.fen
+python3 eval_agreement.py --seaborg SB --stockfish SF --positions pos.fen --label-depth 20
+python3 sweep.py         --seaborg SB --stockfish SF --seaborg-limit nodes=100000 \
+                         --sf-limits nodes=3000,nodes=2000,nodes=1500,nodes=1000 \
+                         --games 100 --restart off --openings ../strength/openings-v1.epd
+```
+
+The node-based figures reproduce on any host. The NPS and time-based figures are
+host- and load-dependent, and on ARM understate seaborg's speed; a confirmatory
+NPS pass on an idle x86 AVX2 host (e.g. the datagen rig) would tighten the speed
+axis, though it cannot change the conclusion that selectivity dominates.

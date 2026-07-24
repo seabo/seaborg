@@ -58,7 +58,7 @@
     },
     "config_name": "config.json",
     "output": 0,
-    "seed": 1870277004698107706,
+    "seed": 15250067661066739044,
     "variant": 0,
     "type": 0,
     "gauntlet_seeds": 1,
@@ -67,8 +67,8 @@
     "wait": 0,
     "autosaveinterval": 20,
     "games": 2,
-    "rounds": 10,
-    "concurrency": 6,
+    "rounds": 20,
+    "concurrency": 4,
     "force_concurrency": false,
     "recover": false,
     "noswap": false,
@@ -89,7 +89,7 @@
             "dir": "",
             "cmd": "../../target/release/seaborg",
             "args": "",
-            "restart": true,
+            "restart": false,
             "options": [
                 [
                     "Hash",
@@ -98,13 +98,13 @@
             ],
             "limit": {
                 "tc": {
-                    "increment": 0,
+                    "increment": 80,
                     "fixed_time": 0,
-                    "time": 0,
+                    "time": 8000,
                     "moves": 0,
                     "timemargin": 0
                 },
-                "nodes": 100000,
+                "nodes": 0,
                 "plies": 0
             },
             "variant": 0
@@ -114,7 +114,7 @@
             "dir": "",
             "cmd": "/opt/homebrew/bin/stockfish",
             "args": "",
-            "restart": true,
+            "restart": false,
             "options": [
                 [
                     "Threads",
@@ -127,13 +127,13 @@
             ],
             "limit": {
                 "tc": {
-                    "increment": 0,
+                    "increment": 80,
                     "fixed_time": 0,
-                    "time": 0,
+                    "time": 8000,
                     "moves": 0,
                     "timemargin": 0
                 },
-                "nodes": 100,
+                "nodes": 0,
                 "plies": 0
             },
             "variant": 0
@@ -141,26 +141,26 @@
     ],
     "stats": {
         "seaborg vs stockfish": {
-            "wins": 14,
-            "losses": 0,
-            "draws": 0,
-            "penta_WW": 7,
-            "penta_WD": 0,
-            "penta_WL": 0,
-            "penta_DD": 0,
-            "penta_LD": 0,
-            "penta_LL": 0
-        },
-        "stockfish vs seaborg": {
             "wins": 0,
-            "losses": 6,
+            "losses": 10,
             "draws": 0,
             "penta_WW": 0,
             "penta_WD": 0,
             "penta_WL": 0,
             "penta_DD": 0,
             "penta_LD": 0,
-            "penta_LL": 3
+            "penta_LL": 5
+        },
+        "stockfish vs seaborg": {
+            "wins": 30,
+            "losses": 0,
+            "draws": 0,
+            "penta_WW": 15,
+            "penta_WD": 0,
+            "penta_WL": 0,
+            "penta_DD": 0,
+            "penta_LD": 0,
+            "penta_LL": 0
         }
     }
 }

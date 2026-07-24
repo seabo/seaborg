@@ -51,6 +51,7 @@ def main() -> None:
     ap.add_argument("--games", type=int, default=100)
     ap.add_argument("--concurrency", type=int, default=6)
     ap.add_argument("--hash", type=int, default=64)
+    ap.add_argument("--restart", default="on", choices=["on", "off"])
     ap.add_argument("--openings", required=True)
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
@@ -59,6 +60,7 @@ def main() -> None:
         fastchess=args.fastchess, seaborg=args.seaborg, stockfish=args.stockfish,
         seaborg_limit=args.seaborg_limit, games=args.games,
         concurrency=args.concurrency, hash=args.hash, openings=args.openings,
+        restart=args.restart,
     )
 
     print(f"seaborg fixed at: {args.seaborg_limit}\n")

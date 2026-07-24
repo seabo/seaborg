@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@george'
 created_date: '2026-07-24 11:00'
-updated_date: '2026-07-24 11:05'
+updated_date: '2026-07-24 21:45'
 labels:
   - search
   - eval
@@ -62,3 +62,13 @@ Minimal tooling permitted within scope: a UCI helper to dump seaborg's static ev
 7. AC#5: write the attribution (eval vs NPS vs selectivity) and the invest-recommendation into BENCHMARKS.md/report with full methodology for reproducibility. Small driver scripts committed under tools/. No engine hot-path change.
 8. Run required checks (fmt/clippy/test), commit, hand off to review.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Measurement campaign (local Apple M3 Pro, 12c; Stockfish 18 arm64; seaborg native ARM release, scalar NNUE — no ARM NEON path, so NPS is a pessimistic bound vs seaborg's x86 AVX2 deployment). Findings so far:
+- NPS (d=14, 20-pos suite, best-of-3): seaborg 642k agg / 687k median vs SF 727k agg / 849k median. Comparable despite scalar handicap -> speed is not the bottleneck.
+- Selectivity/EBF: seaborg needs ~15x more nodes to reach depth 14 (374k vs 24k); at fixed 1500ms SF reaches median depth 22 vs seaborg 14 (8-ply gap). EBF 2.42 vs 2.00.
+- Eval agreement (500 gen'd positions, deep-SF depth-20 labels, 446 decisive): seaborg static Spearman 0.931 / winner-acc 0.946 vs SF static 0.954 / 0.975. Eval close but modestly behind.
+- Fixed-nodes gauntlet: at equal nodes SF wins ~100%; parity sweep underway to quantify the node ratio (early estimate ~40-50x).
+<!-- SECTION:NOTES:END -->
