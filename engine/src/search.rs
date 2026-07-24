@@ -779,35 +779,44 @@ const STABILITY_CONTRACTION_PER_ITER: f64 = 0.1;
 /// The multiplier applied to the planned spend, given what the last completed iteration revealed
 /// about the position — in both directions.
 ///
-/// Above 1 for an *unsettled* position — a root move that just changed, or a falling score — which
-/// is worth more than its planned share and may run into the extension budget up to the hard
-/// deadline. Below 1 for a *settled* one — the same root move and a flat score held across several
-/// consecutive iterations — which is worth less than its share and hands the unspent clock to later
-/// moves. Exactly 1 in between, spending precisely what was allotted.
+/// Above 1 for an *unsettled* iteration — a root move that just changed, or a score that fell past
+/// the flat margin — which is worth more than its planned share and may run into the extension
+/// budget up to the hard deadline. Below 1 for a *settled* one — the same root move and a score
+/// within the flat margin, held across enough consecutive iterations — which is worth less than its
+/// share and hands the unspent clock to later moves. Exactly 1 in between.
+///
+/// `stable_iterations` is the caller's count of consecutive settled iterations, and it is nonzero
+/// *if and only if* this iteration is settled: the caller resets it to zero the moment the root
+/// move changes or the score leaves the flat margin (see the iterative-deepening loop). That is the
+/// contract this function relies on to keep the two directions from competing. It matters because a
+/// genuinely flat search does not hold its score perfectly still — it wobbles a few centipawns
+/// either way between iterations — and treating any such wobble as a "fall" (as an unconditional
+/// `score_drop > 0` extension would) vetoes the contraction on half the iterations of every flat
+/// position, which is the whole set this lever exists to speed up. A sub-margin wobble is the flat
+/// case, not a fall.
 ///
 /// The result is only ever a *request*. The hard deadline still bounds an extension, so a large
 /// scale on a short clock simply resolves to the hard deadline; and [`MIN_STABILITY_SCALE`] bounds
 /// how far a settled position may pull its spend below optimum.
 fn stability_scale(best_move_changed: bool, score_drop: i32, stable_iterations: u32) -> f64 {
-    let mut scale = 1.0;
-
-    if best_move_changed {
-        scale += BEST_MOVE_CHANGE_EXTENSION;
-    }
-
-    // Only a drop counts toward an extension. A rising score means the search is finding more than
-    // it expected, which is not a reason to distrust the move it is about to play.
-    if score_drop > 0 {
-        scale += (f64::from(score_drop) / SCORE_DROP_PER_EXTENSION).min(MAX_SCORE_DROP_EXTENSION);
-    }
-
-    if scale > 1.0 {
-        // An unsettled position extends; contraction never competes with an extension, so an
-        // unstable position spends exactly what it did before contraction existed.
+    if stable_iterations == 0 {
+        // Unsettled: extend exactly as before contraction existed. A changed root move is the
+        // strongest evidence the previous answer was wrong; a fall past the flat margin says the
+        // position is worse than believed and the search has not yet found what to do about it.
+        // Only a drop counts — a rising score is the search finding more than it expected, not a
+        // reason to distrust the move it is about to play.
+        let mut scale = 1.0;
+        if best_move_changed {
+            scale += BEST_MOVE_CHANGE_EXTENSION;
+        }
+        if score_drop > 0 {
+            scale +=
+                (f64::from(score_drop) / SCORE_DROP_PER_EXTENSION).min(MAX_SCORE_DROP_EXTENSION);
+        }
         return scale;
     }
 
-    // A settled position contracts, one step per iteration held past the onset, down to the floor.
+    // Settled: contract, one step per iteration held past the onset, down to the floor.
     let steps = stable_iterations.saturating_sub(STABILITY_CONTRACTION_ONSET);
     let contraction = f64::from(steps) * STABILITY_CONTRACTION_PER_ITER;
     (1.0 - contraction).max(MIN_STABILITY_SCALE)

@@ -2608,17 +2608,22 @@ fn a_changed_best_move_or_a_falling_score_asks_for_an_extension() {
     );
 }
 
-/// An unsettled position extends exactly as it did before contraction existed: a stability streak
-/// never competes with an extension, so however long the position was quiet before it moved, a
-/// changed root move or a falling score asks for the same extension it always did.
+/// The two directions never compete. The caller resets the settled streak to zero the instant the
+/// root move changes or the score leaves the flat margin, so an unsettled iteration always reaches
+/// `stability_scale` with `stable_iterations == 0` and extends exactly as it did before contraction
+/// existed; a settled iteration always arrives with a nonzero streak and contracts. A sub-margin
+/// wobble — the ordinary texture of a flat search, which does not hold its score perfectly still —
+/// is the settled case, not a fall, and must not veto the contraction.
 #[test]
-fn an_extension_ignores_any_prior_stability_streak() {
-    // A large accumulated streak is irrelevant once the position moves this iteration.
-    assert_eq!(stability_scale(true, 0, 100), stability_scale(true, 0, 0));
-    assert_eq!(
-        stability_scale(false, 50, 100),
-        stability_scale(false, 50, 0)
-    );
+fn settled_contracts_and_unsettled_extends_without_competing() {
+    // Unsettled (streak reset to zero by the caller): extends.
+    assert!(stability_scale(true, 0, 0) > 1.0);
+    assert!(stability_scale(false, 50, 0) > 1.0);
+
+    // Settled and held well past the onset: contracts, even though the flat score wobbled a few
+    // centipawns either way — the `score_drop` an unconditional extension would have fired on.
+    assert!(stability_scale(false, 4, 20) < 1.0);
+    assert!(stability_scale(false, -4, 20) < 1.0);
 }
 
 /// Contraction only begins once the position has been settled for several consecutive iterations.

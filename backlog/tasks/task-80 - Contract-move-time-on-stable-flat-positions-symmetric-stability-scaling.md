@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@george'
 created_date: '2026-07-24 10:34'
-updated_date: '2026-07-24 11:02'
+updated_date: '2026-07-24 11:17'
 labels: []
 dependencies: []
 ordinal: 136000
@@ -44,3 +44,17 @@ Prior art: TASK-40 introduced the soft/hard split and next-iteration prediction;
 6. Update existing unit tests for the new signature; add tests: contraction only after onset, monotone decrease, clamped at floor, unstable still extends unchanged, deadline honours sub-1.0 scale, first-ply/hard-deadline untouched.
 7. Run fmt/clippy/test. Then controlled base-vs-target SPRT on fastchess (incremented + no-increment/sudden-death matrix); record attribution in BENCHMARKS.md.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implementation committed at 5272383 (base b2f9457).
+
+Design: stability_scale (renamed from instability_scale) is now bidirectional. Extension branch unchanged, so unstable positions extend exactly as before (AC#2, AC#4). Contraction below 1.0 activates once the root move has held and |inter-iteration score delta| <= STABILITY_FLAT_MARGIN (8cp, both directions) for consecutive iterations; each iteration past STABILITY_CONTRACTION_ONSET (3) removes STABILITY_CONTRACTION_PER_ITER (0.1), floored at MIN_STABILITY_SCALE (0.5) (AC#1, AC#3). Removed the scale.max(1.0) clamp in SoftLimit::deadline that previously blocked any sub-1.0 scale; floor now lives in stability_scale. Hard deadline / guaranteed first ply / legal-bestmove untouched (AC#3).
+
+Unit tests added: contraction waits for onset then decreases monotonically; never below floor; extension ignores prior streak; next_iteration_fits declines an iteration once contracted (mirror of the extension test).
+
+Checks: cargo fmt --check clean; cargo clippy -D warnings clean; cargo test -p engine --lib 430 passed under heavy parallel load. One env-timing flake in an_extendable_budget_is_still_bounded_by_its_hard_half under full-workspace load (search thread descheduled past the 60ms hard deadline); passes in isolation and at base; provably diff-independent (extending position => scale>=1.0 => deadline() byte-identical to base). Final clean workspace run to be taken after SPRT (idle machine).
+
+AC#5 SPRT: baseline=b2f9457, candidate=5272383, both target-cpu=native release locked. Sudden-death regime (tc=10+0, concurrency 4, max 4000) running now; incremented (tc=8+0.08) to follow. Attribution to be recorded in BENCHMARKS.md.
+<!-- SECTION:NOTES:END -->
