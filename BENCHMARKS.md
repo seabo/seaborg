@@ -410,3 +410,117 @@ larger the share of each move that was going into the discarded iteration, which
 is why 2+0.05 (+92) shows the effect more strongly than 10+0.1 (+77). The two
 intervals overlap, so the ordering is the expected shape rather than a measured
 difference between the controls.
+
+## NNUE self-play bootstrap programme
+
+The entries above measure *search* changes against a fixed evaluation. This
+section records the opposite: the strength of a trained NNUE **evaluation**
+produced by self-play reinforcement, against the hand-crafted tapered evaluation
+it replaces. The programme ran the reinforcement loop (`tools/rl/`) for a
+sequence of generations — each generates self-play data with the current best
+network, trains a candidate, and gates it against that best with the same SPRT
+harness — and then anchored the final network to an absolute scale with a direct
+gauntlet against the hand-crafted evaluation.
+
+All figures here were measured on a **different machine** from the sections above
+(AMD Ryzen 9 3900XT, 12 cores, concurrency 11) and at a common time control of
+`tc=10+0.1` with 64 MB hash per engine. They are internally consistent — every
+match is one binary playing both sides, told apart only by its `EvalFile` option
+— but they are not comparable to the M3 Pro search figures above and are not
+intended to be. The engine build is pinned at `git:d53e33e`, which predates the
+embedded-network feature, so a side with no `EvalFile` genuinely runs the
+hand-crafted evaluation rather than a baked network. Runner: fastchess alpha
+1.7.0, `openings-v1.epd`, `target-cpu=x86-64-v2` release, rustc 1.97.1.
+
+### Per-generation self-play gates
+
+Each generation is gated against the best network at the time under a
+promote-on-improvement SPRT. Generation 0's opponent is the hand-crafted
+evaluation; each later generation's opponent is the previous *promoted* network,
+which is not necessarily the immediately preceding generation. A rejected
+candidate promotes nothing, so its predecessor remains the baseline.
+
+| Gen | Opponent | Elo | Games | W-D-L | Pentanomial | Verdict |
+| ---: | --- | ---: | ---: | --- | --- | --- |
+| 0 | hand-crafted | **+263.2 ± 32.7** | 358 | 247-93-18 | 0-2-27-69-81 | PASS (promoted) |
+| 1 | gen-000 | **+156.5 ± 26.1** | 476 | 259-159-58 | 5-15-58-94-66 | PASS (promoted) |
+| 2 | gen-001 | **+22.3 ± 9.8** | 2544 | 774-1159-611 | 71-273-462-354-112 | PASS (promoted) |
+| 3 | gen-002 | **−17.3 ± 9.8** | 2858 | 716-1284-858 | 155-369-460-353-92 | FAIL (rejected) |
+
+Generation 0's SPRT is the bootstrap's non-regression gate
+(`elo0=-5, elo1=0`); generations 1–3 tighten it to demand improvement
+(`elo0=0, elo1=5`). All four ran to a boundary with 0 crashes and 0 forfeits;
+every game terminated normally.
+
+The curve does not merely flatten, it turns over. Gains fall by roughly an order
+of magnitude per step and generation 3 is measurably *worse* than its parent, so
+the gate correctly refuses it and **gen-002 is the programme's final network**.
+Three independent signals corroborate the plateau rather than a single point
+estimate: the gate needed 5.3× more games to separate generation 2 from its
+parent than generation 1 did, the draw rate climbs from 33% (gen 1) through 46%
+(gen 2) to 45% (gen 3), and the pentanomial mass migrates from the winning tail
+toward the centre. The likely cause is the recipe itself — ~30 M samples per
+generation, hidden width 256, 5000 nodes per self-play move — rather than
+anything a few more iterations of the same recipe would break; a wider network
+or richer labels is separate work.
+
+A methodological caution recorded for reuse: two minutes into generation 2's
+gate, the running score over 45 games was 0.567, implying roughly +47 Elo; the
+resolved figure over 2544 games was +22.3. An interim gate score at that sample
+size is consistent with anything from about −50 to +150 Elo. Interim scores are
+not results.
+
+### Absolute anchor: gen-002 vs the hand-crafted evaluation
+
+The per-generation deltas are each measured against a different opponent and do
+**not** compose into a figure against the hand-crafted baseline (naïve addition
+of the promoted deltas would claim +442, which is meaningless). The final
+network was therefore played directly against the hand-crafted evaluation over a
+fixed 1000-game gauntlet, twice:
+
+| Field | Run 1 | Run 2 |
+| --- | ---: | ---: |
+| Elo | **+334.1 ± 24.4** | **+339.6 ± 25.9** |
+| W-D-L | 778-189-33 | 796-160-44 |
+| Score | 87.25 % | 87.60 % |
+| Pentanomial | 0-4-51-141-304 | 1-6-49-128-316 |
+| Draw ratio | 10.2 % | 9.8 % |
+
+The two independent runs agree at **≈ 337 Elo** over the hand-crafted
+evaluation. This is the headline result of the whole NNUE programme: the
+network that a plain build now embeds is about 337 Elo stronger at this control
+than the tapered evaluation it replaced.
+
+The candidate is gen-002 (`nnue:gen-002`, sha256 `f076dc46…`, parameter hash
+`0x6ad073be2b6899cb`, hidden width 256), embedded as the default network by
+TASK-69.15.
+
+Note on archival form: these two matches are recorded here from the runner logs
+rather than as the harness's `report.json`, because `strength_test.py` cannot
+parse them. At an 87 % score the SPRT log-likelihood ratio degenerates to `nan`
+in the runner output, and the harness — correctly, for a gate — treats a `nan`
+LLR as malformed and exits with an infrastructure error, regardless of the
+hypothesis bounds. The matches themselves completed all 1000 games cleanly; only
+the SPRT summary line is unusable. A gauntlet whose purpose is an Elo estimate
+rather than a gate decision does not need the SPRT machinery, and teaching the
+harness to record a lopsided non-gate match in its archived form is a genuine
+gap left for follow-up.
+
+### Cost accounting against the pre-run estimates
+
+The realised per-generation cost, measured on the run host:
+
+| Stage | Cost |
+| --- | --- |
+| Datagen (gen 0, hand-crafted evaluator) | 3996 positions/s → 386 k games in 3.3 h |
+| Datagen (gens 1–3, NNUE evaluator) | ~2900 positions/s, ~23 % slower per node than the hand-crafted evaluator, ~4.1 h per generation |
+| Training + export (per generation) | ~25 min; bounded by the dataloader (~500 k samples/s), not the GPU |
+| Gate | ~1000 games/hour; duration scales inversely with the margin (22 min at gen 1, 77 min at gen 2, and up to the 10 000-game cap ≈ 10 h for a marginal candidate) |
+
+Two cost facts worth carrying forward. Datagen throughput peaks at the physical
+core count and collapses with SMT threads — 24 workers measured 2.25× slower
+than 12 on this 12-core host — so worker count must be pinned to physical cores,
+not to `available_parallelism()`. And as the strength margin shrinks, the SPRT
+gate rather than datagen becomes the variable cost: a near-neutral candidate can
+occupy the full game cap to reach a verdict, which is the economic reason the
+programme was stopped once the per-generation gain fell into single digits.
