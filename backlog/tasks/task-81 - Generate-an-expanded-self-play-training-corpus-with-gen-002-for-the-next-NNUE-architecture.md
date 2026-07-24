@@ -3,9 +3,11 @@ id: TASK-81
 title: >-
   Generate an expanded self-play training corpus with gen-002 for the next NNUE
   architecture
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-24 10:56'
+updated_date: '2026-07-24 11:05'
 labels:
   - nnue
   - datagen
@@ -45,3 +47,24 @@ Scope: primarily an execution/campaign task on the rig. Add only the minimal bin
 - [ ] #4 The corpus provenance is recorded (network sha/parameter hash, binary commit, generation parameters) so the run is reproducible and attributable
 - [ ] #5 The corpus is confirmed loadable by the TASK-69.8 training dataloader as a smoke check before the full run is trusted
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Decision (the one that gates regen): per-move label budget = 25000 nodes/move (5x the bootstrap's 5000). Kept as a node budget, not depth, so it stays comparable to the bootstrap and reproducible under the existing throughput calibration. Higher budget = deeper/quieter labels a larger future net can exploit; under-budgeting is the only choice that forces a regen. Everything else = bootstrap/69.7 defaults: --opening-plies 6, --filter-opening-plies 8, default adjudication (resign 1000cp/4, draw 8cp/8/min40), gen-002 (embedded default.sbnn) as the sole labeller via --network.
+
+2. Code gaps (deliberately minimal, per Scope):
+   - (a) higher budget: already selectable via existing datagen --nodes (u64, no cap) -> NO code change needed.
+   - (b) chain/accumulate: dataloader PackedData reads a SINGLE file (8-byte header + 32-byte records). Add tools/rl/concat_samples.py: header-aware accumulation of shard files into one corpus (write one header, then each shard's record body), validating identical headers and exact record alignment, with a --verify count. Unit-tested against the format.
+   - Add tools/rl/datagen_campaign.py (thin orchestrator): loop datagen into shard_NN.bin with distinct --opening-seed per shard until an accumulated-sample target, recording per-shard provenance, then concat -> corpus.bin. Parameters versioned in-repo rather than ad-hoc on the rig.
+
+3. Purity (AC#3): labeller is gen-002 via --network default.sbnn; no external engines/positions/evals/tablebases. Documented in the campaign doc + task notes.
+
+4. Provenance (AC#4): record net sha256 + network_id, seaborg binary commit, and full generation parameters (nodes, games/shard, seeds, opening + adjudication settings) per shard and for the corpus.
+
+5. Smoke (AC#5): build seaborg release on the rig at the pinned commit; generate a small corpus at nodes=25000 and confirm tools/trainer/data.py PackedData loads it (count matches) before trusting the full run.
+
+6. Full run (AC#1): launch the accumulating campaign on the idle rig (background). Target ~100M samples (~3.3x the bootstrap's 30M/gen); at gen-002 NNUE inference + 25000 nodes ~1.6M kept samples/hr on 12 workers => ~2.5-3 days. Incremental: usable/extendable/stoppable at any checkpoint.
+
+7. Repo checks: cargo fmt/clippy/test + python unittest for the new helper.
+<!-- SECTION:PLAN:END -->
