@@ -38,7 +38,7 @@ fn tables() -> &'static BoardTables {
 pub fn knight_moves(square: Square) -> Bitboard {
     debug_assert!(square.is_okay());
     // SAFETY: move generation only produces squares in 0..64.
-    unsafe { Bitboard::new(*tables().knight.get_unchecked(square.0 as usize)) }
+    unsafe { Bitboard(*tables().knight.get_unchecked(square.0 as usize)) }
 }
 
 /// Generate King moves Bitboard from an origin square
@@ -46,7 +46,7 @@ pub fn knight_moves(square: Square) -> Bitboard {
 pub fn king_moves(square: Square) -> Bitboard {
     debug_assert!(square.is_okay());
     // SAFETY: move generation only produces squares in 0..64.
-    unsafe { Bitboard::new(*tables().king.get_unchecked(square.0 as usize)) }
+    unsafe { Bitboard(*tables().king.get_unchecked(square.0 as usize)) }
 }
 
 const fn gen_knight_moves() -> [u64; 64] {

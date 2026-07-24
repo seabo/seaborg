@@ -1,4 +1,6 @@
-use crate::position::{CastlingRights, Piece, PieceType, Player, Position, Square, State, Zobrist};
+use crate::position::{
+    CastlingRights, CheckInfo, Piece, PieceType, Player, Position, Square, Zobrist,
+};
 use bitflags::bitflags;
 use std::fmt;
 
@@ -255,7 +257,7 @@ pub struct UndoableMove {
     pub prev_castling_rights: CastlingRights,
     pub prev_ep_square: Option<Square>,
     pub prev_half_move_clock: u32,
-    pub state: State,
+    pub state: CheckInfo,
     pub zobrist: Zobrist,
 }
 

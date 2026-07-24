@@ -64,7 +64,14 @@ macro_rules! impl_indv_bit_ops {
 /// Implies bit operations `&, |, ^, !`, shifting operations `<< >>`,
 /// math operations `+, -, *, /, %` and `From` trait to a struct consisting of a
 /// singular tuple. This tuple must contain a type that implements these bit operations.
-// TODO: use `impl_bit_ops` to implement everything for `Bitboard`s (rather than current manual impl)
+///
+/// This covers only the raw operators, which are the same for any single-field
+/// wrapper. `Bitboard`'s semantic methods (`bsf`, `pop_lsb_and_bit`, its
+/// `Iterator` impl) stay hand-written on purpose: they return domain types like
+/// `Square` instead of raw integers, and that typing is where `Bitboard`'s
+/// safety boundary lives. Folding them into a generic bit-ops macro would strip
+/// those types back to `u64`, undoing exactly the domain-safety work this
+/// abstraction exists to protect.
 macro_rules! impl_bit_ops {
     ($t:tt, $b:tt) => {
         impl From<$b> for $t {

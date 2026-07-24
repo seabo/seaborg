@@ -1,9 +1,10 @@
-//! Stores additional state about a position which is often reused across many
-//! methods on `Position`. We keep track of here in a dedicated struct.
+//! Check and pin information derived from a position, reused across many methods
+//! on `Position` so it is computed once per position rather than on demand.
 //!
-//! Contains things like `checkers` (which pieces are currently checking the moving
-//! player's king), `zobrist` (the efficiently updateable hash key for the transposition
-//! table).
+//! Holds the pieces currently checking the side to move (`checkers`), the pieces
+//! blocking sliding attacks on each king (`blockers`), and the pieces delivering
+//! those pins (`pinners`) — the data needed to test move legality and detect
+//! discovered checks without rescanning the board.
 
 use super::{Player, Position};
 use crate::bb::Bitboard;
@@ -12,7 +13,7 @@ use crate::masks::PLAYER_CNT;
 use std::fmt;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct State {
+pub struct CheckInfo {
     /// A `Bitboard` containing the pieces which are currently checking
     /// the player to move.
     pub checkers: Bitboard,
@@ -25,8 +26,8 @@ pub struct State {
     pub pinners: [Bitboard; PLAYER_CNT],
 }
 
-impl State {
-    /// Returns a blank `State`.
+impl CheckInfo {
+    /// Returns a blank `CheckInfo`.
     pub const fn blank() -> Self {
         Self {
             checkers: Bitboard(0),
@@ -35,7 +36,7 @@ impl State {
         }
     }
 
-    /// Set the `State` data based on the associated `Position`.
+    /// Set the `CheckInfo` data based on the associated `Position`.
     pub(crate) fn from_position(position: &Position) -> Self {
         let mut state = Self::blank();
         let us = position.turn();
@@ -65,7 +66,7 @@ impl State {
     }
 }
 
-impl fmt::Display for State {
+impl fmt::Display for CheckInfo {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f, "Checkers:\n {}", self.checkers)?;
         writeln!(

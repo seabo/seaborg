@@ -3,8 +3,8 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use std::hint::black_box;
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let bb = Bitboard::new(0x00000000C0000000);
-    let bb2 = Bitboard::new(0xAB878DE7787627F8);
+    let bb = Bitboard(0x00000000C0000000);
+    let bb2 = Bitboard(0xAB878DE7787627F8);
 
     c.bench_function("bsf", |b| b.iter(|| black_box(bb.bsf())));
     c.bench_function("iterate set bits", |b| {

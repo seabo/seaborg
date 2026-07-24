@@ -22,7 +22,7 @@ pub use fen::{FenError, START_POSITION};
 pub use file::File;
 pub use piece::{Piece, PieceType, PIECE_TYPES, PROMO_PIECES};
 pub use square::Square;
-pub use state::State;
+pub use state::CheckInfo;
 pub use zobrist::Zobrist;
 
 use std::fmt;
@@ -107,7 +107,6 @@ impl fmt::Display for Player {
     }
 }
 
-// TODO: turn off pub for all the `Position` fields and provide getters
 #[derive(Clone, Eq, PartialEq)]
 pub struct Position {
     /// Array of pieces on the board.
@@ -132,12 +131,14 @@ pub struct Position {
     /// Full move number of the current position in the game being played.
     pub(crate) move_number: u32,
 
-    /// `State` struct stores other useful information for fast access
-    // TODO: Pleco wraps this in an Arc for quick copying of states without
-    // copying memory. Do we need that?
-    // TODO: This probably needs a better name since it really just has info
-    // on pins, checks and blocks.
-    pub(crate) state: State,
+    /// Cached check and pin information for the current position, recomputed
+    /// whenever the position changes so legality tests need not rescan the board.
+    ///
+    /// Held inline rather than behind an `Arc`: a `Position` is cloned rarely and
+    /// this is a handful of bitboards, so shared ownership would add reference
+    /// counting to the hot make/unmake path to save a copy that barely costs
+    /// anything.
+    pub(crate) state: CheckInfo,
 
     /// History stores a `Vec` of `UndoableMove`s, allowing the `Position` to
     /// be rolled back with `unmake_move()`.
@@ -176,15 +177,15 @@ impl Position {
     /// before `init_globals()`.
     pub fn blank() -> Self {
         Self {
-            board: Board::new(),
-            bbs: [Bitboard::new(0); PIECE_TYPE_CNT],
-            player_occ: [Bitboard::new(0); PLAYER_CNT],
+            board: Board::empty(),
+            bbs: [Bitboard(0); PIECE_TYPE_CNT],
+            player_occ: [Bitboard(0); PLAYER_CNT],
             turn: Player::WHITE,
             castling_rights: CastlingRights::none(),
             ep_square: None,
             half_move_clock: 0,
             move_number: 1,
-            state: State::blank(),
+            state: CheckInfo::blank(),
             history: Vec::with_capacity(16),
             zobrist: Zobrist::empty(),
         }
@@ -195,10 +196,10 @@ impl Position {
         println!("{}", self);
     }
 
-    /// Sets the `State` struct for the current position. Should only be called
+    /// Sets the `CheckInfo` for the current position. Should only be called
     /// when initialising a new `Position`.
     pub fn set_state(&mut self) {
-        self.state = State::from_position(self);
+        self.state = CheckInfo::from_position(self);
     }
 
     /// Set the `Zobrist` key for the current position based on the other data in
@@ -369,7 +370,7 @@ impl Position {
 
         // Update "invisible" state
         self.turn = them;
-        self.state = State::from_position(self);
+        self.state = CheckInfo::from_position(self);
     }
 
     fn assert_valid_move_input(&self, mov: &Move) {
@@ -555,7 +556,7 @@ impl Position {
 
         self.zobrist.toggle_side_to_move();
         self.turn = !self.turn;
-        self.state = State::from_position(self);
+        self.state = CheckInfo::from_position(self);
     }
 
     /// Restores the position saved by the matching [`Self::make_null_move`].
@@ -1116,8 +1117,8 @@ impl Position {
     /// playing moves and parsed from FEN would hash differently. This is therefore called from
     /// `make_move_unchecked` and from `Position::canonicalize_ep_square` alike.
     ///
-    /// It reads only the piece bitboards, never `State`, so it is callable part-way through a move
-    /// update, before `State::from_position` has run.
+    /// It reads only the piece bitboards, never `CheckInfo`, so it is callable part-way through a
+    /// move update, before `CheckInfo::from_position` has run.
     pub(crate) fn has_legal_ep_capture(&self, ep: Square, capturer: Player) -> bool {
         let pusher = !capturer;
 
