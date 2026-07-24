@@ -1,10 +1,11 @@
 ---
 id: TASK-69.12
 title: Run the bootstrap programme and measure per-iteration strength
-status: To Do
-assignee: []
+status: Ready to Merge
+assignee:
+  - '@claude'
 created_date: '2026-07-20 19:42'
-updated_date: '2026-07-22 02:55'
+updated_date: '2026-07-24 09:22'
 labels:
   - nnue
   - rl
@@ -28,7 +29,168 @@ The deliverable is evidence: the trained network that becomes the new default ev
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The loop runs for the planned iterations and produces a network that passes its strength gate and becomes the default evaluation
-- [ ] #2 Per-iteration strength is recorded against the previous best, and against an external reference where feasible, with results archived per the strength-testing docs
-- [ ] #3 Realised datagen throughput and training cost are recorded and compared against the pre-run estimates
+- [x] #1 The loop runs for the planned iterations and produces a network that passes its strength gate and becomes the default evaluation
+- [x] #2 Per-iteration strength is recorded against the previous best, and against an external reference where feasible, with results archived per the strength-testing docs
+- [x] #3 Realised datagen throughput and training cost are recorded and compared against the pre-run estimates
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Provision the compute host (rig 'seaborig', Ryzen 9 3900XT 12c/24t, 32GB, RTX 2070 SUPER): clone master d53e33e, rustup stable, prebuilt FastChess v1.7.0-alpha, uv venv with CUDA torch. Nothing on the host is a training input; it only runs the repo's own tools.
+2. Calibrate before committing compute: measure datagen positions/s against worker count and node budget, training epoch cost on the GPU, and gate games/hour at the chosen time control. Fix the run parameters from measurement, not from guesses.
+3. Smoke the whole loop end to end (--mode smoke) to prove datagen -> train -> export -> gate -> promote works on the host before any authoritative iteration.
+4. Run the authoritative programme one generation at a time, with an SPRT gate that demands improvement (elo0/elo1 set for a gain, not merely non-regression), archiving each generation's gate report and ledger line.
+5. Anchor the final promoted network against the hand-crafted evaluation with a separate equal-time gauntlet, so the curve has an absolute reference and not only self-play deltas.
+6. Record the realised throughput and cost against the pre-run estimates, land the strength curve in BENCHMARKS.md and the run in docs, and make the promoted network the default evaluation.
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Compute host provisioned and calibrated (rig 'seaborig': Ryzen 9 3900XT 12c/24t, 32GB, RTX 2070 SUPER, Manjaro). Toolchain: rustup stable 1.97.1 (the distro rust was 1.71.1, below the 1.93 workspace floor), FastChess v1.7.0-alpha prebuilt linux-x86-64 release binary, uv venv on Python 3.12 with torch 2.13.0+cu130 (CUDA available on the 2070 SUPER). Repo transferred as a git bundle of master d53e33e, so nothing was pushed. A smoke iteration (--mode smoke --limit depth=4 --max-games 4) completed the whole datagen -> train -> export -> gate -> promote path in 8.4s and wrote a well-formed ledger line.
+
+Measured cost, replacing the pre-run estimates:
+
+Datagen (hand-crafted evaluator, --nodes 5000 --filter-opening-plies 8 --opening-plies 6):
+- 3855 raw positions/s, 2552 kept samples/s = 9.19M kept samples/hour, 77.8 kept samples/game, 32 bytes/sample.
+- Worker count matters far more than expected. Throughput peaks at the physical core count and then collapses: 6w 3627 pos/s, 8w 4736, 10w 4823, 12w 4790, 14w 3774, 16w 3263, 20w 2461, 24w 2116. Running the 24 available threads is 2.25x slower than running 12. The run uses --workers 12.
+- At 24 workers throughput was also flat across node budgets (2057 pos/s at 500 nodes vs 2173 at 10000), i.e. the machine was saturated on something other than search. At 12 workers it scales with the budget as expected (3000n 4768, 6000n 3357, 10000n 2155, 20000n 1091), which is what fixed the diagnosis. TT size is not involved: 1/4/16/64 MB per worker are within noise of each other.
+
+Training: not a bottleneck. Dataloader 502,817 samples/s, which bounds the epoch; 25 epochs over a 30M-sample generation is ~25 min. The GPU is idle most of that time.
+
+Gate: 44 games at tc=10+0.1 with --concurrency 11 took 160s = 990 games/hour. A gate resolving in ~2000 games is ~2h; the 10000-game cap is ~10h.
+
+Generation 0 launched on the host: 386,000 games at 5000 nodes (~30M samples, ~3.3h), H=256, 25 epochs, lambda ramp 0.1 -> 0.5 over 8 generations, gate tc=10+0.1 concurrency 11 against the hand-crafted evaluation.
+
+Two observations on the loop worth recording. (1) loop.py passes no per-generation opening seed, so a multi-iteration run replays the same diversification openings every generation; this run drives one iteration per invocation with an explicit --opening-seed to avoid that. (2) The gate inherits strength_test.py's elo0=-5/elo1=0 default, which is a non-regression test rather than a demand for improvement; that is the right bound for the generation-0 bootstrap but should be tightened for later generations.
+
+Generation 0 result: PASS, promoted, +263.2 +/- 32.7 Elo over the hand-crafted evaluation.
+
+Attribution: 386,000 self-play games at 5000 nodes/move produced 31,409,859 filtered samples; H=256, 25 epochs, lambda 0.1; candidate nnue:gen-000:sha256=5a532e9d7d89af1c. Gate was authoritative at tc=10+0.1, concurrency 11, openings seaborg-openings-v1, SPRT elo0=-5 elo1=0 alpha=beta=0.05, crossing the upper bound (LLR 2.95) after 358 games: 247 wins, 93 draws, 18 losses, pentanomial [0, 2, 27, 69, 81].
+
+The result was checked for the ways a large Elo delta is usually an artifact rather than a gain. Both sides are the same binary (sha256 7ddae8ac...), differing only in the candidate's EvalFile option, so the comparison isolates the evaluation. All 358 games terminated normally: zero crashes, disconnections, forfeits, illegal moves, or losses on time, so the margin is not a baseline failing to play. Preflight had both sides answering g1f3. The limit is a time control, not a node budget, so this is not the free-depth artifact that inflates search-change measurements.
+
+Realised cost against the pre-run calibration: datagen ran as predicted at ~9.2M kept samples/hour and took the bulk of the wall clock; the gate resolved in 358 games (~22 min) rather than the ~2h a marginal change would need, because the effect is large. Total generation-0 wall clock was about 3.5h.
+
+Generation 1 launched: 360,000 games seeded differently (--opening-seed 2000), self-play now evaluated by best.sbnn. Datagen with NNUE inference measured at 2965 raw positions/s against 3855 for the hand-crafted evaluation, 23% slower, giving 7.12M kept samples/hour and a ~4.2h datagen step. Its gate is tightened to elo0=0 elo1=5, so a candidate must show improvement rather than merely avoid regressing.
+
+Generation 1 result: PASS, promoted, +156.5 +/- 26.1 Elo over generation 0.
+
+Attribution: 360,000 self-play games evaluated by nnue:gen-000, 5000 nodes/move, 44,133,929 raw positions filtered to 29,532,992 samples in 15,134s (2916 positions/s, against 2965 measured on the pre-run probe, so the cost model held at full scale). Training converged by roughly epoch 19 of 25 (final val_loss 0.004424). Candidate nnue:gen-001:sha256=8ebc1381ca166774. Gate at tc=10+0.1 concurrency 11 under the tightened SPRT (elo0=0, elo1=5) crossed the upper bound after 476 games: 259 wins, 159 draws, 58 losses, pentanomial [5, 15, 58, 94, 66], 0 crashes, 0 forfeits, all terminations normal.
+
+The tightened bound did what it was meant to: unlike generation 0 it demanded evidence of improvement rather than mere non-regression, and the candidate supplied it.
+
+Note that generation 1's val_loss (0.004424) is higher than generation 0's (0.002736) and the two are not comparable. The models fit different targets: generation 1's labels come from an evaluator 263 Elo stronger, and the schedule moved lambda from 0.10 to 0.15. Only the gate compares generations meaningfully.
+
+Curve so far, each measured against the immediately preceding best at the same time control: gen 0 +263.2 over the hand-crafted evaluation, gen 1 +156.5 over gen 0. Still climbing steeply; no sign of flattening at two generations.
+
+Operational correction: the host idled 5h16m after generation 1 finished (17:30 BST) because each generation was being launched by hand and the watching process died. Generations 2 through 7 now run from ~/rl/chain.sh, which invokes loop.py once per generation with a distinct opening seed and stops the chain only on an infrastructure failure, treating a failed or inconclusive gate as a normal outcome that the next generation still follows.
+
+Generation 2 result: PASS, promoted, +22.3 +/- 9.8 Elo over generation 1.
+
+Attribution: 360,000 games evaluated by nnue:gen-001, 5000 nodes/move, 28,419,372 samples in 4h06m (datagen rate 6.94M samples/hour, steady across the whole run). Candidate nnue:gen-002:sha256=f076dc4674eedd42. Gate at tc=10+0.1 concurrency 11, SPRT elo0=0 elo1=5, crossed the upper bound after 2544 games: 774 wins, 1159 draws, 611 losses, pentanomial [71, 273, 462, 354, 112], 0 crashes, 0 forfeits.
+
+The strength curve, each generation against its immediate predecessor at tc=10+0.1:
+
+  gen 0 vs hand-crafted   +263.2 +/- 32.7   (358 games)
+  gen 1 vs gen 0          +156.5 +/- 26.1   (476 games)
+  gen 2 vs gen 1          +22.3 +/- 9.8     (2544 games)
+
+This is where the curve begins to flatten, which the task exists in part to locate. Three corroborating signals, not just the point estimate: the gate needed 5.3x more games than generation 1 to separate the same hypotheses, the draw rate rose from 33% to 46%, and the pentanomial mass moved from the winning tail toward the centre.
+
+A methodological note worth keeping. Two minutes into this gate the running score over 45 games was 0.567, implying roughly +47 Elo; the resolved figure over 2544 games was +22.3. The early sample was consistent with anything from about -50 to +150 at that sample size. Interim gate scores are not results, and the gap between the two numbers here is the concrete reminder.
+
+Cost per generation is now stable and dominated by datagen and, increasingly, by the gate: roughly 4h06m datagen, 28min training and export, and a gate whose duration scales inversely with the margin being measured (22min at generation 1, 1h17m here).
+
+Generation 3 started 05:38 with seed 4000 and is mid-datagen.
+
+Programme scope decision (agreed with the requester): stop after generation 3 rather than running the planned 8.
+
+Rationale is the measured curve, not impatience. Generation 2 returned +22.3 Elo and needed 5.3x the games of generation 1 to prove it; the gate cost now scales inversely with the margin, so a generation worth single-digit Elo could occupy the full 10,000-game cap, roughly 8-10 hours, to return a result that may not even promote under elo0=0/elo1=5. Generations 3 through 7 on the same recipe were estimated at 2-3 further days for perhaps 30 Elo in total. The plateau is much more likely to be a property of the recipe (30M samples per generation, H=256, 5000 nodes per move) than something four more iterations of it would break, so exploring a wider network or better labels belongs in separate work rather than at the tail of this programme.
+
+Generation 3 was already past half its datagen when the decision was taken, and its verdict is the fourth point that makes the flattening rate estimable rather than inferred, so it runs to completion.
+
+Mechanics: the chain script's shell was terminated while leaving the in-flight loop.py running, so generation 3 continues (reparented to init) and no generation 4 follows. Verified after the kill that the datagen child was still writing samples.
+
+Queued behind it, so the host does not idle: an anchoring gauntlet of the final promoted network directly against the hand-crafted evaluation at tc=10+0.1, 1000 games, concurrency 11. Its SPRT bounds are set to -1000/1000 so the likelihood ratio cannot reach either boundary and the full game budget is played; the run reports an Elo estimate with its error, and its INCONCLUSIVE verdict is an artifact of that construction rather than a finding. This is a measurement, not a gate, and promotes nothing. It exists because the per-generation deltas are each against a different opponent and do not compose into a figure against the hand-crafted baseline.
+
+Generation 3 result: FAIL, not promoted, -17.3 +/- 9.8 Elo against generation 2, over 2858 games. Generation 2 remains best.
+
+The completed curve, each generation against the best network at the time:
+
+  gen 0 vs hand-crafted   +263.2 +/- 32.7   (358 games)
+  gen 1 vs gen 0          +156.5 +/- 26.1   (476 games)
+  gen 2 vs gen 1          +22.3 +/- 9.8     (2544 games)
+  gen 3 vs gen 2          -17.3 +/- 9.8     (2858 games, FAIL)
+
+The programme did not merely flatten, it turned over: generation 3 was measurably worse than its parent and the gate correctly refused to promote it. This is the answer to the task's question about where the curve flattens, and it is a firmer answer than a stop-because-gains-are-small would have been. The decision to stop after generation 3 was taken before this verdict was known, on the strength of generation 2's +22.3; the verdict confirms it rather than having motivated it.
+
+Anchoring measurement, first attempt: an operator error of mine, worth recording because the failure mode is not obvious. To obtain a fixed-length match rather than an early SPRT stop, the bounds were set to elo0=-1000 elo1=1000. Those bounds drive the SPRT variance term to zero, FastChess emitted 'LLR: -nan (nan%)', and the harness rejected the run as malformed runner output with an INFRASTRUCTURE ERROR verdict. The match itself was unaffected and played all 1000 games; the raw runner output recorded Elo 334.10 +/- 24.35, 778 wins, 189 draws, 33 losses, 87.25%, pentanomial [0, 4, 51, 141, 304], draw ratio 10.2%, over 49m32s. That evidence is archived at ~/rl/anchor-gen-002 with its PGN and runner log, but it has no report.json, so it is not archived in the form the strength-testing docs require.
+
+Re-run with bounds that bracket the observed effect (elo0=250, elo1=450) instead of trying to escape the test: the likelihood ratio then wanders between well-defined boundaries, the full budget is played, and the report parses. Any verdict it prints concerns those bracketing hypotheses and is not a promotion decision.
+
+Finalisation: recorded the programme in BENCHMARKS.md and integrated current master.
+
+BENCHMARKS.md gains an 'NNUE self-play bootstrap programme' section: the per-generation gate curve (+263.2, +156.5, +22.3, then a rejected -17.3 that makes gen-002 final), the absolute anchor of gen-002 against the hand-crafted evaluation (334.1 +/- 24.4 and 339.6 +/- 25.9 over two 1000-game runs, ~337 Elo), and realised datagen/training/gate costs. It states plainly that these were measured on the rig (Ryzen 9 3900XT), not the M3 Pro of the search entries, so they are internally consistent but not comparable to those, and that the build is pinned at git:d53e33e (pre-embedding) so the hand-crafted baseline was genuinely hand-crafted.
+
+The anchor archival limitation is documented in that section rather than worked around: at an 87% score the SPRT LLR degenerates to nan, strength_test.py rejects the run as malformed, and no report.json is produced; the measurement is recorded from the runner logs. Teaching the harness to archive a lopsided non-gate gauntlet is left as a follow-up (not created here, as review findings and follow-ups are the reviewer's to raise).
+
+Merged current master (9d273a8) into the branch. That master already carries gen-002 as the embedded default via the merged TASK-69.15, so this task's AC 'produces a network that ... becomes the default evaluation' is satisfied by that bake; this task records the evidence behind it. The merge was clean; the only files this task adds on top of master are BENCHMARKS.md and this task file (git diff master...HEAD).
+
+Test flake worth flagging honestly: the first cargo test --workspace after the merge reported 1 failed in the engine lib suite (425 passed, 1 failed). It did not reproduce on any of five subsequent runs (two isolated cargo test -p engine, three further full-workspace runs, all green), and I did not capture the name before it passed. This task changes no code -- its diff is BENCHMARKS.md and the task file only -- so the failure is not attributable to it; it is an existing timing-sensitive engine test, most likely stressed by concurrent load on the first run. Flagging rather than burying it.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @claude
+created: 2026-07-24 09:01
+---
+Implementation handoff
+Branch: task-69.12-bootstrap-programme
+Worktree: /Users/seabo/seaborg-worktrees/task-69.12-bootstrap-programme
+Base: 9d273a8ce6e64e64039513723e289d7620487673 (current master, includes the gen-002 bake from TASK-69.15)
+Implementation target: 737eaa6b528843b9ed6d74e345862fe91a8f1aff
+Resolved findings: none
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (no warnings)
+- cargo test --workspace: pass on 5 of 6 runs; one non-reproducing engine-lib failure on the first post-merge run (425 passed/1 failed), green on two isolated 'cargo test -p engine' runs and three further full-workspace runs. This task adds no code (diff is BENCHMARKS.md and the task file only, git diff master...HEAD), so the flake is not attributable to it; name not captured before it passed.
+Known failures: the flaky engine test above; timing-sensitive and pre-existing, not caused by this docs-only change.
+
+Scope note for the reviewer: this is the evidence deliverable of the bootstrap programme. It adds the NNUE strength-results section to BENCHMARKS.md and the full run record to the task; it touches no engine code. The network itself became the default via TASK-69.15 (merged), which this record references. The programme was stopped after generation 3 (a rejected candidate) at the requester's direction, recorded on the branch. The absolute anchor (~337 Elo vs the hand-crafted evaluation) answers the parent TASK-69's AC#2. One deliberate non-fix is documented in BENCHMARKS.md: strength_test.py cannot archive an ~87%-score gauntlet as report.json because the SPRT LLR degenerates to nan, so the anchor is recorded from runner logs and a harness fix is left as follow-up.
+---
+
+author: @claude
+created: 2026-07-24 09:22
+---
+Review verdict: APPROVE
+
+Code target (immutable): 737eaa6b528843b9ed6d74e345862fe91a8f1aff
+Base: 9d273a8ce6e64e64039513723e289d7620487673 (master)
+Branch tip presented for merge: 703139c (task-only finalisation/handoff metadata; git diff 737eaa6..703139c touches only the task file, so no implementation file changed after the code target)
+
+Scope: docs/evidence only. git diff base..target = BENCHMARKS.md (+114) and this task file. The merge commit 737eaa6 introduces nothing else relative to master.
+
+Acceptance criteria (all proven):
+- AC#1 met: gen-002 passed its promote-on-improvement SPRT gate (+22.3 +/- 9.8, LLR crossed the upper bound) and is the embedded default evaluation, verified directly in code at base master: engine/src/nnue/embedded.rs BUILT_IN_NETWORK_ID = "gen-002" with engine/nets/default.sbnn baked via include_bytes!. The planned 8 iterations were reduced to 4 (gen 0-3) by explicit, recorded requester agreement on a measured plateau; the deliverable network exists and is default.
+- AC#2 met: per-generation strength recorded against the previous promoted best, plus an external absolute anchor of gen-002 vs the hand-crafted evaluation (~337 Elo over two independent 1000-game gauntlets, 334.1 +/- 24.4 and 339.6 +/- 25.9). The anchor's report.json archival gap (SPRT LLR degenerates to nan at an 87% score, so strength_test.py rejects the run) is honestly documented in BENCHMARKS.md and left as a follow-up rather than worked around.
+- AC#3 met: realised datagen throughput (~9.2M kept samples/h hand-crafted, ~23% slower under NNUE inference), training (~25 min, dataloader-bound), and gate cost (scales inversely with margin) recorded and compared against the pre-run calibration.
+
+Verification (run by reviewer on the branch; code state identical to target 737eaa6 since the only later commit touches the task md):
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (exit 0, no warnings)
+- cargo test --workspace: pass (clean run 426 engine-lib + all crates green). One flaky failure on a loaded run: search::tests::an_extendable_budget_is_still_bounded_by_its_hard_half, a wall-clock deadline-tolerance assertion (elapsed <= hard limit + 100ms); passed 5/5 in isolation. Pre-existing and timing-sensitive, not attributable to this docs-only diff.
+- BENCHMARKS.md figures independently reconciled: W-D-L sums, pentanomial pair counts, and Elo-from-score match on every table row; the two anchor runs agree at ~337 Elo.
+
+No hot-path benchmarks run: the diff touches no movegen/search code.
+No blocking findings.
+---
+<!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Evidence deliverable of the NNUE self-play bootstrap programme; no engine code changed (diff base..target 737eaa6 is BENCHMARKS.md + this task file only). BENCHMARKS.md gains an 'NNUE self-play bootstrap programme' section: the per-generation gate curve (+263.2, +156.5, +22.3, then a rejected -17.3 that makes gen-002 final), the absolute anchor of gen-002 vs the hand-crafted evaluation (~337 Elo over two 1000-game runs), and realised datagen/training/gate costs vs the pre-run estimates. AC#1: gen-002 passed its promote-on-improvement SPRT gate and is the embedded default (verified in code: BUILT_IN_NETWORK_ID = "gen-002", engine/nets/default.sbnn), the 8-iteration plan reduced to 4 by recorded requester agreement on a measured plateau. AC#2: per-generation strength vs previous best plus the external hand-crafted anchor, with the anchor's report.json archival gap (nan SPRT LLR at 87% score) honestly documented as follow-up. AC#3: cost table and comparison recorded. Verified on target 737eaa6: cargo fmt --check pass, cargo clippy --workspace --all-targets --all-features -- -D warnings pass (exit 0, no warnings), cargo test --workspace pass (426 engine-lib tests green on a clean run; a single timing-sensitive search deadline test flaked once under concurrent load and passed 5/5 in isolation, not attributable to this docs-only diff). BENCHMARKS.md numbers verified internally consistent (W-D-L, pentanomial, and Elo arithmetic reconcile across all rows).
+<!-- SECTION:FINAL_SUMMARY:END -->
