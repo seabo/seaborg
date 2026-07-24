@@ -1,11 +1,11 @@
 ---
 id: TASK-69.12
 title: Run the bootstrap programme and measure per-iteration strength
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-20 19:42'
-updated_date: '2026-07-24 09:01'
+updated_date: '2026-07-24 09:22'
 labels:
   - nnue
   - rl
@@ -29,9 +29,9 @@ The deliverable is evidence: the trained network that becomes the new default ev
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The loop runs for the planned iterations and produces a network that passes its strength gate and becomes the default evaluation
-- [ ] #2 Per-iteration strength is recorded against the previous best, and against an external reference where feasible, with results archived per the strength-testing docs
-- [ ] #3 Realised datagen throughput and training cost are recorded and compared against the pre-run estimates
+- [x] #1 The loop runs for the planned iterations and produces a network that passes its strength gate and becomes the default evaluation
+- [x] #2 Per-iteration strength is recorded against the previous best, and against an external reference where feasible, with results archived per the strength-testing docs
+- [x] #3 Realised datagen throughput and training cost are recorded and compared against the pre-run estimates
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -161,4 +161,36 @@ Known failures: the flaky engine test above; timing-sensitive and pre-existing, 
 
 Scope note for the reviewer: this is the evidence deliverable of the bootstrap programme. It adds the NNUE strength-results section to BENCHMARKS.md and the full run record to the task; it touches no engine code. The network itself became the default via TASK-69.15 (merged), which this record references. The programme was stopped after generation 3 (a rejected candidate) at the requester's direction, recorded on the branch. The absolute anchor (~337 Elo vs the hand-crafted evaluation) answers the parent TASK-69's AC#2. One deliberate non-fix is documented in BENCHMARKS.md: strength_test.py cannot archive an ~87%-score gauntlet as report.json because the SPRT LLR degenerates to nan, so the anchor is recorded from runner logs and a harness fix is left as follow-up.
 ---
+
+author: @claude
+created: 2026-07-24 09:22
+---
+Review verdict: APPROVE
+
+Code target (immutable): 737eaa6b528843b9ed6d74e345862fe91a8f1aff
+Base: 9d273a8ce6e64e64039513723e289d7620487673 (master)
+Branch tip presented for merge: 703139c (task-only finalisation/handoff metadata; git diff 737eaa6..703139c touches only the task file, so no implementation file changed after the code target)
+
+Scope: docs/evidence only. git diff base..target = BENCHMARKS.md (+114) and this task file. The merge commit 737eaa6 introduces nothing else relative to master.
+
+Acceptance criteria (all proven):
+- AC#1 met: gen-002 passed its promote-on-improvement SPRT gate (+22.3 +/- 9.8, LLR crossed the upper bound) and is the embedded default evaluation, verified directly in code at base master: engine/src/nnue/embedded.rs BUILT_IN_NETWORK_ID = "gen-002" with engine/nets/default.sbnn baked via include_bytes!. The planned 8 iterations were reduced to 4 (gen 0-3) by explicit, recorded requester agreement on a measured plateau; the deliverable network exists and is default.
+- AC#2 met: per-generation strength recorded against the previous promoted best, plus an external absolute anchor of gen-002 vs the hand-crafted evaluation (~337 Elo over two independent 1000-game gauntlets, 334.1 +/- 24.4 and 339.6 +/- 25.9). The anchor's report.json archival gap (SPRT LLR degenerates to nan at an 87% score, so strength_test.py rejects the run) is honestly documented in BENCHMARKS.md and left as a follow-up rather than worked around.
+- AC#3 met: realised datagen throughput (~9.2M kept samples/h hand-crafted, ~23% slower under NNUE inference), training (~25 min, dataloader-bound), and gate cost (scales inversely with margin) recorded and compared against the pre-run calibration.
+
+Verification (run by reviewer on the branch; code state identical to target 737eaa6 since the only later commit touches the task md):
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (exit 0, no warnings)
+- cargo test --workspace: pass (clean run 426 engine-lib + all crates green). One flaky failure on a loaded run: search::tests::an_extendable_budget_is_still_bounded_by_its_hard_half, a wall-clock deadline-tolerance assertion (elapsed <= hard limit + 100ms); passed 5/5 in isolation. Pre-existing and timing-sensitive, not attributable to this docs-only diff.
+- BENCHMARKS.md figures independently reconciled: W-D-L sums, pentanomial pair counts, and Elo-from-score match on every table row; the two anchor runs agree at ~337 Elo.
+
+No hot-path benchmarks run: the diff touches no movegen/search code.
+No blocking findings.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Evidence deliverable of the NNUE self-play bootstrap programme; no engine code changed (diff base..target 737eaa6 is BENCHMARKS.md + this task file only). BENCHMARKS.md gains an 'NNUE self-play bootstrap programme' section: the per-generation gate curve (+263.2, +156.5, +22.3, then a rejected -17.3 that makes gen-002 final), the absolute anchor of gen-002 vs the hand-crafted evaluation (~337 Elo over two 1000-game runs), and realised datagen/training/gate costs vs the pre-run estimates. AC#1: gen-002 passed its promote-on-improvement SPRT gate and is the embedded default (verified in code: BUILT_IN_NETWORK_ID = "gen-002", engine/nets/default.sbnn), the 8-iteration plan reduced to 4 by recorded requester agreement on a measured plateau. AC#2: per-generation strength vs previous best plus the external hand-crafted anchor, with the anchor's report.json archival gap (nan SPRT LLR at 87% score) honestly documented as follow-up. AC#3: cost table and comparison recorded. Verified on target 737eaa6: cargo fmt --check pass, cargo clippy --workspace --all-targets --all-features -- -D warnings pass (exit 0, no warnings), cargo test --workspace pass (426 engine-lib tests green on a clean run; a single timing-sensitive search deadline test flaked once under concurrent load and passed 5/5 in isolation, not attributable to this docs-only diff). BENCHMARKS.md numbers verified internally consistent (W-D-L, pentanomial, and Elo arithmetic reconcile across all rows).
+<!-- SECTION:FINAL_SUMMARY:END -->
