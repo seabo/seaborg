@@ -89,11 +89,70 @@ what [`BENCHMARKS.md`](../../BENCHMARKS.md) and the strength harness require. Th
 loop resumes from the ledger: generation numbers continue past the highest it
 records.
 
+## Datagen campaign (building a corpus without training)
+
+`datagen_campaign.py` and `concat_samples.py` grow one large, reusable training
+corpus by running `seaborg datagen` many times and joining the results — no
+training, gate, or promotion. This is for producing data ahead of choosing a
+network: the packed format is architecture-agnostic (features are derived from
+the position at train time), so a corpus generated once is reusable across
+future feature sets and topologies and does not need regenerating when the
+architecture is chosen.
+
+The campaign runs many shards, each a self-contained `datagen --out` stream with
+a **distinct opening seed** (`base_seed + shard_index`) so diversification spans
+the whole corpus rather than replaying one opening book per shard. Shards are
+kept, not deleted, so the corpus is usable and the run extendable or resumable at
+any checkpoint. `concat_samples.py` then joins them **header-aware** — one stream
+header, then every shard's record body — because a raw `cat` would bury an
+8-byte header mid-stream at each boundary and shift the whole corpus out of
+alignment.
+
+The **per-move label budget is the decision that governs whether the corpus is
+good enough for a bigger network**: too low forces a full regeneration. It
+defaults to `--nodes 25000`, five times the bootstrap's 5000, so a larger future
+network can exploit deeper, quieter labels; it is kept a node budget (not a depth
+limit) to stay comparable to the bootstrap and reproducible under the existing
+throughput calibration. Everything else takes the bootstrap defaults
+(`--opening-plies 6`, `--filter-opening-plies 8`, the datagen adjudication
+defaults).
+
+**Purity** is preserved by construction: the only evaluator is the network named
+by `--network` playing seaborg against itself. No external engine, opening
+database, evaluation, or tablebase is ever an input. The manifest states this
+explicitly, and the network is named rather than inherited from the binary's
+embedded default so the labeller is unambiguous.
+
+Each run writes `corpus.manifest.json` beside the corpus, recording
+**provenance** for reproducibility: the labelling network's sha256 and id, the
+binary commit, and every generation parameter, plus a per-shard record of its
+seed and sample count.
+
+```sh
+# Smoke: a tiny corpus, then confirm the dataloader reads it back.
+python3 datagen_campaign.py --engine ../../target/release/seaborg \
+    --network default.sbnn --out-dir /tmp/corpus-smoke \
+    --games-per-shard 200 --shards 2 --workers 12 --source-dir ../..
+python3 -c "import sys; sys.path.insert(0, '../trainer'); import data; \
+    print(len(data.PackedData('/tmp/corpus-smoke/corpus.bin')), 'samples load')"
+
+# Full run: accumulate to a sample target on the idle rig.
+python3 datagen_campaign.py --engine ../../target/release/seaborg \
+    --network default.sbnn --network-generation 2 --out-dir corpus-gen-002 \
+    --target-samples 100000000 --source-dir ../..
+```
+
 ## Testing
 
 ```sh
 python3 -m unittest discover -p 'test_*.py'
 ```
+
+`test_concat_samples.py` checks that joining is byte-exact and header-aware, that
+a mismatched or truncated shard is rejected before any output is written, and
+that the joined corpus loads in the dataloader. `test_datagen_campaign.py` drives
+the chaining against a fake runner: distinct seed per shard, both stop bounds,
+abort-on-failure, and the provenance manifest.
 
 `test_loop.py` runs the loop against a fake backend in place of datagen, PyTorch,
 and FastChess, so it checks the generation-0 bootstrap, promote-only-on-`PASS`,

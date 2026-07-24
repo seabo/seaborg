@@ -2,3 +2,8 @@ __pycache__/
 # Run artifacts: networks, samples, checkpoints, strength reports, and the ledger
 # all live under a run's state directory, which is generated, not committed.
 state/
+# Datagen-campaign artifacts: sample shards, the joined corpus, its provenance
+# manifest, and per-shard logs are generated data, not source.
+*.bin
+corpus.manifest.json
+*.datagen.log
