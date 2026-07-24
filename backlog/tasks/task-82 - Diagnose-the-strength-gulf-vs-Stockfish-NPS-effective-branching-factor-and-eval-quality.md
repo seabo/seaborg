@@ -3,11 +3,11 @@ id: TASK-82
 title: >-
   Diagnose the strength gulf vs Stockfish: NPS, effective branching factor, and
   eval quality
-status: In Progress
+status: In Review
 assignee:
   - '@george'
 created_date: '2026-07-24 11:00'
-updated_date: '2026-07-24 21:45'
+updated_date: '2026-07-24 22:11'
 labels:
   - search
   - eval
@@ -71,4 +71,34 @@ Measurement campaign (local Apple M3 Pro, 12c; Stockfish 18 arm64; seaborg nativ
 - Selectivity/EBF: seaborg needs ~15x more nodes to reach depth 14 (374k vs 24k); at fixed 1500ms SF reaches median depth 22 vs seaborg 14 (8-ply gap). EBF 2.42 vs 2.00.
 - Eval agreement (500 gen'd positions, deep-SF depth-20 labels, 446 decisive): seaborg static Spearman 0.931 / winner-acc 0.946 vs SF static 0.954 / 0.975. Eval close but modestly behind.
 - Fixed-nodes gauntlet: at equal nodes SF wins ~100%; parity sweep underway to quantify the node ratio (early estimate ~40-50x).
+
+Final measurement summary (Apple M3 Pro, 12c; Stockfish 18 arm64; seaborg scalar-NNUE ARM release — NPS is a pessimistic bound, node/eval axes exact):
+- NPS ~comparable (seaborg 642k agg vs SF 727k). Speed is not the bottleneck.
+- Selectivity dominant: ~15x nodes to reach depth 14 (374k vs 24k); 8 plies shallower at 1500ms (median 14 vs 22); ~40-50x nodes for parity strength (seaborg 100k ~= SF ~2-2.5k).
+- Eval near-parity: static-eval Spearman 0.931 vs 0.954 (winner-acc 94.6% vs 97.5%) over 500 deep-labelled positions.
+- Head-to-head floors: equal-nodes 0/20 and equal-time 0/40 (both ~100% loss); identical whether budget is nodes or time confirms NPS contributes nothing. Fixed-TIME parity sweep intentionally not reported: SF parity budget is single-digit ms, dominated by move-overhead + shared-host jitter (spurious 92% at one rung).
+Recommendation: invest in search selectivity (reductions/pruning/extensions/ordering), not a larger NNUE. Report + tables + methodology in BENCHMARKS.md; tooling in tools/diag/.
+Engine change: search-free 'eval' UCI command (staticeval cp <v>) reusing the search leaf evaluator. No hot-path change.
+Note: brew-installed Stockfish 18 locally as the reference (system change, benign).
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @george
+created: 2026-07-24 22:11
+---
+Implementation handoff
+Branch: task-82-diagnose-strength-gulf-vs-stockfish
+Worktree: /Users/seabo/seaborg-worktrees/task-82-diagnose-strength-gulf-vs-stockfish
+Base: b2f945778c1ea3a02018c91d00ab4e5923f7d450
+Implementation target: 8f83bdc715b8d3697e864e419bd2186c322eedff
+Resolved findings: none (initial implementation)
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean)
+- cargo test --workspace: pass (428 engine lib tests + workspace; new tests uci::parses_eval and search::static_eval_reports_the_hand_crafted_leaf_from_the_side_to_moves_view pass)
+Known failures: none. During an early full-suite run under heavy machine load, the pre-existing timing test search::tests::an_extendable_budget_is_still_bounded_by_its_hard_half flaked once (ran 202ms vs 60ms hard limit); it passes in isolation and in the final full run. This task makes no time-management change, so it is not implicated.
+Notes for reviewer: measured on Apple M3 Pro (ARM), so AC#1's literal AVX2 build does not apply; seaborg runs scalar NNUE on ARM (no NEON path), which understates its speed vs its x86 AVX2 deployment. This is documented in BENCHMARKS.md and only strengthens the 'speed is not the bottleneck' finding. The node-based selectivity and eval-agreement axes are ISA-independent and exact.
+---
+<!-- COMMENTS:END -->
