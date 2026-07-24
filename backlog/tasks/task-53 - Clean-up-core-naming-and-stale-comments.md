@@ -1,11 +1,11 @@
 ---
 id: TASK-53
 title: Clean up core naming and stale comments
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-18 19:38'
-updated_date: '2026-07-24 15:09'
+updated_date: '2026-07-24 15:20'
 labels: []
 dependencies:
   - TASK-48
