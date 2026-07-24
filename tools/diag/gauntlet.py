@@ -26,13 +26,17 @@ import subprocess
 
 
 def build_cmd(args) -> list[str]:
+    # seaborg is single-threaded and exposes no `Threads` option, so `Threads=1`
+    # is set only on Stockfish (which would otherwise default to many threads);
+    # `Hash` is understood by both. Limits are per-engine so the two sides can
+    # run at independent node/time budgets.
     cmd = [
         args.fastchess,
         "-engine", "name=seaborg", f"cmd={args.seaborg}", "proto=uci",
         *args.seaborg_limit.split(),
         "-engine", "name=stockfish", f"cmd={args.stockfish}", "proto=uci",
-        *args.sf_limit.split(),
-        "-each", "restart=on", "option.Threads=1", f"option.Hash={args.hash}",
+        "option.Threads=1", *args.sf_limit.split(),
+        "-each", "restart=on", f"option.Hash={args.hash}",
         "-rounds", str(args.games // 2), "-games", "2", "-repeat", "2",
         "-concurrency", str(args.concurrency),
         "-openings", f"file={args.openings}", "format=epd", "order=random",
@@ -43,16 +47,30 @@ def build_cmd(args) -> list[str]:
     return cmd
 
 
+def _num(token: str) -> float:
+    if "inf" in token:
+        return float("-inf") if token.startswith("-") else float("inf")
+    return float(token)
+
+
 def parse_result(text: str):
-    elo = elo_err = None
-    m = re.search(r"Elo(?: difference)?:?\s*(-?\d+(?:\.\d+)?)\s*\+/-\s*(\d+(?:\.\d+)?)", text)
+    """Parse fastchess's end-of-match summary block."""
+    elo = elo_err = points_pct = None
+    wld = penta = None
+    m = re.search(r"Elo:\s*(-?[\d.]+|-?inf)\s*\+/-\s*([\d.]+|nan)", text)
     if m:
-        elo, elo_err = float(m.group(1)), float(m.group(2))
-    wld = None
-    m = re.search(r"Score of .*?:\s*(\d+)\s*-\s*(\d+)\s*-\s*(\d+)", text)
+        elo = _num(m.group(1))
+        elo_err = float("nan") if m.group(2) == "nan" else float(m.group(2))
+    m = re.search(r"Games:\s*(\d+),\s*Wins:\s*(\d+),\s*Losses:\s*(\d+),\s*Draws:\s*(\d+)", text)
     if m:
-        wld = tuple(int(m.group(i)) for i in (1, 2, 3))
-    return elo, elo_err, wld
+        wld = (int(m.group(2)), int(m.group(3)), int(m.group(4)))
+    m = re.search(r"Points:\s*[\d.]+\s*\(([\d.]+)\s*%\)", text)
+    if m:
+        points_pct = float(m.group(1))
+    m = re.search(r"Ptnml\(0-2\):\s*\[(\d+),\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\]", text)
+    if m:
+        penta = tuple(int(m.group(i)) for i in range(1, 6))
+    return elo, elo_err, wld, points_pct, penta
 
 
 def main() -> None:
@@ -67,21 +85,44 @@ def main() -> None:
     ap.add_argument("--hash", type=int, default=64)
     ap.add_argument("--openings", required=True)
     ap.add_argument("--pgnout", default=None)
+    ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
     cmd = build_cmd(args)
     print("running:", " ".join(cmd), flush=True)
     proc = subprocess.run(cmd, capture_output=True, text=True)
     out = proc.stdout + proc.stderr
-    elo, err, wld = parse_result(out)
-    print(out[-2000:])
+    elo, err, wld, pct, penta = parse_result(out)
+    print(out[-1200:])
     print("\n=== parsed ===")
     print(f"seaborg limit: {args.seaborg_limit}   sf limit: {args.sf_limit}")
     if wld:
         w, l, d = wld
         print(f"W-L-D (seaborg): {w}-{l}-{d}  ({w + l + d} games)")
+    if pct is not None:
+        print(f"seaborg score: {pct:.2f}%")
+    if penta is not None:
+        print(f"Ptnml(0-2): {penta}")
     if elo is not None:
         print(f"Elo (seaborg - stockfish): {elo:+.1f} +/- {err:.1f}")
+
+    if args.out:
+        import json
+        with open(args.out, "w", encoding="utf-8") as fh:
+            json.dump(
+                {
+                    "seaborg_limit": args.seaborg_limit,
+                    "sf_limit": args.sf_limit,
+                    "games": args.games,
+                    "wld": wld,
+                    "score_pct": pct,
+                    "pentanomial": penta,
+                    "elo": None if elo is None else (elo if elo not in (float("inf"), float("-inf")) else str(elo)),
+                    "elo_err": None if err is None else (err if err == err else "nan"),
+                },
+                fh,
+                indent=2,
+            )
 
 
 if __name__ == "__main__":
