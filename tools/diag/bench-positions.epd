@@ -1,0 +1,32 @@
+# Fixed single-core benchmark suite for the strength-diagnostic (TASK-82).
+#
+# A phase-balanced spread of positions so NPS / effective-branching-factor
+# figures are not skewed toward one game phase (tactical middlegames search
+# very differently from quiet endgames). Lines beginning with '#' and blank
+# lines are ignored. Each position is a bare FEN (six fields); anything after
+# the FEN on the line is ignored, so plain EPD with operations also parses.
+#
+# Openings / early middlegame
+rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1 ; startpos
+r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1 ; kiwipete
+rnbqkb1r/pp2pppp/3p1n2/8/3NP3/2N5/PPP2PPP/R1BQKB1R w KQkq - 0 6 ; open sicilian
+r1bqkbnr/pp1ppppp/2n5/2p5/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3 ; open game
+rnbqkb1r/ppp1pp1p/5np1/3p4/2PP4/2N2N2/PP2PPPP/R1BQKB1R w KQkq - 0 5 ; gruenfeld
+# Middlegame
+r2q1rk1/1b1nbppp/p2ppn2/1p6/3NP3/1BN1B3/PPP1QPPP/R4RK1 w - - 0 12 ; najdorf mg
+2rq1rk1/pp1bppbp/2np1np1/8/2BNP3/2N1BP2/PPPQ2PP/2KR3R w - - 0 11 ; dragon mg
+r1bq1rk1/pp2ppbp/2np1np1/8/2PNP3/2N1B3/PP2BPPP/R2Q1RK1 b - - 0 9 ; maroczy
+1r1q1rk1/1b1nbppp/p2p1n2/1pp1p3/4P3/1BPP1N1P/PP1N1PP1/R1BQR1K1 w - - 0 14 ; ruy closed
+3r1rk1/pp1q1ppp/2p2n2/3p4/3P4/2P1PN2/PP3PPP/R2QR1K1 w - - 0 15 ; carlsbad
+r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P3/2NP1N2/PPP2PPP/R2Q1RK1 w - - 0 10 ; italian mg
+2kr3r/ppp1qppp/2n1bn2/1B2p3/4P3/2N2N2/PPP1QPPP/2KR3R w - - 0 11 ; opposite castle
+# Late middlegame / heavy pieces
+3rr1k1/pp3ppp/2p5/2b5/2P1n3/1P2P3/PB1NQPPP/3RR1K1 w - - 0 20 ; two rooks
+r4rk1/1bqnbppp/pp2p3/3pP3/3N4/1BN5/PPP1QPPP/2KR3R w - - 0 15 ; iqp attack
+# Endgames
+8/2k5/2p5/2P5/2K5/8/8/8 w - - 0 1 ; kp vs k
+8/5ppp/8/8/8/8/5PPP/6K1 w - - 0 1 ; k+3v3 kingside
+8/8/4kpp1/3p1n2/p6P/P1r3P1/1R3PK1/8 b - - 0 1 ; r+n endgame
+8/2p2kpp/8/2P5/1P6/4K3/6PP/8 w - - 0 1 ; pawn endgame
+6k1/5ppp/8/8/8/1BbN4/5PPP/6K1 w - - 0 1 ; minor endgame
+8/1R6/8/5k2/8/6r1/4K3/8 w - - 0 1 ; rook endgame
