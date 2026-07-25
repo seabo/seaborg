@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@george'
 created_date: '2026-07-24 10:34'
-updated_date: '2026-07-24 11:17'
+updated_date: '2026-07-25 11:19'
 labels: []
 dependencies: []
 ordinal: 136000
@@ -57,4 +57,43 @@ Unit tests added: contraction waits for onset then decreases monotonically; neve
 Checks: cargo fmt --check clean; cargo clippy -D warnings clean; cargo test -p engine --lib 430 passed under heavy parallel load. One env-timing flake in an_extendable_budget_is_still_bounded_by_its_hard_half under full-workspace load (search thread descheduled past the 60ms hard deadline); passes in isolation and at base; provably diff-independent (extending position => scale>=1.0 => deadline() byte-identical to base). Final clean workspace run to be taken after SPRT (idle machine).
 
 AC#5 SPRT: baseline=b2f9457, candidate=5272383, both target-cpu=native release locked. Sudden-death regime (tc=10+0, concurrency 4, max 4000) running now; incremented (tc=8+0.08) to follow. Attribution to be recorded in BENCHMARKS.md.
+
+MEASUREMENT PIVOT (with user): equal-speed self-play cannot surface the flagging benefit (the loss happens vs a faster field), and the mandated harness fail-closes on ANY time forfeit as an infrastructure error (docs lines 118-121; forfeit-counting is a reserved-but-unbuilt mode). So the no-increment flagging regime is unmeasurable with the harness as-built. Per user decision, dropped the no-increment Elo claim; validating via (a) direct mechanism evidence and (b) an incremented no-regression gate.
+
+BUG FOUND + FIXED (commit e6b8117): the first cut (5272383) barely engaged. stability_scale entangled extension and contraction — any positive score_drop pushed scale>1 and short-circuited past the contraction branch. A genuinely flat search wobbles a few cp between iterations, so ~half the iterations of every flat position read the wobble as a 'fall' and vetoed contraction. Aggregate over 2699 self-play games showed candidate vs baseline mean move-time 99.3 vs 99.4ms (no effect); per-move A/B on a dead-drawn KP endgame showed candidate spent the FULL budget to the same depth as baseline. Fix: make the two directions mutually exclusive on the settled streak the caller already maintains (contract iff stable_iterations>0, else extend exactly as before). A sub-margin wobble is the flat case, not a fall.
+
+MECHANISM EVIDENCE (fixed candidate, controlled per-move A/B, go wtime 40000 movestogo 20): dead-drawn KP endgame 8/5pk1/6p1/4P1P1/5PK1/8/8/8 -> baseline 24 plies/2691ms vs candidate 23 plies/494ms (-82% time, banking the rest of the clock). Sharp tactical positions do not contract (extend as before). Contraction scales with search depth x settledness, concentrating on deep dead-flat searches = the drawish-endgame archetype of the motivating loss. Deterministic unit tests cover onset gating, monotone contraction, floor, and the settled/unsettled branch invariant.
+
+Non-regression gate: incremented tc=10+0.1 SPRT (elo0=-5 elo1=0), baseline b2f9457 vs candidate e6b8117, running now.
+
+FINAL STATE — implementation target be78d54 (base b2f9457).
+
+Reviewer context on acceptance criteria:
+- AC#1/AC#3/AC#4: satisfied by stability_scale + SoftLimit::deadline. Contraction below 1.0 only when root move held AND |inter-iteration score delta| <= STABILITY_FLAT_MARGIN across consecutive iterations; floored at MIN_STABILITY_SCALE=0.5; hard/maximum deadline, guaranteed first ply, and legal-bestmove path untouched; derived only from root-move stability + inter-iteration score delta (no node-fraction, no cross-move memory).
+- AC#2 nuance to check deliberately: the extension direction is byte-identical for genuinely unstable iterations (changed root move, or a score fall beyond the flat margin). ONE intended behavioural change: a settled iteration (move held, score within the +/-8cp flat margin) no longer buys the trivial <=8/150 'score_drop' extension it did before — it is now treated as flat and eligible to contract. This is required: without it, ordinary sub-margin eval wobble vetoes contraction on ~half the iterations of every flat position (that was the first-cut bug, fixed in e6b8117). So 'unstable extends exactly as today' holds for real instability; sub-margin drifts are reclassified as flat by design.
+- AC#5: PARTIAL by explicit maintainer decision. Round-robin SPRT structurally cannot measure this change's benefit (equal-speed self-play removes the fast-field flagging asymmetry; the harness fails closed on any time-forfeit, so the no-increment regime cannot be scored). Recorded in BENCHMARKS.md as mechanism-based + non-regression. Mechanism: dead-drawn KP endgame 8/5pk1/6p1/4P1P1/5PK1/8/8/8, go wtime 40000 movestogo 20 -> baseline 24 plies/2691ms vs candidate 23 plies/494ms (-82%, banks the clock); sharp positions still extend. Non-regression gate (tc=10+0.1, elo0=-5 elo1=0): environment-limited; session teardowns repeatedly reaped the match; partial windows (2409 games @ 0.4952 ~-3 Elo; 457 games @ 0.5066 ~+5 Elo; 0 forfeits) agree near-neutral, no trend toward regression. No single window reached a boundary or the cap. Merged as low-risk mechanism-sound per maintainer decision.
+- AC#6: cargo fmt --check clean; cargo clippy --workspace --all-targets --all-features -D warnings clean; cargo test --workspace all pass (engine lib 430 + 57+157+19+6+1... ; 0 failed).
+
+Binaries used for measurement (outside repo): /Users/seabo/seaborg-builds/seaborg-task80-{baseline,candidate}. Candidate = e6b8117 code (identical to be78d54 minus the BENCHMARKS/task-file commit).
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @george
+created: 2026-07-25 11:19
+---
+Implementation handoff
+Branch: task-80-symmetric-stability-scaling
+Worktree: /Users/seabo/seaborg-worktrees/task-80-symmetric-stability-scaling
+Base: b2f9457
+Implementation target: be78d54
+Resolved findings: none
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass
+- cargo test --workspace: pass (engine lib 430; all other binaries pass; 0 failed)
+Known failures: none. (A pre-existing wall-clock test, an_extendable_budget_is_still_bounded_by_its_hard_half, can flake under extreme full-workspace CPU load when the search thread is descheduled past its hard deadline; it passed in the final clean run and is diff-independent — the change only alters scale<1 behaviour, and that test uses an extending scale>=1 position where SoftLimit::deadline is byte-identical to base.)
+AC#5 measurement is partial by explicit maintainer decision (mechanism + non-regression); see implementation notes and BENCHMARKS.md for why the SPRT cannot score this change and the evidence gathered.
+---
+<!-- COMMENTS:END -->
