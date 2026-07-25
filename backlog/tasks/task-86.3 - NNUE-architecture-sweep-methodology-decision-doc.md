@@ -1,11 +1,11 @@
 ---
 id: TASK-86.3
 title: NNUE architecture-sweep methodology (decision doc)
-status: In Review
+status: Ready to Merge
 assignee:
   - '@george'
 created_date: '2026-07-25 12:23'
-updated_date: '2026-07-25 18:35'
+updated_date: '2026-07-25 21:41'
 labels:
   - design
 dependencies:
@@ -23,10 +23,10 @@ Before training many candidate architectures on the fixed corpus (TASK-81), pin 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A decision document under docs/ specifies the by-game (not by-position) train/validation split protocol and the rationale (position correlation within a game)
-- [ ] #2 It specifies the quality axis as post-QAT quantized validation loss with lambda, loss function, and training budget held fixed across candidates, and the cost axis as realized in-engine single-thread bench NPS via the incremental accumulator path
-- [ ] #3 It specifies the screen (loss/NPS frontier) -> finalists -> fixed-time-control SPRT decision funnel, and states why static loss cannot be the final arbiter (eval quality changes the search tree)
-- [ ] #4 It defines how to interpret frontier flattening as label-limited vs capacity-limited and what that implies for the next investment
+- [x] #1 A decision document under docs/ specifies the by-game (not by-position) train/validation split protocol and the rationale (position correlation within a game)
+- [x] #2 It specifies the quality axis as post-QAT quantized validation loss with lambda, loss function, and training budget held fixed across candidates, and the cost axis as realized in-engine single-thread bench NPS via the incremental accumulator path
+- [x] #3 It specifies the screen (loss/NPS frontier) -> finalists -> fixed-time-control SPRT decision funnel, and states why static loss cannot be the final arbiter (eval quality changes the search tree)
+- [x] #4 It defines how to interpret frontier flattening as label-limited vs capacity-limited and what that implies for the next investment
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -72,4 +72,39 @@ Verification:
 - cargo test --workspace: pass (all suites ok)
 Known failures: none
 ---
+
+author: @george
+created: 2026-07-25 21:41
+---
+Review attempt: 1
+Reviewed branch: task-86.3-nnue-sweep-methodology
+Reviewed implementation: 207fdb0ef4e2a2093cdb8208c4d7d5dec1f29bde
+Verdict: approved
+
+All four acceptance criteria proven by the delivered decision record (docs/nnue-architecture-sweep.md):
+- AC#1 met: "The validation split must be by game, not by position" states the by-game/by-shard holdout decision and the intra-game position-correlation -> leakage rationale, including that it compresses the candidate gap the screen depends on.
+- AC#2 met: "Quality axis" fixes post-QAT quantized validation loss with loss fn (MSE win-prob), lambda (0.3), training budget (epochs/lr/batch/optimizer/seed), and corpus held fixed; "Cost axis" fixes realized in-engine single-thread bench NPS via the incremental accumulator path, explicitly not a from-scratch forward-pass microbenchmark.
+- AC#3 met: "The decision funnel" gives screen (loss/NPS Pareto frontier) -> finalists -> fixed-TC SPRT; "Why static loss cannot be the final arbiter" leads with eval-quality-changes-the-search-tree, plus clock-absent-from-loss and self-referential-labels.
+- AC#4 met: "Reading the frontier" distinguishes label-limited vs capacity-limited and prescribes a single controlled retrain (fixed architecture on a higher-node-budget corpus) to tell them apart, with the implied next lever (better labels/datagen node budget vs more/efficient parameters).
+
+Factual claims cross-checked against the repo and confirmed accurate:
+- train.py: order = rng.permutation(len(data)); val_idx = order[:val_size] is a random by-position split (train.py:160).
+- engine/src/selfplay/format.rs: 32-byte record (position, search score, outcome), no game id; FORMAT_VERSION reserved for a bump.
+- nnue-design-contract.md: QB=64, lambda default 0.3, MSE in win-probability space, SBNN format, quantization-aware training default; CReLU/SCReLU and deferred HalfKA king buckets.
+Referenced docs (nnue-design-contract.md, strength-testing.md) exist. No bare task-ID/AC/finding-ID citations in the doc.
+
+Immutability: target 207fdb0 is an ancestor of branch tip b98fd2d; the only later commit is task-file handoff metadata; base(cfdac4d)..target diff is scoped to docs/nnue-architecture-sweep.md and the task file.
+
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean (no warnings)
+- cargo test --workspace: pass (all suites; doc-tests ok)
+- Docs-only change (no movegen/search hot path touched): speed benchmarks not applicable
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Adds docs/nnue-architecture-sweep.md, a decision record fixing the NNUE architecture-sweep methodology (companion to nnue-design-contract.md). It pins: the governing objective (realized fixed-TC Elo, not loss or NPS); a by-game/by-shard validation split with the intra-game-correlation rationale (AC#1); the quality axis as post-QAT quantized validation loss with loss fn, lambda, training budget, and corpus held fixed, and the cost axis as realized in-engine single-thread bench NPS via the incremental accumulator (AC#2); the screen->Pareto-frontier->fixed-TC-SPRT funnel with three reasons static loss cannot be the final arbiter, eval-changes-the-search-tree first (AC#3); and the label-limited vs capacity-limited reading of frontier flattening with a concrete controlled-retrain test and its implied next investment (AC#4). Docs-only; no Rust changed. Verified: all code/doc claims cross-checked against the repo (train.py:160 random by-position split; format.rs 32-byte record with no game id and a reserved version field; nnue-design-contract QB=64, lambda=0.3, MSE win-prob, SBNN, QAT default). cargo fmt --check pass; cargo clippy --workspace --all-targets --all-features -- -D warnings clean; cargo test --workspace pass.
+<!-- SECTION:FINAL_SUMMARY:END -->
