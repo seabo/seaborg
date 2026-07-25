@@ -1,11 +1,11 @@
 ---
 id: TASK-86.3
 title: NNUE architecture-sweep methodology (decision doc)
-status: In Progress
+status: In Review
 assignee:
   - '@george'
 created_date: '2026-07-25 12:23'
-updated_date: '2026-07-25 18:29'
+updated_date: '2026-07-25 18:35'
 labels:
   - design
 dependencies:
@@ -39,3 +39,37 @@ Before training many candidate architectures on the fixed corpus (TASK-81), pin 
 5. AC#4: reading frontier flattening as label-limited vs capacity-limited and the implied next investment (better labels / datagen node budget vs more parameters).
 6. Run required checks (fmt/clippy/test — docs-only, unaffected) and hand off.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Added docs/nnue-architecture-sweep.md, a decision record fixing the sweep methodology (modeled on docs/nnue-design-contract.md).
+
+AC coverage:
+- #1 by-game (not by-position) split + rationale (intra-game position correlation -> leakage). Notes the current trainer splits by random position (tools/trainer/train.py) and the packed format carries no game id (engine/src/selfplay/format.rs); specifies a concrete whole-game/shard holdout with a format-bump option for finer grain.
+- #2 quality axis = post-QAT quantized validation loss with loss fn, lambda, and training budget held fixed; cost axis = realized in-engine single-thread bench NPS via the incremental accumulator path (not a standalone forward-pass microbenchmark).
+- #3 screen (loss/NPS Pareto frontier) -> finalists -> fixed-TC SPRT funnel; three reasons static loss cannot be the final arbiter (eval changes the search tree; clock absent from loss; labels self-referential).
+- #4 frontier flattening read as label-limited vs capacity-limited, with a concrete controlled-retrain test and the implied next investment (datagen node budget vs more/efficient parameters).
+
+Docs-only change; no Rust touched. Dependency TASK-86.1 (incremental accumulator) is referenced as the cost-axis path but is not required to write the methodology.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @george
+created: 2026-07-25 18:35
+---
+Implementation handoff
+Branch: task-86.3-nnue-sweep-methodology
+Worktree: /Users/seabo/seaborg-worktrees/task-86.3-nnue-sweep-methodology
+Base: cfdac4d649599c9c5f117ada9b39dbc30110a875
+Implementation target: 207fdb0ef4e2a2093cdb8208c4d7d5dec1f29bde
+Resolved findings: none
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (no warnings)
+- cargo test --workspace: pass (all suites ok)
+Known failures: none
+---
+<!-- COMMENTS:END -->
