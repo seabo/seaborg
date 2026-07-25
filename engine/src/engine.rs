@@ -250,6 +250,15 @@ where
                 }
                 search_engine.new_game();
             }
+            DriverEvent::Input(Ok(Input::Command(Command::Eval))) => {
+                // The static evaluation is a property of the evaluator the engine currently holds,
+                // which lives on the search engine, so it is answered here rather than in the
+                // position-only command handler. No search runs: the leaf value is reported for the
+                // current position exactly as the search would compute it, from the side to move's
+                // perspective with a positive score favouring the side to move.
+                let cp = search_engine.static_eval(&pos);
+                let _ = writeln!(output, "staticeval cp {cp}");
+            }
             DriverEvent::Input(Ok(Input::Command(command))) => {
                 handle_command(&info, command, &config, &mut pos, &mut output, &mut errors);
             }
@@ -387,11 +396,14 @@ fn handle_command<W: Write, E: Write>(
         Command::Config => {
             let _ = writeln!(output, "{config}");
         }
+        // `Eval` is intercepted by the driver loop, which holds the evaluator; the others are handled
+        // there because they act on the search engine rather than the position alone.
         Command::UciNewGame
         | Command::SetOption(_)
         | Command::Go(_)
         | Command::Stop
-        | Command::Quit => {}
+        | Command::Quit
+        | Command::Eval => {}
     }
 }
 

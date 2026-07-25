@@ -981,6 +981,35 @@ impl SearchEngine {
         self.network = network;
     }
 
+    /// The static evaluation of `pos` produced by exactly the evaluator a search would use — the
+    /// selected NNUE forward pass, or the hand-crafted tapered evaluation when no network is set.
+    ///
+    /// This is the search leaf value with no search performed: it lets one position's evaluation be
+    /// inspected in isolation, independent of tree shape, so the evaluation function can be measured
+    /// apart from the search that normally consumes it. The sign convention matches the search leaf
+    /// value in [`Search::evaluate`]: the score is from the side to move's perspective, with a
+    /// positive value favouring the side to move.
+    pub fn static_eval(&self, pos: &Position) -> i16 {
+        match self.network.as_deref() {
+            // The forward pass already returns the score from the side to move's perspective, so it
+            // takes no perspective flip; the accumulator is rebuilt from the position here rather
+            // than maintained incrementally. This mirrors the network branch of `Search::evaluate`.
+            Some(network) => {
+                let accumulator = Accumulator::from_position(network, pos);
+                nnue::forward(network, &accumulator, pos.turn()) as i16
+            }
+            // The hand-crafted evaluation is from White's perspective, so it is flipped to the side
+            // to move to match the network branch's convention.
+            None => {
+                let pov = match pos.turn() {
+                    Player::WHITE => 1,
+                    Player::BLACK => -1,
+                };
+                pos.static_eval() * pov
+            }
+        }
+    }
+
     /// Invalidate the shared hash at an explicit administrative boundary.
     ///
     /// The ownership boundary is enforced rather than merely documented. [`Table::clear`] needs an

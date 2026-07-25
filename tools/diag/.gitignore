@@ -1,0 +1,10 @@
+# Python bytecode cache
+__pycache__/
+*.pyc
+# fastchess writes its runtime config/state here when run from this directory
+config.json
+# Local measurement outputs
+*.json
+*.pgn
+*.fen
+*.log
