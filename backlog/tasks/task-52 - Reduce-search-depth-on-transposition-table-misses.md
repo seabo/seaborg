@@ -1,9 +1,11 @@
 ---
 id: TASK-52
 title: Reduce search depth on transposition-table misses
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@george'
 created_date: '2026-07-18 18:45'
+updated_date: '2026-07-25 18:30'
 labels: []
 dependencies:
   - TASK-51
@@ -39,3 +41,17 @@ TODO sites: engine/src/search.rs:604, :610.
 - [ ] #4 Measured with the TASK-27 strength-regression script showing no strength loss, with results recorded in the implementation notes
 - [ ] #5 The step 11 and step 13 TODO markers are replaced by implementations, with the numbered step comments retained
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Make search_inner's depth parameter mutable.
+2. Add IIR constants (IIR_PV_REDUCTION=3, IIR_NON_PV_REDUCTION=2, IIR_NON_PV_MIN_DEPTH=7) near the other search constants.
+3. In Step 3's TT-probe match, track a tt_collision flag set only in the collision-guard branch, so IIR can distinguish a genuine miss/moveless entry from a Zobrist-collision rejection (AC#3, TASK-12 semantics).
+4. Replace Step 11 TODO: PV node with no genuine TT move -> depth = (depth - 3).max(1). Floor at 1 because Step 5's quiescence handover is already behind us.
+5. Replace Step 13 TODO: non-PV node, depth>=7, no genuine TT move -> depth -= 2.
+6. Add iir_disabled test hook field + iir_enabled() gate, matching the rfp/lmr toggle convention.
+7. Retain all numbered step comments; write reader-facing rationale.
+8. Tests: IIR reduces the tree when it fires (PV and non-PV); IIR does not fire when a TT move is present; genuine-miss vs collision semantics covered by structure. Run fmt/clippy/test.
+9. AC#4: run the TASK-27 strength-regression script; record results in notes.
+<!-- SECTION:PLAN:END -->
