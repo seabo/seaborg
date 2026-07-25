@@ -3,11 +3,11 @@ id: TASK-81
 title: >-
   Generate an expanded self-play training corpus with gen-002 for the next NNUE
   architecture
-status: In Review
+status: Needs Human
 assignee:
   - '@claude'
 created_date: '2026-07-24 10:56'
-updated_date: '2026-07-24 11:18'
+updated_date: '2026-07-25 12:29'
 labels:
   - nnue
   - datagen
@@ -104,5 +104,30 @@ Verification:
 Known failures: search::tests::an_extendable_budget_is_still_bounded_by_its_hard_half — a wall-clock deadline-tolerance assertion (elapsed <= 60ms hard limit) that overran to 314-364ms under the parallel load of 'cargo test --workspace'. Passes 5/5 in isolation (~0.11s). This is the pre-existing timing flake documented by the TASK-69.11 and TASK-69.12 reviewers. This task's diff (git diff b2f9457..7ee02fd) is Python + docs + task file only — ZERO .rs files, so the engine binary is byte-identical to master and the test behaves identically at base; it reproduced twice here on Rust-identical-to-base code.
 
 Scope note for the reviewer: this is primarily a rig execution/campaign task. The committed code is deliberately minimal (Scope: 'add only the minimal binary flags or scripting'): (a) the higher label budget needed no new flag — datagen --nodes is already an uncapped u64; (b) accumulation is tools/rl/concat_samples.py (header-aware shard join) plus tools/rl/datagen_campaign.py (chain shards with distinct opening seeds + provenance manifest). The full 100M-sample corpus (AC#1) is generating on the idle rig now (~2.7 days, ~19 shards); it is incremental and usable/extendable at any checkpoint. Decision, provenance, purity, and the launched-run details are in the implementation notes; the campaign log is ~/rl/corpus-gen-002.log on the rig and the manifest (~/rl/corpus-gen-002/corpus.manifest.json) is written on completion.
+---
+
+author: @claude
+created: 2026-07-25 12:29
+---
+Independent review — verdict: Needs Human (unavailable authority to verify execution deliverables)
+
+Target: 7ee02fd4c09b939427d1fbd492199620b7592aa6 (immutable; base b2f945778c1ea3a02018c91d00ab4e5923f7d450 = master merge-base). Branch tip e5a596e adds only the handoff/task-file metadata commit above the target (git diff 7ee02fd..HEAD = task .md only). git diff b2f9457..7ee02fd touches only tools/rl/ + the task file; ZERO .rs/engine/Cargo changes, so the engine is byte-identical to master.
+
+VERIFIED (objective evidence, in this worktree):
+- Repo-required checks on the target: cargo fmt --check pass; cargo clippy --workspace --all-targets --all-features -- -D warnings = 0 warnings (exit 0); cargo test --workspace = 0 failed. The TASK-69.11/69.12 wall-clock timing flake did not recur this run. Clippy conformance is not load-bearing here (no .rs changed => identical to master), so a clean-CARGO_TARGET_DIR rerun is unnecessary.
+- No #[allow] introduced (no .rs changes). No movegen/search hot-path change => no perft/movegen benchmark needed.
+- Python tooling: 31 tests pass, 1 skipped (dataloader round-trip, NumPy absent on this host). Format compatibility independently confirmed: concat_samples.py's header (SBRG magic, u16 version, u16 record_size, 8-byte header) and 32-byte records match BOTH the Rust writer (engine/src/selfplay/format.rs: MAGIC=SBRG, FORMAT_VERSION=1, HEADER=8, RECORD=32) and the dataloader (tools/trainer/data.py) exactly. concat is header-aware and validates every shard before writing; campaign uses distinct per-shard seed (base_seed+index), two stop bounds, abort-on-failure keeping prior shards, and a provenance manifest. Every datagen flag the campaign emits (--network/--nodes/--games/--workers/--opening-seed/--opening-plies/--filter-opening-plies/--out) exists in src/datagen.rs with matching names; the adjudication defaults it relies on (resign 1000/4, draw 8/8/min40) match the clap defaults.
+- AC#2 PROVEN: label budget = 25000 nodes/move, 5x the bootstrap's 5000 (bootstrap value confirmed from src/datagen.rs default_value_t = 5_000 and TASK-69.12). Deliberately chosen and recorded in code default, tools/rl/README.md, and implementation notes; strictly higher than the bootstrap.
+- AC#3 documentation PROVEN and enforced by construction: labeller named explicitly via --network (never the binary's embedded default); manifest + README + module docs state no external engine/opening-book/eval/tablebase is an input. Labeller identity corroborated: implementation-note sha256 f076dc4674eedd4295f4ef3ca999404cfb1b6c39fa2d4493029113df38addfd5 matches the committed engine/nets/default.sbnn byte-for-byte.
+
+BLOCKER (why not Approve): AC#1, AC#4 (as-written manifest), and AC#5 are execution deliverables that live only on the rig (~/rl/corpus-gen-002/, git-ignored by design) and are NOT in the immutable diff. This review environment cannot reach the rig: ssh seabo@rig and ssh to 150.230.189.173:22 both time out (Operation timed out). I therefore have no objective evidence that (AC#1) a corpus was actually generated, (AC#5) the 53,407-sample smoke corpus loaded via tools/trainer/data.py, or (AC#4) the corpus.manifest.json was written with the claimed provenance. Additionally, the expanded ~100M-sample run was launched 2026-07-24 with a ~2.7-day ETA (≈2026-07-27) and the manifest is written only on completion, so the task's primary deliverable is still mid-flight and its final manifest does not yet exist.
+
+This is not an in-scope code defect (the committed tooling is correct and green), so Changes Requested does not apply; and objective evidence does not prove every AC, so Approve does not apply.
+
+DECISION NEEDED FROM A HUMAN (with rig access):
+1. On the rig, confirm AC#5: tools/trainer/data.py PackedData loads ~/rl/corpus-gen-002/corpus.bin (or the smoke corpus) with a matching record count.
+2. Confirm AC#1 + AC#4: corpus.bin and corpus.manifest.json exist and the manifest records the labeller sha256/id (=f076dc46…), binary commit (7ee02fd), and generation params.
+3. Decide whether the smoke corpus satisfies AC#1's literal wording now, or whether approval should wait for the ~100M expanded run (the task's stated purpose) to finish and write its final manifest.
+Then either re-run $review with that evidence in hand, or approve out-of-band.
 ---
 <!-- COMMENTS:END -->
