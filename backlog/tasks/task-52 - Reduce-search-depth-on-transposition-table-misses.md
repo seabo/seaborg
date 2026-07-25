@@ -1,11 +1,11 @@
 ---
 id: TASK-52
 title: Reduce search depth on transposition-table misses
-status: In Progress
+status: In Review
 assignee:
   - '@george'
 created_date: '2026-07-18 18:45'
-updated_date: '2026-07-25 18:30'
+updated_date: '2026-07-25 21:54'
 labels: []
 dependencies:
   - TASK-51
@@ -55,3 +55,51 @@ TODO sites: engine/src/search.rs:604, :610.
 8. Tests: IIR reduces the tree when it fires (PV and non-PV); IIR does not fire when a TT move is present; genuine-miss vs collision semantics covered by structure. Run fmt/clippy/test.
 9. AC#4: run the TASK-27 strength-regression script; record results in notes.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented steps 11 and 13 (internal iterative reduction) in engine/src/search.rs.
+
+Design:
+- Step 11 (PV): depth = (depth - 3).max(1) when the node has no genuine TT move. Floored at 1 because Step 5's depth<=0 quiescence handover is already passed, so the move loop must keep >=1 ply.
+- Step 13 (non-PV, depth>=7): depth -= 2. The depth>=7 gate keeps the reduced draft (>=5) clear of the quiescence handover, so no floor is needed.
+- Constants IIR_PV_REDUCTION=3, IIR_NON_PV_REDUCTION=2, IIR_NON_PV_MIN_DEPTH=7. Step comments retained (AC#5).
+- AC#3 (genuine miss vs collision): added a tt_collision flag set only in the Step-3 collision-guard branch (full-key hit whose move is unplayable here). Both IIR conditions require tt_mov.is_none() && !tt_collision, so a Zobrist collision on a foreign entry never triggers the reduction, consistent with TASK-12's decoupling of score and move. A miss or a legitimately move-less entry does trigger it.
+- Added iir_enabled()/iir_disabled test hook matching the rfp/lmr toggle convention.
+
+Tests (engine/src/search/tests.rs):
+- internal_iterative_reduction_reduces_a_pv_search_tree: depth-6 PV search (below IIR_NON_PV_MIN_DEPTH so only step 11 can fire); IIR on visits strictly fewer nodes than off.
+- internal_iterative_reduction_reduces_a_non_pv_search_tree: pure non-PV search at depth 7 (only step 13 can fire), other reductions disabled so the two-ply cut registers; IIR on < off.
+- internal_iterative_reduction_ignores_a_transposition_collision: at depth 2 only the root's reduction is observable; a genuine miss reduces the tree, a seeded full-key entry with an unplayable move (collision) leaves the tree byte-identical to the un-reduced search. Directly exercises AC#3.
+- Fixed two pre-existing depth-pinning tests by neutralising IIR the same way they already neutralise LMR/extensions: the_same_key_is_worth_different_scores_at_different_halfmove_clocks and a_repetition_derived_value_is_not_stored_in_the_table.
+- gives_correct_answers KP-race entry: IIR trades horizon depth, so the won K+P-vs-K+P endgame's winning score surfaces at depth 24 rather than 22 (measured: cp 170 at d22, cp 795 at d24). The engine plays the winning move (a1b2) at every depth; only the promotion's full value lags. Raised that entry's depth 22->24 (score band [450,920] and moves unchanged), following the existing precedent for the extension-shifted rook-endgame entry.
+
+AC#4 strength (authoritative): SPRT PASS. LLR 2.96, bounds +/-2.94, elo0=-5 elo1=0. Elo +28.3 +/- 10.8. 1524 games (405-838-281), pentanomial 25-124-353-222-38, 0 crashes, 0 forfeits. tc=8+0.08, 64MB hash, 1 worker/engine, concurrency 4. fastchess alpha 1.5.0 20251121-1eedf82, openings-v1.epd (sha256 eca44927...), target-cpu=native release. Baseline git:cfdac4d (merge-base), tested binary sha256 5bfc5223...; candidate tested binary sha256 4c646761.... Recorded in BENCHMARKS.md. Note: the candidate tested binary embeds GIT_HASH 82c1f3f (the claim commit; the IIR changes were in the working tree). GIT_HASH feeds only UCI version reporting (src/cmdline.rs), not search, so the tested binary's search behavior is byte-identical to a rebuild from the implementation target; verified two rebuilds from the target are reproducible (sha256 41788fc...) and differ from the tested binary by the embedded commit string alone.
+
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean)
+- cargo test --workspace: pass (all suites green; engine lib 435 passed, 0 failed)
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @george
+created: 2026-07-25 21:54
+---
+Implementation handoff
+Branch: task-52-tt-miss-depth-reduction
+Worktree: /Users/seabo/seaborg-worktrees/task-52-tt-miss-depth-reduction
+Base: cfdac4d649599c9c5f117ada9b39dbc30110a875
+Implementation target: 6c4a092
+Resolved findings: none (new work)
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean)
+- cargo test --workspace: pass
+- TASK-27 strength script (authoritative SPRT): PASS, +28.3 +/- 10.8 Elo, 1524 games, LLR 2.96 (bounds +/-2.94), tc=8+0.08; details in implementation notes and BENCHMARKS.md
+Known failures: none
+---
+<!-- COMMENTS:END -->
