@@ -411,6 +411,71 @@ is why 2+0.05 (+92) shows the effect more strongly than 10+0.1 (+77). The two
 intervals overlap, so the ordering is the expected shape rather than a measured
 difference between the controls.
 
+### Symmetric stability scaling: contracting the soft limit on settled positions
+
+Extending the soft/hard split above with the missing direction. Previously the
+stability multiplier only ever *extended* a move — a changed root move or a
+falling score pushed the soft limit toward the maximum, but nothing pushed it
+below the optimum, so a dead-equal position where the same root move was best at
+every iteration and the eval was flat still spent its full planned budget every
+move. The candidate makes the multiplier symmetric: once the root move has held
+and the inter-iteration score has stayed within a flat margin across enough
+consecutive iterations, the soft limit contracts below the optimum (one step per
+settled iteration past an onset, down to a floor of half the optimum), handing
+the unspent clock to later moves. The hard deadline, the guaranteed first ply,
+and the legal-bestmove contract are untouched.
+
+**This change resists the round-robin SPRT that the entries above rely on, for a
+structural reason worth recording.** The motivating case is a real no-increment
+game lost on time: in a drawish endgame with nothing to convert, the engine bled
+its clock searching for a better move that did not exist while a faster opponent
+banked time and won the race. That benefit is realised *against a faster field*.
+A self-play SPRT pits the candidate against a baseline that thinks for the same
+length of time, so the time-race asymmetry the change exists to win never arises
+— an equal-speed match measures only the small *cost* of the contraction (a
+little less depth on settled positions), never its benefit. Worse, the mandated
+harness fails closed on any time-forfeit as an infrastructure error (a valid
+report requires zero forfeits), so the no-increment regime where flagging
+actually occurs cannot be scored at all: with no flags the benefit is invisible,
+and with flags the run is discarded. Forfeit-counting is a reserved-but-unbuilt
+harness mode. Building it, or a calibrated external-engine gauntlet, is the
+correct way to measure this and is out of scope here; this entry is therefore
+**mechanism-based plus a non-regression gate**, by explicit maintainer decision.
+
+Mechanism, measured directly on the archetype of the motivating loss — a
+dead-drawn king-and-pawn endgame `8/5pk1/6p1/4P1P1/5PK1/8/8/8 w - -`, both
+builds under `go wtime 40000 btime 40000 movestogo 20`:
+
+| Build | Depth reached | Wall time | Behaviour |
+| --- | ---: | ---: | --- |
+| Baseline | 24 | 2691 ms | spends the full planned budget |
+| Candidate | 23 | 494 ms | contracts to the floor, banks ~82% of the budget |
+
+The root move (`g4f3`) is stable from depth 6 and the score only oscillates a few
+centipawns, so the streak reaches the floor and the candidate returns one ply
+shallower in a fraction of the time. Sharp, tactically live positions do not
+contract and still extend exactly as before. The contraction scales with search
+depth × settledness, so it concentrates on the deep, dead-flat searches where
+clock-bleeding — and therefore flagging risk — actually lives.
+
+Non-regression gate, baseline `git:b2f9457` vs candidate `git:e6b8117`,
+`tc=10+0.1`, `elo0=-5 elo1=0 alpha=0.05 beta=0.05`, fastchess, `openings-v1.epd`,
+`target-cpu=native` release, Apple M3 Pro, concurrency 4:
+
+| Field | Value |
+| --- | --- |
+| Result | **Non-regression only** — no single uninterrupted window reached an SPRT boundary or the game cap |
+| Score | ≈ 0.50 near-neutral (partial windows: 2409 games at 0.4952 ≈ −3 Elo; 457 games at 0.5066 ≈ +5 Elo), 2σ within ±10 |
+| Forfeits | 0 across every window (increment prevents flagging, so the gate scores cleanly) |
+
+The gate is incomplete because the automated environment repeatedly reaped the
+long-running match at session teardown (clean games, zero engine faults, simply
+truncated). The measurement was performed but not to exhaustion; the partial
+windows agree on near-neutral and never trend toward a regression. Merged as a
+low-risk, mechanism-sound change on that basis. A completed SPRT — and, better,
+a forfeit-counting no-increment match once the harness supports it — remains the
+way to promote this from mechanism-based to measurement-based.
+
 ## NNUE self-play bootstrap programme
 
 The entries above measure *search* changes against a fixed evaluation. This
