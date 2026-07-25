@@ -1,11 +1,11 @@
 ---
 id: TASK-80
 title: 'Contract move time on stable, flat positions (symmetric stability scaling)'
-status: In Review
+status: Ready to Merge
 assignee:
   - '@george'
 created_date: '2026-07-24 10:34'
-updated_date: '2026-07-25 11:20'
+updated_date: '2026-07-25 16:26'
 labels: []
 dependencies: []
 ordinal: 136000
@@ -25,12 +25,12 @@ Prior art: TASK-40 introduced the soft/hard split and next-iteration prediction;
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The stability scale applied to the soft limit can take values below 1.0 when the root best move has been stable across multiple recent iterations and the inter-iteration eval is flat, contracting the planned spend below optimum
-- [ ] #2 A stable, flat position measurably spends less wall-clock per move than before the change at a fixed time control, and an unstable position (changing root move or falling eval) still extends exactly as it does today
-- [ ] #3 The soft limit is never contracted below a documented floor, and the hard/maximum deadline is unchanged; the guaranteed-first-ply and legal-bestmove contracts are untouched
-- [ ] #4 Contraction is derived only from within-search signals already available (root-move stability across iterations, inter-iteration score delta); no dependency on node-fraction or cross-move eval memory
-- [ ] #5 Strength is measured in a controlled base-vs-target SPRT on the incremented fastchess harness (not a cross-session comparison) and is neutral-or-better, with attribution recorded in BENCHMARKS.md; a no-increment (sudden-death) matrix is included since that is the regime the motivating loss came from
-- [ ] #6 cargo fmt --check, cargo clippy --workspace --all-targets --all-features -D warnings, and cargo test --workspace all pass
+- [x] #1 The stability scale applied to the soft limit can take values below 1.0 when the root best move has been stable across multiple recent iterations and the inter-iteration eval is flat, contracting the planned spend below optimum
+- [x] #2 A stable, flat position measurably spends less wall-clock per move than before the change at a fixed time control, and an unstable position (changing root move or falling eval) still extends exactly as it does today
+- [x] #3 The soft limit is never contracted below a documented floor, and the hard/maximum deadline is unchanged; the guaranteed-first-ply and legal-bestmove contracts are untouched
+- [x] #4 Contraction is derived only from within-search signals already available (root-move stability across iterations, inter-iteration score delta); no dependency on node-fraction or cross-move eval memory
+- [x] #5 Strength is validated by a controlled base-vs-target measurement (not a cross-session comparison), neutral-or-better, with attribution recorded in BENCHMARKS.md. Per explicit maintainer decision, the AC5 round-robin SPRT plus no-increment matrix is unmeasurable with the current harness (equal-speed self-play cannot surface the fast-field flagging benefit, and the harness fails closed on any time-forfeit), so validation is mechanism-based — direct per-move A/B on the drawish-endgame archetype of the motivating loss — plus an incremented non-regression gate showing near-neutral results with zero forfeits and no trend toward regression.
+- [x] #6 cargo fmt --check, cargo clippy --workspace --all-targets --all-features -D warnings, and cargo test --workspace all pass
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -96,4 +96,37 @@ Verification:
 Known failures: none. (A pre-existing wall-clock test, an_extendable_budget_is_still_bounded_by_its_hard_half, can flake under extreme full-workspace CPU load when the search thread is descheduled past its hard deadline; it passed in the final clean run and is diff-independent — the change only alters scale<1 behaviour, and that test uses an extending scale>=1 position where SoftLimit::deadline is byte-identical to base.)
 AC#5 measurement is partial by explicit maintainer decision (mechanism + non-regression); see implementation notes and BENCHMARKS.md for why the SPRT cannot score this change and the evidence gathered.
 ---
+
+author: @george
+created: 2026-07-25 16:26
+---
+Review attempt: 1
+Reviewed branch: task-80-symmetric-stability-scaling
+Reviewed implementation: be78d54 (base b2f9457)
+Verdict: approved
+
+Independent review of the full base-to-target diff. Target immutable: be78d54 descends from b2f9457, and the only later commits (fe01da5, 7615498) touch just the task file.
+
+Acceptance criteria:
+- AC#1/#3/#4: stability_scale contracts below 1.0 only on a settled streak past the onset, floored at MIN_STABILITY_SCALE=0.5 (documented); hard/maximum deadline, guaranteed first ply, and legal-bestmove path untouched; derived solely from root-move stability + inter-iteration score delta. Covered by new deterministic unit tests.
+- AC#2: extend branch is byte-identical for genuine instability (move change or drop past the 8cp flat margin). The one intended change — a sub-margin (<=8cp) drop with a held move is reclassified as flat rather than buying a trivial extension — is required for the lever to engage and is thoroughly documented; not a regression of the 'unstable extends exactly' contract.
+- AC#5: amended to match the maintainer-affirmed measurement pivot. The mandated round-robin SPRT + no-increment matrix is structurally unmeasurable with the current harness (equal-speed self-play hides the fast-field flagging benefit; the harness fails closed on any time-forfeit). Validated instead by direct per-move A/B mechanism evidence (dead-drawn KP endgame, -82% time, sharp positions still extend) plus an incremented non-regression gate (~2866 games near-neutral, 0 forfeits, no trend to regression).
+- AC#6: re-run on the target — cargo fmt --check clean; cargo clippy --workspace --all-targets --all-features -- -D warnings clean under a fresh CARGO_TARGET_DIR; cargo test --workspace all pass. The lone wall-clock flake (an_extendable_budget_is_still_bounded_by_its_hard_half) is pre-existing (fails 4/5 at base vs 1/3 at target under load) and diff-independent: its position extends at scale>=1 where SoftLimit::deadline is byte-identical to base, and contraction can only shorten a deadline.
+
+Scope clean: no new #[allow]; no accidental unrelated changes.
+
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings (fresh CARGO_TARGET_DIR): pass
+- cargo test --workspace: pass (430 engine-lib + all other suites)
+- base-vs-target flake reproduction: pre-existing, diff-independent (confirmed)
+
+Approved implementation SHA (code target): be78d54.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Made the search soft-limit stability multiplier symmetric so an obviously-settled position spends less than optimum, banking clock for later moves. stability_scale (renamed from instability_scale) now contracts below 1.0 once the root move has held and the inter-iteration score stayed within an 8cp flat margin across STABILITY_CONTRACTION_ONSET (3) consecutive iterations, removing 0.1 per further settled iteration down to a documented floor MIN_STABILITY_SCALE=0.5; the scale.max(1.0) clamp in SoftLimit::deadline was removed since the floor now lives in stability_scale. The extension direction is byte-identical for genuine instability; the hard/maximum deadline, guaranteed first ply, and legal-bestmove contract are untouched. Verified at implementation target be78d54 (base b2f9457): cargo fmt --check clean; cargo clippy --workspace --all-targets --all-features -- -D warnings clean under a fresh CARGO_TARGET_DIR; cargo test --workspace all pass (engine lib 430 + all other suites; the one wall-clock flake an_extendable_budget_is_still_bounded_by_its_hard_half is pre-existing — fails more at base than target — and diff-independent since its position extends at scale>=1 where deadline() is byte-identical to base). New unit tests cover onset gating, monotone contraction, the floor, the settled/unsettled branch invariant, and the deadline honouring a sub-1.0 scale. AC#5 validated by maintainer-affirmed mechanism evidence (dead-drawn KP endgame 8/5pk1/6p1/4P1P1/5PK1/8/8/8, go wtime 40000 movestogo 20: baseline 24 plies/2691ms vs candidate 23 plies/494ms, -82%) plus an incremented non-regression gate (~2866 games near-neutral, 0 forfeits, no trend to regression); the mandated round-robin SPRT and no-increment matrix are structurally unmeasurable with the current harness.
+<!-- SECTION:FINAL_SUMMARY:END -->
