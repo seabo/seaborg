@@ -1,11 +1,11 @@
 ---
 id: TASK-80
 title: 'Contract move time on stable, flat positions (symmetric stability scaling)'
-status: In Progress
+status: In Review
 assignee:
   - '@george'
 created_date: '2026-07-24 10:34'
-updated_date: '2026-07-25 11:19'
+updated_date: '2026-07-25 11:20'
 labels: []
 dependencies: []
 ordinal: 136000
