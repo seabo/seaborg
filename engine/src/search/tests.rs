@@ -2581,30 +2581,78 @@ fn an_unmeasurably_short_iteration_yields_no_prediction() {
     assert_eq!(cost.predict_next(), None);
 }
 
-/// A settled root spends what it was allotted and no more. Anything else would make the
-/// extension the normal case, which is the same as having allotted more in the first place.
+/// A settled root that has not yet held long enough to contract spends what it was allotted and no
+/// more. Anything above 1 would make the extension the normal case, which is the same as having
+/// allotted more in the first place; anything below would contract before stability is established.
 #[test]
 fn a_stable_root_asks_for_no_extension() {
-    assert_eq!(instability_scale(false, 0), 1.0);
+    assert_eq!(stability_scale(false, 0, 0), 1.0);
     // A rising score — a negative drop — is the search finding more than it expected, not a
     // reason to distrust the move it is about to play.
-    assert_eq!(instability_scale(false, -400), 1.0);
+    assert_eq!(stability_scale(false, -400, 0), 1.0);
 }
 
 #[test]
 fn a_changed_best_move_or_a_falling_score_asks_for_an_extension() {
-    assert!(instability_scale(true, 0) > 1.0);
-    assert!(instability_scale(false, 50) > 1.0);
+    assert!(stability_scale(true, 0, 0) > 1.0);
+    assert!(stability_scale(false, 50, 0) > 1.0);
 
     // The two compound, and a larger drop asks for more than a smaller one.
-    assert!(instability_scale(true, 300) > instability_scale(true, 50));
-    assert!(instability_scale(true, 50) > instability_scale(false, 50));
+    assert!(stability_scale(true, 300, 0) > stability_scale(true, 50, 0));
+    assert!(stability_scale(true, 50, 0) > stability_scale(false, 50, 0));
 
     // A collapsing evaluation cannot ask without bound.
     assert_eq!(
-        instability_scale(true, 30_000),
+        stability_scale(true, 30_000, 0),
         1.0 + BEST_MOVE_CHANGE_EXTENSION + MAX_SCORE_DROP_EXTENSION
     );
+}
+
+/// The two directions never compete. The caller resets the settled streak to zero the instant the
+/// root move changes or the score leaves the flat margin, so an unsettled iteration always reaches
+/// `stability_scale` with `stable_iterations == 0` and extends exactly as it did before contraction
+/// existed; a settled iteration always arrives with a nonzero streak and contracts. A sub-margin
+/// wobble — the ordinary texture of a flat search, which does not hold its score perfectly still —
+/// is the settled case, not a fall, and must not veto the contraction.
+#[test]
+fn settled_contracts_and_unsettled_extends_without_competing() {
+    // Unsettled (streak reset to zero by the caller): extends.
+    assert!(stability_scale(true, 0, 0) > 1.0);
+    assert!(stability_scale(false, 50, 0) > 1.0);
+
+    // Settled and held well past the onset: contracts, even though the flat score wobbled a few
+    // centipawns either way — the `score_drop` an unconditional extension would have fired on.
+    assert!(stability_scale(false, 4, 20) < 1.0);
+    assert!(stability_scale(false, -4, 20) < 1.0);
+}
+
+/// Contraction only begins once the position has been settled for several consecutive iterations.
+/// A position that has only just gone quiet is not yet evidence the answer has stopped moving, so
+/// the early plies keep their full planned spend.
+#[test]
+fn contraction_waits_for_a_streak_then_decreases_monotonically() {
+    // Up to and including the onset, a settled position still spends exactly its planned share.
+    for streak in 0..=STABILITY_CONTRACTION_ONSET {
+        assert_eq!(
+            stability_scale(false, 0, streak),
+            1.0,
+            "contracted at streak {streak}, before the onset"
+        );
+    }
+
+    // Past the onset each further settled iteration removes another step, so the multiplier is
+    // strictly decreasing until it reaches the floor.
+    let just_past = stability_scale(false, 0, STABILITY_CONTRACTION_ONSET + 1);
+    assert!(just_past < 1.0);
+    assert!(stability_scale(false, 0, STABILITY_CONTRACTION_ONSET + 2) < just_past);
+}
+
+/// The contraction is bounded: a position settled for an arbitrarily long time never pulls its
+/// planned spend below the documented floor, so a genuine resolution is never starved of depth.
+#[test]
+fn contraction_never_falls_below_the_floor() {
+    assert_eq!(stability_scale(false, 0, u32::MAX), MIN_STABILITY_SCALE);
+    assert!(stability_scale(false, 0, 10_000) >= MIN_STABILITY_SCALE);
 }
 
 /// Without a soft limit there is nothing to decline against, so an untimed search — depth,
@@ -2683,6 +2731,37 @@ fn instability_buys_an_iteration_the_planned_spend_could_not() {
 
     assert!(!search.next_iteration_fits(&cost, 1.0));
     assert!(search.next_iteration_fits(&cost, 3.0));
+}
+
+/// The contraction direction is the mirror image: a next iteration the full planned spend would
+/// have admitted is declined once the position has settled enough to contract below optimum. This
+/// is the whole point of the lever — releasing the unspent clock to later moves on a settled
+/// position rather than searching for a better move that is not there.
+#[test]
+fn contraction_declines_an_iteration_the_planned_spend_would_have_admitted() {
+    chess::init::init_globals();
+
+    let flag = AtomicBool::new(false);
+    let table = Table::new(1);
+    let mut search = Search::new(Position::start_pos(), &flag, None, &table);
+
+    let start = Instant::now();
+    // A generous hard limit, so only the soft-limit scaling can decide the outcome here.
+    search.soft_limit = Some(SoftLimit {
+        start,
+        budget: Duration::from_millis(100),
+    });
+    search.stop_time = Some(start + Duration::from_secs(60));
+
+    // Predicted at 90ms: inside the 100ms planned spend, so it fits at the neutral scale.
+    let mut cost = IterationCost::default();
+    cost.record(Duration::from_millis(40));
+    cost.record(Duration::from_millis(60));
+    assert_eq!(cost.predict_next(), Some(Duration::from_millis(90)));
+
+    assert!(search.next_iteration_fits(&cost, 1.0));
+    // Contracted to half the planned spend, the same prediction no longer fits.
+    assert!(!search.next_iteration_fits(&cost, MIN_STABILITY_SCALE));
 }
 
 /// However unstable the position, an iteration that would run past the hard deadline is still
