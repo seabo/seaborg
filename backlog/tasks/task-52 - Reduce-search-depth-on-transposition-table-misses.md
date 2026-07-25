@@ -1,11 +1,11 @@
 ---
 id: TASK-52
 title: Reduce search depth on transposition-table misses
-status: In Review
+status: Ready to Merge
 assignee:
   - '@george'
 created_date: '2026-07-18 18:45'
-updated_date: '2026-07-25 21:54'
+updated_date: '2026-07-25 22:22'
 labels: []
 dependencies:
   - TASK-51
@@ -35,11 +35,11 @@ TODO sites: engine/src/search.rs:604, :610.
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 PV nodes with no transposition-table move are searched at reduced depth per step 11
-- [ ] #2 Non-PV nodes at depth >= 7 with no transposition-table move are searched at reduced depth per step 13
-- [ ] #3 Reduction is driven by a genuine TT miss and not by a collision-guard rejection, consistent with the semantics established by TASK-12
-- [ ] #4 Measured with the TASK-27 strength-regression script showing no strength loss, with results recorded in the implementation notes
-- [ ] #5 The step 11 and step 13 TODO markers are replaced by implementations, with the numbered step comments retained
+- [x] #1 PV nodes with no transposition-table move are searched at reduced depth per step 11
+- [x] #2 Non-PV nodes at depth >= 7 with no transposition-table move are searched at reduced depth per step 13
+- [x] #3 Reduction is driven by a genuine TT miss and not by a collision-guard rejection, consistent with the semantics established by TASK-12
+- [x] #4 Measured with the TASK-27 strength-regression script showing no strength loss, with results recorded in the implementation notes
+- [x] #5 The step 11 and step 13 TODO markers are replaced by implementations, with the numbered step comments retained
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -102,4 +102,36 @@ Verification:
 - TASK-27 strength script (authoritative SPRT): PASS, +28.3 +/- 10.8 Elo, 1524 games, LLR 2.96 (bounds +/-2.94), tc=8+0.08; details in implementation notes and BENCHMARKS.md
 Known failures: none
 ---
+
+author: @george
+created: 2026-07-25 22:22
+---
+Review attempt: 1
+Reviewed branch: task-52-tt-miss-depth-reduction
+Reviewed implementation: 6c4a092
+Base: cfdac4d
+Verdict: approved
+
+All five acceptance criteria proven; no blocking findings.
+- AC#1/#2/#5: steps 11 & 13 implemented (search.rs:2246, :2260), TODOs replaced, numbered step comments retained. Proven by tests internal_iterative_reduction_reduces_a_pv_search_tree and _reduces_a_non_pv_search_tree.
+- AC#3: both cuts require tt_mov.is_none() && !tt_collision; tt_collision is set only in the Step-3 full-key-hit-with-unplayable-move branch, so a Zobrist collision never masquerades as a miss. Proven by internal_iterative_reduction_ignores_a_transposition_collision (collision run's node count equals the un-reduced tree; genuine miss reduces).
+- AC#4: SPRT PASS, +28.3 +/- 10.8 Elo, 1524 games, LLR 2.96 (bounds +/-2.94), tc=8+0.08; recorded in notes and BENCHMARKS.md. No strength loss.
+
+Scope: only search.rs, search/tests.rs, BENCHMARKS.md, task file. The gives_correct_answers K+P-race entry depth 22->24 is a justified horizon-trade accommodation (winning move unchanged at every depth; only the promotion's full value lags); two pre-existing depth-pinning tests neutralise IIR the same way they already neutralise LMR/extensions. Comments are reader-facing rationale with no bare task-ID references. #[allow] additions: none.
+
+Verification on target 6c4a092 (code byte-identical to branch tip 12520e3; later commits are handoff/approval metadata only):
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean CARGO_TARGET_DIR, exit 0)
+- cargo test --workspace: green (chess 57, engine 435, lichess 156, integration suites pass)
+
+Note: lichess run::tests::incoming_challenge_is_handled_while_a_matchmaking_call_is_blocked flaked once under the full parallel run, then passed 3/3 in isolation. It is a timing/concurrency test in the lichess crate, which this diff does not touch; pre-existing environmental flake, not patch-introduced, non-blocking.
+
+Perft/movegen speed benchmarks were not run: the diff changes only the alpha-beta search body, leaving move generation and perft byte-identical, so those benches cannot regress from it. Search hot-path performance is covered by the passing strength SPRT.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Implemented search steps 11 & 13 (internal iterative reduction) in engine/src/search.rs: a PV node with no genuine TT move has its depth cut by IIR_PV_REDUCTION=3 (floored at 1), and a non-PV node at depth >= IIR_NON_PV_MIN_DEPTH=7 by IIR_NON_PV_REDUCTION=2. A tt_collision flag set only in the Step-3 collision guard makes both cuts fire on a genuine miss or move-less entry and never on a Zobrist-collision rejection (AC#3, TASK-12 semantics). The numbered step comments are retained (AC#5). Verified on implementation target 6c4a092: cargo fmt --check pass; cargo clippy --workspace --all-targets --all-features -- -D warnings pass (clean CARGO_TARGET_DIR); cargo test --workspace green including three new IIR tests (PV cut, non-PV cut, collision-ignored). AC#4 strength: SPRT PASS +28.3 +/- 10.8 Elo, 1524 games, LLR 2.96 (bounds +/-2.94), tc=8+0.08, recorded in BENCHMARKS.md and notes.
+<!-- SECTION:FINAL_SUMMARY:END -->
