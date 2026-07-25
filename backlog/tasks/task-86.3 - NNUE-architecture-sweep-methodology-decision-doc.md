@@ -8,8 +8,7 @@ created_date: '2026-07-25 12:23'
 updated_date: '2026-07-25 21:41'
 labels:
   - design
-dependencies:
-  - TASK-86.1
+dependencies: []
 parent_task_id: TASK-86
 priority: high
 ordinal: 145000
