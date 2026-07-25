@@ -3,11 +3,11 @@ id: TASK-82
 title: >-
   Diagnose the strength gulf vs Stockfish: NPS, effective branching factor, and
   eval quality
-status: Ready to Merge
+status: Done
 assignee:
   - '@george'
 created_date: '2026-07-24 11:00'
-updated_date: '2026-07-25 16:53'
+updated_date: '2026-07-25 17:05'
 labels:
   - search
   - eval
