@@ -3,11 +3,11 @@ id: TASK-82
 title: >-
   Diagnose the strength gulf vs Stockfish: NPS, effective branching factor, and
   eval quality
-status: In Review
+status: Ready to Merge
 assignee:
   - '@george'
 created_date: '2026-07-24 11:00'
-updated_date: '2026-07-25 16:31'
+updated_date: '2026-07-25 16:53'
 labels:
   - search
   - eval
@@ -43,11 +43,11 @@ Minimal tooling permitted within scope: a UCI helper to dump seaborg's static ev
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 NPS for seaborg and Stockfish is measured on a fixed single-core suite and recorded, with the compile flags (AVX2), hardware, and SF version noted
-- [ ] #2 Effective branching factor is reported for both engines (nodes^(1/depth) and/or nodes-to-fixed-depth), alongside depth-reached-at-fixed-time
-- [ ] #3 Eval quality is isolated with a search-free static-eval agreement test against a reference-labelled position set, reported on a scale-independent metric, not raw centipawns
-- [ ] #4 Head-to-head Elo gaps at fixed nodes and at fixed time are measured to bound how much of the gulf is speed versus eval-plus-selectivity
-- [ ] #5 A written attribution decomposes the gulf into eval vs NPS vs selectivity and recommends where to invest (larger NNUE vs search speed/selectivity), with methodology recorded for reproducibility
+- [x] #1 NPS for seaborg and Stockfish is measured on a fixed single-core suite and recorded, with the compile flags (AVX2), hardware, and SF version noted
+- [x] #2 Effective branching factor is reported for both engines (nodes^(1/depth) and/or nodes-to-fixed-depth), alongside depth-reached-at-fixed-time
+- [x] #3 Eval quality is isolated with a search-free static-eval agreement test against a reference-labelled position set, reported on a scale-independent metric, not raw centipawns
+- [x] #4 Head-to-head Elo gaps at fixed nodes and at fixed time are measured to bound how much of the gulf is speed versus eval-plus-selectivity
+- [x] #5 A written attribution decomposes the gulf into eval vs NPS vs selectivity and recommends where to invest (larger NNUE vs search speed/selectivity), with methodology recorded for reproducibility
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -118,4 +118,39 @@ Verification:
 - cargo test --workspace: pass (docs-only change; code identical to the prior green run). The pre-existing load-sensitive timing test search::tests::an_extendable_budget_is_still_bounded_by_its_hard_half flaked once under heavy host load and passes in isolation and on rerun; not implicated by this task.
 Known failures: none.
 ---
+
+author: @george
+created: 2026-07-25 16:52
+---
+Review attempt: 1
+Reviewed branch: task-82-diagnose-strength-gulf-vs-stockfish
+Reviewed implementation: ee2ff691e7af083512081338102685b292580ced
+Base: b2f945778c1ea3a02018c91d00ab4e5923f7d450
+Verdict: approved
+
+Immutable target confirmed: base is an ancestor of the target, the target is an ancestor of the branch tip (4542b26), and the only commit after the target changes just the task file (re-handoff metadata) — no implementation file differs between ee2ff69 and the tip.
+
+Acceptance criteria (all proven):
+- AC#1 NPS measured single-core over a fixed 20-position suite and recorded with hardware/SF version. Deviation noted and accepted: measured on Apple M3 Pro with the scalar-NNUE aarch64 release (no NEON path) rather than an x86 AVX2 build. This is a pessimistic bound on seaborg's speed and only strengthens the 'speed is not the bottleneck' conclusion; the report flags a confirmatory x86 AVX2 pass as optional tightening that cannot change the conclusion. Environment (flags, hardware, SF 18 arm64) is recorded.
+- AC#2 EBF reported for both engines: geomean nodes^(1/depth) (2.42 vs 2.00), mean nodes-to-depth-14 (373553 vs 24491), and depth-at-1500ms (median 14 vs 22).
+- AC#3 Search-free static-eval agreement over 500 deep-SF-labelled positions on scale-independent metrics (Spearman + decisive-winner accuracy), not raw cp.
+- AC#4 Head-to-head at fixed nodes (0/20) and fixed time (0/40) plus a fixed-node parity sweep (~40-50x); the fixed-time parity sweep is correctly reported as unreliable (collapses into move-overhead/jitter) rather than fabricated.
+- AC#5 Written attribution (eval vs NPS vs selectivity) with recommendation and reproducible methodology in BENCHMARKS.md + tools/diag/.
+
+Engine change reviewed: SearchEngine::static_eval mirrors Search::evaluate exactly (network branch: forward pass, no flip; hand-crafted branch: White-perspective score * pov). The Eval command is intercepted in the driver loop that owns the evaluator. Comments are self-contained and explain the reasoning. No hot-path modification (evaluate/movegen unchanged), so hot-path benchmarks are not implicated. No new #[allow] introduced.
+
+Verification (run on the target, fresh CARGO_TARGET_DIR):
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean
+- cargo test --workspace: 427 passed, 2 ignored, 1 failure = search::tests::an_extendable_budget_is_still_bounded_by_its_hard_half, which is untouched by the diff, is a documented load-sensitive timing flake (full run was under heavy load, perft tests >60s), and passes in isolation. Not patch-introduced.
+- eval command end-to-end: startpos -> staticeval cp 12; r5k1/8/8/8/8/8/8/6K1 b -> staticeval cp 1085 (correct side-to-move sign).
+
+Approved. Code target: ee2ff691e7af083512081338102685b292580ced.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Spike: decomposed the ~1000-1500 Elo gulf vs Stockfish into NPS, selectivity, and eval axes. Delivered a search-free 'eval' UCI command (staticeval cp <v>, side-to-move view, reusing the search leaf evaluator with no hot-path change), a reproducible diagnostic harness under tools/diag/, and a written attribution in BENCHMARKS.md. Findings (Apple M3 Pro, scalar-NNUE ARM release = pessimistic speed bound; SF 18 arm64): NPS comparable (642k vs 727k) so raw speed is ruled out; selectivity far behind (~15x nodes to depth 14, 8 plies shallower at 1500ms, ~40-50x nodes for parity); static-eval agreement Spearman 0.931 vs 0.954 (winner-acc 94.6% vs 97.5%, ~2x error rate on decisive positions). The rework correctly reframed the conclusion: speed ruled out firmly, but eval and selectivity are coupled and this diagnostic cannot rank them, so neither is deprioritised. Verified: cargo fmt --check pass; cargo clippy --workspace --all-targets --all-features -D warnings clean (fresh CARGO_TARGET_DIR); cargo test --workspace 427 pass / 2 ignored (the sole failure, an_extendable_budget_is_still_bounded_by_its_hard_half, is a pre-existing load-sensitive timing flake untouched by the diff and passing in isolation); the eval command exercised end-to-end (startpos->cp 12, black-up-a-rook->cp 1085, correct sign).
+<!-- SECTION:FINAL_SUMMARY:END -->
