@@ -7,7 +7,7 @@ status: In Review
 assignee:
   - '@george'
 created_date: '2026-07-24 11:00'
-updated_date: '2026-07-24 22:11'
+updated_date: '2026-07-25 16:31'
 labels:
   - search
   - eval
@@ -100,5 +100,22 @@ Verification:
 - cargo test --workspace: pass (428 engine lib tests + workspace; new tests uci::parses_eval and search::static_eval_reports_the_hand_crafted_leaf_from_the_side_to_moves_view pass)
 Known failures: none. During an early full-suite run under heavy machine load, the pre-existing timing test search::tests::an_extendable_budget_is_still_bounded_by_its_hard_half flaked once (ran 202ms vs 60ms hard limit); it passes in isolation and in the final full run. This task makes no time-management change, so it is not implicated.
 Notes for reviewer: measured on Apple M3 Pro (ARM), so AC#1's literal AVX2 build does not apply; seaborg runs scalar NNUE on ARM (no NEON path), which understates its speed vs its x86 AVX2 deployment. This is documented in BENCHMARKS.md and only strengthens the 'speed is not the bottleneck' finding. The node-based selectivity and eval-agreement axes are ISA-independent and exact.
+---
+
+author: @george
+created: 2026-07-25 16:31
+---
+Rework: corrected the attribution/recommendation
+Branch: task-82-diagnose-strength-gulf-vs-stockfish
+Worktree: /Users/seabo/seaborg-worktrees/task-82-diagnose-strength-gulf-vs-stockfish
+Base: b2f945778c1ea3a02018c91d00ab4e5923f7d450
+Implementation target: ee2ff691e7af083512081338102685b292580ced
+Change: BENCHMARKS.md only. The original write-up concluded 'invest in search selectivity, not a larger network / eval is a minor factor'. That was overstated and is corrected: (1) the eval-agreement metrics saturate — seaborg's ~2x winner-error-rate on decisive positions (5.4% vs 2.5%) is not 'near parity', and there is no rho->Elo calibration; (2) eval and selectivity are coupled — a better eval improves ordering and enables safer/deeper pruning, so part of the measured selectivity deficit may be eval-limited; (3) the engine's own +337 Elo jump from PST to the current small net argues the network is far from its ceiling. Reframed: raw speed is ruled out (firm); eval and selectivity are both high-leverage and this diagnostic does not rank them; two follow-up experiments proposed to price the eval headroom directly.
+No code change since the prior target 8f83bdc — engine and tooling are byte-identical; only the report prose changed.
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean)
+- cargo test --workspace: pass (docs-only change; code identical to the prior green run). The pre-existing load-sensitive timing test search::tests::an_extendable_budget_is_still_bounded_by_its_hard_half flaked once under heavy host load and passes in isolation and on rerun; not implicated by this task.
+Known failures: none.
 ---
 <!-- COMMENTS:END -->
