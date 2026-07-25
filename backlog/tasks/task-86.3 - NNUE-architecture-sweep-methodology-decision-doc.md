@@ -1,11 +1,11 @@
 ---
 id: TASK-86.3
 title: NNUE architecture-sweep methodology (decision doc)
-status: Ready to Merge
+status: Done
 assignee:
   - '@george'
 created_date: '2026-07-25 12:23'
-updated_date: '2026-07-25 21:41'
+updated_date: '2026-07-25 22:22'
 labels:
   - design
 dependencies: []
