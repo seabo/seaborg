@@ -538,12 +538,18 @@ purely as a reference and never touches training data. The driver scripts and th
 fixed position suite live in `tools/diag/` and each result below is reproducible
 from the commands recorded there.
 
-**The bottom line up front:** the gulf is overwhelmingly **search selectivity**,
-not evaluation and not raw speed. seaborg's NPS is already competitive, and its
-static evaluation ranks positions almost as well as Stockfish's; but its search
-reaches roughly **eight plies less deep in the same time** and needs on the order
-of **40–50× more nodes** to play at Stockfish's level. Investment should go into
-reductions, pruning, extensions, and move ordering — not a larger NNUE.
+**The bottom line up front:** raw speed is *not* the bottleneck — seaborg's NPS is
+already competitive. The gulf is split between two axes that this diagnostic
+cannot cleanly separate, because they are **coupled**: search **selectivity** and
+**evaluation** quality. seaborg's search reaches roughly **eight plies less deep
+in the same time** and needs on the order of **40–50× more nodes** to play at
+Stockfish's level, and its static evaluation is about **twice as error-prone** as
+Stockfish's on decisive positions. Both are high-leverage. What this diagnostic
+does *not* support is ranking the two, or deprioritising the network — see the
+attribution section for why the eval metrics used here saturate, why a better eval
+also buys selectivity, and why the engine's own history (a +337 Elo jump from the
+hand-crafted evaluation to the current small net) argues the network is nowhere
+near its ceiling.
 
 ### Measurement setup
 
@@ -601,9 +607,21 @@ gen-002 network.
 | seaborg (NNUE gen-002) | 0.931 | 94.6 % |
 | Stockfish 18 | 0.954 | 97.5 % |
 
-seaborg's evaluation ranks positions **almost as well as Stockfish's**: a Spearman
-gap of 0.023 and a winner-accuracy gap of ~3 points. The evaluation is behind, but
-modestly — nowhere near enough to explain a four-figure Elo gulf on its own.
+These numbers are easy to over-read as "eval is basically solved," and that
+reading is a trap. Both metrics **saturate** near the top: most positions are easy
+to rank and both engines get them, so the interesting signal is compressed into a
+small headline gap, and there is no calibration here from Spearman ρ to Elo. Read
+as an *error rate* the same data is far less flattering: seaborg mis-ranks the
+winner in **5.4 %** of decisive positions versus Stockfish's **2.5 %** — roughly
+**twice the error rate**, concentrated in exactly the hard positions that decide
+games. Three further limits mean this test *cannot* bound how much a better network
+would buy: it sees only static eval on **quiet** positions sampled from
+**Stockfish-guided** play (not the positions seaborg reaches), it is
+**scale-independent** so it is blind to cp-calibration (which drives pruning
+margins), and its ground truth is Stockfish's *own* deep search, which structurally
+flatters Stockfish's static eval. The honest reading: seaborg's evaluation is
+respectable but measurably behind, and this metric is the wrong instrument for
+declaring it "good enough."
 
 ### Head-to-head, at fixed nodes and at fixed time
 
@@ -648,29 +666,43 @@ supplies the time-based data point.
 
 ### Attribution and recommendation
 
-Decomposing the ~1000–1500 Elo gulf across the three axes:
+What this diagnostic settles, and what it deliberately does not:
 
-- **Raw speed (NPS): not a factor.** seaborg's NPS is ~0.85× Stockfish's *while
+- **Raw speed (NPS): ruled out.** seaborg's NPS is ~0.85× Stockfish's *while
   handicapped to scalar NNUE on ARM*; on its x86 AVX2 target it is likely at or
   above parity. The equal-time and equal-node gaps being identical confirms speed
-  contributes essentially nothing to the differential.
-- **Evaluation quality: a minor factor.** seaborg's static eval ranks positions at
-  ρ = 0.931 vs Stockfish's 0.954 (94.6 % vs 97.5 % winner accuracy). Real, but
-  small. A larger NNUE would chip at this ~0.02 correlation gap while *costing*
-  NPS — improving the axis that is already close at the expense of the one that
-  already isn't the problem.
-- **Selectivity (depth-per-node): the dominant factor.** ~15× the nodes to reach a
-  given depth, eight plies shallower at equal time, and ~40–50× the nodes to reach
-  Stockfish's *strength*. Since evaluation is nearly at parity, almost all of that
-  per-node deficit is search efficiency: reductions, forward pruning, extensions,
-  and move ordering.
+  contributes essentially nothing to the differential. This is the one firm
+  negative result.
+- **Selectivity (depth-per-node): large, clearly-measured headroom.** ~15× the
+  nodes to reach a given depth, eight plies shallower at equal time, and ~40–50×
+  the nodes to reach Stockfish's *strength*. The search machinery that buys depth
+  per node — late-move reduction, null-move and futility/history pruning, singular
+  extensions, move ordering — is coarse relative to the frontier and has room to
+  grow.
+- **Evaluation quality: also high-leverage — and this diagnostic does not rank it
+  against selectivity.** Three reasons the "eval is minor" reading is wrong. (1)
+  The agreement metrics saturate: seaborg's ~2× winner-error-rate on decisive
+  positions is not "nearly at parity," and there is no ρ→Elo calibration here. (2)
+  The two axes are **coupled, not independent**: a better evaluation improves move
+  ordering and lets the search reduce and prune more aggressively *safely*, so an
+  unknown share of the selectivity deficit is plausibly downstream of eval quality
+  — the diagnostic measures the axes separately but cannot untangle their
+  interaction. (3) The engine's own record argues the network is far from its
+  ceiling: replacing the hand-crafted PST evaluation with the current *small,
+  weakly-bootstrapped* net was worth **≈ +337 Elo** (see the NNUE bootstrap
+  section), and that net was trained on low-depth self-play data labelled from a
+  PST-origin bootstrap. A larger network on deeper or higher-quality labels is a
+  very reasonable bet for another large gain.
 
-**Recommendation: invest in search selectivity, not a larger network.** The
-highest-leverage work is the machinery that buys depth per node — late-move
-reduction tuning, null-move and futility/history pruning, singular extensions,
-and move-ordering quality — measured (as the sections above insist) at equal time,
-where selectivity gains actually show up. A bigger NNUE addresses the smallest of
-the three axes and taxes the one that is already fine.
+**Recommendation: rule out speed, and treat evaluation and selectivity as two
+coupled, high-leverage fronts — do not deprioritise either on the strength of this
+diagnostic.** The clean way to rank them is to *measure* rather than infer, with
+two follow-up experiments this spike did not run: (a) train a larger / better-
+labelled network and gate it at equal time, which directly prices the eval
+headroom; and (b) re-run the selectivity measurements with a substantially
+stronger evaluation to see whether effective depth improves — i.e. whether the
+selectivity deficit is partly eval-limited. Whichever axis is worked, measure at
+equal time, where both selectivity and eval gains actually show up.
 
 ### Reproducing this diagnostic
 
