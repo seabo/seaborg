@@ -4,9 +4,11 @@ title: Add a SIMD NNUE accumulator-update kernel for the per-move hot path
 status: To Do
 assignee: []
 created_date: '2026-07-25 12:21'
+updated_date: '2026-07-25 16:31'
 labels: []
 dependencies:
   - TASK-83
+  - TASK-86.1
 references:
   - engine/src/nnue/accumulator.rs
 ordinal: 141000
