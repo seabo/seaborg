@@ -1,11 +1,11 @@
 ---
 id: TASK-52
 title: Reduce search depth on transposition-table misses
-status: Ready to Merge
+status: Done
 assignee:
   - '@george'
 created_date: '2026-07-18 18:45'
-updated_date: '2026-07-25 22:22'
+updated_date: '2026-07-26 19:26'
 labels: []
 dependencies:
   - TASK-51
