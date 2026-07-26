@@ -1376,6 +1376,32 @@ pub struct Search<'engine> {
     /// evaluation on unmake is an O(1) copy rather than a recomputation or a reverse-delta. It grows
     /// and shrinks in lockstep with the position's own move history.
     eval_stack: Vec<EvalState>,
+    /// The NNUE first-layer activation payload for `pos`, maintained incrementally across make/unmake
+    /// exactly as `eval_state` maintains the tapered score — `Some` only when a network is selected,
+    /// `None` on the hand-crafted path, where it is never consulted.
+    ///
+    /// Read at [`Search::evaluate`], where it is paired with the network for the forward pass instead
+    /// of rebuilding the accumulator from scratch (an O(pieces × H) scan) at every leaf. Because a
+    /// move toggles only the features it touches, folding it in is O(features-toggled × H) and nearly
+    /// independent of piece count, which is what makes a wider network affordable.
+    ///
+    /// The payload is stored lifetime-free rather than as an [`Accumulator`]: an `Accumulator`
+    /// borrows the network, and the search owns the network behind an `Arc`, so a stored borrowing
+    /// accumulator would make `Search` self-referential. The payload is re-paired with the network
+    /// via [`Accumulator::from_values`] only for the instant a move is folded in or a leaf is scored.
+    accumulator: Option<[Box<[i16]>; 2]>,
+    /// Saved accumulator payloads, one per made-but-not-unmade move, newest last — the accumulator's
+    /// counterpart to `eval_stack`. `make_move` appends a copy of the pre-move payload and
+    /// `unmake_move` copies the last one back, so restoration is an exact copy rather than a
+    /// reverse-delta.
+    ///
+    /// The payloads are stored flattened into one contiguous buffer — each push appends the two
+    /// `H`-long perspective vectors end to end — rather than as a `Vec` of freshly boxed pairs. That
+    /// is deliberate: cloning a boxed pair per node would allocate on the heap twice for every move
+    /// the search makes, in its hottest loop. Appending into a buffer sized once up front is a plain
+    /// copy into spare capacity, so after the path first reaches its deepest point the stack never
+    /// allocates again. Empty (and never appended to) on the hand-crafted path.
+    accumulator_stack: Vec<i16>,
     /// The selected NNUE network, or `None` to use the hand-crafted evaluation.
     ///
     /// This is the evaluation selector the design contract places at the single consumption point
@@ -1384,9 +1410,8 @@ pub struct Search<'engine> {
     /// scalar quantized forward pass instead. It stays `None` by default so the hand-crafted path
     /// remains the engine's evaluation until a trained network exists and passes its strength gate.
     ///
-    /// The accumulator is rebuilt from the position at each evaluated leaf rather than maintained
-    /// incrementally through make and unmake; the incremental accumulator seam is a later
-    /// performance concern and is not needed for the correctness this scalar path provides.
+    /// When set, the accumulator this network scores through is maintained incrementally across
+    /// make/unmake (see `accumulator`) rather than rebuilt from scratch at each leaf.
     ///
     /// The network is held behind an [`Arc`] because a fresh `Search` is constructed for every move
     /// the engine plays; sharing the weights by reference-count keeps that per-move setup from
@@ -1579,10 +1604,26 @@ impl<'engine> Search<'engine> {
         network: Option<Arc<Network>>,
     ) -> Self {
         let eval_state = EvalState::from_position(&pos);
+        // Seed the incremental accumulator from the root position when a network is selected, so it is
+        // correct from the first leaf however the search was handed its position (including a clone).
+        // The hand-crafted path never scores through it, so it stays `None` there.
+        let accumulator = network
+            .as_deref()
+            .map(|net| Accumulator::from_position(net, &pos).into_values());
+        // Size the flat payload stack for the deepest path the search can reach — two `H`-long
+        // vectors per ply — so appending across make/unmake never has to grow it mid-search. Zero
+        // when there is no network to maintain.
+        let accumulator_stack = Vec::with_capacity(
+            network
+                .as_deref()
+                .map_or(0, |net| MAX_PLY * 2 * net.hidden_width() as usize),
+        );
         Self {
             pos,
             eval_state,
             eval_stack: Vec::with_capacity(MAX_PLY),
+            accumulator,
+            accumulator_stack,
             network,
             tt,
             kt: KillerTable::new(MAX_PLY, KILLER_SLOTS),
@@ -1631,6 +1672,14 @@ impl<'engine> Search<'engine> {
     /// search configured with a network still makes and unmakes moves and maintains the hand-crafted
     /// accumulator exactly as before — the network is consulted only when a leaf is scored.
     pub fn set_network(&mut self, network: Option<Arc<Network>>) {
+        // Re-seed the incremental accumulator so it stays consistent with the newly selected network.
+        // Selection happens between searches, on the root position with no move outstanding, so the
+        // fresh seed and the cleared restore stack are exactly the state a search expects to start
+        // from.
+        self.accumulator = network
+            .as_deref()
+            .map(|net| Accumulator::from_position(net, &self.pos).into_values());
+        self.accumulator_stack.clear();
         self.network = network;
     }
 
@@ -3016,10 +3065,19 @@ impl<'engine> Search<'engine> {
         if let Some(network) = self.network.as_deref() {
             // The forward pass already returns the score from the side to move's perspective (the
             // two accumulators are concatenated side-to-move first), so unlike the hand-crafted
-            // score below it takes no `pov()` flip. The accumulator is rebuilt from the position
-            // here rather than maintained incrementally through the search.
-            let accumulator = Accumulator::from_position(network, &self.pos);
+            // score below it takes no `pov()` flip. The accumulator is the one maintained
+            // incrementally across the search's make/unmake, not a from-scratch rebuild; it is taken
+            // out to be paired with the network for the forward pass and returned unchanged. Its
+            // equivalence to a full rebuild is covered by the accumulator equivalence tests rather
+            // than a per-leaf assertion here, whose O(pieces × H) rebuild would dominate debug search
+            // time.
+            let values = self
+                .accumulator
+                .take()
+                .expect("a network search maintains its accumulator");
+            let accumulator = Accumulator::from_values(network, values);
             let cp = nnue::forward(network, &accumulator, self.pos.turn());
+            self.accumulator = Some(accumulator.into_values());
             return Score::cp(cp as i16);
         }
 
@@ -3044,6 +3102,7 @@ impl<'engine> Search<'engine> {
     #[inline(always)]
     unsafe fn make_move(&mut self, mov: &Move) {
         self.eval_stack.push(self.eval_state);
+        self.push_accumulator();
         self.pos.make_move_unchecked(mov);
         self.sync_eval_after_make();
     }
@@ -3055,11 +3114,46 @@ impl<'engine> Search<'engine> {
     #[inline(always)]
     fn make_move_checked(&mut self, mov: &Move) {
         self.eval_stack.push(self.eval_state);
+        self.push_accumulator();
         self.pos.make_move(mov);
         self.sync_eval_after_make();
     }
 
-    /// Folds the move just made into the accumulator and, under debug builds, checks the result.
+    /// Saves a copy of the current accumulator payload so `unmake_move` can restore it exactly, by
+    /// appending its two perspective vectors to the flat stack. A no-op on the hand-crafted path,
+    /// where no accumulator is maintained.
+    #[inline(always)]
+    fn push_accumulator(&mut self) {
+        if let Some(values) = &self.accumulator {
+            self.accumulator_stack.extend_from_slice(&values[0]);
+            self.accumulator_stack.extend_from_slice(&values[1]);
+        }
+    }
+
+    /// Restores the accumulator payload saved by the matching `push_accumulator`, copying the last
+    /// appended pair back out of the flat stack. A no-op on the hand-crafted path.
+    #[inline(always)]
+    fn pop_accumulator(&mut self) {
+        let Some(values) = self.accumulator.as_mut() else {
+            return;
+        };
+        let hidden = values[0].len();
+        let start = self.accumulator_stack.len() - 2 * hidden;
+        let (saved0, saved1) = self.accumulator_stack[start..].split_at(hidden);
+        values[0].copy_from_slice(saved0);
+        values[1].copy_from_slice(saved1);
+        self.accumulator_stack.truncate(start);
+    }
+
+    /// Folds the move just made into the hand-crafted accumulator and, when a network is selected,
+    /// the NNUE accumulator.
+    ///
+    /// The hand-crafted score is re-checked against a from-scratch recomputation under debug builds,
+    /// as it always has been: `EvalState::from_position` is an O(pieces) scan and cheap enough to run
+    /// per node. The NNUE accumulator is not re-checked inline, because `Accumulator::from_position`
+    /// is O(pieces × H) and running it per node visibly slowed debug searches. Its incremental
+    /// maintenance is instead verified exhaustively over whole subtrees — through this exact
+    /// make/unmake seam, including null moves — by the accumulator equivalence tests.
     #[inline(always)]
     fn sync_eval_after_make(&mut self) {
         self.pos.replay_last_move_deltas(&mut self.eval_state);
@@ -3068,6 +3162,15 @@ impl<'engine> Search<'engine> {
             EvalState::from_position(&self.pos),
             "incremental evaluation diverged from a from-scratch recomputation after a move"
         );
+        if let Some(network) = self.network.as_deref() {
+            let values = self
+                .accumulator
+                .take()
+                .expect("a network search maintains its accumulator");
+            let mut accumulator = Accumulator::from_values(network, values);
+            self.pos.replay_last_move_deltas(&mut accumulator);
+            self.accumulator = Some(accumulator.into_values());
+        }
     }
 
     /// Unmakes the most recent move and restores the accumulator that went with the prior position.
@@ -3081,6 +3184,7 @@ impl<'engine> Search<'engine> {
             .eval_stack
             .pop()
             .expect("unmake_move without a matching make_move");
+        self.pop_accumulator();
     }
 
     /// Passes the turn to the opponent for a null-move search, carrying the evaluation accumulator
@@ -3093,12 +3197,16 @@ impl<'engine> Search<'engine> {
     #[inline(always)]
     fn make_null_move(&mut self) {
         self.eval_stack.push(self.eval_state);
+        self.push_accumulator();
         self.pos.make_null_move();
         debug_assert_eq!(
             self.eval_state,
             EvalState::from_position(&self.pos),
             "a null move must leave the evaluation accumulator unchanged"
         );
+        // A null move moves no piece, so the placement-derived NNUE accumulator is identical on both
+        // sides of it: it is carried across unchanged (nothing to replay) and only re-associated with
+        // the flipped side to move at the next `evaluate`, which is where the carry-across is checked.
     }
 
     /// Unmakes a null move and restores the accumulator that went with the prior position.
@@ -3109,6 +3217,7 @@ impl<'engine> Search<'engine> {
             .eval_stack
             .pop()
             .expect("unmake_null_move without a matching make_null_move");
+        self.pop_accumulator();
     }
 
     /// Whether the forward-pruning steps (futility, null move) are active. Always true in normal

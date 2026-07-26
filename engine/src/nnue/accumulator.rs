@@ -158,6 +158,34 @@ impl<'net> Accumulator<'net> {
     pub fn perspective(&self, perspective: Player) -> &[i16] {
         &self.values[perspective_slot(perspective)]
     }
+
+    /// Pairs an already-computed activation payload with `network`, without recomputing anything.
+    ///
+    /// This is the inverse of [`Accumulator::into_values`]. It exists so a caller that maintains the
+    /// accumulator across make/unmake can keep the payload in a lifetime-free per-move stack — one it
+    /// owns alongside the network rather than a network-borrowing `Accumulator` it cannot store — and
+    /// re-pair it with the network only for the moment it folds a move in ([`PieceDeltaSink`]) or
+    /// reads a perspective. `values` must be the activations `network` would produce for the
+    /// position, i.e. a payload previously taken from `into_values` (or a `from_position` result);
+    /// pairing arbitrary activations with a mismatched network is a logic error, not a checked one.
+    ///
+    /// The two per-perspective vectors must each be `network.hidden_width()` long. That is the
+    /// caller's invariant to uphold; a shorter or longer vector will surface as an out-of-bounds
+    /// access or a wrong result in the forward pass rather than a diagnostic here.
+    pub fn from_values(network: &'net Network, values: [Box<[i16]>; 2]) -> Self {
+        Self {
+            network,
+            hidden: network.hidden_width() as usize,
+            values,
+        }
+    }
+
+    /// Consumes the accumulator and returns its per-perspective activation payload, leaving the
+    /// borrowed network behind. The inverse of [`Accumulator::from_values`]: the payload can be
+    /// stored without a lifetime and later re-paired with the same network.
+    pub fn into_values(self) -> [Box<[i16]>; 2] {
+        self.values
+    }
 }
 
 impl PieceDeltaSink for Accumulator<'_> {

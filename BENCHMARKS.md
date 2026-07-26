@@ -511,6 +511,47 @@ than 22); that fixture's depth was raised to match. The measured +28 Elo is the
 net over the opening book: the breadth the cut buys everywhere else more than
 pays for the occasional deep line it shortens.
 
+## Incremental NNUE accumulator in the search hot loop
+
+The NNUE first-layer accumulator used to be rebuilt from scratch at every
+evaluated leaf — an O(pieces × H) scan of the whole board. It is now maintained
+incrementally along the search's make/unmake, folding in only the features each
+move toggles (O(features-toggled × H)) and restoring the previous value on unmake
+from a per-ply stack. The evaluation is bit-identical: a fixed-depth search visits
+exactly the same nodes before and after, which is what makes the timing a
+like-for-like speed comparison rather than a search-shape one.
+
+Measured single-thread with the built-in `gen-002` network (hidden width 256),
+running `go depth 12` to completion on four positions, base `9fe845c` against the
+task branch. `nps = nodes / time`; node counts are identical by construction, so
+they are the control, not the result. Apple M3 Pro, `rustc 1.97.1`, otherwise
+idle, medians of interleaved base/branch runs.
+
+| Position | Nodes | Base time | Base NPS | Branch time | Branch NPS | Speed-up |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| startpos | 150,749 | 281 ms | 536 k | 170 ms | 883 k | 1.65× |
+| kiwipete | 367,085 | 1003 ms | 366 k | 787 ms | 466 k | 1.27× |
+| middlegame | 142,714 | 314 ms | 454 k | 252 ms | 566 k | 1.25× |
+| endgame | 49,991 | 32 ms | 1517 k | 34 ms | 1435 k | ~1× (noise) |
+| **Aggregate** | **710,539** | **1630 ms** | **436 k** | **1243 ms** | **572 k** | **1.31×** |
+
+About **+31 % NPS in aggregate**. The gain tracks piece count, as expected: the
+opening, where the discarded from-scratch scan touched the most pieces, gains most
+(+65 %); the sparse endgame is too fast to measure against timer noise. This is on
+seaborg's *scalar* ARM NNUE path — the same handicap the strength-gulf diagnostic
+notes — and the saving is per-leaf work removed, so it is at least as large on the
+x86 AVX2 target. Crucially the per-node cost of the incremental path is
+O(features × H) against the old O(pieces × H) rebuild, so the margin widens as the
+hidden width grows: this change is the enabler that keeps a wider network
+affordable, which is its purpose.
+
+One implementation note worth recording, since it dominated the result: the
+restore stack is a single flat, pre-sized `i16` buffer. An earlier version stored
+a `Vec` of freshly boxed per-ply payloads, whose per-node heap
+allocate-and-free churn cancelled the entire saving (NPS came out flat). Sizing
+one buffer up front and copying into its spare capacity is what turns the change
+into the +31 % above.
+
 ## NNUE self-play bootstrap programme
 
 The entries above measure *search* changes against a fixed evaluation. This

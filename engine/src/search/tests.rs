@@ -3707,3 +3707,139 @@ fn static_eval_reports_the_hand_crafted_leaf_from_the_side_to_moves_view() {
         "with Black up a rook, Black's own view is positive"
     );
 }
+
+/// The accumulator the search maintains across its own `make_move`/`unmake_move` (and null-move)
+/// seam is bit-identical to a from-scratch rebuild at every node of a subtree, for every move kind:
+/// quiet moves, captures, castling both sides, en passant, promotions with and without capture, and
+/// null moves.
+///
+/// `Accumulator::from_position` is the from-scratch reference; the search folds each move in
+/// incrementally instead. Walking whole subtrees through the real search wrappers catches an update
+/// that stays self-consistent per move but drifts over a deep line, which a single make/unmake could
+/// not. The checks are `assert_eq!` rather than the search's debug-only guard, so they hold in
+/// release builds too. Bit-identical accumulators feed the forward pass identical inputs, so this is
+/// also what makes the NNUE leaf value — and therefore any fixed-depth search — identical to the
+/// earlier from-scratch behaviour.
+#[test]
+fn search_maintains_the_accumulator_bit_identically_to_a_rebuild() {
+    chess::init::init_globals();
+    let net = Arc::new(test_network());
+
+    fn walk(search: &mut Search<'_>, net: &Network, depth: u32) {
+        assert_eq!(
+            *search.accumulator.as_ref().unwrap(),
+            Accumulator::from_position(net, &search.pos).into_values(),
+            "maintained accumulator disagrees with a rebuild before descending"
+        );
+
+        // A null move is legal only out of check. It moves no piece, so the accumulator is carried
+        // across unchanged and then restored exactly on unmake.
+        if !search.pos.in_check() {
+            search.make_null_move();
+            assert_eq!(
+                *search.accumulator.as_ref().unwrap(),
+                Accumulator::from_position(net, &search.pos).into_values(),
+                "a null move changed the accumulator"
+            );
+            search.unmake_null_move();
+            assert_eq!(
+                *search.accumulator.as_ref().unwrap(),
+                Accumulator::from_position(net, &search.pos).into_values(),
+                "the accumulator was not restored after a null move"
+            );
+        }
+
+        if depth == 0 {
+            return;
+        }
+
+        let moves = search.pos.generate::<BasicMoveList, AllGen, Legal>();
+        for mov in &moves {
+            // SAFETY: `mov` was just generated as a legal move for the current position.
+            unsafe { search.make_move(mov) };
+            assert_eq!(
+                *search.accumulator.as_ref().unwrap(),
+                Accumulator::from_position(net, &search.pos).into_values(),
+                "the accumulator diverged after {mov}"
+            );
+            walk(search, net, depth - 1);
+            search.unmake_move();
+            assert_eq!(
+                *search.accumulator.as_ref().unwrap(),
+                Accumulator::from_position(net, &search.pos).into_values(),
+                "the accumulator was not restored after unmaking {mov}"
+            );
+        }
+    }
+
+    // Depths kept modest so the from-scratch check at every node stays cheap while still forcing long
+    // make/unmake sequences through each position's characteristic move kinds.
+    let cases = [
+        // The opening: quiet development and the first captures.
+        (
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            3,
+        ),
+        // Kiwipete: castling for both sides, captures of every piece, and pins.
+        (
+            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+            3,
+        ),
+        // A pawn poised for a double push that creates a real en-passant target.
+        ("4k3/8/8/8/5p2/8/4P3/4K3 w - - 0 1", 4),
+        // Pawns on the seventh for both sides: promotions, including promotion captures.
+        ("n1n5/PPPk4/8/8/8/8/4Kppp/5N1N b - - 0 1", 3),
+    ];
+
+    for (fen, depth) in cases {
+        let pos = Position::from_fen(fen).expect("test FEN is valid");
+        let flag = AtomicBool::new(false);
+        let tt = Table::new(1);
+        let mut search = Search::new(pos, &flag, None, &tt);
+        // Selecting the network seeds the accumulator from the root, the path the walk relies on.
+        search.set_network(Some(Arc::clone(&net)));
+        walk(&mut search, &net, depth);
+    }
+}
+
+/// A fixed-depth search that scores through the network runs entirely on the incrementally
+/// maintained accumulator and returns the same result every time. Together with the per-node
+/// equivalence proven by `search_maintains_the_accumulator_bit_identically_to_a_rebuild`, which
+/// guarantees the leaf values match a from-scratch rebuild, this exercises the whole integrated
+/// path and pins its determinism.
+#[test]
+fn fixed_depth_network_search_is_deterministic() {
+    chess::init::init_globals();
+    let net = test_network();
+
+    // Depth is kept shallow: every node rebuilds the accumulator from scratch under the debug-build
+    // equivalence guard, so a deeper search would make this test disproportionately slow for the
+    // narrow property it pins.
+    for fen in [
+        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+        "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
+    ] {
+        let pos = Position::from_fen(fen).expect("test FEN is valid");
+
+        let run = || {
+            let flag = AtomicBool::new(false);
+            let tt = Table::new(1);
+            let mut search = Search::new(pos.clone(), &flag, None, &tt);
+            search.set_network(Some(Arc::new(net.clone())));
+            search
+                .run::<Master>(3)
+                .expect("a non-terminal position returns a result")
+        };
+
+        let first = run();
+        let second = run();
+        assert_eq!(
+            first.score, second.score,
+            "network search score is not deterministic on {fen}"
+        );
+        assert_eq!(
+            first.best_move, second.best_move,
+            "network search best move is not deterministic on {fen}"
+        );
+    }
+}
