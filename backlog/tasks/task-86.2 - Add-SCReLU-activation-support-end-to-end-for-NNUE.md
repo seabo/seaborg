@@ -4,7 +4,7 @@ title: Add SCReLU activation support end-to-end for NNUE
 status: To Do
 assignee: []
 created_date: '2026-07-25 12:23'
-updated_date: '2026-07-25 16:31'
+updated_date: '2026-07-26 23:09'
 labels:
   - nnue
 dependencies: []
@@ -25,5 +25,4 @@ The design contract reserves activation_id = 1 for squared clipped ReLU (SCReLU)
 - [ ] #2 Rust scalar and AVX2 inference implement SCReLU and are proven bit-identical to each other for SCReLU networks
 - [ ] #3 The PyTorch trainer and quantization-aware export produce a valid SCReLU .sbnn that the engine loads and evaluates
 - [ ] #4 A three-way differential/golden-vector equivalence test (mirroring TASK-69.10) covers an SCReLU network
-- [ ] #5 SCReLU is implemented in a NEON aarch64 inference path, runtime-dispatched, bit-identical to the scalar SCReLU path, keeping Apple Silicon at SIMD parity with the AVX2 path
 <!-- AC:END -->

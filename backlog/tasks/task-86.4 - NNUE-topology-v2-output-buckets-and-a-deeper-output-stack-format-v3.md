@@ -4,7 +4,7 @@ title: 'NNUE topology v2: output buckets and a deeper output stack (format v3)'
 status: To Do
 assignee: []
 created_date: '2026-07-25 12:23'
-updated_date: '2026-07-25 16:31'
+updated_date: '2026-07-26 23:09'
 labels:
   - nnue
 dependencies:
@@ -26,5 +26,4 @@ Extend the network beyond a single hidden layer to a modern topology while keepi
 - [ ] #2 Inference selects exactly one output bucket by a documented static rule (e.g. piece count) and evaluates only that bucket's tail; scalar and AVX2 paths are bit-identical
 - [ ] #3 The PyTorch model, quantization-aware training, and export produce a valid bucketed multi-layer .sbnn (int8 dense tail) that the engine loads and evaluates
 - [ ] #4 A golden-vector / three-way differential equivalence test covers a bucketed multi-layer network across positions spanning multiple buckets
-- [ ] #5 A NEON aarch64 inference path, runtime-dispatched via `is_aarch64_feature_detected!`, evaluates the bucketed multi-layer network bit-identically to the scalar path so Apple Silicon has SIMD parity with the AVX2 path; where the int8 dense tail allows, dotprod (`sdot`/`udot`) is used
 <!-- AC:END -->
