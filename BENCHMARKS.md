@@ -476,6 +476,41 @@ low-risk, mechanism-sound change on that basis. A completed SPRT — and, better
 a forfeit-counting no-increment match once the harness supports it — remains the
 way to promote this from mechanism-based to measurement-based.
 
+### Internal iterative reduction: shallower search on a transposition-table miss
+
+Implementing the two paired depth-reduction steps in the main search. A node
+reached with no transposition-table move to try first has no cheap guide to its
+best move, so its move ordering is poor and a full-depth search of it is
+expensive out of proportion to how often it matters. Such a node is searched
+shallower instead: in a PV node the depth is cut by three plies, and in a non-PV
+node at depth ≥ 7 by two. There is no verifying re-search — unlike late-move
+reduction — so the cut is a speculative bet that a move-less node is cheap to get
+slightly wrong; the reduced search stocks the table with a move that a later,
+deeper visit can then use. The trigger is a genuine absence of a table move (a
+miss or a legitimately move-less entry) and never a Zobrist-collision guard,
+whose foreign entry says nothing about whether the node has been explored.
+
+| Field | Value |
+| --- | --- |
+| Baseline | `git:cfdac4d` (master, the task's merge-base; tested binary sha256 `5bfc5223…`) |
+| Candidate | task-52 internal-iterative-reduction (tested binary sha256 `4c646761…`, built from the identical search implementation; the binary embeds the build-time commit string via `GIT_HASH`, which feeds only UCI version reporting, so a rebuild from the final commit differs by that string alone and reproduces the search behavior byte-for-byte) |
+| Result | **PASS** — SPRT crossed the upper boundary (LLR 2.96, bounds ±2.94) |
+| Elo | **+28.3 ± 10.8** (fastchess pentanomial error) |
+| Games | 1524 (W-D-L 405-838-281), pentanomial 25-124-353-222-38, 0 crashes, 0 forfeits |
+| Time control | `tc=8+0.08`, 64 MB hash, one worker per engine |
+| SPRT | `elo0=-5, elo1=0, alpha=0.05, beta=0.05` (the no-regression gate) |
+| Runner | fastchess alpha 1.5.0, `openings-v1.epd`, `target-cpu=native` release |
+| Machine | Apple, concurrency 4 |
+
+The reduction trades horizon depth for breadth, and its worst case is a deep,
+move-less line that must be calculated precisely rather than pruned — a
+king-and-pawn race being the archetype. On the won K+P-vs-K+P endgame in the
+`gives_correct_answers` suite the engine still plays the winning move, but the
+promotion's full value now surfaces two plies later than before (depth 24 rather
+than 22); that fixture's depth was raised to match. The measured +28 Elo is the
+net over the opening book: the breadth the cut buys everywhere else more than
+pays for the occasional deep line it shortens.
+
 ## NNUE self-play bootstrap programme
 
 The entries above measure *search* changes against a fixed evaluation. This

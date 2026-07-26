@@ -50,8 +50,12 @@ fn suite() -> Vec<(&'static str, u8, Score, Score, &'static [&'static str])> {
             // win away (a2a4 draws, a2a3 loses), so the king must step aside
             // first. The two king moves are equally optimal, and which one the
             // search returns depends on quiet-move ordering, so both are
-            // accepted.
-            ("8/6pk/8/8/8/8/P7/K7 w - - 0 1", 22, Score::cp(450), Score::cp(920), &["a1b1", "a1b2"]),
+            // accepted. Searched two plies deeper than the winning move needs:
+            // the transposition-miss depth reduction speculatively shortens the
+            // long, move-less king-and-pawn lines, so the winning score surfaces
+            // at depth 24 rather than 22. The best move is found well before
+            // either — only the promotion's full value lags behind the horizon.
+            ("8/6pk/8/8/8/8/P7/K7 w - - 0 1", 24, Score::cp(450), Score::cp(920), &["a1b1", "a1b2"]),
     ]
 }
 
@@ -836,9 +840,11 @@ fn the_same_key_is_worth_different_scores_at_different_halfmove_clocks() {
         // The exact scores below are properties of the four-ply search and the evaluation. Hold
         // the search to its nominal depth: the check-evasion extension would search this
         // heavy-check position deeper and move the numbers, without bearing on the clock gate
-        // this test exists to pin. Late-move reduction is off for the same reason.
+        // this test exists to pin. Late-move reduction and the transposition-miss depth reduction
+        // are off for the same reason — both alter the effective depth without touching the clock.
         search.lmr_disabled = true;
         search.extensions_disabled = true;
+        search.iir_disabled = true;
         search.run::<Master>(4).unwrap().score
     };
 
@@ -1002,6 +1008,10 @@ fn a_repetition_derived_value_is_not_stored_in_the_table() {
     // Driven at a single fixed depth rather than through iterative deepening. Four plies are
     // needed to reach the third occurrence, so a deepening search would first store legitimate
     // history-independent results from its shallower iterations and mask the suppression.
+    // The transposition-miss depth reduction is off so the cold-table root keeps its full four
+    // plies: with it on, the move-less root would be reduced and the search would stop short of
+    // the repetition this test needs to reach.
+    search.iir_disabled = true;
     search.pvt = PVTable::new(4);
     search
         .search::<Master, Root>(Score::INF_N, Score::INF_P, 4, 0)
@@ -1633,6 +1643,145 @@ fn late_move_reduction_reduces_the_search_tree() {
     assert!(
         reduced_nodes < full_nodes,
         "late-move reduction did not reduce the tree: {reduced_nodes} reduced vs {full_nodes} full"
+    );
+}
+
+/// A quiet, piece-heavy middlegame position whose fixed-depth tree recurses widely, so a
+/// depth-reducing heuristic has room to visibly cut work. Shared by the internal-iterative-reduction
+/// tests below.
+const IIR_TEST_FEN: &str = "r3k2r/pppq1ppp/2np1n2/4p3/2B1P3/2NP1N2/PPP2PPP/R2Q1RK1 w kq - 0 1";
+
+/// Internal iterative reduction must earn its keep in PV nodes: a PV node with no transposition-table
+/// move to search first is trimmed by [`IIR_PV_REDUCTION`] plies, so a search visits strictly fewer
+/// nodes with the reduction on than off. The depth is held below [`IIR_NON_PV_MIN_DEPTH`] so no node
+/// in the tree qualifies for the non-PV cut at Step 13 — the reduction of the tree is therefore
+/// attributable to Step 11 alone. The search is driven directly at one fixed depth rather than
+/// through iterative deepening so the table starts empty and every node's first visit is a genuine
+/// miss, which is exactly the condition the reduction keys on.
+#[test]
+fn internal_iterative_reduction_reduces_a_pv_search_tree() {
+    chess::init::init_globals();
+
+    let position = Position::from_fen(IIR_TEST_FEN).unwrap();
+    let flag = AtomicBool::new(false);
+    let depth = 6;
+
+    let nodes = |iir_disabled: bool| {
+        let table = Table::new(16);
+        let mut search = Search::new(position.clone(), &flag, None, &table);
+        search.pvt = PVTable::new(depth as u8);
+        search.iir_disabled = iir_disabled;
+        search
+            .search::<Master, Pv>(Score::INF_N, Score::INF_P, depth, 0)
+            .unwrap();
+        search.trace.all_nodes_visited()
+    };
+
+    let reduced = nodes(false);
+    let full = nodes(true);
+    assert!(
+        reduced < full,
+        "internal iterative reduction did not reduce the PV tree: {reduced} reduced vs {full} full"
+    );
+}
+
+/// Internal iterative reduction must earn its keep in non-PV nodes too: at or above
+/// [`IIR_NON_PV_MIN_DEPTH`] a non-PV node with no transposition-table move is trimmed by
+/// [`IIR_NON_PV_REDUCTION`] plies. A pure non-PV search never reaches Step 11's PV cut, so any
+/// difference here is Step 13's alone. The other depth-shrinking heuristics are switched off so the
+/// tree is wide enough for the two-ply cut to register unmistakably rather than being swallowed by
+/// forward pruning; only the reduction under test varies between the two runs. The window sits above
+/// the position's true value so the node fails low and must actually search its moves.
+#[test]
+fn internal_iterative_reduction_reduces_a_non_pv_search_tree() {
+    chess::init::init_globals();
+
+    let position = Position::from_fen(IIR_TEST_FEN).unwrap();
+    let flag = AtomicBool::new(false);
+    let depth = IIR_NON_PV_MIN_DEPTH;
+
+    let nodes = |iir_disabled: bool| {
+        let table = Table::new(16);
+        let mut search = Search::new(position.clone(), &flag, None, &table);
+        search.pvt = PVTable::new(depth as u8);
+        search.iir_disabled = iir_disabled;
+        search.forward_pruning_disabled = true;
+        search.rfp_disabled = true;
+        search.lmr_disabled = true;
+        search.lmp_disabled = true;
+        search
+            .search::<Master, NonPv>(Score::cp(200), Score::cp(201), depth, 0)
+            .unwrap();
+        search.trace.all_nodes_visited()
+    };
+
+    let reduced = nodes(false);
+    let full = nodes(true);
+    assert!(
+        reduced < full,
+        "internal iterative reduction did not reduce the non-PV tree: \
+         {reduced} reduced vs {full} full"
+    );
+}
+
+/// The reduction must fire on a genuine absence of a table move and never on a Zobrist collision. A
+/// full-key hit whose stored move cannot be played here belongs to a foreign position and says
+/// nothing about whether this node has been explored, so it must not stand in for a real miss.
+///
+/// The two runs are made identical except for one seeded entry. At depth two only the root can
+/// change: Step 11's cut is floored at one ply, so a child at depth one is left untouched, and the
+/// grandchildren fall straight into quiescence — the root is the sole node whose reduction is
+/// observable. With an empty table the root is a genuine miss and the reduction fires, cutting the
+/// tree; with the root's slot seeded to a full-key entry carrying an unplayable move, the collision
+/// guard must suppress the reduction, leaving the tree identical to a search that never reduces.
+#[test]
+fn internal_iterative_reduction_ignores_a_transposition_collision() {
+    chess::init::init_globals();
+
+    let position = Position::from_fen(IIR_TEST_FEN).unwrap();
+    let flag = AtomicBool::new(false);
+    let depth = 2;
+
+    // No piece stands on a4 in this position, so this move cannot be played here: a full-key hit
+    // carrying it is a genuine collision, not an ordering hint.
+    let unplayable = Move::build(Square::A4, Square::A5, None, MoveType::QUIET);
+
+    let nodes = |seed_collision: bool, iir_disabled: bool| {
+        let table = Table::new(16);
+        if seed_collision {
+            table.store(
+                position.zobrist().0,
+                Score::cp(0),
+                None,
+                8,
+                Bound::Exact,
+                &unplayable,
+            );
+        }
+        let mut search = Search::new(position.clone(), &flag, None, &table);
+        search.pvt = PVTable::new(depth as u8);
+        search.iir_disabled = iir_disabled;
+        search
+            .search::<Master, Pv>(Score::INF_N, Score::INF_P, depth, 0)
+            .unwrap();
+        search.trace.all_nodes_visited()
+    };
+
+    let miss_reduced = nodes(false, false);
+    let miss_full = nodes(false, true);
+    let collision_reduced = nodes(true, false);
+
+    // A genuine miss reduces the tree.
+    assert!(
+        miss_reduced < miss_full,
+        "the reduction did not fire on a genuine miss: {miss_reduced} vs {miss_full}"
+    );
+    // A collision does not: the reduction-enabled search matches the un-reduced tree exactly,
+    // proving the collision guard took the no-reduce path rather than treating it as a miss.
+    assert_eq!(
+        collision_reduced, miss_full,
+        "the reduction fired on a collision instead of treating it as a hit: \
+         {collision_reduced} vs {miss_full}"
     );
 }
 

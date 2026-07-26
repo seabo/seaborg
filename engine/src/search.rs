@@ -321,6 +321,30 @@ const LMR_MIN_DEPTH: Depth = 3;
 /// bound and are reducible immediately.
 const LMR_MOVE_THRESHOLD: u8 = 3;
 
+/// Plies trimmed from a PV node that has no transposition-table move to search first.
+///
+/// Internal iterative reduction. Without a hash move the node has no cheap guide to its best move,
+/// so its ordering is poor and a full-depth search of it is expensive out of proportion to how
+/// often it matters. It is searched shallower instead; the reduced search leaves a move in the
+/// table, and a later visit that finds the node important re-searches it with that move in hand.
+/// There is no verifying re-search of its own, unlike late-move reduction, so the cut is a
+/// speculative bet that a move-less node is cheap to get slightly wrong. Larger for PV nodes than
+/// the non-PV cut below because a PV node with no hash move is the most ordering-starved of all.
+const IIR_PV_REDUCTION: Depth = 3;
+
+/// Plies trimmed from a non-PV node, at or above [`IIR_NON_PV_MIN_DEPTH`], that has no
+/// transposition-table move to search first. The non-PV counterpart of [`IIR_PV_REDUCTION`],
+/// smaller because a non-PV node is scouted against a null window and so is already cheap.
+const IIR_NON_PV_REDUCTION: Depth = 2;
+
+/// Smallest remaining depth at which the non-PV internal iterative reduction is attempted.
+///
+/// Confining it to deep nodes keeps two plies from swallowing a shallow search whole: at seven the
+/// reduced draft is still five, where the saving is large and the speculative cut's risk small.
+/// Near the horizon the reduction would buy little and could turn a real search into quiescence,
+/// so it is not attempted there.
+const IIR_NON_PV_MIN_DEPTH: Depth = 7;
+
 /// Whether late-move reduction draws its base reduction from the log-shaped [`LmrTable`] rather than
 /// the older hand-tuned step function.
 ///
@@ -1491,6 +1515,12 @@ pub struct Search<'engine> {
     /// leave a materially sound result unchanged while still shrinking the tree.
     #[cfg(test)]
     see_pruning_disabled: bool,
+    /// Test hook that disables internal iterative reduction so a test can search the same position
+    /// with the transposition-miss depth cut bypassed and confirm the cut shrinks the tree where it
+    /// fires. The reduction has no verifying re-search, so unlike late-move reduction it can move a
+    /// fixed-depth result; tests compare node counts rather than scores.
+    #[cfg(test)]
+    iir_disabled: bool,
     /// Destination for typed search progress events.
     events: Option<Sender<SearchEvent>>,
     /// Per-ply state for the nodes on the current search path, indexed by ply from the root.
@@ -1589,6 +1619,8 @@ impl<'engine> Search<'engine> {
             extensions_disabled: false,
             #[cfg(test)]
             see_pruning_disabled: false,
+            #[cfg(test)]
+            iir_disabled: false,
         }
     }
 
@@ -1895,7 +1927,7 @@ impl<'engine> Search<'engine> {
         &mut self,
         mut alpha: Score,
         mut beta: Score,
-        depth: Depth,
+        mut depth: Depth,
         ply: usize,
     ) -> NodeResult {
         self.trace.visit_node();
@@ -1989,6 +2021,12 @@ impl<'engine> Search<'engine> {
         // recomputation — see [`Snapshot::eval`] for why this needs no clock gate, unlike the score.
         let tt_eval = tt_entry.as_ref().and_then(Snapshot::eval);
         let mut tt_mov = None;
+        // Set only when a full-key hit carried a move that cannot be played here — a genuine Zobrist
+        // collision on a foreign entry, distinct from having no move at all. The internal iterative
+        // reduction at Steps 11 and 13 reads this to avoid mistaking a collision for a real miss: the
+        // foreign move says nothing about whether *this* node has been explored, so it must not stand
+        // in for the absence of information that the reduction is meant to react to.
+        let mut tt_collision = false;
         match tt_entry.as_ref() {
             Some(entry) => {
                 self.trace.hash_hit();
@@ -2002,6 +2040,7 @@ impl<'engine> Search<'engine> {
                         // that rather than a truncated-signature accident. The score is left alone:
                         // an unusable ordering hint is not evidence about the score's provenance.
                         self.trace.hash_collision();
+                        tt_collision = true;
                     }
                 }
             }
@@ -2192,13 +2231,40 @@ impl<'engine> Search<'engine> {
         //         TODO
 
         // Step 11. In PV nodes, if the move is not in TT, decrease depth by 3.
-        //          TODO
+        //
+        // Internal iterative reduction: a PV node with no hash move to try first is the most
+        // ordering-starved node in the tree, so rather than pay full depth to search it blind it is
+        // searched shallower and left to a later visit once the reduced search has stocked the table
+        // with a move. See [`IIR_PV_REDUCTION`] for why this speculative cut is worth its occasional
+        // cost. The trigger is a genuine absence of a table move — a miss or a legitimately move-less
+        // entry — and never a collision guard: `tt_collision` marks a foreign entry whose move is
+        // unplayable here, which is not evidence this node is unexplored (see Step 3).
+        //
+        // The cut is floored at one ply because Step 5's depth-at-or-below-zero handover to
+        // quiescence is already behind us: a node whose move loop is about to begin must keep a real
+        // search of its own rather than fall through the loop at a non-positive depth.
+        if self.iir_enabled() && Node::pv() && tt_mov.is_none() && !tt_collision {
+            depth = (depth - IIR_PV_REDUCTION).max(1);
+        }
 
         // Step 12. If depth <= 0, run quiescence search.
         //          Handled earlier, at Step 5.
 
         // Step 13. In non-PV nodes with depth >= 7 and not in TT, decrease depth by 2.
-        //          TODO
+        //
+        // The non-PV counterpart of Step 11, confined to nodes deep enough that trimming two plies
+        // still leaves a substantial search (see [`IIR_NON_PV_MIN_DEPTH`]). The genuine-miss
+        // requirement is identical: a real miss or a move-less entry reduces, a collision guard does
+        // not. The depth floor Step 11 needs is unnecessary here because the minimum-depth gate
+        // already keeps the reduced draft well clear of the quiescence handover.
+        if self.iir_enabled()
+            && !Node::pv()
+            && depth >= IIR_NON_PV_MIN_DEPTH
+            && tt_mov.is_none()
+            && !tt_collision
+        {
+            depth -= IIR_NON_PV_REDUCTION;
+        }
 
         // Step 14. If PV move and TT move failed low, this is a likely fail-low.
         //          TODO
@@ -3124,6 +3190,21 @@ impl<'engine> Search<'engine> {
         #[cfg(test)]
         {
             !self.see_pruning_disabled
+        }
+        #[cfg(not(test))]
+        {
+            true
+        }
+    }
+
+    /// Whether internal iterative reduction — the transposition-miss depth cut at Steps 11 and 13 —
+    /// is active. Always true in normal builds; a test can switch it off to search a position at full
+    /// depth and confirm the cut shrinks the tree where it fires.
+    #[inline(always)]
+    fn iir_enabled(&self) -> bool {
+        #[cfg(test)]
+        {
+            !self.iir_disabled
         }
         #[cfg(not(test))]
         {
