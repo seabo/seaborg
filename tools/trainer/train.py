@@ -99,12 +99,22 @@ def _to_device(batch, device):
     return stm_idx, nstm_idx, offsets
 
 
+def _buckets(piece_count: np.ndarray, num_buckets: int) -> np.ndarray:
+    """The per-sample output bucket, binning piece count into ``num_buckets`` equal
+    ranges over ``1..=32`` — the same rule the engine and exporter apply."""
+    idx = (np.maximum(piece_count - 1, 0) * num_buckets) // 32
+    return np.minimum(idx, num_buckets - 1)
+
+
 def _loss_on(model, batch, device, scale, lam) -> torch.Tensor:
     stm_idx, nstm_idx, offsets = _to_device(batch, device)
     y = torch.from_numpy(targets(batch.score, batch.wdl, scale, lam)).to(
         device=device, dtype=torch.float32
     )
-    fout = model(stm_idx, offsets, nstm_idx, offsets)
+    bucket = None
+    if model.config.is_bucketed:
+        bucket = torch.from_numpy(_buckets(batch.piece_count, model.config.num_buckets)).to(device)
+    fout = model(stm_idx, offsets, nstm_idx, offsets, bucket)
     p = torch.sigmoid(fout)
     return torch.mean((p - y) ** 2)
 
@@ -234,7 +244,20 @@ def benchmark_dataloader(data: PackedData, batch_size: int, seconds: float, log=
 
 
 def _build_config(args) -> NnueConfig:
-    return NnueConfig(hidden=args.hidden, activation=args.activation, scale=args.scale)
+    output_stack = None
+    if args.output_stack is not None:
+        output_stack = tuple(int(x) for x in args.output_stack.split(",") if x != "")
+    output_scales = None
+    if args.output_stack_scales is not None:
+        output_scales = tuple(int(x) for x in args.output_stack_scales.split(",") if x != "")
+    return NnueConfig(
+        hidden=args.hidden,
+        activation=args.activation,
+        scale=args.scale,
+        num_buckets=args.num_buckets,
+        output_stack=output_stack,
+        output_stack_scales=output_scales,
+    )
 
 
 def _build_schedule(args) -> LambdaSchedule:
@@ -254,6 +277,24 @@ def main(argv=None) -> int:
     parser.add_argument("--hidden", type=int, default=256, help="hidden width H (multiple of 16)")
     parser.add_argument("--activation", choices=["crelu", "screlu"], default="crelu")
     parser.add_argument("--scale", type=int, default=400)
+    parser.add_argument(
+        "--num-buckets",
+        type=int,
+        default=1,
+        help="version-2 output-bucket count (needs --output-stack)",
+    )
+    parser.add_argument(
+        "--output-stack",
+        default=None,
+        help="version-2 output-stack hidden dims, comma-separated (e.g. 16,32); "
+        "omit for the version-1 single linear output",
+    )
+    parser.add_argument(
+        "--output-stack-scales",
+        default=None,
+        help="per-layer int8 weight scales for the output stack, comma-separated "
+        "(one per stack layer incl. the final ->1); defaults to qb for every layer",
+    )
     parser.add_argument(
         "--lambda",
         dest="lam",

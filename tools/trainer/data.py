@@ -77,6 +77,9 @@ class Batch:
     offsets: np.ndarray
     score: np.ndarray
     wdl: np.ndarray
+    # Pieces on the board per sample (one active feature per piece). The version-2
+    # bucketed model selects an output-stack bucket from this.
+    piece_count: np.ndarray
 
     def __len__(self) -> int:
         return self.offsets.shape[0]
@@ -149,6 +152,7 @@ def decode(records: np.ndarray) -> Batch:
         offsets=offsets,
         score=score,
         wdl=wdl,
+        piece_count=counts,
     )
 
 

@@ -305,6 +305,69 @@ def quantize(model: NnueModel) -> QuantizedNetwork:
     return net
 
 
+def quantize_bucketed(model: NnueModel) -> QuantizedBucketedNetwork:
+    """Quantize a trained bucketed (version-2) model to the engine's integer
+    network: the feature transformer to i16 at ``QA`` (as version 1), and each stack
+    layer's weights to i8 at that layer's scale ``QB_k`` and its bias to i32 at
+    ``QA·QB_k``. Refuses any weight that overflows its integer type or an accumulator
+    that could exceed i16."""
+    config = model.config
+    if not config.is_bucketed:
+        raise ExportError("quantize_bucketed needs a bucketed (output_stack) model")
+    if config.activation_id not in _SUPPORTED_ACTIVATIONS:
+        raise ExportError(
+            f"activation {config.activation!r} has no integer inference; "
+            "export needs crelu or screlu"
+        )
+    state = model.state_dict()
+    w_ft = state["feature_transformer.weight"].detach().cpu().numpy()  # [768, H]
+    b_ft = state["ft_bias"].detach().cpu().numpy()  # [H]
+    dims = config.stack_layer_dims
+    scales = config.stack_layer_scales
+
+    buckets = []
+    for b in range(config.num_buckets):
+        layers = []
+        for k in range(len(dims)):
+            wk = state[f"stack_weights.{k}"].detach().cpu().numpy()[b]  # [out, in]
+            bk = state[f"stack_biases.{k}"].detach().cpu().numpy()[b]  # [out]
+            # Row-major flatten of [out, in] is the output-major o*in + i order on disk.
+            w_i8 = _checked_cast(
+                _round_half_even(wk.reshape(-1), scales[k]),
+                _I8_MIN,
+                _I8_MAX,
+                f"stack_w[bucket {b}][layer {k}]",
+                np.int8,
+            )
+            b_i32 = _checked_cast(
+                _round_half_even(bk, config.qa * scales[k]),
+                _I32_MIN,
+                _I32_MAX,
+                f"stack_b[bucket {b}][layer {k}]",
+                np.int32,
+            )
+            layers.append((w_i8, b_i32))
+        buckets.append(tuple(layers))
+
+    net = QuantizedBucketedNetwork(
+        hidden=config.hidden,
+        qa=config.qa,
+        scale=config.scale,
+        activation=config.activation_id,
+        layer_dims=tuple(dims),
+        layer_scales=tuple(scales),
+        w_ft=_checked_cast(
+            _round_half_even(w_ft, config.qa).reshape(-1), _I16_MIN, _I16_MAX, "w_ft", np.int16
+        ),
+        b_ft=_checked_cast(
+            _round_half_even(b_ft, config.qa), _I16_MIN, _I16_MAX, "b_ft", np.int16
+        ),
+        buckets=tuple(buckets),
+    )
+    _assert_accumulator_fits_i16(net)
+    return net
+
+
 def integer_eval_cp(
     net: QuantizedNetwork, stm_features: np.ndarray, nstm_features: np.ndarray
 ) -> int:
@@ -658,10 +721,10 @@ def features_from_fen(fen: str) -> tuple[np.ndarray, np.ndarray]:
     return np.array(stm, dtype=np.int64), np.array(nstm, dtype=np.int64)
 
 
-def write_network(path, model: NnueModel) -> QuantizedNetwork:
-    """Quantize ``model`` and write the SBNN file at ``path``; return the quantized
-    network so a caller can inspect or reproduce it."""
-    net = quantize(model)
+def write_network(path, model: NnueModel):
+    """Quantize ``model`` (version 1 or the bucketed version 2) and write the SBNN
+    file at ``path``; return the quantized network so a caller can inspect it."""
+    net = quantize_bucketed(model) if model.config.is_bucketed else quantize(model)
     Path(path).write_bytes(net.to_bytes())
     return net
 
