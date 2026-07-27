@@ -1,11 +1,11 @@
 ---
 id: TASK-86.1
 title: Wire the NNUE accumulator to update incrementally in the search hot loop
-status: In Review
+status: Ready to Merge
 assignee:
   - '@george'
 created_date: '2026-07-25 12:22'
-updated_date: '2026-07-26 23:19'
+updated_date: '2026-07-27 09:14'
 labels:
   - nnue
 dependencies: []
@@ -22,11 +22,11 @@ Today Search::evaluate rebuilds the accumulator from scratch at every evaluated 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The accumulator is maintained incrementally across make/unmake during search (e.g. a per-ply accumulator stack mirroring the EvalState eval_stack), and read at Search::evaluate without a from-scratch rebuild
-- [ ] #2 Null moves and any other move types that do not change piece placement are handled correctly (accumulator unchanged; only side-to-move / concatenation order flips)
-- [ ] #3 Accumulator::from_position is retained as a from-scratch equivalence reference, and a test asserts the incrementally-maintained accumulator is bit-identical to a full rebuild across a representative position/move suite including captures, promotions, castling, en passant, and null moves
-- [ ] #4 Evaluation output is bit-identical before and after this change (verified by a fixed-nodes search producing identical results)
-- [ ] #5 Before/after single-thread bench NPS is measured under controlled conditions and recorded in BENCHMARKS.md with attribution
+- [x] #1 The accumulator is maintained incrementally across make/unmake during search (e.g. a per-ply accumulator stack mirroring the EvalState eval_stack), and read at Search::evaluate without a from-scratch rebuild
+- [x] #2 Null moves and any other move types that do not change piece placement are handled correctly (accumulator unchanged; only side-to-move / concatenation order flips)
+- [x] #3 Accumulator::from_position is retained as a from-scratch equivalence reference, and a test asserts the incrementally-maintained accumulator is bit-identical to a full rebuild across a representative position/move suite including captures, promotions, castling, en passant, and null moves
+- [x] #4 Evaluation output is bit-identical before and after this change (verified by a fixed-nodes search producing identical results)
+- [x] #5 Before/after single-thread bench NPS is measured under controlled conditions and recorded in BENCHMARKS.md with attribution
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -77,4 +77,38 @@ Verification:
 - Single-thread NPS bench (go depth 12, built-in gen-002 net): +31% aggregate (435,913 -> 571,632 nps), node counts bit-identical base vs branch; recorded in BENCHMARKS.md
 Known failures: none
 ---
+
+author: @george
+created: 2026-07-27 09:14
+---
+Review attempt: 1
+Reviewed branch: task-86.1-incremental-accumulator
+Reviewed implementation: d1da68eb714158eca1862cecd0fba4b817947f19
+Verdict: approved
+
+Immutability: base 9fe845c is an ancestor of target d1da68e, which is an ancestor of tip b8d6997. The only commit after the target (b8d6997) touches nothing but the task file (handoff metadata). No implementation file changed after the reviewed SHA.
+
+Acceptance criteria (all proven):
+- AC#1: accumulator + flat accumulator_stack fields maintained across the six make/unmake/null wrappers; evaluate() reads the maintained payload via Accumulator::from_values instead of from_position. Confirmed no path mutates self.pos outside the wrappers.
+- AC#2: make_null_move carries the payload unchanged; the forward pass reads pos.turn() for concatenation order. Asserted before/after null in the walk test.
+- AC#3: Accumulator::from_position retained as the from-scratch reference; search_maintains_the_accumulator_bit_identically_to_a_rebuild walks the real seam over opening/kiwipete/en-passant/promotion positions (captures, promotions, castling both sides, en passant, null moves) with release-valid assert_eq.
+- AC#4: maintained payload is bit-identical to from_position at every node and forward() is a pure function of (network, payload, turn), so leaf values and the whole fixed-depth tree are unchanged; fixed_depth_network_search_is_deterministic pins the integrated path.
+- AC#5: before/after single-thread NPS recorded in BENCHMARKS.md with full attribution (M3 Pro, rustc 1.97.1, gen-002 H=256, interleaved medians). Independently corroborated: identical fixed-depth startpos search ~1025 ms at base vs ~730 ms at target.
+
+Verification (run on target d1da68e in the task worktree):
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean under a fresh CARGO_TARGET_DIR
+- cargo test --workspace: pass (engine 437, chess 57, lichess 157, +others; 0 failed, 2 ignored); both new tests pass
+- Relative NPS probe base 9fe845c vs target d1da68e: ~1.4x faster, node counts identical by construction
+
+Scope: diff is confined to the two additive accumulator helpers, the search wiring, the two new tests, BENCHMARKS.md, and the task file. No new #[allow], no unrelated changes. Non-blocking observation: the 'every node rebuilds the accumulator from scratch' rationale in fixed_depth_network_search_is_deterministic reads most naturally as the O(pieces) EvalState debug guard, since the NNUE accumulator is deliberately not rebuilt per node — not a defect, noted only for a future touch.
+
+Code target for merge: d1da68eb714158eca1862cecd0fba4b817947f19.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Wired the NNUE first-layer accumulator to update incrementally along search make/unmake instead of rebuilding it from scratch (O(pieces x H)) at every leaf. Search now holds the activation payload live (Option<[Box<[i16]>;2]>) plus a flat pre-sized i16 restore stack mirroring the eval_stack seam; two additive Accumulator::from_values/into_values helpers pair the lifetime-free payload with the Arc-held network only to fold a move in or score a leaf, avoiding a self-referential Search. make/unmake/null wrappers push/pop the payload; evaluate reads the maintained accumulator. Bit-identity to a from-scratch rebuild is proven per-node over representative subtrees (captures, promotions, castling, en passant, null moves) by search_maintains_the_accumulator_bit_identically_to_a_rebuild (release-valid assert_eq), with fixed_depth_network_search_is_deterministic pinning the integrated path. Verified on target d1da68e: cargo fmt --check pass; cargo clippy --workspace --all-targets --all-features -D warnings clean under a fresh CARGO_TARGET_DIR; cargo test --workspace pass (engine 437 / chess 57 / lichess 157, 0 failed). Reviewer independently confirmed the speed win: identical fixed-depth startpos search ran ~1025 ms at base 9fe845c vs ~730 ms at target (node counts identical by construction), corroborating the +31%% aggregate NPS recorded in BENCHMARKS.md.
+<!-- SECTION:FINAL_SUMMARY:END -->
