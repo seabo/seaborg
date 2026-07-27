@@ -1762,4 +1762,94 @@ mod tests {
             }
         });
     }
+
+    /// The version-2 exporter's golden fixtures: a bucketed multi-layer int8 network
+    /// the engine loads, and the `(category, FEN, expected-cp)` triples the exporter's
+    /// own integer forward pass produced for it. Committed so the cross-language
+    /// agreement is checked in every `cargo test` without invoking Python. Regenerate
+    /// with `python export.py --emit-golden engine/tests/fixtures`.
+    const GOLDEN_V2_NET_BYTES: &[u8] = include_bytes!("../../tests/fixtures/golden_v2.sbnn");
+    const GOLDEN_V2_VECTORS: &str = include_str!("../../tests/fixtures/golden_v2.vectors");
+    const GOLDEN_SCRELU_V2_NET_BYTES: &[u8] =
+        include_bytes!("../../tests/fixtures/golden_screlu_v2.sbnn");
+    const GOLDEN_SCRELU_V2_VECTORS: &str =
+        include_str!("../../tests/fixtures/golden_screlu_v2.vectors");
+
+    /// The three-way cross-language guarantee for a bucketed network: for every
+    /// golden position the score the Python exporter emitted, the Rust scalar
+    /// bucketed forward pass, and — on a CPU with AVX2 — the Rust SIMD bucketed
+    /// forward pass are the identical integer. The positions span multiple buckets
+    /// and the network's per-layer int8 scales differ, so the check proves the
+    /// bucket selection and the per-layer-scale path in all three implementations.
+    fn assert_golden_three_way_bucketed(net_bytes: &[u8], vectors_text: &'static str) {
+        init_globals();
+        let net =
+            Network::read(&mut &net_bytes[..]).expect("the exporter's bucketed golden network loads");
+        let stack = stack_of(&net);
+        // A uniform-scale fixture would pass even if an implementation ignored
+        // `stack_scales`; require the golden net's per-layer scales to differ.
+        let scales = stack.layer_scales();
+        assert!(
+            scales.iter().any(|s| *s != scales[0]),
+            "golden stack scales must differ per layer to exercise the per-layer path"
+        );
+
+        let vectors = parse_golden_vectors(vectors_text);
+        assert!(!vectors.is_empty(), "the golden fixture has vectors");
+        for category in GOLDEN_CATEGORIES {
+            assert!(
+                vectors.iter().any(|&(c, _, _)| c == category),
+                "golden set covers the {category} category"
+            );
+        }
+
+        let mut buckets_seen = std::collections::HashSet::new();
+        for (category, fen, expected) in vectors {
+            let pos = Position::from_fen(fen).expect("golden FEN is valid");
+            let stm = pos.turn();
+            let acc = Accumulator::from_position(&net, &pos);
+            let pc = pos.occupied().popcnt();
+            buckets_seen.insert(select_bucket(pc, stack.num_buckets()));
+
+            let scalar = forward_bucketed_with(&net, stack, &acc, stm, pc, dot_i8);
+            assert_eq!(
+                scalar, expected,
+                "scalar bucketed forward vs exporter on {category} {fen}"
+            );
+
+            #[cfg(target_arch = "x86_64")]
+            {
+                if is_x86_feature_detected!("avx2") {
+                    // SAFETY: AVX2 presence just confirmed; the kernel is handed
+                    // multiple-of-16 stack rows.
+                    let simd = forward_bucketed_with(&net, stack, &acc, stm, pc, |a, w| unsafe {
+                        dot_i8_avx2(a, w)
+                    });
+                    assert_eq!(
+                        simd, expected,
+                        "SIMD bucketed forward vs exporter on {category} {fen}"
+                    );
+                }
+            }
+
+            // The public dispatch path lands on the same value.
+            assert_eq!(forward(&net, &acc, stm, pc), expected);
+        }
+        assert!(
+            buckets_seen.len() >= 2,
+            "golden positions must span at least two buckets"
+        );
+    }
+
+    /// The CReLU bucketed cross-language differential check over the committed v2 fixture.
+    #[test]
+    fn bucketed_golden_vectors_agree_across_python_scalar_and_simd() {
+        assert_golden_three_way_bucketed(GOLDEN_V2_NET_BYTES, GOLDEN_V2_VECTORS);
+    }
+
+    /// The SCReLU bucketed cross-language differential check over the committed v2 fixture.
+    #[test]
+    fn screlu_bucketed_golden_vectors_agree_across_python_scalar_and_simd() {
+        assert_golden_three_way_bucketed(GOLDEN_SCRELU_V2_NET_BYTES, GOLDEN_SCRELU_V2_VECTORS);
+    }
 }
