@@ -3,11 +3,11 @@ id: TASK-43
 title: >-
   Report complete principal variations by extending the PV with validated
   transposition-table moves
-status: In Progress
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-18 13:59'
-updated_date: '2026-07-27 13:56'
+updated_date: '2026-07-27 14:03'
 labels:
   - engine
   - search
@@ -72,6 +72,8 @@ Rework for review attempt 1 (changes requested).
 Resolved REV-1-01 [P1] (fifty-move-rule PV stop): extend_pv() in engine/src/search.rs now stops the reported-PV walk on pos.fifty_move_rule_reached() as well as pos.in_threefold(), checked before extending so the move that reaches the draw is kept and nothing after it is reported. New unit test pv_extension_stops_on_a_fifty_move_rule_draw (engine/src/search/tests.rs) sets a root one ply below the fifty-move limit, offers a further TT move from the drawn position, and asserts the walk keeps only the move that reaches the draw. Re-ran the reviewer's fixed-depth self-play (release seaborg vs seaborg, depth 9, 48 games, run in /tmp so no worktree artifact): 0 'PV continues after fifty-move rule' warnings (reviewer measured 924 on the prior target), 0 'PV continues after threefold', 0 'Illegal PV move'; result 6W/6L/36D, Elo 0.00 as expected for identical-engine self-play.
 
 Resolved REV-1-02 [P2] (stray config.json): removed config.json from the branch (git rm) and added /config.json to the repo-root .gitignore so a fastchess run from the root neither commits the results file nor dirties the worktree. Worktree left clean.
+
+Rework for MERGE-01 (merge-time integration failure). TASK-88 landed on master after this task's approval, adding the cfg-gated SearchEvent::SelStats variant; the new reported_progress test helper's match over SearchEvent was non-exhaustive once that variant exists, so the integrated build failed to compile (E0004). Merged current master (016dd62) into the branch to integrate the variant, then added a cfg-gated arm to reported_progress mirroring info.rs: 'SearchEvent::CurrentMove(_) => None' plus '#[cfg(feature = "selstats")] SearchEvent::SelStats(_) => None'. New code target 70a3fc2. Verified: cargo fmt --check pass; cargo clippy --workspace --all-targets --all-features -- -D warnings clean (selstats on); cargo test --workspace pass (selstats off); cargo test -p engine --features selstats pass (selstats on); all PV tests green.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -188,6 +190,17 @@ Evidence:
 Cause: TASK-88 (landed on master as 56a1cab, code f144f89) added a new enum variant `SearchEvent::SelStats(String)` (engine/src/search.rs:710). This task's new test helper `reported_progress` (engine/src/search/tests.rs, added by target 11ea6f5) matches on `SearchEvent` with only `Progress` and `CurrentMove` arms, so once the variant exists the match is non-exhaustive and the lib-test build fails to compile. Both changes pass in isolation; the defect only appears in the integrated result, which is why review (against the immutable base) did not surface it.
 Expected: Add the missing arm to `reported_progress` — `SearchEvent::SelStats(_) => None` (the helper collects Progress events for PV/score assertions; SelStats carries no PV and should be filtered out, exactly like CurrentMove). Then re-run the required checks and re-handoff for review.
 Note: This is a rework on the same task branch. The approval pinned to 11ea6f5 is void because the code target must change to integrate with current master. Primary was not advanced; the trial merge was built on a detached HEAD and discarded (master still at 016dd62, worktree clean).
+---
+
+author: @claude
+created: 2026-07-27 14:03
+---
+Rework + merge (MERGE-01), review waived by human authorization
+Branch: task-43-hybrid-pv-tt-extension
+New code target: 70a3fc2 (base a56acdd; master 016dd62 merged in at a747b7e to integrate TASK-88 SelStats)
+Fix: cfg-gated SearchEvent::SelStats arm added to the reported_progress test helper, mirroring the existing info.rs pattern. One test-only file changed (engine/src/search/tests.rs); no non-test implementation code changed since approved target 11ea6f5.
+Verification: fmt pass; clippy --all-features clean; test --workspace (selstats off) pass; test -p engine --features selstats (selstats on) pass.
+The user explicitly authorized implementing this one-line, low-risk fix and merging without a fresh independent $review. The merge-time integration gate (build + clippy + full test on the merged result) is applied as the safety net.
 ---
 <!-- COMMENTS:END -->
 
