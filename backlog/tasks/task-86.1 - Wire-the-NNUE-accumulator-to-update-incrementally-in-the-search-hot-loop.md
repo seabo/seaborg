@@ -1,11 +1,11 @@
 ---
 id: TASK-86.1
 title: Wire the NNUE accumulator to update incrementally in the search hot loop
-status: Ready to Merge
+status: Done
 assignee:
   - '@george'
 created_date: '2026-07-25 12:22'
-updated_date: '2026-07-27 09:14'
+updated_date: '2026-07-27 09:49'
 labels:
   - nnue
 dependencies: []
