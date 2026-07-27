@@ -377,7 +377,9 @@ impl Network {
         match &self.output {
             OutputStack::Single { w_out, .. } => w_out,
             OutputStack::Bucketed(_) => {
-                panic!("output_weights is a version-1 single-layer accessor; this network is bucketed")
+                panic!(
+                    "output_weights is a version-1 single-layer accessor; this network is bucketed"
+                )
             }
         }
     }
@@ -747,9 +749,7 @@ impl OutputStack {
     /// v2 the `stack_dims`/`stack_scales` prefix plus every bucket's int8 layers.
     fn blob_bytes(&self) -> u64 {
         match self {
-            OutputStack::Single { w_out, b_out } => {
-                2 * w_out.len() as u64 + 4 * b_out.len() as u64
-            }
+            OutputStack::Single { w_out, b_out } => 2 * w_out.len() as u64 + 4 * b_out.len() as u64,
             OutputStack::Bucketed(stack) => stack.blob_bytes(),
         }
     }
@@ -982,7 +982,10 @@ fn validate_stack_scales(scales: &[u32], qb: u16) -> Result<(), LoadError> {
             return Err(LoadError::NonPositiveStackScale { index: i });
         }
         if scale > u32::from(u16::MAX) {
-            return Err(LoadError::StackScaleTooLarge { index: i, value: scale });
+            return Err(LoadError::StackScaleTooLarge {
+                index: i,
+                value: scale,
+            });
         }
         if i + 1 == n && scale != u32::from(qb) {
             return Err(LoadError::StackFinalScaleMismatch { found: scale, qb });
@@ -1017,7 +1020,10 @@ fn check_stack_scales_build(scales: &[u32]) -> Result<(), BuildError> {
             return Err(BuildError::NonPositiveStackScale { index: i });
         }
         if scale > u32::from(u16::MAX) {
-            return Err(BuildError::StackScaleTooLarge { index: i, value: scale });
+            return Err(BuildError::StackScaleTooLarge {
+                index: i,
+                value: scale,
+            });
         }
     }
     Ok(())
@@ -1155,10 +1161,9 @@ impl std::fmt::Display for BuildError {
                 f,
                 "bucket count {n} must be in {MIN_BUCKETS}..={MAX_BUCKETS}"
             ),
-            BuildError::StackScaleCountMismatch { expected, found } => write!(
-                f,
-                "stack has {expected} layers but {found} layer scales"
-            ),
+            BuildError::StackScaleCountMismatch { expected, found } => {
+                write!(f, "stack has {expected} layers but {found} layer scales")
+            }
             BuildError::StackFinalDimMismatch { found, expected } => write!(
                 f,
                 "final stack layer output dimension {found} must be {expected}"
@@ -1178,10 +1183,7 @@ impl std::fmt::Display for BuildError {
                 bucket,
                 expected,
                 found,
-            } => write!(
-                f,
-                "bucket {bucket} has {found} layers, expected {expected}"
-            ),
+            } => write!(f, "bucket {bucket} has {found} layers, expected {expected}"),
         }
     }
 }
@@ -1789,10 +1791,7 @@ mod tests {
         assert_eq!(&bytes[..4], &MAGIC);
         assert_eq!(u16_le(&bytes, OFF_FORMAT_VERSION), FORMAT_VERSION_V2);
         assert_eq!(u16_le(&bytes, OFF_NUM_BUCKETS), V2_BUCKETS);
-        assert_eq!(
-            u16_le(&bytes, OFF_NUM_OUTPUT_LAYERS),
-            V2_DIMS.len() as u16
-        );
+        assert_eq!(u16_le(&bytes, OFF_NUM_OUTPUT_LAYERS), V2_DIMS.len() as u16);
 
         let reloaded = Network::read(&mut bytes.as_slice()).unwrap();
         assert_eq!(reloaded, net);
@@ -1849,7 +1848,8 @@ mod tests {
     #[test]
     fn zero_output_layers_is_rejected() {
         let mut bytes = to_bytes(&sample_bucketed_network());
-        bytes[OFF_NUM_OUTPUT_LAYERS..OFF_NUM_OUTPUT_LAYERS + 2].copy_from_slice(&0u16.to_le_bytes());
+        bytes[OFF_NUM_OUTPUT_LAYERS..OFF_NUM_OUTPUT_LAYERS + 2]
+            .copy_from_slice(&0u16.to_le_bytes());
         assert!(matches!(
             Network::read(&mut bytes.as_slice()),
             Err(LoadError::InvalidLayerCount(0))
@@ -1872,7 +1872,10 @@ mod tests {
         bytes[off..off + 4].copy_from_slice(&2u32.to_le_bytes());
         assert!(matches!(
             Network::read(&mut bytes.as_slice()),
-            Err(LoadError::StackFinalDimMismatch { found: 2, expected: 1 })
+            Err(LoadError::StackFinalDimMismatch {
+                found: 2,
+                expected: 1
+            })
         ));
     }
 
@@ -1997,7 +2000,10 @@ mod tests {
                     ]],
                 },
             ),
-            Err(BuildError::WeightCountMismatch { block: "stack_layer_w", .. })
+            Err(BuildError::WeightCountMismatch {
+                block: "stack_layer_w",
+                ..
+            })
         ));
     }
 }

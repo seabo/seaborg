@@ -177,7 +177,10 @@ const STACK_SCRATCH: usize = 1024;
 /// allocation, so the lint is suppressed here rather than obeyed.
 #[allow(clippy::large_enum_variant)]
 enum Scratch {
-    Stack { data: [i16; STACK_SCRATCH], len: usize },
+    Stack {
+        data: [i16; STACK_SCRATCH],
+        len: usize,
+    },
     Heap(Vec<i16>),
 }
 
@@ -1037,8 +1040,18 @@ mod tests {
         ] {
             let pos = Position::from_fen(fen).expect("test FEN is valid");
             let mir = Position::from_fen(&colour_mirror(fen)).expect("mirror FEN is valid");
-            let s = forward(&net, &Accumulator::from_position(&net, &pos), pos.turn(), pos.occupied().popcnt());
-            let m = forward(&net, &Accumulator::from_position(&net, &mir), mir.turn(), mir.occupied().popcnt());
+            let s = forward(
+                &net,
+                &Accumulator::from_position(&net, &pos),
+                pos.turn(),
+                pos.occupied().popcnt(),
+            );
+            let m = forward(
+                &net,
+                &Accumulator::from_position(&net, &mir),
+                mir.turn(),
+                mir.occupied().popcnt(),
+            );
             assert_eq!(s, m, "mirror of {fen} did not match from the mover");
         }
     }
@@ -1158,7 +1171,10 @@ mod tests {
         // s = 2H · QA · 1 = 32 · 255 = 8160; eval = round(8160 · 400 / (255·64)).
         let s_hi = 2 * hidden as i64 * i64::from(QA);
         let expected_hi = round_div(s_hi * i64::from(SCALE), i64::from(QA) * i64::from(QB));
-        assert_eq!(forward(&net_hi, &acc_hi, stm, pos.occupied().popcnt()), expected_hi as i32);
+        assert_eq!(
+            forward(&net_hi, &acc_hi, stm, pos.occupied().popcnt()),
+            expected_hi as i32
+        );
 
         // Every entry i16::MIN -> clipped to 0, so only the bias survives.
         let net_lo = constant_accumulator_network(hidden, i16::MIN, 1000, -12_345);
@@ -1167,7 +1183,10 @@ mod tests {
             i64::from(-12_345) * i64::from(SCALE),
             i64::from(QA) * i64::from(QB),
         );
-        assert_eq!(forward(&net_lo, &acc_lo, stm, pos.occupied().popcnt()), expected_lo as i32);
+        assert_eq!(
+            forward(&net_lo, &acc_lo, stm, pos.occupied().popcnt()),
+            expected_lo as i32
+        );
     }
 
     /// With the accumulator saturated and the output weights near the top of their
@@ -1215,12 +1234,18 @@ mod tests {
         // Large positive raw output: clamps to +10_000.
         let net_pos = constant_accumulator_network(hidden, i16::MAX, 20_000, 0);
         let acc_pos = Accumulator::from_position(&net_pos, &pos);
-        assert_eq!(forward(&net_pos, &acc_pos, stm, pos.occupied().popcnt()), 10_000);
+        assert_eq!(
+            forward(&net_pos, &acc_pos, stm, pos.occupied().popcnt()),
+            10_000
+        );
 
         // Large negative raw output: clamps to -10_000.
         let net_neg = constant_accumulator_network(hidden, i16::MAX, -20_000, 0);
         let acc_neg = Accumulator::from_position(&net_neg, &pos);
-        assert_eq!(forward(&net_neg, &acc_neg, stm, pos.occupied().popcnt()), -10_000);
+        assert_eq!(
+            forward(&net_neg, &acc_neg, stm, pos.occupied().popcnt()),
+            -10_000
+        );
     }
 
     /// `OUTPUT_DIM` is 1, so the output layer reads exactly one bias; this guards
@@ -1555,7 +1580,11 @@ mod tests {
         };
 
         // Activated input, own perspective first.
-        let mut input: Vec<i64> = own.iter().chain(enemy.iter()).map(|&x| activate(x)).collect();
+        let mut input: Vec<i64> = own
+            .iter()
+            .chain(enemy.iter())
+            .map(|&x| activate(x))
+            .collect();
 
         let stack = stack_of(net);
         let bucket = select_bucket(pos.occupied().popcnt(), stack.num_buckets());
@@ -1748,9 +1777,10 @@ mod tests {
                         let scalar = forward_bucketed_with(&net, stack, &acc, stm, pc, dot_i8);
                         // SAFETY: AVX2 presence confirmed by `with_avx2`; every stack
                         // layer input is a multiple of 16, handed to the kernel whole.
-                        let simd = forward_bucketed_with(&net, stack, &acc, stm, pc, |a, w| unsafe {
-                            dot_i8_avx2(a, w)
-                        });
+                        let simd =
+                            forward_bucketed_with(&net, stack, &acc, stm, pc, |a, w| unsafe {
+                                dot_i8_avx2(a, w)
+                            });
                         assert_eq!(scalar, simd, "bucketed scalar vs AVX2 at H={hidden}");
                         assert_eq!(
                             scalar,
@@ -1783,8 +1813,8 @@ mod tests {
     /// bucket selection and the per-layer-scale path in all three implementations.
     fn assert_golden_three_way_bucketed(net_bytes: &[u8], vectors_text: &'static str) {
         init_globals();
-        let net =
-            Network::read(&mut &net_bytes[..]).expect("the exporter's bucketed golden network loads");
+        let net = Network::read(&mut &net_bytes[..])
+            .expect("the exporter's bucketed golden network loads");
         let stack = stack_of(&net);
         // A uniform-scale fixture would pass even if an implementation ignored
         // `stack_scales`; require the golden net's per-layer scales to differ.
