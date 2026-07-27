@@ -3,11 +3,11 @@ id: TASK-43
 title: >-
   Report complete principal variations by extending the PV with validated
   transposition-table moves
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-18 13:59'
-updated_date: '2026-07-27 10:05'
+updated_date: '2026-07-27 10:41'
 labels:
   - engine
   - search
@@ -50,3 +50,41 @@ The verification harness already exists and should be reused rather than rebuilt
 4. Tests: mate-line length == plies-to-mate (AC1/6), non-mate length assertion (AC6), each stop condition (AC3), and confirm reported_principal_variations_are_legal still passes unmodified (AC2).
 5. Run required checks; verify no illegal-PV warnings in fixed-depth self-play (AC4).
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented a reporting-only hybrid PV in engine/src/search.rs. reported_pv() takes the triangular PV table's exact line as a trusted prefix and extend_pv() walks the transposition table on a clone of the root position, appending each stored best move after validating it against the real position reached. Stop conditions: TT miss, move-less entry, stale/illegal move (pseudolegal check plus a king-left-in-check check), an in-line cycle (per-line seen set), a draw by repetition against the full game history (Position::in_threefold, which the per-line set cannot detect), and a MAX_PLY length cap. The walk only probes the TT and mutates the clone, so the played move and node counts are unchanged.
+
+Discovered during fixed-depth self-play that TT extension alone (in-line cycle detection only) produces a fastchess 'PV continues after threefold repetition' warning: the walk can repeat a position from earlier in the game that is not on the reported line. Added the in_threefold draw stop to fix it; a unit test reproduces the exact case and fails without the stop.
+
+Tests (engine/src/search/tests.rs):
+- a_resolved_mate_reports_the_full_mating_line: reported mate PV length equals plies-to-mate.
+- a_non_mate_search_reports_a_multi_ply_line: non-mate reported line length floor.
+- pv_extension_stops_on_a_transposition_table_miss / _a_stale_or_illegal_tt_move / _a_repetition / _a_threefold_against_game_history / _at_the_length_cap: one per stop condition.
+- pv_extension_preserves_the_exact_prefix_and_visits_no_nodes: reporting-only invariant (prefix preserved, node count unchanged).
+- reported_principal_variations_are_legal: unchanged and still passing, now over extended PVs.
+
+AC #4 evidence: fastchess self-play, seaborg vs seaborg, depth 8 fixed, 64 games (16 ending in 3-fold-repetition draws), concurrency 4: zero 'Illegal PV move' warnings and zero 'PV continues after threefold' warnings.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @claude
+created: 2026-07-27 10:41
+---
+Implementation handoff
+Branch: task-43-hybrid-pv-tt-extension
+Worktree: /Users/seabo/seaborg-worktrees/task-43-hybrid-pv-tt-extension
+Base: a56acdde4c2c5d83c2d1e02c5d9be1993a74e9e3
+Implementation target: a9ed22d8ba94939978358213695a0fc64109a88e
+Resolved findings: none
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass
+- cargo test --workspace: pass (all binaries, no failures)
+- fastchess self-play depth=8, 64 games, 16 three-fold draws: 0 'Illegal PV move', 0 'PV continues after threefold' warnings
+Known failures: none
+---
+<!-- COMMENTS:END -->
