@@ -3522,6 +3522,42 @@ fn pv_extension_stops_on_a_threefold_against_game_history() {
     );
 }
 
+/// A walk that reaches the fifty-move-rule threshold is stopped by the same reversible-draw test
+/// as a threefold. The walk favours reversible moves, so a table of knight shuffles keeps the
+/// halfmove clock climbing; once a move carries it to the fifty-move limit the position is drawn and
+/// has no truthful continuation. This is the fifty-move analogue of the "PV continues past a
+/// threefold" case a self-play runner flags. The root's clock sits one ply below the limit, so the
+/// first walked move reaches the draw and the extension keeps that move but reports nothing after
+/// it, even though the table still offers a further move.
+#[test]
+fn pv_extension_stops_on_a_fifty_move_rule_draw() {
+    chess::init::init_globals();
+
+    let flag = AtomicBool::new(false);
+    let table = Table::new(1);
+
+    // Bare kings and a lone white knight: every move is reversible, and the halfmove clock is set
+    // one ply short of the fifty-move limit so a single knight move reaches the draw.
+    let root = Position::from_fen("4k3/8/8/8/8/5N2/8/4K3 w - - 99 100").unwrap();
+
+    let mut pos = root.clone();
+    // The knight move carries the clock to the fifty-move limit; this is the move that reaches the
+    // draw and must be kept in the reported line.
+    let ne5 = pos.make_uci_move("f3e5").unwrap();
+    store_tt_move(&table, &root, &ne5);
+    // A further move is on offer from the drawn position, so only the fifty-move test — not a table
+    // miss — can be what stops the walk here.
+    let kd8 = pos.make_uci_move("e8d8").unwrap();
+    store_tt_move_for_prev(&table, &root, &[ne5], &kd8);
+
+    let search = Search::new(root, &flag, None, &table);
+    assert_eq!(
+        search.extend_pv(Vec::new(), MAX_PLY),
+        vec![ne5],
+        "the walk must stop at the fifty-move draw, keeping the move that reaches it and reporting no more"
+    );
+}
+
 /// The length cap bounds the reported line even when the table could keep supplying legal,
 /// non-repeating moves. A chain of pawn advances never repeats, so only the cap stops it.
 #[test]

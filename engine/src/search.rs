@@ -3769,14 +3769,19 @@ impl<'engine> Search<'engine> {
         }
 
         while pv.len() < cap {
-            // Stop once the line has reached a draw by repetition: the position has no truthful
-            // continuation, and reporting moves beyond it yields a line that "continues past" a
-            // threefold. This consults the position's own history — the moves played before the
-            // search root as well as those just walked onto the clone — so it catches a line that
-            // repeats a position from earlier in the game, which the per-line `seen` set below
-            // cannot see. Checked before extending, so the move that first reaches the threefold is
-            // kept (it shows how the draw arises) but nothing is reported after it.
-            if pos.in_threefold() {
+            // Stop once the line has reached a draw by one of the reversible-draw rules: the
+            // position has no truthful continuation, and reporting moves beyond it yields a line
+            // that "continues past" a threefold or a fifty-move draw. The threefold test consults
+            // the position's own history — the moves played before the search root as well as those
+            // just walked onto the clone — so it catches a line that repeats a position from earlier
+            // in the game, which the per-line `seen` set below cannot see. The fifty-move test is
+            // the symmetric stop for the other reversible-draw rule: a line drifting toward a
+            // fifty-move draw is a run of reversible moves, and the table stores a best move for
+            // each, so without this stop the walk follows them straight past the halfmove threshold
+            // and the reported line continues past a settled draw. Both are checked before
+            // extending, so the move that first reaches the draw is kept (it shows how the draw
+            // arises) but nothing is reported after it.
+            if pos.in_threefold() || pos.fifty_move_rule_reached() {
                 break;
             }
 

@@ -6,5 +6,9 @@ perf.*
 log.txt
 run.sh
 
+# FastChess writes its results file to its working directory; a self-play run from the repo root
+# drops config.json here. It is a generated artifact, never source.
+/config.json
+
 anchors
 
