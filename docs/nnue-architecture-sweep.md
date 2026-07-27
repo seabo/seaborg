@@ -236,3 +236,37 @@ flattening was capacity/architecture-limited, and the next lever is a better or
 more efficient architecture (for example the king-bucketed feature set), not more
 labels. This distinguishes the two readings with a single controlled retrain
 instead of guessing from the frontier's shape alone.
+
+## Running the screen
+
+The methodology above is realized by two in-repo tools; the trainer README
+([`tools/trainer/README.md`](../tools/trainer/README.md)) carries the exact
+commands. This section names what runs where and pins the invariants a fair run
+depends on.
+
+- **The leak-free split.** `tools/trainer/train.py --split by-shard` holds out whole
+  datagen runs from the corpus provenance manifest, as the by-game decision above
+  requires. The split is a fixed hash of run identity folded with `--split-seed`, so
+  it is byte-identical across every candidate — the same held-out games score them
+  all. The legacy `--split by-position` leaks and must not be used to compare
+  architectures.
+- **The sweep driver.** `tools/trainer/sweep.py` enumerates the candidates one
+  factor at a time with all non-architectural configuration held fixed, trains and
+  exports each as a QAT-quantized `SBNN`, records its post-QAT validation loss and
+  realized single-thread NPS with attribution (network parameter hash and binary
+  commit), computes the Pareto frontier, and writes `sweep.json` with the finalists
+  and the exact `strength_test.py` commands. It ranks and hands off; it does not run
+  the game matches or select the winner.
+- **One quiet host, one build.** Train and measure NPS on a single quiet machine
+  ([`rig`](../tools/rl/README.md)) with an optimized `target-cpu=native` release
+  binary for the whole sweep. NPS measured on a different build or machine is not
+  comparable and must never be mixed within a sweep, exactly as the cost-axis
+  protocol above states.
+- **The single-thread NPS protocol.** The driver measures realized in-engine NPS —
+  each candidate network loaded, a fixed position suite searched to a fixed depth on
+  one thread, total nodes over total time — not a forward-pass microbenchmark, so
+  the cost axis reflects the incremental accumulator the search actually pays for.
+- **FastChess prerequisite.** The emitted finalist commands drive FastChess through
+  `tools/strength/strength_test.py`; install it before running them (see
+  [`strength-testing.md`](strength-testing.md#installing-fastchess)). The screen
+  itself needs no FastChess — only the SPRT matches it hands off do.
