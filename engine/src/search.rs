@@ -683,6 +683,10 @@ pub enum SearchLimit {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SearchProgress {
     pub depth: u8,
+    /// The 1-based rank of this line among the reported principal variations, best first. Always 1
+    /// for ordinary single-line search; under MultiPV each completed iteration reports one snapshot
+    /// per line, numbered `1..=multipv`. This is the value carried by the UCI `multipv` field.
+    pub multipv: usize,
     pub score: Score,
     pub elapsed: Duration,
     pub nodes: usize,
@@ -979,6 +983,11 @@ pub struct SearchEngine {
     /// [`SearchEngine::start_inner`], which clones this reference-counted handle rather than the
     /// weights.
     network: Option<Arc<Network>>,
+    /// How many best lines each started search reports (the UCI `MultiPV` count). One is ordinary
+    /// single-line play; a higher value makes the master thread report that many ranked lines per
+    /// iteration. Each started search reads this at construction, so a change takes effect on the
+    /// next `go` and leaves a running search untouched.
+    multipv: usize,
 }
 
 impl SearchEngine {
@@ -993,6 +1002,7 @@ impl SearchEngine {
         Self {
             table: Arc::new(Table::new(hash_size_mb)),
             network: nnue::built_in_network(),
+            multipv: 1,
         }
     }
 
@@ -1007,6 +1017,12 @@ impl SearchEngine {
     /// the hand-crafted evaluation. Searches already running keep the handle they were started with.
     pub fn set_network(&mut self, network: Option<Arc<Network>>) {
         self.network = network;
+    }
+
+    /// Set how many best lines each subsequently started search reports. One is ordinary
+    /// single-line play. A search already running keeps the count it started with.
+    pub fn set_multipv(&mut self, multipv: usize) {
+        self.multipv = multipv;
     }
 
     /// The static evaluation of `pos` produced by exactly the evaluator a search would use — the
@@ -1105,6 +1121,9 @@ impl SearchEngine {
         // Clone the reference-counted handle, not the weights, and hand it to the worker so the
         // network outlives this call on the search thread.
         let network = self.network.clone();
+        // The line count is captured here, so the search this call starts is unaffected by a later
+        // `MultiPV` change.
+        let multipv = self.multipv;
         let (events, receiver) = unbounded();
         let events_probe = events.clone();
         // Capacity 1 and a single send per worker, so signalling completion can never
@@ -1127,6 +1146,7 @@ impl SearchEngine {
                 &table,
                 events,
                 network,
+                multipv,
             );
             let result = search.run::<Master>(depth);
             let outcome = if thread_cancellation.is_cancelled() {
@@ -1566,6 +1586,39 @@ pub struct Search<'engine> {
     /// cutoff under test could confirm itself. A node attempts a null move only when its ply is at
     /// or above this bound. See the null-move step in [`Search::search`].
     nmp_min_ply: usize,
+    /// How many best lines the master thread reports (the UCI `MultiPV` count). One drives ordinary
+    /// single-line search, unchanged from a build without this feature; a higher value makes the
+    /// root run that many ranked passes per iteration. See [`Search::search_root_iteration`].
+    multipv: usize,
+    /// Root moves already reported on an earlier line of the current MultiPV iteration, which the
+    /// root move loop skips so each pass finds the best of the moves that remain.
+    ///
+    /// Empty for ordinary single-line search and for every non-root node, so the exclusion check
+    /// costs nothing and changes nothing there. While it is non-empty the root node is not written
+    /// to the transposition table and does not upgrade the cancellation fallback: an excluded pass
+    /// describes a restricted move list, not the position, so its value and best move belong to
+    /// neither.
+    root_excluded: Vec<Move>,
+}
+
+/// One reported principal variation: its exact score and its move sequence, best move first.
+///
+/// Built once per line per iteration on the master thread, from the search that produced it, so the
+/// snapshot the driver formats is fixed at the moment the line completed.
+struct RootLine {
+    score: Score,
+    pv: Vec<Move>,
+}
+
+/// The outcome of one iterative-deepening iteration: the lines to report, plus the score and move
+/// of the best line that the loop uses for its own bookkeeping.
+struct IterationResult {
+    /// The best line's exact score — the value iterative deepening centres the next window on.
+    score: Score,
+    /// The best line's first move — the move the engine plays. `None` only at a terminal root.
+    best_move: Option<Move>,
+    /// The lines to report, ranked best first. Empty on a worker thread, which reports nothing.
+    lines: Vec<RootLine>,
 }
 
 impl<'engine> Search<'engine> {
@@ -1583,9 +1636,14 @@ impl<'engine> Search<'engine> {
             tt,
             None,
             None,
+            1,
         )
     }
 
+    // A thin constructor over `build` for the event-emitting search path: it forwards the same
+    // inputs plus the event sender, so it necessarily carries one more argument than `build`. See
+    // `build` for why the wide signature is kept rather than bundled into a struct.
+    #[allow(clippy::too_many_arguments)]
     fn with_events(
         pos: Position,
         flag: &'engine AtomicBool,
@@ -1594,10 +1652,27 @@ impl<'engine> Search<'engine> {
         tt: &'engine Table,
         events: Sender<SearchEvent>,
         network: Option<Arc<Network>>,
+        multipv: usize,
     ) -> Self {
-        Self::build(pos, flag, deadlines, node_limit, tt, Some(events), network)
+        Self::build(
+            pos,
+            flag,
+            deadlines,
+            node_limit,
+            tt,
+            Some(events),
+            network,
+            multipv,
+        )
     }
 
+    // The engine's search constructor threads every borrowed engine resource (cancellation flag,
+    // deadlines, shared transposition table) alongside the owned per-search inputs (position, node
+    // limit, optional event sender, network handle, MultiPV count) into the `Search`. Each has its
+    // own lifetime and ownership and is consumed exactly once here, so bundling them into a
+    // parameter struct would relocate the same list without removing an argument or simplifying any
+    // caller — the width is inherent to this seam.
+    #[allow(clippy::too_many_arguments)]
     fn build(
         pos: Position,
         flag: &'engine AtomicBool,
@@ -1606,6 +1681,7 @@ impl<'engine> Search<'engine> {
         tt: &'engine Table,
         events: Option<Sender<SearchEvent>>,
         network: Option<Arc<Network>>,
+        multipv: usize,
     ) -> Self {
         let eval_state = EvalState::from_position(&pos);
         // Seed the incremental accumulator from the root position when a network is selected, so it is
@@ -1647,6 +1723,8 @@ impl<'engine> Search<'engine> {
             stack: Box::new([StackEntry::default(); MAX_PLY]),
             depth_reached: 0,
             nmp_min_ply: 0,
+            multipv,
+            root_excluded: Vec::new(),
             min_search_complete: false,
             root_fallback_ready: false,
             root_fallback: None,
@@ -1770,13 +1848,16 @@ impl<'engine> Search<'engine> {
             }
 
             let completed_pvt = std::mem::replace(&mut self.pvt, PVTable::new(d));
-            let Some(value) = self.aspiration_search::<T>(d, prev_score) else {
+            let Some(iteration) = self.search_root_iteration::<T>(d, prev_score) else {
                 self.pvt = completed_pvt;
                 break;
             };
+            let value = iteration.score;
 
             self.depth_reached = d;
-            let best_move = self.pvt.pv().next().copied();
+            // The move actually played is the best line's first move; MultiPV bookkeeping — the
+            // window centre, the stability signals — all follow this line and ignore the rest.
+            let best_move = iteration.best_move;
 
             // Measure this iteration before deciding anything about the next one. `live_elapsed`
             // is monotonic within a search, so the difference is this iteration's own cost.
@@ -1808,7 +1889,7 @@ impl<'engine> Search<'engine> {
                 depth: d,
             });
             if T::is_master() {
-                self.emit_progress(d, value);
+                self.emit_iteration(d, &iteration.lines);
             }
 
             // The first full ply is guaranteed to run against the clock; from here on the time-based
@@ -1852,6 +1933,113 @@ impl<'engine> Search<'engine> {
                     depth: 0,
                 })
             })
+    }
+
+    /// Run one iterative-deepening iteration at depth `d` and return the lines to report.
+    ///
+    /// With MultiPV at its default of one — and on any worker thread, and at a terminal root — this
+    /// is exactly the single aspiration search the loop has always run: the same window handling,
+    /// the same nodes, the same reported line. Nothing about the ordinary case changes.
+    ///
+    /// With MultiPV greater than one on the master thread it runs the search once per requested
+    /// line. Each pass excludes the moves already chosen this iteration (see
+    /// [`Self::root_excluded`]) and searches the rest with a full window, so its score is exact and
+    /// its move is the best of those that remain. Each pass takes the best remaining move, so the
+    /// lines come out in greedy best-first order. The number of passes is capped at the count of
+    /// legal root moves, so asking for more lines than the position offers simply reports every line
+    /// there is. The first line is the one the engine plays and the one iterative deepening measures;
+    /// MultiPV never changes which move is played, only how many are reported.
+    ///
+    /// The reported scores are each line's own exact full-window value and are usually but not
+    /// strictly non-increasing across the lines. A move searched here as a full-window PV node can
+    /// score higher than the reduced null-window scout it received in an earlier pass where a
+    /// different move led — an instability of principal-variation search with reductions, present in
+    /// single-line search too and merely made visible by reporting each move's isolated score. The
+    /// honest per-line score is reported rather than a fabricated monotonic one.
+    ///
+    /// Returns `None` only when the search was aborted before completing the first line, which the
+    /// caller treats exactly as an aborted single-line iteration.
+    fn search_root_iteration<T: Thread>(
+        &mut self,
+        d: u8,
+        prev_score: Option<Score>,
+    ) -> Option<IterationResult> {
+        // MultiPV is a master-thread reporting feature: a worker always runs a single line so its
+        // shared-table contributions match ordinary search.
+        let requested = if T::is_master() {
+            self.multipv.max(1)
+        } else {
+            1
+        };
+
+        // Count the legal root moves only when more than one line is asked for; the single-line path
+        // needs no cap and must stay allocation-for-allocation identical to before.
+        let legal_root_moves = if requested > 1 {
+            self.pos.generate::<BasicMoveList, AllGen, Legal>().len()
+        } else {
+            1
+        };
+
+        if requested == 1 || legal_root_moves == 0 {
+            // The unchanged single-line path. A terminal root joins it so its move-less mate or
+            // stalemate result is reported exactly as it always was, rather than through the
+            // exclusion loop below.
+            let value = self.aspiration_search::<T>(d, prev_score)?;
+            let best_move = self.pvt.pv().next().copied();
+            let lines = if T::is_master() {
+                vec![RootLine {
+                    score: value,
+                    pv: self.reported_pv(),
+                }]
+            } else {
+                Vec::new()
+            };
+            return Some(IterationResult {
+                score: value,
+                best_move,
+                lines,
+            });
+        }
+
+        // MultiPV: one full-window pass per line, each excluding the moves already reported.
+        let passes = requested.min(legal_root_moves);
+        self.root_excluded.clear();
+        let mut lines: Vec<RootLine> = Vec::with_capacity(passes);
+        for _ in 0..passes {
+            let value = match self.search::<T, Root>(Score::INF_N, Score::INF_P, Depth::from(d), 0)
+            {
+                Some(value) => value,
+                None => {
+                    // A genuine abort: discard the whole iteration, exactly as the single-line
+                    // path discards an aborted aspiration search.
+                    self.root_excluded.clear();
+                    return None;
+                }
+            };
+            // A full-window root search of a non-empty, non-terminal move list always raises alpha
+            // on its first move, so the best move of this line is present. Its absence means every
+            // remaining move was excluded, which the pass cap should have prevented; stop reporting
+            // rather than record an empty line.
+            let Some(best_move) = self.pvt.pv().next().copied() else {
+                break;
+            };
+            lines.push(RootLine {
+                score: value,
+                pv: self.reported_pv(),
+            });
+            self.root_excluded.push(best_move);
+        }
+        self.root_excluded.clear();
+
+        // The first pass searched the full move list, so it always produced a line here.
+        let first = lines
+            .first()
+            .expect("the first MultiPV pass reports a line");
+        Some(IterationResult {
+            score: first.score,
+            best_move: first.pv.first().copied(),
+            lines,
+        })
     }
 
     /// Search iteration `d` at the root, narrowing the window around the previous iteration's
@@ -2399,6 +2587,14 @@ impl<'engine> Search<'engine> {
                     break 'move_loop;
                 }
 
+                // MultiPV reports each root move on its own line, so a root move already reported
+                // this iteration is skipped before it is counted, leaving this pass to find the best
+                // of the moves that remain. `root_excluded` is empty for every non-root node and for
+                // ordinary single-line search, so this changes nothing there.
+                if Node::root() && self.root_excluded.contains(&mov) {
+                    continue;
+                }
+
                 move_count += 1;
                 let mut value = Score::INF_N;
 
@@ -2636,8 +2832,15 @@ impl<'engine> Search<'engine> {
                 // Upgrade the cancellation fallback to the best fully searched root move, so a
                 // cancellation during the first ply reports a searched move rather than the
                 // arbitrary first generated one. An abort during this move's subtree leaves `value`
-                // meaningless, so only a move searched without stopping may be adopted.
-                if Node::root() && value > best_value && !self.stopping() {
+                // meaningless, so only a move searched without stopping may be adopted. A MultiPV
+                // pass that excludes moves must not touch the fallback: it ranks the *remaining*
+                // moves, and the move to play if cancelled is the best line's move, which the first
+                // (unexcluded) pass already recorded.
+                if Node::root()
+                    && self.root_excluded.is_empty()
+                    && value > best_value
+                    && !self.stopping()
+                {
                     self.root_fallback = Some(mov);
                 }
 
@@ -2742,8 +2945,15 @@ impl<'engine> Search<'engine> {
         //
         // `depth` is at least one here: a node at or below zero delegated to quiescence at Step 5.
         // That is what reserves [`Self::QUIESCENCE_DRAFT`] for quiescence alone.
+        //
+        // A MultiPV pass that excludes root moves is also withheld from the table. Its value and its
+        // best move describe the restricted move list it searched, not the position, so publishing
+        // them under the position's key would hand a wrong best move and bound to every ordinary
+        // visit. The first pass excludes nothing and stores the true value as usual, which also
+        // seeds the next iteration's root ordering.
         debug_assert!(depth > Depth::from(Self::QUIESCENCE_DRAFT));
-        if self.history_draws == history_draws_on_entry {
+        let root_exclusion_pass = Node::root() && !self.root_excluded.is_empty();
+        if self.history_draws == history_draws_on_entry && !root_exclusion_pass {
             self.tt.store(
                 self.pos.zobrist().0,
                 best_value,
@@ -3790,16 +4000,31 @@ impl<'engine> Search<'engine> {
         }
     }
 
-    fn emit_progress(&self, depth: u8, score: Score) {
-        self.emit(SearchEvent::Progress(SearchProgress {
-            depth,
-            score,
-            elapsed: self.trace.live_elapsed(),
-            nodes: self.trace.nodes_visited(),
-            principal_variation: self.reported_pv(),
-            hashfull: self.tt.hashfull(),
-            nps: self.trace.live_nps() as u32,
-        }));
+    /// Emit one `info` snapshot per reported line, ranked best first with the UCI `multipv` index
+    /// running `1..=lines.len()`.
+    ///
+    /// The node, time, rate and hash figures are read once and shared across the lines: they are
+    /// cumulative properties of the whole iteration, not of any one line, and all the lines are
+    /// reported at the same instant. With a single line — the MultiPV-off default — this emits
+    /// exactly the one snapshot the search always did, now carrying an explicit `multipv 1`.
+    fn emit_iteration(&self, depth: u8, lines: &[RootLine]) {
+        let elapsed = self.trace.live_elapsed();
+        let nodes = self.trace.nodes_visited();
+        let nps = self.trace.live_nps() as u32;
+        let hashfull = self.tt.hashfull();
+
+        for (index, line) in lines.iter().enumerate() {
+            self.emit(SearchEvent::Progress(SearchProgress {
+                depth,
+                multipv: index + 1,
+                score: line.score,
+                elapsed,
+                nodes,
+                principal_variation: line.pv.clone(),
+                hashfull,
+                nps,
+            }));
+        }
     }
 
     /// Assemble the principal variation to report: the exact prefix held by the triangular PV
