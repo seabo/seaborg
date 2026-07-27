@@ -16,7 +16,9 @@ contract and this code disagree, the contract wins.
 | --- | --- |
 | `model.py` | The NNUE model and its `NnueConfig` (the contract's parameterizable dimensions), including the quantization-aware forward pass. |
 | `data.py` | The dataloader: memory-maps the packed format and decodes batches into sparse `EmbeddingBag` inputs with vectorised NumPy. |
-| `train.py` | Training loop, the blended target and its `LambdaSchedule`, checkpoint writing, and the throughput benchmark. |
+| `train.py` | Training loop, the blended target and its `LambdaSchedule`, the validation split, checkpoint writing, and the throughput benchmark. |
+| `split.py` | The deterministic by-shard (by-game) train/validation split, derived from the corpus provenance manifest. |
+| `sweep.py` | The architecture-sweep screen: candidate enumeration, the loss/NPS Pareto frontier, and the finalist SPRT hand-off. |
 | `export.py` | Quantizes a checkpoint and writes the versioned `SBNN` network file; also the integer forward pass the export is checked against. |
 | `testsupport.py` | A reference encoder for the packed format, used by the tests. |
 | `test_data.py`, `test_model.py`, `test_train.py`, `test_export.py` | `unittest` suites (no pytest dependency). |
@@ -84,6 +86,34 @@ optimises the behaviour the export will actually ship. Pass
 `--no-quantization-aware` to train the plain fp32 model instead. Either way, the
 feature-transformer weights are clamped each step so the i16 accumulator cannot
 overflow for any legal position — the contract makes that overflow a defect.
+
+### Validation split: by-shard, not by-position
+
+`--split` chooses how the validation set is held out. The default `by-position`
+shuffles individual positions and reserves a `--val-fraction` slice — fine for a
+convergence check, but it **leaks**: successive plies of one self-play game are
+near-duplicates carrying the same outcome label, so a random split puts near-twins
+on both sides of the boundary and makes validation loss optimistic.
+
+`--split by-shard` holds out whole datagen runs instead. It reads the corpus
+provenance manifest (`corpus.manifest.json`, written beside `corpus.bin` by
+`tools/rl/datagen_campaign.py`), maps each shard to its contiguous record span,
+and reserves whole lowest-hash shards for validation — so no game, and no
+position's same-game neighbour, straddles the split. The choice is a fixed hash of
+each shard's run identity folded with `--split-seed`, so the same corpus and seed
+yield the byte-identical split on every run; a sweep therefore compares every
+candidate on the same held-out games. This is required for a fair architecture
+sweep (see [`docs/nnue-architecture-sweep.md`](../../docs/nnue-architecture-sweep.md)).
+
+```sh
+.venv/bin/python train.py --data corpus.bin --split by-shard \
+    --manifest corpus.manifest.json --val-fraction 0.1 --split-seed 0 \
+    --hidden 256 --out checkpoint.pt
+```
+
+`--manifest` defaults to `corpus.manifest.json` beside `--data`. The trainer
+rejects a corpus whose record count disagrees with the manifest, so a stale
+manifest cannot silently mis-split the data.
 
 ## Exporting a network
 
@@ -174,6 +204,58 @@ memorising. Loss is MSE in win-probability space, so these are squared errors on
 a `[0, 1]` target: a final val loss of 0.004 is a typical error of ~0.06 in win
 probability.
 
+## Architecture sweep
+
+`sweep.py` runs the screen that chooses the next network's *shape*
+([`docs/nnue-architecture-sweep.md`](../../docs/nnue-architecture-sweep.md) fixes
+the methodology). It enumerates candidate architectures one factor at a time —
+hidden width, CReLU vs SCReLU, output-bucket count, output-stack depth, and
+dense-tail int8 quantization — with every non-architectural knob held fixed (loss,
+`lambda`, epochs/lr/batch/seed, corpus, and the by-shard split). For each it trains
+and exports a QAT-quantized `SBNN`, records the post-QAT validation loss and the
+realized single-thread NPS, computes the loss/NPS Pareto frontier, and writes
+`sweep.json`: every screened point with attribution (network parameter hash and
+binary commit), the frontier, the finalists spanning the trade, and the exact
+`strength_test.py` commands to play them.
+
+The screen ranks; it never selects. It stops at the SPRT commands — running the
+multi-day training and the thousands of games, then picking the winner by realized
+Elo, is the downstream campaign.
+
+### Running it on the rig
+
+Training and the NPS measurement are heavy and must run on one quiet host for the
+whole sweep; [`rig`](../rl/README.md) is that host. Build an optimized,
+`target-cpu=native` release binary first — NPS measured on a different build or
+machine is not comparable and must never be mixed within a sweep.
+
+```sh
+RUSTFLAGS="-C target-cpu=native" cargo build --release --bin seaborg
+.venv/bin/python sweep.py \
+    --engine ../../target/release/seaborg \
+    --corpus corpus.bin --manifest corpus.manifest.json \
+    --baseline-net ../../engine/nets/default.sbnn --baseline-id gen-002 \
+    --nps-suite ../diag/bench-positions.epd --nps-depth 13 \
+    --build-settings 'RUSTFLAGS="-C target-cpu=native" cargo build --release' \
+    --limit tc=10+0.1 --out-dir sweep-out
+```
+
+**The single-thread NPS protocol.** The cost axis is realized in-engine NPS, not a
+forward-pass microbenchmark: the driver loads each candidate network, searches a
+fixed position suite to a fixed depth on a **single thread**, and aggregates total
+nodes over total search time. This folds in the incremental-accumulator cost the
+search actually pays and the cache pressure a wider feature transformer adds —
+exactly what decides whether a bigger net is affordable. Run on an otherwise idle
+machine; NPS is sensitive to CPU contention. The same `--engine`, `--nps-suite`,
+and `--nps-depth` must be used for every candidate.
+
+**FastChess prerequisite.** The emitted commands invoke
+`tools/strength/strength_test.py`, which drives [FastChess](https://github.com/Disservin/fastchess);
+install it before running them (see
+[`docs/strength-testing.md`](../../docs/strength-testing.md#installing-fastchess)).
+The sweep itself does not need FastChess — only the finalist SPRT matches it hands
+off do.
+
 ## Testing
 
 ```sh
@@ -191,4 +273,9 @@ quantization rounding, the accumulator bound, the `SBNN` serialization (with a
 reader written independently of the writer), that the exported integer network
 reproduces a trained model within tolerance, and the golden-vector emission — the
 FEN feature derivation against the packed decoder, the category coverage, and that
-the committed fixture matches the current export.
+the committed fixture matches the current export. `test_split.py` proves the
+by-shard split is leak-free (no shard straddles the boundary) and byte-identical for
+a given corpus and seed, and that the trainer rejects a corpus disagreeing with its
+manifest. `test_sweep.py` pins the sweep's domination and Pareto-frontier logic
+(including ties and single-candidate cases), the one-factor enumeration, and the
+finalist SPRT hand-off.

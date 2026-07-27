@@ -31,6 +31,7 @@ import torch
 
 from data import PackedData, iter_batches
 from model import NnueConfig, NnueModel
+from split import by_shard_split, load_manifest
 
 
 @dataclass(frozen=True)
@@ -153,6 +154,7 @@ def train(
     generation: int = 0,
     quantization_aware: bool = True,
     device: str = "cpu",
+    split: "tuple[np.ndarray, np.ndarray] | None" = None,
     log=print,
 ) -> tuple[NnueModel, list[EpochReport]]:
     """Train a fresh model and return it with its per-epoch loss history.
@@ -161,15 +163,25 @@ def train(
     once at ``generation`` for the whole run. With ``quantization_aware`` set (the
     default), the model trains on its quantized behaviour so the exported integer
     network reproduces it; the feature-transformer weights are clamped each step so
-    the i16 accumulator cannot overflow."""
+    the i16 accumulator cannot overflow.
+
+    ``split`` is an optional precomputed ``(train_idx, val_idx)`` partition. Passing
+    the leak-free by-shard split from :mod:`split` is how a sweep validates on whole
+    held-out games; when it is ``None`` the trainer falls back to the legacy
+    by-position split — a random ``val_fraction`` of positions — which leaks
+    near-duplicate positions across the boundary and must not be used to compare
+    architectures (see docs/nnue-architecture-sweep.md)."""
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
     lam_value = resolve_lambda(lam, generation)
 
-    order = rng.permutation(len(data))
-    val_size = int(len(order) * val_fraction)
-    val_idx = order[:val_size]
-    train_idx = order[val_size:]
+    if split is None:
+        order = rng.permutation(len(data))
+        val_size = int(len(order) * val_fraction)
+        val_idx = order[:val_size]
+        train_idx = order[val_size:]
+    else:
+        train_idx, val_idx = (np.asarray(split[0]), np.asarray(split[1]))
     if len(train_idx) == 0:
         raise ValueError("no training samples remain after the validation split")
 
@@ -321,6 +333,29 @@ def main(argv=None) -> int:
         help="this run's reinforcement generation, at which the lambda schedule resolves",
     )
     parser.add_argument("--val-fraction", type=float, default=0.1)
+    parser.add_argument(
+        "--split",
+        choices=["by-position", "by-shard"],
+        default="by-position",
+        help="validation split: 'by-position' shuffles individual positions (the "
+        "legacy default, which leaks near-duplicate positions across the boundary); "
+        "'by-shard' holds out whole datagen runs from the corpus manifest and is "
+        "required for a fair architecture sweep",
+    )
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=None,
+        help="corpus provenance manifest (or its directory) for --split by-shard; "
+        "defaults to corpus.manifest.json beside --data",
+    )
+    parser.add_argument(
+        "--split-seed",
+        type=int,
+        default=0,
+        help="seed selecting which shards are held out for --split by-shard; a fixed "
+        "value gives the identical split every run",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", default="cpu")
     parser.add_argument(
@@ -345,6 +380,23 @@ def main(argv=None) -> int:
         benchmark_dataloader(data, args.batch_size, args.benchmark_seconds)
         return 0
 
+    split = None
+    if args.split == "by-shard":
+        manifest_source = args.manifest if args.manifest is not None else args.data.parent
+        manifest = load_manifest(manifest_source)
+        result = by_shard_split(manifest, val_fraction=args.val_fraction, seed=args.split_seed)
+        if result.train_idx.size + result.val_idx.size != len(data):
+            raise SystemExit(
+                f"manifest describes {result.train_idx.size + result.val_idx.size} records but "
+                f"{args.data} holds {len(data)}; manifest and corpus disagree"
+            )
+        split = (result.train_idx, result.val_idx)
+        print(
+            f"by-shard split: {result.val_idx.size:,} val / {result.train_idx.size:,} train "
+            f"records; {len(result.val_shards)} of "
+            f"{len(result.val_shards) + len(result.train_shards)} shards held out"
+        )
+
     config = _build_config(args)
     model, history = train(
         data,
@@ -358,6 +410,7 @@ def main(argv=None) -> int:
         generation=args.generation,
         quantization_aware=args.quantization_aware,
         device=args.device,
+        split=split,
     )
 
     if args.out is not None:
