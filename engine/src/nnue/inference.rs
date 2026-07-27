@@ -26,7 +26,7 @@
 
 use chess::position::Player;
 
-use super::{Accumulator, Activation, Network};
+use super::{Accumulator, Activation, BucketedStack, Network, OutputStack, StackLayer};
 
 /// The centipawn band a network evaluation is clamped into before it becomes a
 /// score. It matches the range [`crate::score::Score`] reserves for centipawn
@@ -65,14 +65,46 @@ const EVAL_CP_MAX: i64 = 10_000;
 /// and, for contract-bounded output weights, `s` stays well inside i32 while the
 /// subsequent `s · SCALE` can exceed it and so is done in i64.
 ///
+/// `piece_count` is the number of pieces on the board; a bucketed (version-2)
+/// network uses it to select one output-stack bucket, and a single-layer
+/// (version-1) network ignores it.
+///
 /// # Panics
 ///
 /// Panics if `accumulator` was not built from `network` — the two perspectives
 /// must be `H` long and the output weight block `2H` long. Pairing an
 /// accumulator with a foreign network is a programming error, and the mismatch
 /// is caught rather than silently reading past a block.
-pub fn forward(network: &Network, accumulator: &Accumulator, side_to_move: Player) -> i32 {
-    forward_with(network, accumulator, side_to_move, dot_clipped_selected)
+pub fn forward(
+    network: &Network,
+    accumulator: &Accumulator,
+    side_to_move: Player,
+    piece_count: u32,
+) -> i32 {
+    match network.output() {
+        OutputStack::Single { .. } => {
+            forward_with(network, accumulator, side_to_move, dot_clipped_selected)
+        }
+        OutputStack::Bucketed(stack) => forward_bucketed_with(
+            network,
+            stack,
+            accumulator,
+            side_to_move,
+            piece_count,
+            dot_i8_selected,
+        ),
+    }
+}
+
+/// The output bucket a position with `piece_count` pieces selects, binning the
+/// reachable `1..=32` into `num_buckets` equal ranges:
+/// `min((piece_count - 1) · B / 32, B - 1)`. A pure function of piece count, so it
+/// is identical across the scalar, SIMD, and Python paths. See
+/// `docs/nnue-topology-v2.md`.
+pub fn select_bucket(piece_count: u32, num_buckets: u16) -> usize {
+    let b = u32::from(num_buckets);
+    let index = (piece_count.saturating_sub(1) * b / 32).min(b.saturating_sub(1));
+    index as usize
 }
 
 /// The forward pass parameterized by the clipped dot product used for each
@@ -126,6 +158,299 @@ fn forward_with(
     let denominator = i64::from(network.qa()) * i64::from(network.qb());
     let eval_cp = round_div(numerator, denominator);
     eval_cp.clamp(EVAL_CP_MIN, EVAL_CP_MAX) as i32
+}
+
+/// The widest activation buffer the bucketed forward pass keeps on the stack.
+/// It covers the `2H` activated input for `H ≤ 512` and any intermediate layer no
+/// wider than this without heap traffic; a wider network still evaluates, via a
+/// one-time heap buffer. Two of these ping-pong between layers.
+const STACK_SCRATCH: usize = 1024;
+
+/// A per-layer activation buffer that lives on the stack for the small widths this
+/// engine trains and spills to the heap only for an unusually wide network, so the
+/// per-node bucketed forward pass allocates nothing in the common case.
+///
+/// The size gap between the inline-array and heap variants is deliberate: the
+/// inline array *is* the optimization — it keeps the buffer off the heap in the
+/// search hot loop, where a per-node allocation would negate the incremental
+/// accumulator's speed. Boxing it to equalize the variants would reintroduce that
+/// allocation, so the lint is suppressed here rather than obeyed.
+#[allow(clippy::large_enum_variant)]
+enum Scratch {
+    Stack {
+        data: [i16; STACK_SCRATCH],
+        len: usize,
+    },
+    Heap(Vec<i16>),
+}
+
+impl Scratch {
+    fn new(len: usize) -> Self {
+        if len <= STACK_SCRATCH {
+            Scratch::Stack {
+                data: [0i16; STACK_SCRATCH],
+                len,
+            }
+        } else {
+            Scratch::Heap(vec![0i16; len])
+        }
+    }
+
+    fn as_slice(&self) -> &[i16] {
+        match self {
+            Scratch::Stack { data, len } => &data[..*len],
+            Scratch::Heap(v) => v,
+        }
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [i16] {
+        match self {
+            Scratch::Stack { data, len } => &mut data[..*len],
+            Scratch::Heap(v) => v,
+        }
+    }
+}
+
+/// The version-2 bucketed forward pass, parameterized by the int8 dot product used
+/// for each stack layer.
+///
+/// [`forward`] passes [`dot_i8_selected`], the runtime dispatcher; the
+/// differential test passes the scalar [`dot_i8`] and the AVX2 kernel explicitly so
+/// it can assert both land on the identical score. The pass materializes the
+/// activated `2H` input once (concatenated side-to-move first, each entry activated
+/// into `[0, QA]`), selects the bucket by piece count, then runs that bucket's
+/// affine layers: each layer's i32 accumulator is requantized with the layer's
+/// scale and activated back into `[0, QA]` for the next layer, and the final layer
+/// is dequantized to centipawns exactly as the version-1 output is. See
+/// `docs/nnue-topology-v2.md`.
+#[inline]
+fn forward_bucketed_with(
+    network: &Network,
+    stack: &BucketedStack,
+    accumulator: &Accumulator,
+    side_to_move: Player,
+    piece_count: u32,
+    dot: impl Fn(&[i16], &[i8]) -> i32,
+) -> i32 {
+    let hidden = network.hidden_width() as usize;
+    let two_h = 2 * hidden;
+    let qa = i64::from(network.qa());
+    let activation = network.activation();
+
+    let bucket = select_bucket(piece_count, stack.num_buckets());
+    let layers = stack.bucket(bucket);
+    let dims = stack.layer_dims();
+    let scales = stack.layer_scales();
+
+    // Two ping-pong buffers sized to the widest vector any layer reads or writes.
+    // The `2H` activated input dominates; hidden layer outputs are smaller.
+    let widest_dim = dims.iter().copied().max().unwrap_or(0) as usize;
+    let cap = two_h.max(widest_dim);
+    let mut buf_a = Scratch::new(cap);
+    let mut buf_b = Scratch::new(cap);
+
+    // Materialize the activated input into buf_a[..2H]: own perspective first.
+    let own = accumulator.perspective(side_to_move);
+    let enemy = accumulator.perspective(side_to_move.other_player());
+    {
+        let input = &mut buf_a.as_mut_slice()[..two_h];
+        let (own_half, enemy_half) = input.split_at_mut(hidden);
+        for (dst, &x) in own_half.iter_mut().zip(own) {
+            *dst = activate_qa_domain(activation, i64::from(x), qa);
+        }
+        for (dst, &x) in enemy_half.iter_mut().zip(enemy) {
+            *dst = activate_qa_domain(activation, i64::from(x), qa);
+        }
+    }
+
+    // Run the stack, ping-ponging between the two buffers. `in_dim` is the current
+    // input width; `from_a` says which buffer holds it. The final layer produces
+    // one scalar, `final_acc`, that is dequantized below.
+    let mut in_dim = two_h;
+    let mut from_a = true;
+    let mut final_acc: i64 = 0;
+    for (k, layer) in layers.iter().enumerate() {
+        let out_dim = dims[k] as usize;
+        let scale = i64::from(scales[k]);
+        let is_last = k + 1 == layers.len();
+
+        if is_last {
+            // A single output neuron: bias plus the int8 dot over the whole input.
+            let input = if from_a {
+                &buf_a.as_slice()[..in_dim]
+            } else {
+                &buf_b.as_slice()[..in_dim]
+            };
+            debug_assert_eq!(out_dim, 1, "the final stack layer emits one scalar");
+            final_acc = i64::from(layer.b[0]) + i64::from(dot(input, &layer.w[..in_dim]));
+        } else if from_a {
+            let (src, dst) = (&buf_a, &mut buf_b);
+            affine_activate(
+                &src.as_slice()[..in_dim],
+                layer,
+                in_dim,
+                scale,
+                activation,
+                qa,
+                &mut dst.as_mut_slice()[..out_dim],
+                &dot,
+            );
+        } else {
+            let (src, dst) = (&buf_b, &mut buf_a);
+            affine_activate(
+                &src.as_slice()[..in_dim],
+                layer,
+                in_dim,
+                scale,
+                activation,
+                qa,
+                &mut dst.as_mut_slice()[..out_dim],
+                &dot,
+            );
+        }
+
+        in_dim = out_dim;
+        from_a = !from_a;
+    }
+
+    // Dequantize the scalar output to centipawns: identical to the version-1
+    // read-out, with the final layer's scale (the network's `qb`).
+    let numerator = final_acc * i64::from(network.scale());
+    let denominator = qa * i64::from(network.qb());
+    let eval_cp = round_div(numerator, denominator);
+    eval_cp.clamp(EVAL_CP_MIN, EVAL_CP_MAX) as i32
+}
+
+/// One hidden affine layer: for each output neuron, seed the i32 bias, add the int8
+/// dot over the input, requantize with the layer's scale, and activate back into
+/// `[0, QA]` for the next layer. `output` is `out_dim` long and `input` `in_dim`.
+#[inline]
+// The `dot` parameter is the scalar or AVX2 kernel the caller selected — a
+// function, which like any closure cannot be folded into a plain-data struct
+// alongside the layer's dimensions and buffers. The argument count is inherent
+// here rather than a sign of a missing abstraction.
+#[allow(clippy::too_many_arguments)]
+fn affine_activate(
+    input: &[i16],
+    layer: &StackLayer,
+    in_dim: usize,
+    scale: i64,
+    activation: Activation,
+    qa: i64,
+    output: &mut [i16],
+    dot: &impl Fn(&[i16], &[i8]) -> i32,
+) {
+    for (o, dst) in output.iter_mut().enumerate() {
+        let row = &layer.w[o * in_dim..o * in_dim + in_dim];
+        let acc = i64::from(layer.b[o]) + i64::from(dot(input, row));
+        // `round_div(acc, scale) = QA · out_float`; clamping and activating lands
+        // it back in the `[0, QA]` domain the next layer's input occupies.
+        let t = round_div(acc, scale);
+        *dst = activate_qa_domain(activation, t, qa);
+    }
+}
+
+/// Activates a pre-activation value `t` (already in the `QA`-scaled domain) into the
+/// `[0, QA]` activation domain, applying the network's activation: CReLU is the
+/// clip alone; SCReLU squares the clipped value and divides by `QA` rounding half
+/// away from zero. The result is in `[0, QA]` and, for the `QA ≤ i16::MAX` the
+/// contract's i16 activation domain assumes, fits i16. This is the same arithmetic
+/// as [`screlu_activation`] applied to a clipped value.
+#[inline]
+fn activate_qa_domain(activation: Activation, t: i64, qa: i64) -> i16 {
+    let c = t.clamp(0, qa);
+    match activation {
+        Activation::ClippedRelu => c as i16,
+        Activation::SquaredClippedRelu => round_div(c * c, qa) as i16,
+    }
+}
+
+/// The int8 dot product of a stack layer row, dispatched to the widest path this
+/// CPU supports. Every path returns the identical i32 the scalar [`dot_i8`] would.
+#[inline]
+fn dot_i8_selected(activations: &[i16], weights: &[i8]) -> i32 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") {
+            // SAFETY: `dot_i8_avx2` requires AVX2, which the runtime check on this
+            // line has just confirmed. Its slices are equal-length and a multiple
+            // of 16 (every stack layer's input dimension is), read in bounds below.
+            return unsafe { dot_i8_avx2(activations, weights) };
+        }
+    }
+    dot_i8(activations, weights)
+}
+
+/// The scalar int8 dot product of one stack-layer row: `Σ_i act[i] · W[i]`, summed
+/// in i32. `act` is an already-activated value in `[0, QA]`; `W` is an int8 weight.
+/// This is the normative reference the AVX2 kernel reproduces exactly.
+#[inline]
+fn dot_i8(activations: &[i16], weights: &[i8]) -> i32 {
+    activations
+        .iter()
+        .zip(weights)
+        .map(|(&a, &w)| i32::from(a) * i32::from(w))
+        .sum()
+}
+
+/// AVX2 implementation of [`dot_i8`], computing the bit-identical i32 sum sixteen
+/// elements at a time.
+///
+/// The int8 weights are sign-extended to i16 and multiplied against the i16
+/// activations with `_mm256_madd_epi16` (i16×i16 → i32 pairwise, non-saturating),
+/// the same instruction the version-1 clipped dot uses. Because every product and
+/// pair-sum lands in i32 with no saturation, the result equals the scalar loop's
+/// exactly rather than approximately — the reason the tail uses this widened kernel
+/// rather than the saturating `vpmaddubsw`. Every stack layer's input dimension is
+/// a multiple of 16, so the whole row is processed by full 256-bit loads.
+///
+/// # Safety
+///
+/// The caller must ensure AVX2 is available. `activations` and `weights` must have
+/// equal length and that length must be a multiple of 16.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn dot_i8_avx2(activations: &[i16], weights: &[i8]) -> i32 {
+    use std::arch::x86_64::{
+        __m128i, __m256i, _mm256_add_epi32, _mm256_castsi256_si128, _mm256_cvtepi8_epi16,
+        _mm256_extracti128_si256, _mm256_loadu_si256, _mm256_madd_epi16, _mm256_setzero_si256,
+        _mm_add_epi32, _mm_cvtsi128_si32, _mm_loadu_si128, _mm_shuffle_epi32, _mm_unpackhi_epi64,
+    };
+
+    debug_assert_eq!(
+        activations.len(),
+        weights.len(),
+        "int8 dot product needs equal-length inputs"
+    );
+    debug_assert_eq!(
+        activations.len() % 16,
+        0,
+        "every stack layer input dimension is a multiple of 16"
+    );
+
+    let mut acc = _mm256_setzero_si256();
+    let len = activations.len();
+    let mut offset = 0;
+    while offset < len {
+        // SAFETY: `offset` steps by 16 and stops at `len`, so the i16 load reads a
+        // full 16-lane vector and the i8 load a full 16-byte half, both wholly
+        // inside the equal-length slices. The loads are unaligned.
+        let a = _mm256_loadu_si256(activations.as_ptr().add(offset) as *const __m256i);
+        let w8 = _mm_loadu_si128(weights.as_ptr().add(offset) as *const __m128i);
+        // Sign-extend the sixteen i8 weights to i16, then multiply-add against the
+        // i16 activations, accumulating the pairwise products in i32 lanes.
+        let w16 = _mm256_cvtepi8_epi16(w8);
+        acc = _mm256_add_epi32(acc, _mm256_madd_epi16(a, w16));
+        offset += 16;
+    }
+
+    // Horizontal sum of the eight i32 lanes, exactly as the version-1 kernel.
+    let lo = _mm256_castsi256_si128(acc);
+    let hi = _mm256_extracti128_si256::<1>(acc);
+    let sum128 = _mm_add_epi32(lo, hi);
+    let sum64 = _mm_add_epi32(sum128, _mm_unpackhi_epi64(sum128, sum128));
+    let sum32 = _mm_add_epi32(sum64, _mm_shuffle_epi32::<0b01>(sum64));
+    _mm_cvtsi128_si32(sum32)
 }
 
 /// The clipped dot product of one perspective block, dispatched to the widest
@@ -514,7 +839,7 @@ mod tests {
             let stm = pos.turn();
             let acc = Accumulator::from_position(&net, &pos);
 
-            let got = forward(&net, &acc, stm);
+            let got = forward(&net, &acc, stm, pos.occupied().popcnt());
             assert_eq!(got, expected, "forward pass mismatch on {fen}");
 
             let reference = reference_forward(&net, &pos, stm);
@@ -664,7 +989,7 @@ mod tests {
                 let stm = pos.turn();
                 let acc = Accumulator::from_position(&net, &pos);
                 assert_eq!(
-                    forward(&net, &acc, stm),
+                    forward(&net, &acc, stm, pos.occupied().popcnt()),
                     reference_forward(&net, &pos, stm),
                     "scalar and dense reference disagree on {fen} at H={hidden}"
                 );
@@ -719,8 +1044,18 @@ mod tests {
         ] {
             let pos = Position::from_fen(fen).expect("test FEN is valid");
             let mir = Position::from_fen(&colour_mirror(fen)).expect("mirror FEN is valid");
-            let s = forward(&net, &Accumulator::from_position(&net, &pos), pos.turn());
-            let m = forward(&net, &Accumulator::from_position(&net, &mir), mir.turn());
+            let s = forward(
+                &net,
+                &Accumulator::from_position(&net, &pos),
+                pos.turn(),
+                pos.occupied().popcnt(),
+            );
+            let m = forward(
+                &net,
+                &Accumulator::from_position(&net, &mir),
+                mir.turn(),
+                mir.occupied().popcnt(),
+            );
             assert_eq!(s, m, "mirror of {fen} did not match from the mover");
         }
     }
@@ -796,7 +1131,7 @@ mod tests {
                 let stm = pos.turn();
                 let acc = Accumulator::from_position(&net, &pos);
                 assert_eq!(
-                    forward(&net, &acc, stm),
+                    forward(&net, &acc, stm, pos.occupied().popcnt()),
                     reference_forward(&net, &pos, stm),
                     "SCReLU forward vs dense reference on {fen} at H={hidden}"
                 );
@@ -840,7 +1175,10 @@ mod tests {
         // s = 2H · QA · 1 = 32 · 255 = 8160; eval = round(8160 · 400 / (255·64)).
         let s_hi = 2 * hidden as i64 * i64::from(QA);
         let expected_hi = round_div(s_hi * i64::from(SCALE), i64::from(QA) * i64::from(QB));
-        assert_eq!(forward(&net_hi, &acc_hi, stm), expected_hi as i32);
+        assert_eq!(
+            forward(&net_hi, &acc_hi, stm, pos.occupied().popcnt()),
+            expected_hi as i32
+        );
 
         // Every entry i16::MIN -> clipped to 0, so only the bias survives.
         let net_lo = constant_accumulator_network(hidden, i16::MIN, 1000, -12_345);
@@ -849,7 +1187,10 @@ mod tests {
             i64::from(-12_345) * i64::from(SCALE),
             i64::from(QA) * i64::from(QB),
         );
-        assert_eq!(forward(&net_lo, &acc_lo, stm), expected_lo as i32);
+        assert_eq!(
+            forward(&net_lo, &acc_lo, stm, pos.occupied().popcnt()),
+            expected_lo as i32
+        );
     }
 
     /// With the accumulator saturated and the output weights near the top of their
@@ -879,7 +1220,7 @@ mod tests {
         );
         let expected = round_div(s * i64::from(SCALE), i64::from(QA) * i64::from(QB))
             .clamp(-10_000, 10_000) as i32;
-        assert_eq!(forward(&net, &acc, stm), expected);
+        assert_eq!(forward(&net, &acc, stm, pos.occupied().popcnt()), expected);
         // This saturated network exceeds the centipawn band, so the result clamps.
         assert_eq!(expected, 10_000);
     }
@@ -897,12 +1238,18 @@ mod tests {
         // Large positive raw output: clamps to +10_000.
         let net_pos = constant_accumulator_network(hidden, i16::MAX, 20_000, 0);
         let acc_pos = Accumulator::from_position(&net_pos, &pos);
-        assert_eq!(forward(&net_pos, &acc_pos, stm), 10_000);
+        assert_eq!(
+            forward(&net_pos, &acc_pos, stm, pos.occupied().popcnt()),
+            10_000
+        );
 
         // Large negative raw output: clamps to -10_000.
         let net_neg = constant_accumulator_network(hidden, i16::MAX, -20_000, 0);
         let acc_neg = Accumulator::from_position(&net_neg, &pos);
-        assert_eq!(forward(&net_neg, &acc_neg, stm), -10_000);
+        assert_eq!(
+            forward(&net_neg, &acc_neg, stm, pos.occupied().popcnt()),
+            -10_000
+        );
     }
 
     /// `OUTPUT_DIM` is 1, so the output layer reads exactly one bias; this guards
@@ -1032,7 +1379,7 @@ mod tests {
                     let stm = pos.turn();
                     let acc = Accumulator::from_position(&golden_net, &pos);
                     assert_eq!(
-                        forward(&golden_net, &acc, stm),
+                        forward(&golden_net, &acc, stm, pos.occupied().popcnt()),
                         expected,
                         "AVX2 golden {fen}"
                     );
@@ -1050,7 +1397,7 @@ mod tests {
 
                         // Full forward (AVX2) equals the independent dense oracle.
                         assert_eq!(
-                            forward(&net, &acc, stm),
+                            forward(&net, &acc, stm, pos.occupied().popcnt()),
                             reference_forward(&net, &pos, stm),
                             "AVX2 forward vs dense reference at H={hidden}"
                         );
@@ -1112,5 +1459,431 @@ mod tests {
                 }
             }
         });
+    }
+
+    // --- Version-2 bucketed multi-layer int8 stack ---
+
+    use super::super::{BucketedParameters, BucketedStack, OutputStack, StackLayer};
+
+    const V2_DIMS: [u32; 3] = [16, 32, 1];
+    // Distinct per-layer int8 weight scales (last is the network's qb) so a path
+    // that ignored `stack_scales` and assumed a uniform scale would diverge.
+    const V2_SCALES: [u32; 3] = [64, 128, 256];
+
+    /// The bucketed stack of a network, or a panic if it is a single-layer one.
+    fn stack_of(net: &Network) -> &BucketedStack {
+        match net.output() {
+            OutputStack::Bucketed(stack) => stack,
+            OutputStack::Single { .. } => panic!("expected a bucketed network"),
+        }
+    }
+
+    /// Round half away from zero, in i64 — an independent transcription of the
+    /// contract's rounded divide, so the bucketed reference shares no arithmetic
+    /// helper with the module under test.
+    fn rdiv(numerator: i64, denominator: i64) -> i64 {
+        let half = denominator / 2;
+        if numerator >= 0 {
+            (numerator + half) / denominator
+        } else {
+            -((-numerator + half) / denominator)
+        }
+    }
+
+    /// Builds a bucketed network whose feature transformer matches
+    /// [`patterned_network`] and whose per-bucket int8 stacks vary by bucket, layer,
+    /// and position, at the distinct per-layer scales above. `2H → 16 → 32 → 1`.
+    fn patterned_bucketed_network(
+        hidden: u32,
+        activation: Activation,
+        num_buckets: u16,
+    ) -> Network {
+        let h = hidden as usize;
+        let mut w_ft = vec![0i16; INPUT_DIM as usize * h];
+        for (feature, column) in w_ft.chunks_mut(h).enumerate() {
+            for (unit, w) in column.iter_mut().enumerate() {
+                *w = ((feature * 31 + unit * 7) % 41) as i16 - 20;
+            }
+        }
+        let b_ft: Vec<i16> = (0..h).map(|unit| (unit as i16 % 7) - 3).collect();
+
+        let buckets = (0..num_buckets as usize)
+            .map(|bucket| {
+                let mut in_dim = 2 * h;
+                V2_DIMS
+                    .iter()
+                    .map(|&out_dim| {
+                        let out_dim = out_dim as usize;
+                        let w: Vec<i8> = (0..out_dim * in_dim)
+                            .map(|i| ((i * 13 + bucket * 17 + out_dim * 5) % 151) as i32 - 75)
+                            .map(|v| v as i8)
+                            .collect();
+                        let b: Vec<i32> = (0..out_dim)
+                            .map(|o| o as i32 * 37 + bucket as i32 * 11 - 300)
+                            .collect();
+                        in_dim = out_dim;
+                        StackLayer { w, b }
+                    })
+                    .collect()
+            })
+            .collect();
+
+        Network::new_bucketed(
+            hidden,
+            activation,
+            QA,
+            SCALE,
+            BucketedParameters {
+                w_ft,
+                b_ft,
+                layer_dims: V2_DIMS.to_vec(),
+                layer_scales: V2_SCALES.to_vec(),
+                buckets,
+            },
+        )
+        .expect("patterned bucketed network satisfies the build invariant")
+    }
+
+    /// An independent dense forward pass for a bucketed network, sharing no code
+    /// with [`forward`]: it materializes the full 768-input dense accumulator per
+    /// perspective, activates in `i64`, selects the bucket, and runs the stack in
+    /// plain nested loops with its own rounded divide. Agreement therefore exercises
+    /// two different index derivations, accumulation widths, and layer loops.
+    fn reference_bucketed_forward(net: &Network, pos: &Position, stm: Player) -> i32 {
+        let h = net.hidden_width() as usize;
+        let w_ft = net.feature_transformer_weights();
+        let b_ft = net.feature_transformer_bias();
+        let qa = i64::from(net.qa());
+
+        let mut acc = [vec![0i64; h], vec![0i64; h]];
+        for (slot, &perspective) in [Player::WHITE, Player::BLACK].iter().enumerate() {
+            for (unit, a) in acc[slot].iter_mut().enumerate() {
+                *a = i64::from(b_ft[unit]);
+            }
+            for &colour in &[Player::WHITE, Player::BLACK] {
+                for &piece_type in &PIECE_TYPES {
+                    let piece = chess::position::Piece::make(colour, piece_type);
+                    for sq in pos.piece_bb(colour, piece_type) {
+                        let f = feature_index(perspective, piece, sq);
+                        for (unit, a) in acc[slot].iter_mut().enumerate() {
+                            *a += i64::from(w_ft[f * h + unit]);
+                        }
+                    }
+                }
+            }
+        }
+
+        let own = if stm.is_white() { &acc[0] } else { &acc[1] };
+        let enemy = if stm.is_white() { &acc[1] } else { &acc[0] };
+        let activate = |x: i64| -> i64 {
+            let c = x.clamp(0, qa);
+            match net.activation() {
+                Activation::ClippedRelu => c,
+                Activation::SquaredClippedRelu => rdiv(c * c, qa),
+            }
+        };
+
+        // Activated input, own perspective first.
+        let mut input: Vec<i64> = own
+            .iter()
+            .chain(enemy.iter())
+            .map(|&x| activate(x))
+            .collect();
+
+        let stack = stack_of(net);
+        let bucket = select_bucket(pos.occupied().popcnt(), stack.num_buckets());
+        let layers = stack.bucket(bucket);
+        let dims = stack.layer_dims();
+        let scales = stack.layer_scales();
+
+        let mut final_acc: i64 = 0;
+        for (k, layer) in layers.iter().enumerate() {
+            let out_dim = dims[k] as usize;
+            let in_dim = input.len();
+            let scale = i64::from(scales[k]);
+            let is_last = k + 1 == layers.len();
+            let mut next = vec![0i64; out_dim];
+            for (o, slot) in next.iter_mut().enumerate() {
+                let mut s = i64::from(layer.b[o]);
+                for (i, &a) in input.iter().enumerate() {
+                    s += a * i64::from(layer.w[o * in_dim + i]);
+                }
+                if is_last {
+                    final_acc = s;
+                } else {
+                    *slot = activate(rdiv(s, scale));
+                }
+            }
+            if !is_last {
+                input = next;
+            }
+        }
+
+        let num = final_acc * i64::from(net.scale());
+        let den = qa * i64::from(net.qb());
+        rdiv(num, den).clamp(-10_000, 10_000) as i32
+    }
+
+    /// The bucket rule bins piece count into `num_buckets` equal ranges over the
+    /// reachable `1..=32`, clamps at `B-1`, and never underflows.
+    #[test]
+    fn select_bucket_bins_piece_count() {
+        // Eight buckets: (p-1)/4.
+        assert_eq!(select_bucket(2, 8), 0);
+        assert_eq!(select_bucket(5, 8), 1);
+        assert_eq!(select_bucket(6, 8), 1);
+        assert_eq!(select_bucket(32, 8), 7);
+        assert_eq!(select_bucket(1, 8), 0);
+        // Never underflows below the first bucket.
+        assert_eq!(select_bucket(0, 8), 0);
+        // A single bucket always selects itself.
+        assert_eq!(select_bucket(20, 1), 0);
+        // Four buckets: (p-1)/8.
+        assert_eq!(select_bucket(9, 4), 1);
+        assert_eq!(select_bucket(32, 4), 3);
+    }
+
+    /// The scalar bucketed forward pass reproduces the independent dense reference
+    /// across positions spanning multiple buckets and both activations, at two
+    /// hidden widths — so the sparse accumulator path, the bucket selection, the
+    /// int8 layers, the inter-layer requantize, and the final dequantize all match a
+    /// from-the-board computation that shares no code with `forward`.
+    #[test]
+    fn bucketed_forward_agrees_with_the_dense_reference() {
+        init_globals();
+        // FENs chosen to span several piece counts, hence several buckets.
+        let fens = [
+            "4k3/8/8/8/8/8/8/4K3 w - - 0 1",             // 2 pieces  -> bucket 0
+            "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1", // 8 pieces  -> bucket 1
+            "r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 b - - 0 1", // busy middlegame
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", // 32 -> bucket 7
+        ];
+        for activation in [Activation::ClippedRelu, Activation::SquaredClippedRelu] {
+            for hidden in [16u32, 256] {
+                let net = patterned_bucketed_network(hidden, activation, 8);
+                let mut buckets_seen = std::collections::HashSet::new();
+                for fen in fens {
+                    let pos = Position::from_fen(fen).expect("test FEN is valid");
+                    let stm = pos.turn();
+                    let acc = Accumulator::from_position(&net, &pos);
+                    let pc = pos.occupied().popcnt();
+                    buckets_seen.insert(select_bucket(pc, 8));
+                    assert_eq!(
+                        forward(&net, &acc, stm, pc),
+                        reference_bucketed_forward(&net, &pos, stm),
+                        "bucketed forward vs dense reference on {fen} at H={hidden}"
+                    );
+                }
+                assert!(
+                    buckets_seen.len() >= 2,
+                    "the position set must span at least two buckets"
+                );
+            }
+        }
+    }
+
+    /// The selected bucket actually drives the evaluation: scoring one fixed
+    /// accumulator under piece counts that map to different buckets reads different
+    /// per-bucket stacks and so produces more than one distinct score.
+    #[test]
+    fn bucket_selection_uses_the_selected_bucket_stack() {
+        init_globals();
+        let net = patterned_bucketed_network(16, Activation::ClippedRelu, 8);
+        let pos = Position::from_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
+            .expect("valid");
+        let stm = pos.turn();
+        let acc = Accumulator::from_position(&net, &pos);
+
+        // A piece count landing squarely in each bucket 0..8.
+        let scores: Vec<i32> = (0..8u32)
+            .map(|b| forward(&net, &acc, stm, (4 * b + 2).min(32)))
+            .collect();
+        let distinct: std::collections::HashSet<_> = scores.iter().collect();
+        assert!(
+            distinct.len() > 1,
+            "distinct buckets should yield distinct scores, got {scores:?}"
+        );
+    }
+
+    /// A random bucketed network with int8 stack weights and i32 biases whose FT
+    /// stays inside i16 for any reachable position, so scalar/SIMD comparison stays
+    /// in the regime the paths are defined to agree on.
+    #[cfg(target_arch = "x86_64")]
+    fn random_bucketed_network(
+        rng: &mut SmallRng,
+        activation: Activation,
+        hidden: u32,
+        num_buckets: u16,
+    ) -> Network {
+        let h = hidden as usize;
+        let w_ft: Vec<i16> = (0..INPUT_DIM as usize * h)
+            .map(|_| rng.random_range(-200..=200))
+            .collect();
+        let b_ft: Vec<i16> = (0..h).map(|_| rng.random_range(-500..=500)).collect();
+        let buckets = (0..num_buckets as usize)
+            .map(|_| {
+                let mut in_dim = 2 * h;
+                V2_DIMS
+                    .iter()
+                    .map(|&out_dim| {
+                        let out_dim = out_dim as usize;
+                        let w: Vec<i8> = (0..out_dim * in_dim)
+                            .map(|_| rng.random_range(-127..=127i16) as i8)
+                            .collect();
+                        let b: Vec<i32> = (0..out_dim)
+                            .map(|_| rng.random_range(-1_000_000..=1_000_000))
+                            .collect();
+                        in_dim = out_dim;
+                        StackLayer { w, b }
+                    })
+                    .collect()
+            })
+            .collect();
+        Network::new_bucketed(
+            hidden,
+            activation,
+            QA,
+            SCALE,
+            BucketedParameters {
+                w_ft,
+                b_ft,
+                layer_dims: V2_DIMS.to_vec(),
+                layer_scales: V2_SCALES.to_vec(),
+                buckets,
+            },
+        )
+        .expect("random bucketed network satisfies the build invariant")
+    }
+
+    /// For a bucketed network the scalar and AVX2 forward passes are bit-identical,
+    /// and both reproduce the independent dense reference, over randomized networks
+    /// and positions spanning buckets and both activations. The int8 AVX2 kernel
+    /// (`vpmaddwd` over widened weights) is driven explicitly through the shared
+    /// bucketed tail so the check is a real third path, not the runtime dispatch
+    /// counted twice.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn bucketed_scalar_and_avx2_forward_are_bit_identical() {
+        with_avx2("bucketed_scalar_and_avx2_forward_are_bit_identical", || {
+            init_globals();
+            let mut rng = SmallRng::seed_from_u64(0xB0CE_7A11);
+            for activation in [Activation::ClippedRelu, Activation::SquaredClippedRelu] {
+                for hidden in [16u32, 256] {
+                    let net = random_bucketed_network(&mut rng, activation, hidden, 8);
+                    let stack = stack_of(&net);
+                    for _ in 0..40 {
+                        let plies = rng.random_range(1..=40);
+                        let pos = random_position(&mut rng, plies);
+                        let stm = pos.turn();
+                        let acc = Accumulator::from_position(&net, &pos);
+                        let pc = pos.occupied().popcnt();
+
+                        let scalar = forward_bucketed_with(&net, stack, &acc, stm, pc, dot_i8);
+                        // SAFETY: AVX2 presence confirmed by `with_avx2`; every stack
+                        // layer input is a multiple of 16, handed to the kernel whole.
+                        let simd =
+                            forward_bucketed_with(&net, stack, &acc, stm, pc, |a, w| unsafe {
+                                dot_i8_avx2(a, w)
+                            });
+                        assert_eq!(scalar, simd, "bucketed scalar vs AVX2 at H={hidden}");
+                        assert_eq!(
+                            scalar,
+                            reference_bucketed_forward(&net, &pos, stm),
+                            "bucketed forward vs dense reference at H={hidden}"
+                        );
+                    }
+                }
+            }
+        });
+    }
+
+    /// The version-2 exporter's golden fixtures: a bucketed multi-layer int8 network
+    /// the engine loads, and the `(category, FEN, expected-cp)` triples the exporter's
+    /// own integer forward pass produced for it. Committed so the cross-language
+    /// agreement is checked in every `cargo test` without invoking Python. Regenerate
+    /// with `python export.py --emit-golden engine/tests/fixtures`.
+    const GOLDEN_V2_NET_BYTES: &[u8] = include_bytes!("../../tests/fixtures/golden_v2.sbnn");
+    const GOLDEN_V2_VECTORS: &str = include_str!("../../tests/fixtures/golden_v2.vectors");
+    const GOLDEN_SCRELU_V2_NET_BYTES: &[u8] =
+        include_bytes!("../../tests/fixtures/golden_screlu_v2.sbnn");
+    const GOLDEN_SCRELU_V2_VECTORS: &str =
+        include_str!("../../tests/fixtures/golden_screlu_v2.vectors");
+
+    /// The three-way cross-language guarantee for a bucketed network: for every
+    /// golden position the score the Python exporter emitted, the Rust scalar
+    /// bucketed forward pass, and — on a CPU with AVX2 — the Rust SIMD bucketed
+    /// forward pass are the identical integer. The positions span multiple buckets
+    /// and the network's per-layer int8 scales differ, so the check proves the
+    /// bucket selection and the per-layer-scale path in all three implementations.
+    fn assert_golden_three_way_bucketed(net_bytes: &[u8], vectors_text: &'static str) {
+        init_globals();
+        let net = Network::read(&mut &net_bytes[..])
+            .expect("the exporter's bucketed golden network loads");
+        let stack = stack_of(&net);
+        // A uniform-scale fixture would pass even if an implementation ignored
+        // `stack_scales`; require the golden net's per-layer scales to differ.
+        let scales = stack.layer_scales();
+        assert!(
+            scales.iter().any(|s| *s != scales[0]),
+            "golden stack scales must differ per layer to exercise the per-layer path"
+        );
+
+        let vectors = parse_golden_vectors(vectors_text);
+        assert!(!vectors.is_empty(), "the golden fixture has vectors");
+        for category in GOLDEN_CATEGORIES {
+            assert!(
+                vectors.iter().any(|&(c, _, _)| c == category),
+                "golden set covers the {category} category"
+            );
+        }
+
+        let mut buckets_seen = std::collections::HashSet::new();
+        for (category, fen, expected) in vectors {
+            let pos = Position::from_fen(fen).expect("golden FEN is valid");
+            let stm = pos.turn();
+            let acc = Accumulator::from_position(&net, &pos);
+            let pc = pos.occupied().popcnt();
+            buckets_seen.insert(select_bucket(pc, stack.num_buckets()));
+
+            let scalar = forward_bucketed_with(&net, stack, &acc, stm, pc, dot_i8);
+            assert_eq!(
+                scalar, expected,
+                "scalar bucketed forward vs exporter on {category} {fen}"
+            );
+
+            #[cfg(target_arch = "x86_64")]
+            {
+                if is_x86_feature_detected!("avx2") {
+                    // SAFETY: AVX2 presence just confirmed; the kernel is handed
+                    // multiple-of-16 stack rows.
+                    let simd = forward_bucketed_with(&net, stack, &acc, stm, pc, |a, w| unsafe {
+                        dot_i8_avx2(a, w)
+                    });
+                    assert_eq!(
+                        simd, expected,
+                        "SIMD bucketed forward vs exporter on {category} {fen}"
+                    );
+                }
+            }
+
+            // The public dispatch path lands on the same value.
+            assert_eq!(forward(&net, &acc, stm, pc), expected);
+        }
+        assert!(
+            buckets_seen.len() >= 2,
+            "golden positions must span at least two buckets"
+        );
+    }
+
+    /// The CReLU bucketed cross-language differential check over the committed v2 fixture.
+    #[test]
+    fn bucketed_golden_vectors_agree_across_python_scalar_and_simd() {
+        assert_golden_three_way_bucketed(GOLDEN_V2_NET_BYTES, GOLDEN_V2_VECTORS);
+    }
+
+    /// The SCReLU bucketed cross-language differential check over the committed v2 fixture.
+    #[test]
+    fn screlu_bucketed_golden_vectors_agree_across_python_scalar_and_simd() {
+        assert_golden_three_way_bucketed(GOLDEN_SCRELU_V2_NET_BYTES, GOLDEN_SCRELU_V2_VECTORS);
     }
 }

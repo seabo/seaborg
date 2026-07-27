@@ -269,6 +269,12 @@ than misinterpreting it. The repository has no prior binary-loading precedent
 (runtime tables are generated, not loaded), so this format is greenfield and
 owned by TASK-69.2.
 
+This section describes **format version 1** (a single linear output layer).
+Format version 2 adds a bucketed multi-layer output stack with an int8 dense
+tail; its header additions, blob layout, and rejection rules are specified in
+`docs/nnue-topology-v2.md`, which governs version 2 while this section continues
+to govern version 1. The engine loads both.
+
 All multi-byte fields are little-endian (the engine targets x86-64).
 
 **Header (64 bytes):**

@@ -45,6 +45,9 @@ from model import (
 MAGIC = b"SBNN"
 HEADER_LEN = 64
 FORMAT_VERSION = 1
+# Format version 2 adds a bucketed multi-layer int8 output stack; see
+# docs/nnue-topology-v2.md and the QuantizedBucketedNetwork below.
+FORMAT_VERSION_V2 = 2
 # Activation ids from the contract's file-format header: 0 = clipped ReLU,
 # 1 = squared clipped ReLU. Both have integer inference in engine and exporter.
 ACTIVATION_CRELU = 0
@@ -66,11 +69,17 @@ _OFF_SCALE = 24
 _OFF_PARAM_BYTES = 28
 _OFF_PARAM_HASH = 32
 _OFF_RESERVED = 40
+# Version-2 header fields, carved out of the version-1 reserved region.
+_OFF_NUM_BUCKETS = 40
+_OFF_NUM_OUTPUT_LAYERS = 42
+_OFF_V2_RESERVED = 44
 
 _HIDDEN_WIDTH_MULTIPLE = 16
+_I8_MIN, _I8_MAX = -127, 127  # symmetric int8 range the tail weights are held to
 _I16_MIN, _I16_MAX = -32768, 32767
 _I32_MIN, _I32_MAX = -(2**31), 2**31 - 1
 _EVAL_CP_MIN, _EVAL_CP_MAX = -10_000, 10_000
+_MIN_BUCKETS, _MAX_BUCKETS = 1, 32
 
 
 class ExportError(ValueError):
@@ -296,6 +305,69 @@ def quantize(model: NnueModel) -> QuantizedNetwork:
     return net
 
 
+def quantize_bucketed(model: NnueModel) -> QuantizedBucketedNetwork:
+    """Quantize a trained bucketed (version-2) model to the engine's integer
+    network: the feature transformer to i16 at ``QA`` (as version 1), and each stack
+    layer's weights to i8 at that layer's scale ``QB_k`` and its bias to i32 at
+    ``QA·QB_k``. Refuses any weight that overflows its integer type or an accumulator
+    that could exceed i16."""
+    config = model.config
+    if not config.is_bucketed:
+        raise ExportError("quantize_bucketed needs a bucketed (output_stack) model")
+    if config.activation_id not in _SUPPORTED_ACTIVATIONS:
+        raise ExportError(
+            f"activation {config.activation!r} has no integer inference; "
+            "export needs crelu or screlu"
+        )
+    state = model.state_dict()
+    w_ft = state["feature_transformer.weight"].detach().cpu().numpy()  # [768, H]
+    b_ft = state["ft_bias"].detach().cpu().numpy()  # [H]
+    dims = config.stack_layer_dims
+    scales = config.stack_layer_scales
+
+    buckets = []
+    for b in range(config.num_buckets):
+        layers = []
+        for k in range(len(dims)):
+            wk = state[f"stack_weights.{k}"].detach().cpu().numpy()[b]  # [out, in]
+            bk = state[f"stack_biases.{k}"].detach().cpu().numpy()[b]  # [out]
+            # Row-major flatten of [out, in] is the output-major o*in + i order on disk.
+            w_i8 = _checked_cast(
+                _round_half_even(wk.reshape(-1), scales[k]),
+                _I8_MIN,
+                _I8_MAX,
+                f"stack_w[bucket {b}][layer {k}]",
+                np.int8,
+            )
+            b_i32 = _checked_cast(
+                _round_half_even(bk, config.qa * scales[k]),
+                _I32_MIN,
+                _I32_MAX,
+                f"stack_b[bucket {b}][layer {k}]",
+                np.int32,
+            )
+            layers.append((w_i8, b_i32))
+        buckets.append(tuple(layers))
+
+    net = QuantizedBucketedNetwork(
+        hidden=config.hidden,
+        qa=config.qa,
+        scale=config.scale,
+        activation=config.activation_id,
+        layer_dims=tuple(dims),
+        layer_scales=tuple(scales),
+        w_ft=_checked_cast(
+            _round_half_even(w_ft, config.qa).reshape(-1), _I16_MIN, _I16_MAX, "w_ft", np.int16
+        ),
+        b_ft=_checked_cast(
+            _round_half_even(b_ft, config.qa), _I16_MIN, _I16_MAX, "b_ft", np.int16
+        ),
+        buckets=tuple(buckets),
+    )
+    _assert_accumulator_fits_i16(net)
+    return net
+
+
 def integer_eval_cp(
     net: QuantizedNetwork, stm_features: np.ndarray, nstm_features: np.ndarray
 ) -> int:
@@ -333,6 +405,256 @@ def integer_eval_cp(
     den = net.qa * net.qb
     half = den // 2
     cp = (num + half) // den if num >= 0 else -((-num + half) // den)
+    return int(np.clip(cp, _EVAL_CP_MIN, _EVAL_CP_MAX))
+
+
+def _round_div(num: int, den: int) -> int:
+    """Round ``num / den`` half away from zero for a positive ``den`` — the exact
+    rounded divide the contract fixes, matching the engine's ``round_div``."""
+    half = den // 2
+    return (num + half) // den if num >= 0 else -((-num + half) // den)
+
+
+def select_bucket(piece_count: int, num_buckets: int) -> int:
+    """The output bucket a position with ``piece_count`` pieces selects, binning the
+    reachable ``1..=32`` into ``num_buckets`` equal ranges:
+    ``min((piece_count - 1) * B / 32, B - 1)`` — the same rule the engine applies."""
+    b = num_buckets
+    return min(max(piece_count - 1, 0) * b // 32, b - 1)
+
+
+@dataclass(frozen=True)
+class QuantizedBucketedNetwork:
+    """A version-2 bucketed network in the engine's on-disk integer types: the
+    shared feature transformer, the per-layer stack shape and int8 weight scales,
+    and one int8 output stack per bucket. Construct one from a trained model with
+    :func:`quantize_bucketed`, or from a file with :meth:`from_bytes`.
+
+    ``layer_dims`` are the per-layer output dimensions (last is :data:`OUTPUT_DIM`);
+    ``layer_scales`` the per-layer int8 weight scales ``QB_k`` (last is ``qb``).
+    ``buckets[b][k]`` is the ``(w, b)`` pair for bucket ``b``'s layer ``k``: int8
+    weights output-major (``out_dim_k * in_dim_k``) and an i32 bias of length
+    ``out_dim_k``, with ``in_dim_0 = 2H`` and ``in_dim_k = out_dim_{k-1}``."""
+
+    hidden: int
+    qa: int
+    scale: int
+    activation: int
+    layer_dims: tuple[int, ...]
+    layer_scales: tuple[int, ...]
+    w_ft: np.ndarray  # int16, INPUT_DIM * H, feature-major
+    b_ft: np.ndarray  # int16, H
+    buckets: tuple[tuple[tuple[np.ndarray, np.ndarray], ...], ...]
+
+    @property
+    def qb(self) -> int:
+        return self.layer_scales[-1]
+
+    @property
+    def num_buckets(self) -> int:
+        return len(self.buckets)
+
+    @property
+    def num_layers(self) -> int:
+        return len(self.layer_dims)
+
+    def layer_in_dim(self, k: int) -> int:
+        return 2 * self.hidden if k == 0 else self.layer_dims[k - 1]
+
+    def param_bytes(self) -> int:
+        n = self.num_layers
+        per_bucket = sum(
+            self.layer_dims[k] * self.layer_in_dim(k) + 4 * self.layer_dims[k] for k in range(n)
+        )
+        return 4 * n + 4 * n + 2 * self.w_ft.size + 2 * self.b_ft.size + self.num_buckets * per_bucket
+
+    def _blob(self) -> bytes:
+        parts = [
+            np.asarray(self.layer_dims, dtype="<u4").tobytes(),
+            np.asarray(self.layer_scales, dtype="<u4").tobytes(),
+            self.w_ft.astype("<i2").tobytes(),
+            self.b_ft.astype("<i2").tobytes(),
+        ]
+        for bucket in self.buckets:
+            for w, b in bucket:
+                parts.append(w.astype(np.int8).tobytes())
+                parts.append(b.astype("<i4").tobytes())
+        return b"".join(parts)
+
+    def to_bytes(self) -> bytes:
+        """Serialise to the 64-byte version-2 header followed by the parameter blob."""
+        blob = self._blob()
+        header = bytearray(HEADER_LEN)
+        header[_OFF_MAGIC : _OFF_MAGIC + 4] = MAGIC
+        header[_OFF_FORMAT_VERSION : _OFF_FORMAT_VERSION + 2] = FORMAT_VERSION_V2.to_bytes(
+            2, "little"
+        )
+        header[_OFF_FEATURE_SET_ID : _OFF_FEATURE_SET_ID + 2] = PERSPECTIVE_768_ID.to_bytes(
+            2, "little"
+        )
+        header[_OFF_INPUT_DIM : _OFF_INPUT_DIM + 4] = PERSPECTIVE_768_DIM.to_bytes(4, "little")
+        header[_OFF_HIDDEN_WIDTH : _OFF_HIDDEN_WIDTH + 4] = int(self.hidden).to_bytes(4, "little")
+        header[_OFF_OUTPUT_DIM : _OFF_OUTPUT_DIM + 2] = OUTPUT_DIM.to_bytes(2, "little")
+        header[_OFF_ACTIVATION_ID : _OFF_ACTIVATION_ID + 2] = int(self.activation).to_bytes(
+            2, "little"
+        )
+        header[_OFF_QA : _OFF_QA + 2] = int(self.qa).to_bytes(2, "little")
+        header[_OFF_QB : _OFF_QB + 2] = int(self.qb).to_bytes(2, "little")
+        header[_OFF_SCALE : _OFF_SCALE + 4] = int(self.scale).to_bytes(4, "little", signed=True)
+        header[_OFF_PARAM_BYTES : _OFF_PARAM_BYTES + 4] = len(blob).to_bytes(4, "little")
+        header[_OFF_PARAM_HASH : _OFF_PARAM_HASH + 8] = _fnv1a_64(blob).to_bytes(8, "little")
+        header[_OFF_NUM_BUCKETS : _OFF_NUM_BUCKETS + 2] = int(self.num_buckets).to_bytes(
+            2, "little"
+        )
+        header[_OFF_NUM_OUTPUT_LAYERS : _OFF_NUM_OUTPUT_LAYERS + 2] = int(self.num_layers).to_bytes(
+            2, "little"
+        )
+        return bytes(header) + blob
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> "QuantizedBucketedNetwork":
+        """Parse and validate a version-2 file the same way the engine loader does,
+        written independently of :meth:`to_bytes` so a round trip exercises the byte
+        layout from both directions."""
+        if len(data) < HEADER_LEN:
+            raise ExportError("shorter than the 64-byte header")
+        header = data[:HEADER_LEN]
+
+        def u16(off: int) -> int:
+            return int.from_bytes(header[off : off + 2], "little")
+
+        def u32(off: int) -> int:
+            return int.from_bytes(header[off : off + 4], "little")
+
+        if header[_OFF_MAGIC : _OFF_MAGIC + 4] != MAGIC:
+            raise ExportError("bad magic")
+        if u16(_OFF_FORMAT_VERSION) != FORMAT_VERSION_V2:
+            raise ExportError(f"expected version 2, got {u16(_OFF_FORMAT_VERSION)}")
+        if u16(_OFF_FEATURE_SET_ID) != PERSPECTIVE_768_ID:
+            raise ExportError(f"unsupported feature set {u16(_OFF_FEATURE_SET_ID)}")
+        activation = u16(_OFF_ACTIVATION_ID)
+        if activation not in _SUPPORTED_ACTIVATIONS:
+            raise ExportError(f"unsupported activation {activation}")
+        if u32(_OFF_INPUT_DIM) != PERSPECTIVE_768_DIM:
+            raise ExportError("input dim inconsistent with feature set")
+        hidden = u32(_OFF_HIDDEN_WIDTH)
+        if hidden == 0 or hidden % _HIDDEN_WIDTH_MULTIPLE != 0:
+            raise ExportError(f"hidden width {hidden} is not a positive multiple of 16")
+        if u16(_OFF_OUTPUT_DIM) != OUTPUT_DIM:
+            raise ExportError("output dim unsupported")
+        qa, qb = u16(_OFF_QA), u16(_OFF_QB)
+        scale = int.from_bytes(header[_OFF_SCALE : _OFF_SCALE + 4], "little", signed=True)
+        if qa <= 0 or qb <= 0 or scale <= 0:
+            raise ExportError("qa, qb, and scale must be positive")
+        num_buckets = u16(_OFF_NUM_BUCKETS)
+        if not _MIN_BUCKETS <= num_buckets <= _MAX_BUCKETS:
+            raise ExportError(f"bucket count {num_buckets} out of range")
+        num_layers = u16(_OFF_NUM_OUTPUT_LAYERS)
+        if num_layers < 1:
+            raise ExportError("need at least one output layer")
+        if any(header[_OFF_V2_RESERVED:HEADER_LEN]):
+            raise ExportError("reserved bytes are non-zero")
+
+        blob = data[HEADER_LEN:]
+        pos = 0
+
+        def take(count: int, dtype: str) -> np.ndarray:
+            nonlocal pos
+            width = np.dtype(dtype).itemsize
+            arr = np.frombuffer(blob, dtype=dtype, count=count, offset=pos).copy()
+            pos += count * width
+            return arr
+
+        layer_dims = tuple(int(x) for x in take(num_layers, "<u4"))
+        layer_scales = tuple(int(x) for x in take(num_layers, "<u4"))
+        if layer_dims[-1] != OUTPUT_DIM:
+            raise ExportError("final stack dim is not the output dim")
+        if any(d == 0 or d % _HIDDEN_WIDTH_MULTIPLE != 0 for d in layer_dims[:-1]):
+            raise ExportError("a hidden stack dim is not a positive multiple of 16")
+        if any(s <= 0 for s in layer_scales):
+            raise ExportError("a stack scale is not positive")
+        if layer_scales[-1] != qb:
+            raise ExportError("final stack scale must equal qb")
+
+        w_ft = take(PERSPECTIVE_768_DIM * hidden, "<i2")
+        b_ft = take(hidden, "<i2")
+        buckets = []
+        for _ in range(num_buckets):
+            in_dim = 2 * hidden
+            layers = []
+            for out_dim in layer_dims:
+                w = take(out_dim * in_dim, np.int8.__name__)
+                b = take(out_dim, "<i4")
+                layers.append((w, b))
+                in_dim = out_dim
+            buckets.append(tuple(layers))
+
+        declared = int.from_bytes(header[_OFF_PARAM_BYTES : _OFF_PARAM_BYTES + 4], "little")
+        if declared != len(blob):
+            raise ExportError("param_bytes disagrees with the blob length")
+        if pos != len(blob):
+            raise ExportError("blob length disagrees with the dimensions")
+        declared_hash = int.from_bytes(header[_OFF_PARAM_HASH : _OFF_PARAM_HASH + 8], "little")
+        if declared_hash != _fnv1a_64(blob):
+            raise ExportError("parameter blob hash mismatch")
+
+        return cls(
+            hidden=hidden,
+            qa=qa,
+            scale=scale,
+            activation=activation,
+            layer_dims=layer_dims,
+            layer_scales=layer_scales,
+            w_ft=w_ft,
+            b_ft=b_ft,
+            buckets=tuple(buckets),
+        )
+
+
+def integer_eval_cp_bucketed(
+    net: QuantizedBucketedNetwork,
+    stm_features: np.ndarray,
+    nstm_features: np.ndarray,
+    piece_count: int,
+) -> int:
+    """The contract's integer forward pass for a bucketed network, in centipawns
+    from the side to move — the same arithmetic as ``engine::nnue::forward`` for a
+    version-2 network. The feature transformer and activation are the version-1
+    ones; then the piece-count bucket's int8 stack runs, each layer's i32
+    accumulator requantized with the layer's scale and activated back into
+    ``[0, QA]``, and the final layer dequantized with ``QA·qb``."""
+    h = net.hidden
+    columns = net.w_ft.reshape(PERSPECTIVE_768_DIM, h).astype(np.int64)
+    bias = net.b_ft.astype(np.int64)
+
+    def activate(vec: np.ndarray) -> np.ndarray:
+        clipped = np.clip(vec, 0, net.qa)
+        if net.activation == ACTIVATION_SCRELU:
+            half = net.qa // 2
+            return (clipped * clipped + half) // net.qa
+        return clipped
+
+    own = activate(bias + columns[np.asarray(stm_features, dtype=np.int64)].sum(axis=0))
+    enemy = activate(bias + columns[np.asarray(nstm_features, dtype=np.int64)].sum(axis=0))
+    cur = np.concatenate([own, enemy])  # 2H, side-to-move first
+
+    bucket = select_bucket(piece_count, net.num_buckets)
+    layers = net.buckets[bucket]
+    final_acc = 0
+    for k, (w, b) in enumerate(layers):
+        out_dim = net.layer_dims[k]
+        in_dim = cur.shape[0]
+        weight = w.astype(np.int64).reshape(out_dim, in_dim)
+        acc = b.astype(np.int64) + weight @ cur
+        if k + 1 == len(layers):
+            final_acc = int(acc[0])
+        else:
+            scale = net.layer_scales[k]
+            half = scale // 2
+            requant = np.where(acc >= 0, (acc + half) // scale, -((-acc + half) // scale))
+            cur = activate(requant)
+
+    cp = _round_div(final_acc * net.scale, net.qa * net.qb)
     return int(np.clip(cp, _EVAL_CP_MIN, _EVAL_CP_MAX))
 
 
@@ -399,10 +721,10 @@ def features_from_fen(fen: str) -> tuple[np.ndarray, np.ndarray]:
     return np.array(stm, dtype=np.int64), np.array(nstm, dtype=np.int64)
 
 
-def write_network(path, model: NnueModel) -> QuantizedNetwork:
-    """Quantize ``model`` and write the SBNN file at ``path``; return the quantized
-    network so a caller can inspect or reproduce it."""
-    net = quantize(model)
+def write_network(path, model: NnueModel):
+    """Quantize ``model`` (version 1 or the bucketed version 2) and write the SBNN
+    file at ``path``; return the quantized network so a caller can inspect it."""
+    net = quantize_bucketed(model) if model.config.is_bucketed else quantize(model)
     Path(path).write_bytes(net.to_bytes())
     return net
 
@@ -560,6 +882,90 @@ def write_golden_fixture(
     return vectors
 
 
+# The version-2 golden network's stack shape and distinct per-layer int8 scales.
+# The scales are deliberately not all equal (`[64, 128, 256]`), so a golden vector
+# only reproduces if every implementation honours `stack_scales` per layer rather
+# than assuming a single `qb`.
+_GOLDEN_STACK_DIMS = (16, 32, 1)
+_GOLDEN_STACK_SCALES = (64, 128, 256)
+_GOLDEN_NUM_BUCKETS = 8
+
+
+def _golden_bucketed_network(
+    hidden: int = 16, activation: int = ACTIVATION_CRELU, num_buckets: int = _GOLDEN_NUM_BUCKETS
+) -> QuantizedBucketedNetwork:
+    """The deterministic version-2 golden network: the version-1 golden feature
+    transformer (so the accumulator spans the same wide, near-overflow range) under
+    a bucketed ``2H → 16 → 32 → 1`` int8 stack whose weights vary by bucket, layer,
+    and position. Patterned rather than trained, so both languages hold the identical
+    weights, and the per-layer scales differ so the fixture exercises the per-layer
+    scale path."""
+    base = _golden_network(hidden=hidden)  # reuse its checked feature transformer
+    buckets = []
+    for bucket in range(num_buckets):
+        in_dim = 2 * hidden
+        layers = []
+        for li, out_dim in enumerate(_GOLDEN_STACK_DIMS):
+            idx = np.arange(out_dim * in_dim)
+            w = (((idx * 13 + bucket * 17 + li * 5) % 151) - 75).astype(np.int64)
+            if w.size and (w.min() < _I8_MIN or w.max() > _I8_MAX):
+                raise ExportError("golden stack weight pattern leaves the int8 range")
+            w = w.astype(np.int8)
+            b = (np.arange(out_dim) * 37 + bucket * 11 - 300).astype(np.int32)
+            layers.append((w, b))
+            in_dim = out_dim
+        buckets.append(tuple(layers))
+    net = QuantizedBucketedNetwork(
+        hidden=hidden,
+        qa=255,
+        scale=400,
+        activation=activation,
+        layer_dims=_GOLDEN_STACK_DIMS,
+        layer_scales=_GOLDEN_STACK_SCALES,
+        w_ft=base.w_ft,
+        b_ft=base.b_ft,
+        buckets=tuple(buckets),
+    )
+    # The feature transformer is the version-1 golden one, so the same i16
+    # accumulator bound holds; the activation and stack do not affect it.
+    _assert_accumulator_fits_i16(net)
+    return net
+
+
+def _golden_bucketed_screlu_network(hidden: int = 16) -> QuantizedBucketedNetwork:
+    """The SCReLU counterpart of :func:`_golden_bucketed_network`: the identical
+    weights with ``activation_id = 1``, pinning the squared activation through the
+    bucketed stack across the language boundary."""
+    return _golden_bucketed_network(hidden=hidden, activation=ACTIVATION_SCRELU)
+
+
+def golden_bucketed_vectors(
+    net: QuantizedBucketedNetwork, positions: tuple[tuple[str, str], ...] = GOLDEN_POSITIONS
+) -> list[tuple[str, str, int]]:
+    """Evaluate a bucketed ``net`` over each ``(category, FEN)``. The piece count —
+    hence the bucket — is the number of active features (one per piece), so the
+    fixture positions, which range from a three-piece endgame to a full board, span
+    several buckets."""
+    result = []
+    for category, fen in positions:
+        stm, nstm = features_from_fen(fen)
+        piece_count = int(stm.shape[0])
+        result.append((category, fen, integer_eval_cp_bucketed(net, stm, nstm, piece_count)))
+    return result
+
+
+def write_golden_bucketed_fixture(
+    net_path, vectors_path, net: QuantizedBucketedNetwork | None = None
+) -> list[tuple[str, str, int]]:
+    """Write the version-2 two-file golden fixture: the bucketed SBNN ``net_path``
+    the engine loads and the ``vectors_path`` of expected scores it reproduces."""
+    net = net or _golden_bucketed_network()
+    vectors = golden_bucketed_vectors(net)
+    Path(net_path).write_bytes(net.to_bytes())
+    Path(vectors_path).write_text(_format_golden_vectors(vectors))
+    return vectors
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Quantize and export an NNUE network file.")
     parser.add_argument("--checkpoint", type=Path, help="fp32 checkpoint from train.py")
@@ -592,8 +998,9 @@ def main(argv=None) -> int:
 
     if args.emit_golden is not None:
         args.emit_golden.mkdir(parents=True, exist_ok=True)
-        # Emit one fixture per implemented activation so the engine's differential
-        # test covers CReLU and SCReLU from the same deterministic network.
+        # Emit one version-1 fixture per activation, then the version-2 bucketed
+        # fixtures, so the engine's differential test covers CReLU and SCReLU on both
+        # the single-layer and the bucketed multi-layer int8 path.
         for name, net in (
             ("golden_v1", _golden_network()),
             ("golden_screlu_v1", _golden_screlu_network()),
@@ -601,6 +1008,14 @@ def main(argv=None) -> int:
             net_path = args.emit_golden / f"{name}.sbnn"
             vectors_path = args.emit_golden / f"{name}.vectors"
             vectors = write_golden_fixture(net_path, vectors_path, net)
+            print(f"wrote {len(vectors)} golden vectors to {net_path} and {vectors_path}")
+        for name, net in (
+            ("golden_v2", _golden_bucketed_network()),
+            ("golden_screlu_v2", _golden_bucketed_screlu_network()),
+        ):
+            net_path = args.emit_golden / f"{name}.sbnn"
+            vectors_path = args.emit_golden / f"{name}.vectors"
+            vectors = write_golden_bucketed_fixture(net_path, vectors_path, net)
             print(f"wrote {len(vectors)} golden vectors to {net_path} and {vectors_path}")
         return 0
 

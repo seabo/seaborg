@@ -1024,7 +1024,7 @@ impl SearchEngine {
             // than maintained incrementally. This mirrors the network branch of `Search::evaluate`.
             Some(network) => {
                 let accumulator = Accumulator::from_position(network, pos);
-                nnue::forward(network, &accumulator, pos.turn()) as i16
+                nnue::forward(network, &accumulator, pos.turn(), pos.occupied().popcnt()) as i16
             }
             // The hand-crafted evaluation is from White's perspective, so it is flipped to the side
             // to move to match the network branch's convention.
@@ -3141,7 +3141,12 @@ impl<'engine> Search<'engine> {
                 .take()
                 .expect("a network search maintains its accumulator");
             let accumulator = Accumulator::from_values(network, values);
-            let cp = nnue::forward(network, &accumulator, self.pos.turn());
+            let cp = nnue::forward(
+                network,
+                &accumulator,
+                self.pos.turn(),
+                self.pos.occupied().popcnt(),
+            );
             self.accumulator = Some(accumulator.into_values());
             return Score::cp(cp as i16);
         }

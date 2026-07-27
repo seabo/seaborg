@@ -64,6 +64,9 @@ MAX_ACTIVE_FEATURES = 32
 # The i16 accumulator saturates here; the contract forbids reaching it.
 _I16_MAX = 32767
 
+# The symmetric int8 range the version-2 output-stack weights are held to.
+_I8_MAX = 127
+
 
 class _FakeQuantize(torch.autograd.Function):
     """Round to the integer grid ``round(x * scale) / scale`` on the forward pass
@@ -108,6 +111,33 @@ class NnueConfig:
     feature_set_id: int = PERSPECTIVE_768_ID
     input_dim: int = PERSPECTIVE_768_DIM
     output_dim: int = 1
+    # Version-2 topology. ``output_stack`` is the tuple of hidden output-stack
+    # dimensions (e.g. ``(16, 32)`` for ``2H -> 16 -> 32 -> 1``); ``None`` selects
+    # the version-1 single linear output. ``num_buckets`` is the number of
+    # piece-count-selected stacks (only meaningful when ``output_stack`` is set).
+    # ``output_stack_scales`` are the per-layer int8 weight scales ``QB_k`` (one
+    # per stack layer including the final ``-> 1``); ``None`` defaults every layer
+    # to ``qb``. See docs/nnue-topology-v2.md.
+    num_buckets: int = 1
+    output_stack: tuple[int, ...] | None = None
+    output_stack_scales: tuple[int, ...] | None = None
+
+    @property
+    def is_bucketed(self) -> bool:
+        """Whether this is a version-2 bucketed multi-layer network."""
+        return self.output_stack is not None
+
+    @property
+    def stack_layer_dims(self) -> tuple[int, ...]:
+        """The per-layer output dimensions of the stack, ending in ``output_dim``."""
+        return tuple(self.output_stack or ()) + (self.output_dim,)
+
+    @property
+    def stack_layer_scales(self) -> tuple[int, ...]:
+        """The per-layer int8 weight scales ``QB_k``; defaults every layer to ``qb``."""
+        if self.output_stack_scales is not None:
+            return tuple(self.output_stack_scales)
+        return tuple(self.qb for _ in self.stack_layer_dims)
 
     def validate(self) -> None:
         """Reject a configuration the contract forbids, with the same rules the
@@ -130,6 +160,24 @@ class NnueConfig:
             raise ValueError(f"unknown activation {self.activation!r}")
         if self.qa <= 0 or self.qb <= 0 or self.scale <= 0:
             raise ValueError("qa, qb, and scale must all be positive")
+
+        if self.is_bucketed:
+            if not 1 <= self.num_buckets <= 32:
+                raise ValueError(f"num_buckets must be in 1..=32, got {self.num_buckets}")
+            for d in self.output_stack:
+                # Each hidden stack dim is a positive multiple of 16 so every layer's
+                # input dimension is, keeping the SIMD kernel remainder-free.
+                if d <= 0 or d % 16 != 0:
+                    raise ValueError(f"output-stack dim {d} must be a positive multiple of 16")
+            scales = self.stack_layer_scales
+            if len(scales) != len(self.stack_layer_dims):
+                raise ValueError("output_stack_scales must have one entry per stack layer")
+            if any(s <= 0 for s in scales):
+                raise ValueError("every output-stack scale must be positive")
+            if scales[-1] != self.qb:
+                raise ValueError(f"final output-stack scale {scales[-1]} must equal qb {self.qb}")
+        elif self.num_buckets != 1:
+            raise ValueError("num_buckets applies only to a bucketed (output_stack) network")
 
     @property
     def activation_id(self) -> int:
@@ -160,7 +208,27 @@ class NnueModel(nn.Module):
             self.config.input_dim, self.config.hidden, mode="sum"
         )
         self.ft_bias = nn.Parameter(torch.zeros(self.config.hidden))
-        self.output = nn.Linear(2 * self.config.hidden, self.config.output_dim)
+
+        if self.config.is_bucketed:
+            # A version-2 bucketed stack: for each layer, a weight tensor
+            # [num_buckets, out, in] and bias [num_buckets, out], so a sample routes
+            # through its bucket by index-select. The final layer emits one scalar.
+            self.output = None
+            self.stack_weights = nn.ParameterList()
+            self.stack_biases = nn.ParameterList()
+            in_dim = 2 * self.config.hidden
+            for out_dim in self.config.stack_layer_dims:
+                self.stack_weights.append(
+                    nn.Parameter(torch.empty(self.config.num_buckets, out_dim, in_dim))
+                )
+                self.stack_biases.append(
+                    nn.Parameter(torch.zeros(self.config.num_buckets, out_dim))
+                )
+                in_dim = out_dim
+        else:
+            self.output = nn.Linear(2 * self.config.hidden, self.config.output_dim)
+            self.stack_weights = None
+            self.stack_biases = None
 
         self._reset_parameters()
 
@@ -170,6 +238,12 @@ class NnueModel(nn.Module):
         # not born saturated at 0 or 1 with no gradient.
         nn.init.normal_(self.feature_transformer.weight, mean=0.0, std=0.1)
         nn.init.zeros_(self.ft_bias)
+        if self.config.is_bucketed:
+            # Kaiming-style small init per bucket keeps early stack activations in
+            # the clipped-ReLU active band across all buckets.
+            for weight in self.stack_weights:
+                fan_in = weight.shape[-1]
+                nn.init.normal_(weight, mean=0.0, std=(1.0 / fan_in) ** 0.5)
 
     def accumulator(self, indices: torch.Tensor, offsets: torch.Tensor) -> torch.Tensor:
         """The per-perspective accumulator: sum of the active features' weight
@@ -200,15 +274,22 @@ class NnueModel(nn.Module):
         stm_offsets: torch.Tensor,
         nstm_indices: torch.Tensor,
         nstm_offsets: torch.Tensor,
+        bucket: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Return the scalar output `fout` for each sample in the batch, in
-        SCALE-normalised units (`fout == eval_cp / SCALE`)."""
+        SCALE-normalised units (`fout == eval_cp / SCALE`).
+
+        For a bucketed (version-2) network ``bucket`` is a per-sample ``LongTensor``
+        of stack indices; it is ignored by a single-layer (version-1) network."""
         stm_acc = self.accumulator(stm_indices, stm_offsets)
         nstm_acc = self.accumulator(nstm_indices, nstm_offsets)
         # Side-to-move first: this ordering (not colour order) is what makes a
         # position and its colour-flipped mirror evaluate equal and opposite.
         x = torch.cat((stm_acc, nstm_acc), dim=1)
         x = self._activate(x)
+
+        if self.config.is_bucketed:
+            return self._bucketed_output(x, bucket)
 
         weight = self.output.weight
         bias = self.output.bias
@@ -220,6 +301,33 @@ class NnueModel(nn.Module):
             if bias is not None:
                 bias = fake_quantize(bias, self.config.qa * self.config.qb)
         return F.linear(x, weight, bias).squeeze(1)
+
+    def _bucketed_output(self, activated: torch.Tensor, bucket: torch.Tensor) -> torch.Tensor:
+        """Run the activated ``2H`` input through each sample's selected bucket stack.
+
+        Each layer's per-sample weights are gathered by bucket and applied with a
+        batched matmul; the header activation is applied between layers (fake-quantized
+        onto the ``1/QA`` grid under QAT), and the final layer emits the raw scalar.
+        Under QAT each layer's weights are fake-quantized onto its own ``1/QB_k`` int8
+        grid and its bias onto ``1/(QA*QB_k)``, mirroring the integer export."""
+        if bucket is None:
+            raise ValueError("a bucketed network requires a per-sample bucket tensor")
+        scales = self.config.stack_layer_scales
+        cur = activated
+        last = len(self.stack_weights) - 1
+        for k, (weight, bias) in enumerate(zip(self.stack_weights, self.stack_biases)):
+            if self.quantization_aware:
+                weight = fake_quantize(weight, scales[k])
+                bias = fake_quantize(bias, self.config.qa * scales[k])
+            # Gather this sample's bucket: [batch, out, in] and [batch, out].
+            w = weight[bucket]
+            b = bias[bucket]
+            acc = torch.bmm(w, cur.unsqueeze(-1)).squeeze(-1) + b
+            if k == last:
+                return acc.squeeze(-1)
+            cur = self._activate(acc)
+        # Unreachable: the loop returns at the final layer.
+        raise AssertionError("bucketed stack has no layers")
 
     @torch.no_grad()
     def clamp_for_quantization(self) -> None:
@@ -238,3 +346,11 @@ class NnueModel(nn.Module):
         limit = (_I16_MAX / terms - 0.5) / self.config.qa
         self.feature_transformer.weight.clamp_(-limit, limit)
         self.ft_bias.clamp_(-limit, limit)
+
+        if self.config.is_bucketed:
+            # Each stack layer's weights quantize to i8 at that layer's scale, so
+            # bound them to the largest float that still rounds inside [-127, 127].
+            scales = self.config.stack_layer_scales
+            for weight, scale in zip(self.stack_weights, scales):
+                weight_limit = (_I8_MAX - 0.5) / scale
+                weight.clamp_(-weight_limit, weight_limit)

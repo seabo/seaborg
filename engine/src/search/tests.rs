@@ -601,7 +601,8 @@ fn evaluate_selects_the_nnue_forward_pass_when_a_network_is_set() {
         // returned already from the side to move's perspective (no `pov` flip).
         search.set_network(Some(Arc::new(net.clone())));
         let acc = Accumulator::from_position(&net, &pos);
-        let expected = Score::cp(nnue::forward(&net, &acc, pos.turn()) as i16);
+        let expected =
+            Score::cp(nnue::forward(&net, &acc, pos.turn(), pos.occupied().popcnt()) as i16);
         assert_eq!(
             search.evaluate(),
             expected,
