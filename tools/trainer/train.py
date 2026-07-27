@@ -29,7 +29,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from data import PackedData, iter_batches
+from data import BatchLoader, PackedData, default_num_workers
 from model import NnueConfig, NnueModel
 from split import by_shard_split, load_manifest
 
@@ -127,14 +127,14 @@ class EpochReport:
     val_loss: float
 
 
-def _evaluate(model, data, indices, batch_size, device, scale, lam) -> float:
+def _evaluate(model, loader, indices, batch_size, device, scale, lam) -> float:
     """Mean validation loss, weighted by batch size so a short final batch does
     not skew the average."""
     model.eval()
     total = 0.0
     seen = 0
     with torch.no_grad():
-        for batch in iter_batches(data, indices, batch_size):
+        for batch in loader.iter_batches(indices, batch_size):
             n = len(batch)
             total += _loss_on(model, batch, device, scale, lam).item() * n
             seen += n
@@ -155,6 +155,7 @@ def train(
     quantization_aware: bool = True,
     device: str = "cpu",
     split: "tuple[np.ndarray, np.ndarray] | None" = None,
+    num_workers: int = 1,
     log=print,
 ) -> tuple[NnueModel, list[EpochReport]]:
     """Train a fresh model and return it with its per-epoch loss history.
@@ -191,29 +192,32 @@ def train(
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     history: list[EpochReport] = []
-    for epoch in range(1, epochs + 1):
-        model.train()
-        epoch_order = train_idx[rng.permutation(len(train_idx))]
-        total = 0.0
-        seen = 0
-        for batch in iter_batches(data, epoch_order, batch_size):
-            loss = _loss_on(model, batch, device, config.scale, lam_value)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            if quantization_aware:
-                model.clamp_for_quantization()
-            n = len(batch)
-            total += loss.item() * n
-            seen += n
-        train_loss = total / max(seen, 1)
-        val_loss = (
-            _evaluate(model, data, val_idx, batch_size, device, config.scale, lam_value)
-            if len(val_idx) > 0
-            else float("nan")
-        )
-        history.append(EpochReport(epoch, train_loss, val_loss))
-        log(f"epoch {epoch:3d}  train_loss {train_loss:.6f}  val_loss {val_loss:.6f}")
+    # One loader (and, when parallel, one worker pool) for the whole run: reused
+    # across every epoch and the validation pass so pool startup is paid once.
+    with BatchLoader(data, num_workers) as loader:
+        for epoch in range(1, epochs + 1):
+            model.train()
+            epoch_order = train_idx[rng.permutation(len(train_idx))]
+            total = 0.0
+            seen = 0
+            for batch in loader.iter_batches(epoch_order, batch_size):
+                loss = _loss_on(model, batch, device, config.scale, lam_value)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                if quantization_aware:
+                    model.clamp_for_quantization()
+                n = len(batch)
+                total += loss.item() * n
+                seen += n
+            train_loss = total / max(seen, 1)
+            val_loss = (
+                _evaluate(model, loader, val_idx, batch_size, device, config.scale, lam_value)
+                if len(val_idx) > 0
+                else float("nan")
+            )
+            history.append(EpochReport(epoch, train_loss, val_loss))
+            log(f"epoch {epoch:3d}  train_loss {train_loss:.6f}  val_loss {val_loss:.6f}")
 
     return model, history
 
@@ -233,25 +237,32 @@ def save_checkpoint(path, model: NnueModel, history: list[EpochReport]) -> None:
     )
 
 
-def benchmark_dataloader(data: PackedData, batch_size: int, seconds: float, log=print) -> float:
+def benchmark_dataloader(
+    data: PackedData, batch_size: int, seconds: float, num_workers: int = 1, log=print
+) -> float:
     """Measure decode throughput (samples/sec) over shuffled batches, so the
-    figure reflects the random-access pattern training uses. Returns the rate."""
+    figure reflects the random-access pattern training uses, with the same worker
+    count training would use. Returns the rate."""
     rng = np.random.default_rng(0)
     order = rng.permutation(len(data))
-    processed = 0
-    # A short warm-up faults the memmap pages in so the timed run measures decode
-    # work, not first-touch page faults.
-    for batch in iter_batches(data, order[: min(len(order), 4 * batch_size)], batch_size):
-        processed += len(batch)
-    processed = 0
-    start = time.perf_counter()
-    elapsed = 0.0
-    while elapsed < seconds:
-        for batch in iter_batches(data, order, batch_size):
+    with BatchLoader(data, num_workers) as loader:
+        processed = 0
+        # A short warm-up faults the memmap pages in so the timed run measures decode
+        # work, not first-touch page faults.
+        for batch in loader.iter_batches(order[: min(len(order), 4 * batch_size)], batch_size):
             processed += len(batch)
-        elapsed = time.perf_counter() - start
+        processed = 0
+        start = time.perf_counter()
+        elapsed = 0.0
+        while elapsed < seconds:
+            for batch in loader.iter_batches(order, batch_size):
+                processed += len(batch)
+            elapsed = time.perf_counter() - start
     rate = processed / elapsed
-    log(f"dataloader throughput: {rate:,.0f} samples/sec (batch_size={batch_size})")
+    log(
+        f"dataloader throughput: {rate:,.0f} samples/sec "
+        f"(batch_size={batch_size}, num_workers={num_workers})"
+    )
     return rate
 
 
@@ -357,6 +368,15 @@ def main(argv=None) -> int:
         "value gives the identical split every run",
     )
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=default_num_workers(),
+        help="CPU processes decoding batches in parallel (1 = serial). Decode is "
+        "the training bottleneck; set this to the host's physical core count. The "
+        "batch sequence is identical for any worker count, so this never changes "
+        "the trained result.",
+    )
     parser.add_argument("--device", default="cpu")
     parser.add_argument(
         "--no-quantization-aware",
@@ -377,7 +397,7 @@ def main(argv=None) -> int:
     print(f"loaded {len(data):,} samples from {args.data}")
 
     if args.benchmark:
-        benchmark_dataloader(data, args.batch_size, args.benchmark_seconds)
+        benchmark_dataloader(data, args.batch_size, args.benchmark_seconds, args.num_workers)
         return 0
 
     split = None
@@ -411,6 +431,7 @@ def main(argv=None) -> int:
         quantization_aware=args.quantization_aware,
         device=args.device,
         split=split,
+        num_workers=args.num_workers,
     )
 
     if args.out is not None:

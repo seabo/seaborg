@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -355,6 +356,9 @@ class TrainingConfig:
     seed: int = 0
     generation: int = 0
     device: str = "cpu"
+    # Decode workers per candidate. Fixed across the sweep like every other
+    # training knob; it only changes wall time, never the trained network.
+    num_workers: int = 1
 
 
 @dataclass
@@ -492,6 +496,7 @@ def _default_train_and_export(config: SweepConfig, log=print) -> TrainAndExport:
             "--lr", str(training.lr), "--lambda", str(training.lam),
             "--scale", str(training.scale), "--seed", str(training.seed),
             "--generation", str(training.generation), "--device", training.device,
+            "--num-workers", str(training.num_workers),
             "--out", str(checkpoint),
             *candidate.arch.train_flags(),
         ]
@@ -631,6 +636,11 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--split-seed", type=int, default=0)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", default="cpu")
+    p.add_argument(
+        "--num-workers", type=int, default=min(8, os.cpu_count() or 1),
+        help="decode workers per candidate training run; set to the host's physical "
+        "core count. Fixed across the sweep; changes only wall time, not the nets.",
+    )
     p.add_argument("--limit", default="tc=10+0.1", help="SPRT time control for the finalists")
     p.add_argument("--elo0", type=float, default=0.0)
     p.add_argument("--elo1", type=float, default=5.0)
@@ -649,7 +659,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             corpus=args.corpus, manifest=manifest, epochs=args.epochs,
             batch_size=args.batch_size, lr=args.lr, lam=args.lam, scale=args.scale,
             val_fraction=args.val_fraction, split_seed=args.split_seed, seed=args.seed,
-            device=args.device,
+            device=args.device, num_workers=args.num_workers,
         ),
         sprt=SprtConfig(
             engine=str(args.engine), baseline_net=str(args.baseline_net),

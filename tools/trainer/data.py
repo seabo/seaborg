@@ -37,6 +37,9 @@ per-sample ``offsets`` array serves both.
 
 from __future__ import annotations
 
+import collections
+import multiprocessing as mp
+import os
 from dataclasses import dataclass
 
 import numpy as np
@@ -161,6 +164,9 @@ class PackedData:
     decoded a batch at a time; nothing is copied until a batch is gathered."""
 
     def __init__(self, path) -> None:
+        # Kept so worker processes can reopen the same file by path; a memmap is
+        # not worth shipping across a process boundary when reopening is O(1).
+        self.path = os.fspath(path)
         with open(path, "rb") as handle:
             header = handle.read(HEADER_SIZE)
         if len(header) < HEADER_SIZE:
@@ -195,3 +201,99 @@ def iter_batches(data: PackedData, indices: np.ndarray, batch_size: int):
     ``indices`` before calling."""
     for start in range(0, len(indices), batch_size):
         yield data.batch(indices[start : start + batch_size])
+
+
+# --------------------------------------------------------------------------- #
+# Parallel decoding
+#
+# Decoding is the training bottleneck (the network is tiny), and a single Python
+# process decodes one batch at a time while the other cores sit idle. Because a
+# batch is a pure function of its slice of the shuffled index array, the decode
+# work parallelises trivially: hand each slice to a worker and collect the
+# results in submission order. The batch sequence — and therefore the training
+# trajectory — is byte-for-byte identical to the serial loader; only the wall
+# time changes. This equivalence is what lets a fixed-config architecture sweep
+# turn on parallel decoding without perturbing the comparison it depends on.
+# --------------------------------------------------------------------------- #
+
+# Per-worker handle, opened once in the initializer and reused for every slice so
+# the memmap is not reopened per batch.
+_worker_data: "PackedData | None" = None
+
+
+def _init_worker(path) -> None:
+    global _worker_data
+    _worker_data = PackedData(path)
+
+
+def _decode_slice(indices: np.ndarray) -> Batch:
+    assert _worker_data is not None, "worker used before initialisation"
+    return _worker_data.batch(indices)
+
+
+def default_num_workers() -> int:
+    """A conservative parallel default: enough decode workers to keep the GPU fed
+    on a typical multi-core host without oversubscribing a hyperthreaded one, where
+    decode is memory-bandwidth bound and stops scaling past the physical cores. A
+    dedicated training host should pass an explicit count equal to its physical
+    core count for the best throughput."""
+    return min(8, os.cpu_count() or 1)
+
+
+class BatchLoader:
+    """Decodes batches over an index order, across worker processes when asked.
+
+    With ``num_workers <= 1`` this is exactly :func:`iter_batches` — the serial
+    reference path, unchanged. With more workers, slices are decoded concurrently
+    and yielded in submission order, so the batch stream is identical to the serial
+    one; the only difference is that the decode is spread across cores.
+
+    Workers are spawned rather than forked so that a CUDA context already
+    initialised in the parent training process is never inherited into a child (an
+    inherited context is invalid and a classic fork-after-CUDA-init hazard). The
+    pool is created once and reused for every epoch and the validation pass, so its
+    startup cost is paid a single time per training run.
+    """
+
+    # In-flight decode tasks are capped at this multiple of the worker count so a
+    # fast pool cannot race ahead of a slower consumer and buffer the whole epoch's
+    # decoded batches (several MB each) in memory. It still keeps every worker busy.
+    _PREFETCH_PER_WORKER = 3
+
+    def __init__(self, data: PackedData, num_workers: int = 1) -> None:
+        self._data = data
+        self._num_workers = max(1, int(num_workers))
+        self._pool = None
+        if self._num_workers > 1:
+            ctx = mp.get_context("spawn")
+            self._pool = ctx.Pool(
+                self._num_workers, initializer=_init_worker, initargs=(data.path,)
+            )
+
+    def iter_batches(self, indices: np.ndarray, batch_size: int):
+        """Yield decoded batches over ``indices`` in order (see the class docstring
+        for the ordering/equivalence guarantee)."""
+        if self._pool is None:
+            yield from iter_batches(self._data, indices, batch_size)
+            return
+        max_in_flight = self._num_workers * self._PREFETCH_PER_WORKER
+        pending: "collections.deque" = collections.deque()
+        for start in range(0, len(indices), batch_size):
+            sl = indices[start : start + batch_size]
+            pending.append(self._pool.apply_async(_decode_slice, (sl,)))
+            if len(pending) >= max_in_flight:
+                yield pending.popleft().get()
+        while pending:
+            yield pending.popleft().get()
+
+    def close(self) -> None:
+        if self._pool is not None:
+            self._pool.close()
+            self._pool.join()
+            self._pool = None
+
+    def __enter__(self) -> "BatchLoader":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
