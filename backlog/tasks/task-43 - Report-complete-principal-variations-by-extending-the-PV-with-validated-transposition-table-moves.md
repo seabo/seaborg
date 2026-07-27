@@ -3,11 +3,11 @@ id: TASK-43
 title: >-
   Report complete principal variations by extending the PV with validated
   transposition-table moves
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-18 13:59'
-updated_date: '2026-07-27 14:03'
+updated_date: '2026-07-27 14:07'
 labels:
   - engine
   - search
