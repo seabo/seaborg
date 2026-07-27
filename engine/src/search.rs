@@ -3723,10 +3723,98 @@ impl<'engine> Search<'engine> {
             score,
             elapsed: self.trace.live_elapsed(),
             nodes: self.trace.nodes_visited(),
-            principal_variation: self.pvt.pv().copied().collect(),
+            principal_variation: self.reported_pv(),
             hashfull: self.tt.hashfull(),
             nps: self.trace.live_nps() as u32,
         }));
+    }
+
+    /// Assemble the principal variation to report: the exact prefix held by the triangular PV
+    /// table, extended past its last ply by following each position's transposition-table move.
+    ///
+    /// The triangular table only records plies that came from an exact PV-node alpha raise, so a
+    /// line that ends in a fail-high — as a forced mate almost always does, the mating move
+    /// arriving as a beta cutoff — is otherwise reported truncated. Following the best move each
+    /// position's transposition-table entry recorded recovers the rest of the line, which is how a
+    /// full mate can be shown without the search storing the whole line anywhere.
+    ///
+    /// Every extended ply is validated against the actual position it is played from rather than
+    /// copied from a table row, so the extension cannot reintroduce the stale-sibling splice the
+    /// triangular table's per-node clear exists to prevent: a move that is not legal in the position
+    /// reached simply ends the line.
+    ///
+    /// The walk only probes the transposition table and mutates a local clone of the position, so
+    /// nothing the search observes changes — the played move and the node counts are identical with
+    /// or without it, and this runs once per reported iteration rather than in the node loop.
+    fn reported_pv(&self) -> Vec<Move> {
+        // The exact prefix cannot exceed the iteration depth; the extension is capped at the
+        // deepest ply the search itself can reach, so no genuine line is truncated while a cyclic
+        // or pathological table can never drive the walk without bound.
+        self.extend_pv(self.pvt.pv().copied().collect(), MAX_PLY)
+    }
+
+    /// Extend a validated PV prefix by walking transposition-table moves from the position its last
+    /// ply leads to, stopping at the first move that cannot be trusted or once `cap` plies are
+    /// reported. Factored out of [`Search::reported_pv`] so the stop conditions can be exercised
+    /// directly with a controlled table and a small cap.
+    fn extend_pv(&self, mut pv: Vec<Move>, cap: usize) -> Vec<Move> {
+        // Replay the trusted prefix to reach the position beyond its last ply, recording every
+        // position on the line so the extension can recognise a move that cycles back into it.
+        let mut pos = self.pos.clone();
+        let mut seen = Vec::with_capacity(cap);
+        seen.push(pos.zobrist().0);
+        for mov in &pv {
+            pos.make_move(mov);
+            seen.push(pos.zobrist().0);
+        }
+
+        while pv.len() < cap {
+            // Stop once the line has reached a draw by repetition: the position has no truthful
+            // continuation, and reporting moves beyond it yields a line that "continues past" a
+            // threefold. This consults the position's own history — the moves played before the
+            // search root as well as those just walked onto the clone — so it catches a line that
+            // repeats a position from earlier in the game, which the per-line `seen` set below
+            // cannot see. Checked before extending, so the move that first reaches the threefold is
+            // kept (it shows how the draw arises) but nothing is reported after it.
+            if pos.in_threefold() {
+                break;
+            }
+
+            // A table miss, or a hit stored without a move, leaves nothing further to follow.
+            let Some(mov) = self
+                .tt
+                .probe(pos.zobrist().0)
+                .and_then(|entry| entry.mov())
+                .map(|packed| packed.to_move(&pos))
+            else {
+                break;
+            };
+
+            // `valid_move` is pseudolegal, so it rejects a move that is stale or belongs to a
+            // foreign position (a Zobrist collision) but still admits one that leaves the mover's
+            // own king in check. Making the move and testing whether the side that just moved is in
+            // check completes the legality check against the real position.
+            if !pos.valid_move(&mov) {
+                break;
+            }
+            pos.make_move(&mov);
+            if pos.enemy_in_check() {
+                break;
+            }
+
+            // A position already on the line means the walk has begun to cycle; stop before adding
+            // the repeating move rather than looping until the length cap. The clone carries only
+            // the positions since the root, so this catches a cycle confined to the reported line;
+            // a repetition that closes onto a pre-root game position is caught by the draw test above.
+            let key = pos.zobrist().0;
+            if seen.contains(&key) {
+                break;
+            }
+            seen.push(key);
+            pv.push(mov);
+        }
+
+        pv
     }
 
     /// The reported depth is the node's remaining depth, which at the root is the iteration depth.
