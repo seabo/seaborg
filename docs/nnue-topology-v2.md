@@ -13,6 +13,15 @@ Status: accepted, July 2026. Consumed by TASK-86.4 (this topology) and TASK-86.5
 implementation, change it here first and bump `FORMAT_VERSION` rather than
 letting the Rust and Python paths drift.
 
+Decisions recorded in this revision: (1) one int8 weight scale **per
+output-stack layer**, shared across all buckets (`stack_scales`, indexed by layer
+`k` only); (2) the scales are **fixed configuration written into the file** —
+specified in the trainer config, fake-quantized to during QAT, and written
+verbatim by export, exactly as the single `QB` is today (not learned, not
+export-derived); (3) the header `qb` field stays authoritative for the **final**
+layer (`qb == QB_last`), so the dequantize keeps its v1 `QA·qb` form and there is
+one source of truth. Per-bucket-per-layer scales are a future extension.
+
 The v1 self-play purity boundary, the feature set and its index formula, the
 feature-transformer quantization (int16 weights/bias at `QA`, i16 accumulator,
 activation clamp to `[0, QA]`), the training-target formulation, and the rounded
@@ -57,7 +66,7 @@ king-bucketed feature set (TASK-86.6) is attempted.
    ```text
    in_0            = a                       // 2H, the activated accumulator
    acc_k[o]        = b_k[o] + Σ_i in_k[i] · W_k[o][i]     // affine layer k
-   in_{k+1}[o]     = activation(round_div(acc_k[o], QB))  // requantize + activate, k < last
+   in_{k+1}[o]     = activation(round_div(acc_k[o], QB_k)) // requantize with layer k's scale, k < last
    ```
 
    The final layer produces a single scalar `acc_last`, dequantized to centipawns
@@ -75,6 +84,9 @@ king-bucketed feature set (TASK-86.6) is attempted.
   `output_dim = 1`; every earlier (hidden) `out_dim_k` must be a positive
   multiple of 16, so that every layer's input dimension is a multiple of 16 and
   the SIMD kernel needs no scalar remainder.
+- **Per-layer int8 weight scales** `[QB_0, …, QB_last]` (`stack_scales`). Default
+  all `64`. Each `> 0`; `QB_last` equals the header `qb`. Shared across buckets;
+  see *Quantization of the output stack*.
 - **Activation id** — CReLU (`0`) or SCReLU (`1`), as v1. The same activation is
   used at the feature-transformer output and between every pair of stack layers.
 
@@ -105,48 +117,55 @@ The output stack is quantized to **int8 weights** with **int32 biases**. This is
 the normative integer arithmetic; the scalar reference, the AVX2 kernel, and the
 Python integer forward pass must all reproduce it bit for bit.
 
-**Scales.** The stack reuses the existing header scale `QB` (default `64`) as the
-int8 weight scale for *every* stack layer — there is no new scale field. `QA`,
-`QB`, and `SCALE` keep their v1 meanings and defaults (`255`, `64`, `400`).
+**Scales.** Each output-stack layer `k` has its own int8 weight scale `QB_k`, a
+positive integer carried in the file (`stack_scales`, below), shared across all
+buckets. Defaults are all `64`; a layer with a larger natural weight range uses a
+smaller scale, a layer with small weights a larger one, so each layer spends the
+full `[-127, 127]` int8 range. `QA` and `SCALE` keep their v1 meanings and
+defaults (`255`, `400`). The header `qb` field equals the final layer's scale
+`QB_last`, preserving v1's invariant that `qb` is the scale in the dequantize.
+Setting every `QB_k = 64` recovers a scale-uniform stack identical to reusing a
+single `QB`. Per-bucket-per-layer scales are a future extension (a format bump),
+not needed now.
 
 **Quantized parameter types** (produced by quantization-aware export):
 
 | Parameter | Float → integer | Integer type |
 | --- | --- | --- |
-| Stack weights `W_k` | `round(w · QB)` | **i8** |
-| Stack biases `b_k` | `round(b · QA · QB)` | i32 |
+| Stack weights `W_k` | `round(w · QB_k)` | **i8** |
+| Stack biases `b_k` | `round(b · QA · QB_k)` | i32 |
 
 Rounding at export is round-half-to-even, as v1. The i8 range is `[-127, 127]`
 (−128 is excluded so magnitudes are symmetric and the widened-i16 SIMD kernel
 never sees an asymmetric lane); export refuses any weight that rounds outside it.
 
-**Why `QA·QB` for the bias, and why this is scale-uniform.** Every stack layer's
-input lives in the `[0, QA]` activation domain (the feature-transformer output
-for layer 0, and the requantized activation for later layers), so an input
-integer `in` represents the float `in / QA`. A weight integer `W` represents
-`W / QB`. Then
+**Why per-layer `QA·QB_k` for the bias.** Every stack layer's input lives in the
+`[0, QA]` activation domain (the feature-transformer output for layer 0, and the
+requantized activation for later layers), so an input integer `in` represents the
+float `in / QA`. A layer-`k` weight integer `W` represents `W / QB_k`. Then
 
 ```text
-acc = b_int + Σ in·W = (QA·QB)·b_float + Σ (QA·in_float)(QB·w_float)
-    = (QA·QB) · (b_float + Σ in_float·w_float) = (QA·QB) · out_float
+acc_k = b_int + Σ in·W = (QA·QB_k)·b_float + Σ (QA·in_float)(QB_k·w_float)
+      = (QA·QB_k) · (b_float + Σ in_float·w_float) = (QA·QB_k) · out_float
 ```
 
-so the layer's i32 accumulator is exactly `QA·QB` times the float layer output,
-provided the bias is stored as `round(b_float · QA · QB)`. This is the *same*
+so layer `k`'s i32 accumulator is exactly `QA·QB_k` times the float layer output,
+provided the bias is stored as `round(b_float · QA · QB_k)`. This is the *same*
 relationship v1's single output layer has (`s = QA·QB · out_float`), so:
 
 - **Between layers** (`k` not last) the activation domain is restored by
-  `in_{k+1} = activation(round_div(acc_k, QB))` clamped into `[0, QA]`:
-  `round_div(acc_k, QB) = QA · out_float`, and clamping to `[0, QA]` then
+  `in_{k+1} = activation(clamp(round_div(acc_k, QB_k), 0, QA))`:
+  `round_div(acc_k, QB_k) = QA · out_float`, and clamping to `[0, QA]` then
   applying the activation yields exactly `round(activation(clamp(out_float,0,1)) · QA)`
   — an integer back in `[0, QA]`, i.e. the same domain layer `k+1` expects. For
   CReLU the clamp *is* the activation; for SCReLU the clamped value is squared by
   the same `screlu_activation` v1 uses (`round_div(c·c, QA)`), which already maps
   `[0, QA] → [0, QA]`.
 - **After the last layer** the scalar is dequantized to centipawns exactly as v1:
-  `eval_cp = round_div(acc_last · SCALE, QA · QB)`, then clamped to the centipawn
-  band `[-10_000, 10_000]`. (v1 uses `QB`; here the last layer's weight scale is
-  also `QB`, so the formula is unchanged.)
+  `eval_cp = round_div(acc_last · SCALE, QA · QB_last)`, then clamped to the
+  centipawn band `[-10_000, 10_000]`. Because the header `qb` equals `QB_last`,
+  this is identical to `round_div(acc_last · SCALE, QA · qb)` — the v1 dequantize
+  with the final-layer scale.
 
 `round_div` is the same round-half-away-from-zero divide the v1 dequantize and
 SCReLU use, computed in i64.
@@ -155,9 +174,12 @@ SCReLU use, computed in i64.
 widest layer is layer 0: `2H` terms of `in ∈ [0, QA]` times `W ∈ [-127, 127]`,
 so `|Σ in·W| ≤ 2H · QA · 127`. For `H = 256` that is `512 · 255 · 127 ≈ 1.66e7`,
 three orders of magnitude inside i32; the i32 bias adds a value of order
-`QA·QB · out_float`, also tiny. The subsequent `acc_last · SCALE` is widened to
+`QA·QB_k · out_float`, also tiny. The subsequent `acc_last · SCALE` is widened to
 **i64** before the divide, exactly as v1. Export bounds the stack weights to i8
-and the biases to i32 and refuses anything that would not fit.
+and the biases to i32 and refuses anything that would not fit. The per-layer
+scales do not affect these bounds: an int8 weight is in `[-127, 127]` whatever
+scale produced it, so `|Σ in·W| ≤ 2H · QA · 127` and the i32/i64 widths are
+unchanged from the uniform-scale case.
 
 **SIMD bit-identity — the widened-i16 kernel.** The natural int8 kernel
 `vpmaddubsw` (u8×i8 → i16 pairwise) *saturates* its i16 pair-sum: with `in ≤ 255`
@@ -171,7 +193,10 @@ activations. Every partial product and pair-sum then lands in i32 with no
 saturation, so the kernel returns exactly the integer the scalar loop does,
 across the full `[0, QA]` activation range and the full `[-127, 127]` weight
 range. Every layer's input dimension is a multiple of 16, so each dot product is
-whole 16-lane vectors with no scalar remainder.
+whole 16-lane vectors with no scalar remainder. The scale enters only at the
+scalar requantize divide (`round_div(acc_k, QB_k)`); the `vpmaddwd` kernel
+operates on raw int8-widened weights and never sees a scale, so the bit-identity
+argument is unchanged by per-layer scales.
 
 ## File format version 2
 
@@ -197,6 +222,7 @@ stays reserved and must be zero:
 | Block | Element | Count | Layout |
 | --- | --- | --- | --- |
 | `stack_dims` | u32 | `num_output_layers` | `out_dim_k` for each layer; last must be `output_dim` (1); each earlier must be a positive multiple of 16 |
+| `stack_scales` | u32 | `num_output_layers` | `QB_k` for each layer; each `> 0`; last entry `== qb` |
 | `W_ft` | i16 | `input_dim · H` | feature-major, exactly as v1 |
 | `b_ft` | i16 | `H` | — |
 | per bucket `b` in `0..num_buckets`, per layer `k` in `0..num_output_layers`: | | | |
@@ -208,12 +234,13 @@ and `T = Σ_k out_dim_k` the total stack bias count per bucket:
 
 ```text
 param_bytes = 4·num_output_layers            // stack_dims
+            + 4·num_output_layers            // stack_scales
             + 2·(input_dim·H) + 2·H           // feature transformer
             + num_buckets · (1·S + 4·T)       // int8 weights + i32 biases, all buckets
 ```
 
-`param_hash` is the FNV-1a hash of the entire blob including `stack_dims`, exactly
-as v1.
+`param_hash` is the FNV-1a hash of the entire blob including `stack_dims` and
+`stack_scales`, exactly as v1.
 
 **Deterministic rejection.** In addition to the v1 rules (magic, version this
 build implements, feature set, activation, input/hidden/output dims, positive
@@ -225,7 +252,10 @@ each as a distinct error and before interpreting any weights, a file that:
 3. has a `stack_dims` last entry `≠ output_dim` (1), or any earlier entry that is
    zero or not a multiple of 16;
 4. has any of the header bytes `44..64` non-zero;
-5. has a `param_bytes` that disagrees with the size the dimensions above imply.
+5. has a `param_bytes` that disagrees with the size the dimensions above imply;
+6. has any `stack_scales` entry `≤ 0`;
+7. has `stack_scales[num_output_layers − 1] ≠ qb` (the final-layer scale must
+   match the header `qb`).
 
 A version-1 file continues to require **all** of `40..64` to be zero, so a v1
 loader can never misread v2 bucket/layer counts as reserved-must-be-zero, and a
@@ -238,7 +268,8 @@ The engine loads and evaluates **both** versions. The built-in default network
 (gen-002, format version 1, single linear output) keeps loading and evaluating
 byte-for-byte as today; format version 2 is additive. The in-memory `Network`
 carries the feature transformer plus an output representation that is either the
-v1 single linear layer (i16 weights, i32 bias) or the v2 bucketed int8 stack; the
+v1 single linear layer (i16 weights, i32 bias) or the v2 bucketed int8 stack
+(int8 weights, i32 biases, plus the per-layer `QB_k` scale vector); the
 accumulator and every feature-transformer path are shared and unchanged. The
 first *v2* network is trained and promoted by the sweep (TASK-86.5); until then
 the engine ships a v1 network and the v2 path is exercised only by tests and by
@@ -250,11 +281,23 @@ The float trainer mirrors this topology: the feature transformer and activation
 are unchanged, and the single output `Linear` is replaced by `num_buckets`
 independent stacks of `nn.Linear` layers with the header activation between them.
 The forward pass selects a sample's bucket by the same piece-count rule and runs
-only that bucket's stack. Quantization-aware training fake-quantizes the stack
-weights onto the `1/QB` int8 grid and the inter-layer activations onto the
-`1/QA` grid, and bounds the stack weights so the exported i8 cast cannot
-overflow, so the exported integer network reproduces the trained behaviour. The
-exporter writes the version-2 file above and its integer forward pass
-(`integer_eval_cp`) is the same arithmetic as `engine::nnue::forward`, which is
-what makes the three-way golden equivalence (Python ↔ Rust scalar ↔ Rust AVX2)
-testable across positions spanning multiple buckets.
+only that bucket's stack. Quantization-aware training fake-quantizes layer `k`'s
+weights onto the per-layer `1/QB_k` int8 grid (not a single shared grid) and the
+inter-layer activations onto the `1/QA` grid, and bounds the stack weights so the
+exported i8 cast cannot overflow, so the exported integer network reproduces the
+trained behaviour. Export writes `stack_scales` from the config. The exporter's
+integer forward pass (`integer_eval_cp`) is the same arithmetic as
+`engine::nnue::forward`, which is what makes the three-way golden equivalence
+(Python ↔ Rust scalar ↔ Rust AVX2) testable across positions spanning multiple
+buckets.
+
+## Test expectations
+
+The golden fixture's network **must** span multiple buckets across its positions
+and its `stack_scales` **must not be all equal** (e.g. `[64, 64, 256]`). A
+uniform-scale golden net would pass even if an implementation ignored
+`stack_scales` and hard-coded `qb`, so the three-way differential test must
+exercise distinct per-layer scales to prove the per-layer path in all three
+implementations. The bucket-selecting positions must reach at least two distinct
+buckets so a stack-selection bug cannot hide behind a single always-selected
+bucket.

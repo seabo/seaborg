@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@george'
 created_date: '2026-07-25 12:23'
-updated_date: '2026-07-27 10:28'
+updated_date: '2026-07-27 10:38'
 labels:
   - nnue
 dependencies:
@@ -62,3 +62,9 @@ TESTS: format round-trip + rejection for v2; scalar==AVX2 bit-identity for bucke
 
 VERIFY: cargo fmt --check; clippy -D warnings; cargo test --workspace; python trainer tests.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Contract-first checkpoint: wrote docs/nnue-topology-v2.md (normative spec for format v2 topology). Key decisions: reuse QB as the int8 tail weight scale (scale-uniform stack: input @ QA, weights int8 @ QB, bias i32 @ QA*QB, acc = QA*QB*out_float); inter-layer requantize round_div(acc,QB) clamp [0,QA] then activation; final layer dequantize as v1. Activations stay [0,QA=255], tail weights full int8 [-127,127]; AVX2 widens int8->i16 and uses non-saturating vpmaddwd (not vpmaddubsw) so scalar==SIMD bit-identical. Buckets/dims parameterizable in header (num_buckets @off40, num_output_layers @off42, stack_dims table in blob prefix); defaults 8 buckets, 2H->16->32->1. Bucket rule: min((p-1)*B/32, B-1) from pos.occupied().popcnt(). v1 nets (gen-002) still load/eval unchanged. Awaiting approval before implementing.
+<!-- SECTION:NOTES:END -->
