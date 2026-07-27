@@ -166,25 +166,38 @@ the committed fixture still matches what the exporter emits.
 The network is tiny (~197k parameters at H=256), so training is dataloader-bound:
 if the loader cannot decode samples faster than the model consumes them, the GPU
 starves. The loader is built to stay ahead — memory-mapped file, whole-batch
-vectorised decode, no per-sample Python loop.
+vectorised decode, no per-sample Python loop — and it decodes batches across
+several threads (`--num-workers`) so decoding is not stuck on a single core.
 
-Measured on this machine (Apple Silicon, CPU, `torch` 2.13, 216,233 real
-self-play samples, batch size 16,384):
+`--num-workers` is a pure speedup: because each batch is a function only of its
+slice of the shuffled index order, the decode is spread across threads and the
+results are collected in submission order, so the sequence of batches — and thus
+the training trajectory — is identical for any worker count. It defaults to a
+conservative parallel value; set it to taste against the `--benchmark` figure on
+your host. It changes wall time only, never the trained network, which is why the
+architecture sweep can run every candidate under it.
+
+Measured on the training host (AMD Ryzen 9 3900XT, 12 physical cores, CPU decode,
+one ~5.1M-sample shard, batch size 8,192):
 
 ```sh
-.venv/bin/python train.py --data samples.bin --benchmark --batch-size 16384
-# dataloader throughput: ~561,000 samples/sec
+.venv/bin/python train.py --data samples.bin --benchmark --batch-size 8192 --num-workers 8
+# dataloader throughput: ~1,445,000 samples/sec (batch_size=8192, num_workers=8)
 ```
 
-| Stage | Throughput | Notes |
-| --- | --- | --- |
-| Dataloader (decode only) | **~561,000 samples/sec** | random-access shuffled batches |
-| Full CPU training step | ~197,000 samples/sec | decode + forward + backward + optimizer + validation |
+| `--num-workers` | Throughput | Speedup |
+| ---: | ---: | ---: |
+| 1 (serial) | ~574,000 samples/sec | 1.0× |
+| 8 | **~1,445,000 samples/sec** | ~2.5× |
+| 12 | ~1,285,000 samples/sec | ~2.2× |
 
-The loader runs ~2.8× faster than the full CPU training step, so it does not
-starve even a CPU trainer; a GPU consumes the model faster still, which is why
-the decode rate is the figure that matters and it is the larger one. The numbers
-scale with the machine — re-run `--benchmark` to record them for a given host.
+The speedup plateaus and then declines: decode is memory-bandwidth bound, so a
+few threads saturate the memory system and adding more only adds contention. On
+this host eight workers is the sweet spot. The numbers scale with the machine —
+re-run `--benchmark` to record them for a given host. Threads (not processes) do
+the work: NumPy releases the GIL for the vectorised decode, so threads run it
+concurrently while sharing the memmap, with none of the per-batch copies or
+fork-after-CUDA hazards a process pool would bring.
 
 ## Convergence
 
