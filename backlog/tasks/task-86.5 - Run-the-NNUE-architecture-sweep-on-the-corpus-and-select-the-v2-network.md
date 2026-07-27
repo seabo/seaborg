@@ -4,12 +4,14 @@ title: Run the NNUE architecture sweep on the corpus and select the v2 network
 status: To Do
 assignee: []
 created_date: '2026-07-25 12:24'
+updated_date: '2026-07-27 17:47'
 labels:
   - nnue
 dependencies:
   - TASK-86.3
   - TASK-86.4
   - TASK-81
+  - TASK-86.7
 parent_task_id: TASK-86
 priority: high
 ordinal: 147000
