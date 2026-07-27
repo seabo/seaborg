@@ -1,11 +1,11 @@
 ---
 id: TASK-86.5
 title: Run the NNUE architecture sweep on the corpus and select the v2 network
-status: To Do
+status: In Progress
 assignee:
   - '@george'
 created_date: '2026-07-25 12:24'
-updated_date: '2026-07-27 22:48'
+updated_date: '2026-07-27 23:43'
 labels:
   - nnue
 dependencies:
@@ -13,6 +13,7 @@ dependencies:
   - TASK-86.4
   - TASK-81
   - TASK-86.7
+  - TASK-86.8
 parent_task_id: TASK-86
 priority: high
 ordinal: 147000
@@ -34,14 +35,13 @@ Execute the architecture sweep defined by the methodology decision doc (TASK-86.
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-Phase 1 (this session, bounded): run the sweep.py screen on the rig.
-1. Sync rig seaborg clone to this task branch's tip; build release with target-cpu=native.
-2. Locate corpus-gen-002 + provenance manifest + baseline gen-002 net; assemble a fixed NPS position suite.
-3. Run tools/trainer/sweep.py --device cuda: enumerate one-factor-at-a-time candidates, train+export each on the leak-free by-shard split, record post-QAT val loss + single-thread NPS with attribution, compute loss/NPS Pareto frontier, select finalists, emit strength_test.py commands.
-4. Install fastchess on the rig (prereq for phase 2), verify.
-5. Commit the frontier report + finalist list under the task branch; record coverage limits (AC#1). PAUSE for go/no-go before the multi-day SPRT.
-Phase 2 (after approval): run finalist SPRT vs gen-002 (+head-to-heads); record results/attribution in BENCHMARKS.md (AC#2).
-Phase 3: select the net by fixed-TC Elo, write rationale + label-limited vs capacity-limited read, promote (AC#3).
+Resumed after TASK-86.8 (parallel dataloader) merged. Phase 1 (screen) on the rig:
+1. Sync rig clone to this branch (master + 86.8 merged + width axis extended to 1024); rebuild target-cpu=native release.
+2. Run tools/trainer/sweep.py --device cuda --num-workers 8 over corpus-gen-002 (14 candidates, one factor at a time, fixed-everything-but-architecture; by-shard leak-free split). Records post-QAT quantized val loss + in-engine single-thread NPS per candidate, computes loss/NPS Pareto frontier, selects finalists, emits strength_test.py SPRT commands. Monitor candidate-1 epoch time for a firm ETA.
+3. Install fastchess on the rig (phase-2 prereq).
+4. Commit the frontier report + finalists under this branch; record swept factors and coverage limits (width capped at 1024; AC#1). PAUSE for go/no-go before the multi-day SPRT.
+Phase 2 (after approval): finalist SPRT vs gen-002 (+head-to-heads); record results/attribution in BENCHMARKS.md (AC#2).
+Phase 3: select the net by fixed-TC Elo; write rationale + label-limited vs capacity-limited read; promote (AC#3).
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
