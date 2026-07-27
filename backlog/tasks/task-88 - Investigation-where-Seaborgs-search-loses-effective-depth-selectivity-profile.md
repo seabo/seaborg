@@ -7,7 +7,7 @@ status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-27 10:15'
-updated_date: '2026-07-27 10:50'
+updated_date: '2026-07-27 12:35'
 labels:
   - search
   - selectivity
@@ -74,6 +74,8 @@ Measured profile (Apple M3 Pro, native release, 64MB hash, single thread; fixed 
 - First-move-cutoff 88.8% (ordering strong, not a loss site); PVS re-search 5.1%; aspiration re-search 12-13%/window.
 
 Report + ranked experiments + methodology written to BENCHMARKS.md ('Search selectivity profile (self-instrumented)'). External comparison limited to citing TASK-82's single EBF/depth reading as a sanity check, explicitly not a basis for any recommendation. No follow-up Backlog tasks created (deferred to the human per the philosophy that the scope decision is theirs).
+
+Follow-up (human-directed, same branch): the pooled TT-move-availability finding was the weakest in the report, so added a node-type x TT-hit/miss split to the instrumentation and re-measured. Result rules TT availability out as a depth-loss site: PV nodes 79-97% covered; the low pooled ~30% is the first-visit non-PV frontier that no engine has a stored move for; and the ordering penalty of a missing TT move is only ~5-7 pp (first-move-cutoff 86-87% at TT-miss vs 91-93% at TT-hit). Non-TT ordering (capture-history/SEE, killers, counter-move, quiet history) is strong enough that the hash move is a refinement, not load-bearing; consistent with IIR's +28 Elo coming from reducing TT-miss nodes, not needing better ordering there. BENCHMARKS.md updated: finding rewritten as 'investigated and ruled out', TT-availability experiment removed from the ranked list. Two strong findings unchanged (LMR under-reduction; quiescence ~half the tree). Behaviour still transparent (identical 1,204,096-node depth-15 search).
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -94,5 +96,23 @@ Verification:
 - cargo test --workspace: pass (clean idle run: 441 engine + 157 lichess + workspace suites, 0 failed, 2 ignored). engine also green with --features selstats (441 passed). Behaviour transparency verified: depth-15 kiwipete-family search visits 1,204,096 nodes under both the default and selstats release.
 Known failures: none. On one earlier full-workspace run under concurrent build+test load, the lichess timing test run::tests::incoming_challenge_is_handled_while_a_matchmaking_call_is_blocked flaked once with 'matchmaking issued an outgoing challenge: Timeout'; it passes 3/3 in isolation and the lichess crate is untouched by this diff (selstats does not forward to lichess), and the subsequent idle full-workspace run was clean.
 Notes for reviewer: this is a spike. The engine change is the off-by-default 'selstats' instrumentation feature only; the default/shipped build is behaviour- and speed-identical (feature off => counters, hot-loop increments, and emission compile out). Deliverables: the selectivity profile + first-principles diagnosis + ranked SPRT experiment list in BENCHMARKS.md ('Search selectivity profile (self-instrumented)'), and tools/diag/selectivity_profile.py. Measured on Apple M3 Pro (scalar-NNUE ARM release); ratios/node counts are ISA-independent, the 2000ms depth figure is host-dependent. No follow-up Backlog tasks were created for the ranked experiments (the scope decision is the human's).
+---
+
+author: @claude
+created: 2026-07-27 12:35
+---
+Implementation handoff (updated target)
+Branch: task-88-selectivity-profile
+Worktree: /Users/seabo/seaborg-worktrees/task-88-selectivity-profile
+Base: 4722f814d5e1be00d4526dd06993ff4ff48d48d5
+Implementation target: f144f8915d7964053ab7db7e8705d6260989d787
+Supersedes prior target 1a287cf51b74a77206a7d9b5af46bcdd2d16c809 (human-directed follow-up added a node-type / TT-hit-miss split; review the new tip).
+Resolved findings: none (no review findings; this is a scope extension)
+Verification (clean idle run):
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean; --all-features compiles the gated selstats code including the new split)
+- cargo test --workspace: pass (441 engine + 157 lichess + workspace suites, 0 failed, 2 ignored); engine also green with --features selstats (441 passed). Behaviour transparency re-verified: depth-15 kiwipete-family search visits 1,204,096 nodes under both default and selstats builds after the change.
+Known failures: none.
+Change since prior target: engine/src/trace.rs + search.rs add node-type x TT-availability and TT-hit/miss cutoff counters; tools/diag/selectivity_profile.py aggregates/derives the split; BENCHMARKS.md rewrites the TT-move-availability finding as 'investigated and ruled out' and removes that experiment from the ranked list. No default-build behaviour change (selstats off => compiles out).
 ---
 <!-- COMMENTS:END -->
