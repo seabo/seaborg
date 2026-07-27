@@ -16,6 +16,8 @@ pub enum OptionError {
     HashOutOfRange(usize),
     /// A worker count outside the supported `Threads` bounds.
     ThreadsOutOfRange(usize),
+    /// A reported-line count outside the advertised `MultiPV` bounds.
+    MultiPvOutOfRange(usize),
 }
 
 impl fmt::Display for OptionError {
@@ -32,6 +34,12 @@ impl fmt::Display for OptionError {
                 "Threads must be between {} and {}, got {n}",
                 EngineConfig::THREADS_MIN,
                 EngineConfig::THREADS_MAX,
+            ),
+            Self::MultiPvOutOfRange(n) => write!(
+                f,
+                "MultiPV must be between {} and {}, got {n}",
+                EngineConfig::MULTIPV_MIN,
+                EngineConfig::MULTIPV_MAX,
             ),
         }
     }
@@ -50,6 +58,11 @@ pub struct EngineConfig {
     /// The number of search workers a `go` should run. One today; the field exists so a later Lazy
     /// SMP search can be configured without another ownership rewrite.
     threads: usize,
+    /// How many best lines a search reports (the UCI `MultiPV` option). One reproduces ordinary
+    /// single-line play exactly; a higher value asks each search iteration to report that many
+    /// distinct, ranked principal variations for analysis. A mode setting, not an allocation, so it
+    /// needs no quiescent boundary to change.
+    multipv: usize,
     /// Whether UCI `debug` mode is on. A mode flag, not a resource: changing it allocates nothing
     /// and never needs a quiescent boundary.
     debug: bool,
@@ -74,6 +87,17 @@ impl EngineConfig {
     /// advertised, when a real multi-worker search consumes [`EngineConfig::threads`].
     pub const THREADS_MAX: usize = 1;
 
+    /// Default number of reported lines, and the advertised `MultiPV` default. One means ordinary
+    /// single-line search.
+    pub const MULTIPV_DEFAULT: usize = 1;
+    /// Fewest lines the engine reports. One is the floor: reporting zero lines would leave a search
+    /// with no move to play.
+    pub const MULTIPV_MIN: usize = 1;
+    /// Most lines the engine will report. A legal chess position has at most 218 moves, so this
+    /// ceiling already exceeds the number of distinct lines any position can offer; a request beyond
+    /// the moves actually available simply reports every line there is.
+    pub const MULTIPV_MAX: usize = 256;
+
     /// A fresh configuration at the advertised defaults.
     pub fn new() -> Self {
         Self::default()
@@ -87,6 +111,11 @@ impl EngineConfig {
     /// The configured worker count.
     pub fn threads(&self) -> usize {
         self.threads
+    }
+
+    /// The configured number of reported lines.
+    pub fn multipv(&self) -> usize {
+        self.multipv
     }
 
     /// Whether debug mode is on.
@@ -115,6 +144,18 @@ impl EngineConfig {
         }
     }
 
+    /// Check a requested line count against the advertised bounds without applying it.
+    ///
+    /// The one validation the parser and [`EngineConfig::set_multipv`] both call, so a value the
+    /// handshake would reject can never be accepted anywhere else.
+    pub fn validate_multipv(n: usize) -> Result<usize, OptionError> {
+        if (Self::MULTIPV_MIN..=Self::MULTIPV_MAX).contains(&n) {
+            Ok(n)
+        } else {
+            Err(OptionError::MultiPvOutOfRange(n))
+        }
+    }
+
     /// Record a new hash size, rejecting an out-of-range request without changing anything.
     ///
     /// Applying the change to the live allocation is the caller's separate step, done only once the
@@ -131,6 +172,12 @@ impl EngineConfig {
         Ok(())
     }
 
+    /// Record a new reported-line count, rejecting an out-of-range request without changing anything.
+    pub fn set_multipv(&mut self, n: usize) -> Result<(), OptionError> {
+        self.multipv = Self::validate_multipv(n)?;
+        Ok(())
+    }
+
     /// Turn debug mode on or off.
     pub fn set_debug(&mut self, on: bool) {
         self.debug = on;
@@ -142,6 +189,7 @@ impl Default for EngineConfig {
         Self {
             hash_mb: Self::HASH_DEFAULT_MB,
             threads: Self::THREADS_DEFAULT,
+            multipv: Self::MULTIPV_DEFAULT,
             debug: false,
         }
     }
@@ -151,9 +199,10 @@ impl fmt::Display for EngineConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "hash {} MB, threads {}, debug {}",
+            "hash {} MB, threads {}, multipv {}, debug {}",
             self.hash_mb,
             self.threads,
+            self.multipv,
             if self.debug { "on" } else { "off" },
         )
     }
@@ -177,10 +226,14 @@ impl fmt::Display for EngineConfig {
 pub fn advertised_uci_options() -> String {
     format!(
         "option name Hash type spin default {} min {} max {}\n\
+         option name MultiPV type spin default {} min {} max {}\n\
          option name EvalFile type string default <empty>",
         EngineConfig::HASH_DEFAULT_MB,
         EngineConfig::HASH_MIN_MB,
         EngineConfig::HASH_MAX_MB,
+        EngineConfig::MULTIPV_DEFAULT,
+        EngineConfig::MULTIPV_MIN,
+        EngineConfig::MULTIPV_MAX,
     )
 }
 
@@ -220,6 +273,8 @@ pub enum EvalFileSetting {
 pub enum EngineOpt {
     /// The size in MiB of the hash table.
     Hash(usize),
+    /// How many best lines the search reports.
+    MultiPV(usize),
     /// Whether debug mode is turned on.
     DebugMode(bool),
     /// Which evaluator the engine should use.
@@ -238,10 +293,12 @@ mod tests {
         let config = EngineConfig::new();
         assert_eq!(config.hash_mb(), EngineConfig::HASH_DEFAULT_MB);
         assert_eq!(config.threads(), EngineConfig::THREADS_DEFAULT);
+        assert_eq!(config.multipv(), EngineConfig::MULTIPV_DEFAULT);
         assert!(!config.debug());
         // The default must sit inside the advertised bounds, or the handshake would offer a value
         // the engine rejects on the next `setoption`.
         assert!(EngineConfig::validate_hash_mb(config.hash_mb()).is_ok());
+        assert!(EngineConfig::validate_multipv(config.multipv()).is_ok());
     }
 
     #[test]
@@ -251,10 +308,14 @@ mod tests {
             advert,
             format!(
                 "option name Hash type spin default {} min {} max {}\n\
+                 option name MultiPV type spin default {} min {} max {}\n\
                  option name EvalFile type string default <empty>",
                 EngineConfig::HASH_DEFAULT_MB,
                 EngineConfig::HASH_MIN_MB,
                 EngineConfig::HASH_MAX_MB,
+                EngineConfig::MULTIPV_DEFAULT,
+                EngineConfig::MULTIPV_MIN,
+                EngineConfig::MULTIPV_MAX,
             )
         );
         // EvalFile's advertised default is the `<empty>` sentinel, which selects the build's
@@ -267,6 +328,18 @@ mod tests {
         assert!(EngineConfig::validate_hash_mb(EngineConfig::HASH_MAX_MB).is_ok());
         assert!(EngineConfig::validate_hash_mb(EngineConfig::HASH_MIN_MB - 1).is_err());
         assert!(EngineConfig::validate_hash_mb(EngineConfig::HASH_MAX_MB + 1).is_err());
+
+        // MultiPV is advertised, so its bounds must be acceptance boundaries too.
+        assert!(advert.contains(&format!(
+            "option name MultiPV type spin default {} min {} max {}",
+            EngineConfig::MULTIPV_DEFAULT,
+            EngineConfig::MULTIPV_MIN,
+            EngineConfig::MULTIPV_MAX,
+        )));
+        assert!(EngineConfig::validate_multipv(EngineConfig::MULTIPV_MIN).is_ok());
+        assert!(EngineConfig::validate_multipv(EngineConfig::MULTIPV_MAX).is_ok());
+        assert!(EngineConfig::validate_multipv(EngineConfig::MULTIPV_MIN - 1).is_err());
+        assert!(EngineConfig::validate_multipv(EngineConfig::MULTIPV_MAX + 1).is_err());
 
         // Threads is unadvertised precisely because its range is a single value.
         assert!(!advert.contains("Threads"));
@@ -287,6 +360,27 @@ mod tests {
             Err(OptionError::HashOutOfRange(EngineConfig::HASH_MAX_MB + 1)),
         );
         assert_eq!(config.hash_mb(), 256);
+    }
+
+    #[test]
+    fn multipv_values_apply_and_invalid_values_are_rejected_intact() {
+        let mut config = EngineConfig::new();
+
+        assert!(config.set_multipv(4).is_ok());
+        assert_eq!(config.multipv(), 4);
+
+        // Zero lines and a value past the ceiling are both refused, leaving the last accepted value.
+        assert_eq!(
+            config.set_multipv(0),
+            Err(OptionError::MultiPvOutOfRange(0))
+        );
+        assert_eq!(
+            config.set_multipv(EngineConfig::MULTIPV_MAX + 1),
+            Err(OptionError::MultiPvOutOfRange(
+                EngineConfig::MULTIPV_MAX + 1
+            )),
+        );
+        assert_eq!(config.multipv(), 4);
     }
 
     #[test]

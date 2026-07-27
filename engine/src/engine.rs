@@ -172,6 +172,16 @@ where
                         }
                     }
                 }
+                // MultiPV is a mode setting, not a resource: it allocates nothing and each search
+                // reads the count when it starts, so changing it neither needs a quiescent boundary
+                // nor disturbs a search already running. The config and the search engine are kept in
+                // step, and a value the engine cannot apply leaves both untouched.
+                EngineOpt::MultiPV(lines) => match config.set_multipv(lines) {
+                    Ok(()) => search_engine.set_multipv(config.multipv()),
+                    Err(err) => {
+                        let _ = writeln!(errors, "error: {err}");
+                    }
+                },
                 // Debug is a mode flag rather than a resource: it allocates nothing and must not
                 // disturb a running search, so it is recorded without a quiescent boundary.
                 EngineOpt::DebugMode(on) => config.set_debug(on),
@@ -837,8 +847,8 @@ mod tests {
         // those commands feed a single authoritative config rather than ad hoc state.
         let (output, errors) =
             run_script("config\nsetoption name Hash value 256\ndebug on\nconfig\nquit\n");
-        assert!(output.contains("hash 16 MB, threads 1, debug off"));
-        assert!(output.contains("hash 256 MB, threads 1, debug on"));
+        assert!(output.contains("hash 16 MB, threads 1, multipv 1, debug off"));
+        assert!(output.contains("hash 256 MB, threads 1, multipv 1, debug on"));
         assert_eq!(diagnostics_after_banner(&errors), "");
     }
 
@@ -866,6 +876,7 @@ mod tests {
             "id name seaborg 9.9.9\n\
              id author George Seabridge\n\
              option name Hash type spin default 16 min 1 max 1024\n\
+             option name MultiPV type spin default 1 min 1 max 256\n\
              option name EvalFile type string default <empty>\n\
              uciok\n"
         );

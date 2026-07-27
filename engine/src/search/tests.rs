@@ -2319,6 +2319,7 @@ fn out_of_band_windows_do_not_leak_into_returned_scores() {
             &table,
             sender,
             None,
+            1,
         );
 
         let value = search
@@ -2352,6 +2353,7 @@ fn quiescence_clamps_out_of_band_windows_into_the_node_score_band() {
         &table,
         sender,
         None,
+        1,
     );
 
     let value = search
@@ -2379,6 +2381,7 @@ fn search_emits_typed_current_move_events() {
         &table,
         sender,
         None,
+        1,
     );
 
     search.emit_current_move(7, &current_move, 4);
@@ -3298,6 +3301,207 @@ fn reported_principal_variations_are_legal() {
                 }
             }
         }
+    }
+}
+
+/// Collects every `Progress` snapshot a search emits, preserving the order and the `multipv` rank,
+/// so a MultiPV test can inspect the full set of reported lines.
+fn multipv_progress(engine: &SearchEngine, root: &Position, depth: u8) -> Vec<SearchProgress> {
+    let search = engine.start(root.clone(), SearchLimit::Depth(depth));
+    let events = search.events().clone();
+    let _ = search.wait();
+
+    events
+        .try_iter()
+        .filter_map(|event| match event {
+            SearchEvent::Progress(progress) => Some(progress),
+            SearchEvent::CurrentMove(_) => None,
+            #[cfg(feature = "selstats")]
+            SearchEvent::SelStats(_) => None,
+        })
+        .collect()
+}
+
+/// The move a search actually reports playing for `root` at `depth`.
+fn played_move(engine: &SearchEngine, root: &Position, depth: u8) -> Option<Move> {
+    engine
+        .start(root.clone(), SearchLimit::Depth(depth))
+        .wait()
+        .result()
+        .and_then(|result| result.best_move)
+}
+
+/// The number of legal moves in `position`.
+fn legal_move_count(position: &Position) -> usize {
+    position.generate::<BasicMoveList, AllGen, Legal>().len()
+}
+
+/// MultiPV at its default of one leaves the search wholly unchanged: the same nodes, the same
+/// scores, the same single line reported at every depth, now carrying an explicit `multipv 1`.
+/// Two cold engines are compared so the transposition table is identical for both runs.
+#[test]
+fn multipv_one_reports_a_single_line_and_does_not_perturb_the_search() {
+    chess::init::init_globals();
+
+    let root =
+        Position::from_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1")
+            .unwrap();
+    let depth = 6;
+
+    let default_engine = SearchEngine::new(4);
+    let mut explicit_engine = SearchEngine::new(4);
+    explicit_engine.set_multipv(1);
+
+    let default_lines = multipv_progress(&default_engine, &root, depth);
+    let explicit_lines = multipv_progress(&explicit_engine, &root, depth);
+
+    // Every snapshot is line one, and setting MultiPV to one explicitly changes nothing about which
+    // nodes are searched or what is reported.
+    assert!(!default_lines.is_empty());
+    assert!(default_lines.iter().all(|p| p.multipv == 1));
+    assert_eq!(default_lines.len(), explicit_lines.len());
+    for (a, b) in default_lines.iter().zip(&explicit_lines) {
+        assert_eq!(a.depth, b.depth);
+        assert_eq!(a.multipv, b.multipv);
+        assert_eq!(a.score, b.score);
+        assert_eq!(a.nodes, b.nodes, "MultiPV 1 must not change the node count");
+        assert_eq!(a.principal_variation, b.principal_variation);
+    }
+}
+
+/// With MultiPV set above one, each completed iteration reports that many lines, numbered `1..=n`,
+/// each beginning with a distinct root move and carrying its own exact score. Line one is the move
+/// actually played — the same move a single-line search of the same position and depth chooses — so
+/// enabling MultiPV never changes which move the engine plays.
+#[test]
+fn multipv_reports_distinct_lines_and_plays_the_first() {
+    chess::init::init_globals();
+
+    let root =
+        Position::from_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1")
+            .unwrap();
+    let depth = 6;
+    let lines = 3;
+    assert!(legal_move_count(&root) >= lines);
+
+    let mut engine = SearchEngine::new(4);
+    engine.set_multipv(lines);
+    let progress = multipv_progress(&engine, &root, depth);
+
+    // Look at the deepest completed iteration, which reports the full set of lines.
+    let final_lines: Vec<&SearchProgress> = progress.iter().filter(|p| p.depth == depth).collect();
+    assert_eq!(final_lines.len(), lines, "one snapshot per requested line");
+
+    // Indices are exactly 1..=n, in order.
+    for (offset, line) in final_lines.iter().enumerate() {
+        assert_eq!(line.multipv, offset + 1);
+        assert!(
+            !line.principal_variation.is_empty(),
+            "every reported line names at least its own move"
+        );
+    }
+
+    // Each line opens with a distinct root move.
+    let first_moves: Vec<Move> = final_lines
+        .iter()
+        .map(|line| line.principal_variation[0])
+        .collect();
+    for i in 0..first_moves.len() {
+        for j in (i + 1)..first_moves.len() {
+            assert_ne!(
+                first_moves[i], first_moves[j],
+                "MultiPV lines must each begin with a different move"
+            );
+        }
+    }
+
+    // The lines are the greedy best-of-the-rest, in selection order: line one is the move actually
+    // played, line two the best of what remains, and so on. Their reported scores are each move's
+    // own exact search value and are usually non-increasing, but a strict ordering is deliberately
+    // not asserted: a move searched in isolation as a full-window PV node can out-score the reduced
+    // scout it received where an earlier line was the first move, so a later line's exact score can
+    // legitimately exceed an earlier one's. That instability is a property of the underlying
+    // principal-variation search, not of MultiPV, and MultiPV reports the honest per-line scores
+    // rather than fabricating a monotonic sequence.
+
+    // The move played is line one's move. A fresh cold MultiPV engine reproduces the collection run
+    // deterministically, so its reported bestmove must be the first line's move.
+    let mut cold_multi = SearchEngine::new(4);
+    cold_multi.set_multipv(lines);
+    assert_eq!(
+        played_move(&cold_multi, &root, depth),
+        Some(first_moves[0]),
+        "the move played is the multipv 1 move"
+    );
+
+    // And that move is exactly what an otherwise identical single-line search plays: reporting extra
+    // lines does not change the move chosen.
+    let single_best = played_move(&SearchEngine::new(4), &root, depth);
+    assert_eq!(
+        single_best,
+        Some(first_moves[0]),
+        "reporting extra lines must not change the move played"
+    );
+}
+
+/// Every move of every line reported under MultiPV is legal in the position it is reached from —
+/// the single-line legality guarantee extended to all lines. A warm second pass mirrors the state
+/// self-play reports from.
+#[test]
+fn reported_multipv_lines_are_all_legal() {
+    chess::init::init_globals();
+
+    for (label, root) in pv_legality_positions() {
+        let mut engine = SearchEngine::new(1);
+        engine.set_multipv(4);
+
+        for _ in 0..2 {
+            for depth in 1..=6 {
+                for progress in multipv_progress(&engine, &root, depth) {
+                    assert_pv_is_legal(
+                        &label,
+                        &root,
+                        progress.depth,
+                        &progress.principal_variation,
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Asking for more lines than the position has legal moves reports only the lines that exist,
+/// without error, and a position with a single legal move accepts MultiPV and reports that one
+/// move. Both are checked at the deepest iteration.
+#[test]
+fn multipv_caps_at_the_available_moves() {
+    chess::init::init_globals();
+
+    // A position with exactly one legal move: White is in check from the queen and can only capture
+    // it with the king.
+    let single = Position::from_fen("k7/8/8/8/8/8/1q6/K7 w - - 0 1").unwrap();
+    assert_eq!(legal_move_count(&single), 1);
+
+    // A position with a handful of legal moves, fewer than the lines requested: a bare king in the
+    // corner has three moves and the enemy king is too far away to remove any.
+    let few = Position::from_fen("7k/8/8/8/8/8/8/K7 w - - 0 1").unwrap();
+    let few_moves = legal_move_count(&few);
+    assert_eq!(few_moves, 3, "expected a three-move position");
+
+    let depth = 4;
+    for (position, expected) in [(&single, 1), (&few, few_moves)] {
+        let mut engine = SearchEngine::new(1);
+        engine.set_multipv(8);
+        let progress = multipv_progress(&engine, position, depth);
+        let deepest = progress.iter().map(|p| p.depth).max().unwrap_or(0);
+        let final_lines = progress.iter().filter(|p| p.depth == deepest).count();
+        assert_eq!(
+            final_lines, expected,
+            "requesting more lines than legal moves must report only the available lines"
+        );
+
+        // A move is still played without error.
+        assert!(played_move(&engine, position, depth).is_some());
     }
 }
 

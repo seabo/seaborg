@@ -13,8 +13,9 @@ pub fn format_search_event(event: &SearchEvent) -> String {
                 .collect::<Vec<_>>()
                 .join(" ");
             format!(
-                "info depth {} multipv 1 score {} nodes {} nps {} hashfull {} time {} pv {}",
+                "info depth {} multipv {} score {} nodes {} nps {} hashfull {} time {} pv {}",
                 progress.depth,
+                progress.multipv,
                 progress.score,
                 progress.nodes,
                 progress.nps,
@@ -54,6 +55,7 @@ mod tests {
         let best_move = position.make_uci_move("e2e4").unwrap();
         let event = SearchEvent::Progress(SearchProgress {
             depth: 4,
+            multipv: 1,
             score: Score::cp(23),
             elapsed: Duration::from_millis(17),
             nodes: 1200,
@@ -65,6 +67,29 @@ mod tests {
         assert_eq!(
             format_search_event(&event),
             "info depth 4 multipv 1 score cp 23 nodes 1200 nps 70588 hashfull 12 time 17 pv e2e4"
+        );
+    }
+
+    /// A line reported under MultiPV carries its real 1-based rank in the `multipv` field, not a
+    /// constant, so a GUI can tell the second-best line from the best.
+    #[test]
+    fn formats_progress_with_its_multipv_index() {
+        let mut position = Position::start_pos();
+        let best_move = position.make_uci_move("d2d4").unwrap();
+        let event = SearchEvent::Progress(SearchProgress {
+            depth: 4,
+            multipv: 2,
+            score: Score::cp(15),
+            elapsed: Duration::from_millis(17),
+            nodes: 1200,
+            nps: 70_588,
+            hashfull: 12,
+            principal_variation: vec![best_move],
+        });
+
+        assert_eq!(
+            format_search_event(&event),
+            "info depth 4 multipv 2 score cp 15 nodes 1200 nps 70588 hashfull 12 time 17 pv d2d4"
         );
     }
 

@@ -411,6 +411,7 @@ mod tests {
             position_revision: 3,
             progress: Some(SearchProgress {
                 depth: 5,
+                multipv: 1,
                 score: Score::cp(-42),
                 elapsed: Duration::from_millis(250),
                 nodes: 9_000,
@@ -646,6 +647,7 @@ mod tests {
             position_revision: 3,
             progress: Some(SearchProgress {
                 depth: 5,
+                multipv: 1,
                 score: Score::cp(-42),
                 elapsed: Duration::from_millis(250),
                 nodes: 9_000,

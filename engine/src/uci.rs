@@ -433,6 +433,7 @@ impl<'a> Parser<'a> {
 
         match self.parse_string()? {
             "Hash" => self.parse_hash(),
+            "MultiPV" => self.parse_multipv(),
             "EvalFile" => self.parse_eval_file(),
             _ => Err(Error::InvalidOption),
         }
@@ -467,6 +468,17 @@ impl<'a> Parser<'a> {
         EngineConfig::validate_hash_mb(v).map_err(|_| Error::ExpectedNumber)?;
 
         self.expect_end(Ok(Command::SetOption(EngineOpt::Hash(v))))
+    }
+
+    fn parse_multipv(&mut self) -> PResult {
+        self.expect_kw(Keyword::Value)?;
+
+        // Range-check against the same bounds the handshake advertises and the engine applies, so a
+        // value outside them is rejected here rather than reaching the driver.
+        let v = self.parse_integer()?;
+        EngineConfig::validate_multipv(v).map_err(|_| Error::ExpectedNumber)?;
+
+        self.expect_end(Ok(Command::SetOption(EngineOpt::MultiPV(v))))
     }
 
     fn parse_display(&mut self) -> PResult {
@@ -653,6 +665,26 @@ mod tests {
             Parser::parse("ucinewgame"),
             Ok(Command::UciNewGame)
         ));
+    }
+
+    #[test]
+    fn parses_multipv_and_rejects_out_of_range_values() {
+        assert!(matches!(
+            Parser::parse("setoption name MultiPV value 5"),
+            Ok(Command::SetOption(EngineOpt::MultiPV(5)))
+        ));
+        // Boundary values are accepted; a zero or a value past the ceiling is rejected at parse time,
+        // the same range the handshake advertises.
+        assert!(matches!(
+            Parser::parse("setoption name MultiPV value 1"),
+            Ok(Command::SetOption(EngineOpt::MultiPV(1)))
+        ));
+        assert!(Parser::parse("setoption name MultiPV value 0").is_err());
+        assert!(Parser::parse(&format!(
+            "setoption name MultiPV value {}",
+            EngineConfig::MULTIPV_MAX + 1
+        ))
+        .is_err());
     }
 
     #[test]
