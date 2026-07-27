@@ -1,11 +1,11 @@
 ---
 id: TASK-86.8
 title: Parallelize the NNUE packed dataloader across CPU workers
-status: Ready to Merge
+status: Done
 assignee:
   - '@george'
 created_date: '2026-07-27 22:47'
-updated_date: '2026-07-27 23:17'
+updated_date: '2026-07-27 23:26'
 labels:
   - nnue
   - tooling
