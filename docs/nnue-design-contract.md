@@ -152,9 +152,10 @@ new `activation`/layer descriptor, never a silent change to the `v1` layout.
   Default `256` (so `2H = 512` into the output layer). `H` must be a positive
   multiple of `16` so a single file loads unchanged into both the scalar and the
   future AVX2 path (TASK-69.5), whose i16 lanes process 16 elements at a time.
-- **Activation id** — `0 = clipped ReLU (CReLU)`, the default and only value
-  `v1` inference implements. `1 = squared clipped ReLU (SCReLU)` is reserved for
-  a later version; a loader that does not implement an id rejects the file.
+- **Activation id** — `0 = clipped ReLU (CReLU)`, the default. `1 = squared
+  clipped ReLU (SCReLU)`, whose integer semantics are fixed under *Activation
+  variants* below. Both are implemented by `v1` inference; a loader that does not
+  implement an id rejects the file.
 - **Output scale `SCALE`** — the constant that converts the network's internal
   output to centipawns and, identically, ties centipawns to win probability in
   the training target (see below). Default `400`.
@@ -199,6 +200,44 @@ eval_cp   = round_div(s as i64 * SCALE, QA * QB)            // i64 multiply, the
 as `Score::cp(eval_cp)` — the same band the `Score` type reserves for centipawn
 evaluations (`engine/src/score.rs`), well below the mate band at `±20_000`.
 
+The arithmetic above is written for `activation_id = 0` (CReLU), where `a[j] =
+clamp(x[j], 0, QA)`. The next section fixes the only stage that a different
+activation changes.
+
+**Activation variants.** The activation stage `a = activation(x)` is the *sole*
+difference between activation ids; the accumulator, the perspective
+concatenation, the i32 output accumulation, and the rounded dequantize are
+byte-for-byte identical across ids. Each id must define `a[j]` as an integer in
+`[0, QA]` so it stays inside the i16 activation domain the accumulator and the
+output kernels already assume.
+
+- **`activation_id = 0` — CReLU.** `a[j] = clamp(x[j], 0, QA)`, as above.
+- **`activation_id = 1` — SCReLU (squared clipped ReLU).**
+
+  ```text
+  c[j] = clamp(x[j], 0, QA)                       // i16 in [0, QA]
+  a[j] = round_div(c[j]·c[j], QA)                 // i32 square, rounded divide by QA
+  ```
+
+  `round_div` is the same round-half-away-from-zero divide the dequantize uses;
+  the numerator `c·c` is non-negative, so this is `(c·c + QA/2) / QA`. Because
+  `c ≤ QA`, `a[j] = round(c²/QA) ≤ c ≤ QA`, so the activation again lands in
+  `[0, QA]` and fits i16 — every subsequent stage (the i32 sum `s`, the `QA·QB`
+  denominator, the `SCALE` multiply) is exactly the CReLU arithmetic. This is
+  what lets one output kernel serve both activations: the kernel's own clip to
+  `[0, QA]` is a no-op on an already-activated SCReLU value.
+
+  This matches the float trainer, whose SCReLU is `clamp(x, 0, 1)²`
+  fake-quantized onto the `1/QA` grid: with `x = X/QA` for the integer
+  accumulator `X`, `round(clamp(X/QA, 0, 1)²·QA) = round(clamp(X, 0, QA)²/QA)`,
+  the formula above. The per-unit divide rounds half away from zero rather than
+  the trainer's half to even; for an **odd** `QA` (the `255` default) `2·c²` is
+  even and `QA` is odd so no exact half ever occurs and the two rules coincide,
+  keeping the integer forward pass faithful to the trained float model. For an
+  even `QA` the two can differ by one unit at an exact half — inside the
+  documented float-vs-integer tolerance, and the integer paths still agree with
+  each other bit for bit, which is the guarantee that matters.
+
 Semantics that must match on both sides:
 
 - **Clipped-ReLU domain.** The float model clips activations to `[0, 1]`; the
@@ -242,7 +281,7 @@ All multi-byte fields are little-endian (the engine targets x86-64).
 | 8 | 4 | `input_dim` | u32 | `768` |
 | 12 | 4 | `hidden_width` (`H`) | u32 | e.g. `256`; positive multiple of 16 |
 | 16 | 2 | `output_dim` | u16 | `1` |
-| 18 | 2 | `activation_id` | u16 | `0` = CReLU |
+| 18 | 2 | `activation_id` | u16 | `0` = CReLU, `1` = SCReLU |
 | 20 | 2 | `qa` | u16 | `255` |
 | 22 | 2 | `qb` | u16 | `64` |
 | 24 | 4 | `scale` | i32 | `400` |

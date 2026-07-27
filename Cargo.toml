@@ -47,6 +47,11 @@ rust-version.workspace = true
 [features]
 default = ["embedded-net"]
 embedded-net = ["engine/embedded-net", "lichess/embedded-net"]
+# Forwards the engine's off-by-default search selectivity instrumentation so a
+# `cargo run --features selstats` build of the UCI binary emits the per-search
+# `info string selstats {json}` summary. Disabled by default: the shipped binary
+# carries no instrumentation.
+selstats = ["engine/selstats"]
 
 [dependencies]
 chess = { path = "./chess" }

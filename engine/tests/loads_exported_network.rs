@@ -17,7 +17,7 @@
 //! The same formula lives in `export.py::_demo_network`; if the format or the
 //! pattern changes, regenerate the fixture and update `expected_network` together.
 
-use engine::nnue::{Network, Parameters, INPUT_DIM};
+use engine::nnue::{Activation, Network, Parameters, INPUT_DIM};
 
 const FIXTURE: &[u8] = include_bytes!("fixtures/exported_v1.sbnn");
 
@@ -43,6 +43,7 @@ fn expected_network() -> Network {
     let b_out = vec![0i32];
     Network::new(
         HIDDEN,
+        Activation::ClippedRelu,
         QA,
         QB,
         SCALE,
