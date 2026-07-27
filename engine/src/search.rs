@@ -2347,6 +2347,8 @@ impl<'engine> Search<'engine> {
         //          TODO
 
         // Step 15. Iterate moves.
+        #[cfg(feature = "selstats")]
+        self.trace.sel_node_ordering(Node::pv(), tt_mov.is_some());
         let mut best_value = Score::INF_N;
         let mut best_move = Move::null();
         let mut moves = OrderedMoves::new();
@@ -2666,7 +2668,11 @@ impl<'engine> Search<'engine> {
                             debug_assert!(value >= beta);
                             // beta-cutoff; record killer and history
                             #[cfg(feature = "selstats")]
-                            self.trace.sel_cutoff(Node::pv(), u32::from(move_count));
+                            self.trace.sel_cutoff(
+                                Node::pv(),
+                                u32::from(move_count),
+                                tt_mov.is_some(),
+                            );
                             if let Some(slot) = killer_slot {
                                 self.trace.killer_cutoff(slot);
                             }

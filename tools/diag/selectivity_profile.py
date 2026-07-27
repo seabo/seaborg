@@ -89,6 +89,14 @@ class Pooled:
     pv_exact: int = 0
     pv_fail_low: int = 0
     nonpv_fail_low: int = 0
+    ord_pv_tt: int = 0
+    ord_pv_nott: int = 0
+    ord_nonpv_tt: int = 0
+    ord_nonpv_nott: int = 0
+    fh_tt: int = 0
+    fh_tt_first: int = 0
+    fh_nott: int = 0
+    fh_nott_first: int = 0
     lmr_applied: int = 0
     lmr_research: int = 0
     lmr_red_sum: int = 0
@@ -123,6 +131,14 @@ class Pooled:
         self.pv_exact += s["pv_exact"]
         self.pv_fail_low += s["pv_fail_low"]
         self.nonpv_fail_low += s["nonpv_fail_low"]
+        self.ord_pv_tt += s["ord_pv_tt"]
+        self.ord_pv_nott += s["ord_pv_nott"]
+        self.ord_nonpv_tt += s["ord_nonpv_tt"]
+        self.ord_nonpv_nott += s["ord_nonpv_nott"]
+        self.fh_tt += s["fh_tt"]
+        self.fh_tt_first += s["fh_tt_first"]
+        self.fh_nott += s["fh_nott"]
+        self.fh_nott_first += s["fh_nott_first"]
         self.lmr_applied += s["lmr_applied"]
         self.lmr_research += s["lmr_research"]
         self.lmr_red_sum += s["lmr_red_sum"]
@@ -144,6 +160,8 @@ def derive(p: Pooled) -> dict:
     """Turn pooled sums into the named selectivity rates."""
     pv_loops = p.pv_fail_high + p.pv_exact + p.pv_fail_low
     nonpv_loops = p.nonpv_fail_high + p.nonpv_fail_low
+    ord_pv = p.ord_pv_tt + p.ord_pv_nott
+    ord_nonpv = p.ord_nonpv_tt + p.ord_nonpv_nott
     return {
         "positions": p.positions,
         "mean_depth": _rate(p.depth_sum, p.positions),
@@ -159,6 +177,11 @@ def derive(p: Pooled) -> dict:
         "pv_node_fraction": _rate(p.nodes_pv, p.nodes),
         "first_move_cutoff_rate": _rate(p.fh_first, p.fh_total),
         "cutoff_index_dist": [_rate(v, p.fh_total) for v in p.fh_idx],
+        "tt_move_avail_pv": _rate(p.ord_pv_tt, ord_pv),
+        "tt_move_avail_nonpv": _rate(p.ord_nonpv_tt, ord_nonpv),
+        "first_move_cutoff_rate_tt": _rate(p.fh_tt_first, p.fh_tt),
+        "first_move_cutoff_rate_nott": _rate(p.fh_nott_first, p.fh_nott),
+        "cutoff_share_nott": _rate(p.fh_nott, p.fh_total),
         "pv_fail_high_rate": _rate(p.pv_fail_high, pv_loops),
         "pv_exact_rate": _rate(p.pv_exact, pv_loops),
         "pv_fail_low_rate": _rate(p.pv_fail_low, pv_loops),
@@ -199,6 +222,15 @@ def format_summary(mode: str, agg: dict) -> str:
     lines.append(f"  cutoff move-idx %     [{dist}] (1,2,3,4,5,6,7,8+)")
     lines.append(f"non-PV node fraction    {(1 - agg['pv_node_fraction']) * 100:.2f}%")
     lines.append(f"TT-move availability    {agg['tt_move_avail'] * 100:.1f}%")
+    lines.append(
+        f"  PV / non-PV nodes     {agg['tt_move_avail_pv'] * 100:.1f}% / "
+        f"{agg['tt_move_avail_nonpv'] * 100:.1f}%"
+    )
+    lines.append(
+        f"first-move-cutoff by TT  hit {agg['first_move_cutoff_rate_tt'] * 100:.1f}% vs "
+        f"miss {agg['first_move_cutoff_rate_nott'] * 100:.1f}% "
+        f"(misses are {agg['cutoff_share_nott'] * 100:.0f}% of cutoffs)"
+    )
     lines.append(f"hash hit rate           {agg['hash_hit_rate'] * 100:.1f}%")
     lines.append(f"non-PV TT-cutoff rate   {agg['tt_cutoff_rate_nonpv'] * 100:.1f}%")
     lines.append(

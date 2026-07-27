@@ -916,7 +916,9 @@ agrees within a point or two on every ordering/reduction rate.
 | First-move beta-cutoff rate | 88.8% | move ordering is strong |
 | Cutoff move-index distribution (1st,2nd,3rd,…) | 88.8 / 6.7 / 2.4 / … % | cutoffs concentrate on move 1 |
 | Non-PV node fraction | 99.7% | tree is overwhelmingly zero-window |
-| TT-move availability (fraction of nodes with a hash move) | 29% (37% at 2M nodes) | ~2/3 of nodes ordered with no TT move |
+| TT-move availability, pooled | 29% (37% at 2M nodes) | dominated by the non-PV frontier |
+| — at PV nodes / at non-PV nodes | 79–97% / 29–34% | PV spine is well covered; the frontier is not |
+| First-move-cutoff at TT-hit / TT-miss nodes | 91–93% / 86–87% | a missing TT move costs only ~5–7 pp |
 | Hash hit rate | 29–37% | — |
 | Non-PV TT early-cutoff rate | 14–18% | — |
 | **LMR re-search rate** (reduced scouts re-searched at full depth) | **1.6–2.0%** | **reductions almost never overturned** |
@@ -945,15 +947,26 @@ Each point is backed only by a Seaborg-measured signal.
    in-check widening (≈16% of qnodes expand from captures-only to all evasions) is
    a smaller sub-lever within it.
 
-3. **A hash move is available at only ~1/3 of nodes.** TT-move availability is
-   29–37%. At the other ~two-thirds of nodes the search orders without the single
-   strongest ordering hint, which both delays cutoffs and makes reductions and
-   pruning less safe (they lean on ordering quality). Because eval-guided ordering
-   and reduction safety are coupled, this partly bounds how hard (1) can push.
-
 Move ordering itself (88.8% first-move cutoffs, cutoffs sharply front-loaded) is
 **not** a primary loss site; PVS (5.1%) and aspiration (12–13%) re-search costs
 are secondary.
+
+**Investigated and ruled out — TT-move availability.** The pooled figure (~1/3 of
+nodes carry a hash move) initially reads as a large ordering weakness. Split by
+node type it is not: PV nodes — the spine that iterative deepening re-walks every
+iteration — are 79–97% covered, and the low pooled number is almost entirely the
+non-PV frontier, which is dominated by first-visit nodes that *no* engine has a
+stored move for. More to the point, the ordering penalty of a missing TT move is
+small: a node that cuts still does so **on its first move 86–87% of the time
+without a TT move, versus 91–93% with one** — a ~5–7 pp gap. Seaborg's non-TT
+ordering (captures by capture-history/SEE, killers, counter-move, quiet history)
+is strong enough that the hash move is a modest refinement, not a load-bearing
+input. This is consistent with the engine's existing IIR result (+28 Elo, TASK-52):
+IIR pays off by *reducing* depth at TT-miss nodes — safe precisely because those
+nodes are already decently ordered and cheap to get slightly wrong — not by
+needing better ordering there. Raising TT-move availability is therefore a
+low-leverage lever and is not recommended; the coupling to selectivity means the
+number would rise on its own if the reduction and quiescence work below lands.
 
 *Single external sanity check (not a basis for any recommendation).* The
 strength-gulf diagnostic's one external reading — a frontier engine showing EBF
@@ -990,15 +1003,14 @@ mechanism. Ranked by expected leverage × cheapness.
    the leaf explosion, converting quiescence nodes into main-search plies. (This
    tunes the existing, already net-positive quiescence SEE prune — it does **not**
    reintroduce a main-search SEE prune, which measured net-harmful.)
-5. **Raise TT-move availability (larger default hash and/or wider IIR coverage).**
-   *Mechanism:* more nodes ordered with a hash move → earlier cutoffs and safer
-   reductions, indirectly enabling experiments 1–3. Internal iterative reduction
-   is already a measured win; extending the hash-move supply is the same idea from
-   the other side. *Signal:* TT-move availability and first-move-cutoff rate at
-   hash-miss nodes (a natural follow-up is to split the profile by TT hit/miss).
-6. **Aspiration window sizing (`ASPIRATION_INITIAL_DELTA`).** Lowest expected
+5. **Aspiration window sizing (`ASPIRATION_INITIAL_DELTA`).** Lowest expected
    payoff — a 12–13% per-window re-search rate is already modest — but a cheap
    parameter sweep.
+
+Raising TT-move availability is deliberately **not** on this list: the node-type /
+TT-hit-miss split above shows the ordering penalty of a missing TT move is only
+~5–7 pp, so it is a low-leverage lever, and IIR already handles the TT-miss
+population.
 
 ### Reproducing this profile
 

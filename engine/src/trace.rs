@@ -71,6 +71,22 @@ pub struct SelStats {
     /// Fail-high (cutoff) counts split by node type, cross-checking `fh_total`.
     pub pv_fail_high: u64,
     pub nonpv_fail_high: u64,
+    /// Nodes that reached the move loop (ran ordering), split by node type and by whether a
+    /// transposition-table move was available to seed that ordering. These are the denominators for a
+    /// per-node-type TT-move availability, measured only where ordering actually happens (a node
+    /// short-circuited before its move loop is excluded, so a trivially-present TT move at an early
+    /// cutoff does not inflate the figure).
+    pub ord_pv_tt: u64,
+    pub ord_pv_nott: u64,
+    pub ord_nonpv_tt: u64,
+    pub ord_nonpv_nott: u64,
+    /// Beta cutoffs and first-move cutoffs split by whether the cutting node had a TT move. The gap
+    /// between `fh_tt_first / fh_tt` and `fh_nott_first / fh_nott` is the ordering penalty a missing
+    /// TT move actually costs — the quantity that says whether low TT-move availability matters.
+    pub fh_tt: u64,
+    pub fh_tt_first: u64,
+    pub fh_nott: u64,
+    pub fh_nott_first: u64,
     /// Non-cutoff outcomes of a completed move loop, split by node type: a PV node that raised alpha
     /// (an exact score) versus one that did not (fail-low), and non-PV fail-lows. Non-PV nodes are
     /// searched with a null window and so are never exact.
@@ -302,11 +318,25 @@ impl Tracer {
         }
     }
 
-    /// Record a beta cutoff at the given node type, cutting on the `move_count`-th move searched.
+    /// Record a node that reached its move loop (ran ordering), classified by node type and by
+    /// whether a transposition-table move was available to seed that ordering.
     #[inline(always)]
-    pub fn sel_cutoff(&mut self, pv: bool, move_count: u32) {
+    pub fn sel_node_ordering(&mut self, pv: bool, tt_move: bool) {
+        match (pv, tt_move) {
+            (true, true) => self.sel.ord_pv_tt += 1,
+            (true, false) => self.sel.ord_pv_nott += 1,
+            (false, true) => self.sel.ord_nonpv_tt += 1,
+            (false, false) => self.sel.ord_nonpv_nott += 1,
+        }
+    }
+
+    /// Record a beta cutoff at the given node type, cutting on the `move_count`-th move searched, at a
+    /// node that did or did not have a TT move to order by.
+    #[inline(always)]
+    pub fn sel_cutoff(&mut self, pv: bool, move_count: u32, tt_move: bool) {
         self.sel.fh_total += 1;
-        if move_count == 1 {
+        let first = move_count == 1;
+        if first {
             self.sel.fh_first += 1;
         }
         let bucket = (move_count.max(1) - 1).min(self.sel.fh_idx.len() as u32 - 1) as usize;
@@ -315,6 +345,13 @@ impl Tracer {
             self.sel.pv_fail_high += 1;
         } else {
             self.sel.nonpv_fail_high += 1;
+        }
+        if tt_move {
+            self.sel.fh_tt += 1;
+            self.sel.fh_tt_first += u64::from(first);
+        } else {
+            self.sel.fh_nott += 1;
+            self.sel.fh_nott_first += u64::from(first);
         }
     }
 
@@ -432,6 +469,11 @@ impl Tracer {
             out,
             "\"pv_fail_high\":{},\"nonpv_fail_high\":{},\"pv_exact\":{},\"pv_fail_low\":{},\"nonpv_fail_low\":{},",
             s.pv_fail_high, s.nonpv_fail_high, s.pv_exact, s.pv_fail_low, s.nonpv_fail_low,
+        );
+        let _ = write!(
+            out,
+            "\"ord_pv_tt\":{},\"ord_pv_nott\":{},\"ord_nonpv_tt\":{},\"ord_nonpv_nott\":{},\"fh_tt\":{},\"fh_tt_first\":{},\"fh_nott\":{},\"fh_nott_first\":{},",
+            s.ord_pv_tt, s.ord_pv_nott, s.ord_nonpv_tt, s.ord_nonpv_nott, s.fh_tt, s.fh_tt_first, s.fh_nott, s.fh_nott_first,
         );
         let _ = write!(
             out,
