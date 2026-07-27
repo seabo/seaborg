@@ -3,11 +3,11 @@ id: TASK-43
 title: >-
   Report complete principal variations by extending the PV with validated
   transposition-table moves
-status: Ready to Merge
+status: Changes Requested
 assignee:
   - '@claude'
 created_date: '2026-07-18 13:59'
-updated_date: '2026-07-27 13:22'
+updated_date: '2026-07-27 13:30'
 labels:
   - engine
   - search
@@ -170,6 +170,24 @@ Verification commands (on target 11ea6f5):
 - fastchess -engine cmd=seaborg name=A -engine cmd=seaborg name=B -each proto=uci depth=9 -openings file=tools/strength/openings-v1.epd format=epd order=sequential -rounds 24 -repeat -concurrency 6: 0 PV warnings across 48 games
 
 No new #[allow] introduced; comments are self-contained and explain the reasoning (stale-sibling splice, reversible-draw rules), not just task references. Code target 11ea6f5 remains the immutable implementation; this approval commit adds task metadata only.
+---
+
+author: @claude
+created: 2026-07-27 13:30
+---
+Merge attempt: ejected (integration failure — not landed)
+Primary tip tested: 016dd62 (master)
+Approved code target: 11ea6f5 (branch tip 7d06a2a)
+Trial merge M: non-ff merge of 7d06a2a onto 016dd62 was textually clean (auto-merged engine/src/search.rs and engine/src/search/tests.rs, no conflict), but the integrated result fails to compile.
+
+MERGE-01 [blocking] Non-exhaustive match on SearchEvent after semantic merge with TASK-88
+Failing command: cargo clippy --workspace --all-targets --all-features -- -D warnings  (also cargo test --workspace: same compile error)
+Evidence:
+  error[E0004]: non-exhaustive patterns: `search::SearchEvent::SelStats(_)` not covered
+    --> engine/src/search/tests.rs:3316:35
+Cause: TASK-88 (landed on master as 56a1cab, code f144f89) added a new enum variant `SearchEvent::SelStats(String)` (engine/src/search.rs:710). This task's new test helper `reported_progress` (engine/src/search/tests.rs, added by target 11ea6f5) matches on `SearchEvent` with only `Progress` and `CurrentMove` arms, so once the variant exists the match is non-exhaustive and the lib-test build fails to compile. Both changes pass in isolation; the defect only appears in the integrated result, which is why review (against the immutable base) did not surface it.
+Expected: Add the missing arm to `reported_progress` — `SearchEvent::SelStats(_) => None` (the helper collects Progress events for PV/score assertions; SelStats carries no PV and should be filtered out, exactly like CurrentMove). Then re-run the required checks and re-handoff for review.
+Note: This is a rework on the same task branch. The approval pinned to 11ea6f5 is void because the code target must change to integrate with current master. Primary was not advanced; the trial merge was built on a detached HEAD and discarded (master still at 016dd62, worktree clean).
 ---
 <!-- COMMENTS:END -->
 
