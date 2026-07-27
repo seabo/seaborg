@@ -1,11 +1,11 @@
 ---
 id: TASK-44
 title: Support the MultiPV UCI option and report multiple ranked principal variations
-status: In Review
+status: Changes Requested
 assignee:
   - '@george'
 created_date: '2026-07-18 14:02'
-updated_date: '2026-07-27 17:20'
+updated_date: '2026-07-27 17:32'
 labels:
   - engine
   - search
@@ -101,5 +101,34 @@ Verification:
 - cargo clippy --workspace --all-targets --all-features -- -D warnings: pass
 - cargo test --workspace: pass (all suites 0 failed; 2 pre-existing ignored subprocess probes)
 Known failures: none
+---
+
+author: @george
+created: 2026-07-27 17:32
+---
+Review attempt: 1
+Reviewed branch: task-44-multipv
+Reviewed implementation: 13d51f0
+Verdict: changes_requested
+
+REV-1-01 [P2] Undocumented #[allow(clippy::too_many_arguments)] attributes
+Location: engine/src/search.rs:1643 (with_events) and engine/src/search.rs:1666 (build)
+Impact: Both allows are introduced by this diff (0 at base 3093fa8, 2 at target 13d51f0) and neither carries a comment stating why the many-argument signature is required. CLAUDE.md requires "a comment stating why" for every local #[allow], and the review standard classifies an undocumented allowance that merely silences the gate as a blocking finding. This is the same class the repo required fixing as REV-1-01 on TASK-86.4 (commit 5b327c5). Strict Clippy is a gate, not advisory, so this blocks approval even though it is not a correctness defect.
+Reproduction: git diff 3093fa8 13d51f0 -- engine/src/search.rs | grep -B1 'too_many_arguments' shows both attributes added with no preceding explanatory comment. The allow is genuinely needed (both fns reach 8 parameters after gaining `multipv`, past Clippy's default of 7); only the required justification comment is missing.
+Expected: Add a local comment above each #[allow(clippy::too_many_arguments)] explaining why the wide signature is required (e.g. these are the search constructor seams that thread engine-owned borrows and the captured multipv count by value, and bundling them into a params struct buys nothing here), or refactor the arguments into a struct. Do not broaden the allow.
+
+Everything else verified and passing (not blocking):
+- AC1: handshake advertises 'option name MultiPV type spin default 1 min 1 max 256'; setoption parsed/applied. Verified live and by options/uci/engine tests.
+- AC2/AC3: live 'go depth 8' with MultiPV 3 emits N ranked best-first lines per iteration with real 1..N indices, distinct first moves, per-line scores; multipv=1 output unchanged.
+- AC4: reported_multipv_lines_are_all_legal covers all lines across the shared pv_legality_positions/assert_pv_is_legal suite, warm and cold.
+- AC5: multipv_one_reports_a_single_line_and_does_not_perturb_the_search asserts identical node counts at MultiPV=1; played move == line 1 == single-line move. Interior (non-root) hot path is unchanged (all new logic is Node::root()-gated, dead code for non-root monomorphisations), so no movegen/perft bench was warranted.
+- AC6: multipv_caps_at_the_available_moves covers single-legal-move and 3-move-under-MultiPV-8 positions.
+- AC7: at the default MultiPV=1 the play/PV path is byte-identical to pre-change, so the existing regression covers it; a full FastChess match is an operator step.
+
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (exit 0)
+- cargo test --workspace: pass (all suites 0 failed; 2 pre-existing ignored subprocess probes)
+- Live UCI: setoption name MultiPV value 3 / position startpos / go depth 8 -> 3 ranked lines per iteration, distinct first moves, bestmove == line 1 (e2e4)
 ---
 <!-- COMMENTS:END -->
