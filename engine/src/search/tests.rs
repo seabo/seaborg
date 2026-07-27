@@ -3300,6 +3300,358 @@ fn reported_principal_variations_are_legal() {
     }
 }
 
+/// Collects every reported search event as `(depth, score, pv)`, so a test can assert reported PV
+/// length against the score the same line was published with.
+fn reported_progress(
+    engine: &SearchEngine,
+    root: &Position,
+    depth: u8,
+) -> Vec<(u8, Score, Vec<Move>)> {
+    let search = engine.start(root.clone(), SearchLimit::Depth(depth));
+    let events = search.events().clone();
+    let _ = search.wait();
+
+    events
+        .try_iter()
+        .filter_map(|event| match event {
+            SearchEvent::Progress(p) => Some((p.depth, p.score, p.principal_variation)),
+            // Only Progress events carry a PV to assert against, so every other event is dropped.
+            // SelStats exists only under the `selstats` feature, so its arm is gated to match.
+            SearchEvent::CurrentMove(_) => None,
+            #[cfg(feature = "selstats")]
+            SearchEvent::SelStats(_) => None,
+        })
+        .collect()
+}
+
+/// The distance to mate, in plies, that a mate score encodes. This is exactly the length the full
+/// mating line should have when it is recoverable, so a reported PV that reaches mate must hold this
+/// many moves.
+fn plies_to_mate(score: Score) -> usize {
+    assert!(score.is_mate(), "score {score} is not a mate");
+    let raw = i32::from(score.to_i16());
+    // The side delivering mate holds a positive score whose distance shrinks towards `20_100`
+    // (mate now); the side being mated holds the mirror image below `-20_100`.
+    if raw > 0 {
+        (20_100 - raw) as usize
+    } else {
+        (raw + 20_100) as usize
+    }
+}
+
+/// A search that resolves a forced mate reports the whole mating line, not just the exact prefix the
+/// triangular table could publish. The mating move arrives as a fail-high, so before the
+/// transposition-table extension the line was truncated to its exact prefix; recovering the rest is
+/// the point of the extension, and its length must match the mate distance the score announces.
+#[test]
+fn a_resolved_mate_reports_the_full_mating_line() {
+    chess::init::init_globals();
+
+    // A forced mate in five plies (displayed "mate 3"): the mating move is a beta cutoff, so the
+    // exact prefix stops short and the extension must recover the tail.
+    let fen = "8/2R2pp1/k3p3/8/5Bn1/6P1/5r1r/1R4K1 w - - 4 3";
+    let root = Position::from_fen(fen).unwrap();
+    let engine = SearchEngine::new(1);
+
+    let progress = reported_progress(&engine, &root, 6);
+    let (depth, score, pv) = progress
+        .into_iter()
+        .rfind(|(_, score, _)| score.is_mate())
+        .expect("the search resolves a forced mate at this depth");
+
+    assert_eq!(
+        pv.len(),
+        plies_to_mate(score),
+        "reported mate line [{}] for `{fen}` scored {score} is not the full {}-ply mate",
+        pv.iter()
+            .map(Move::to_uci_string)
+            .collect::<Vec<_>>()
+            .join(" "),
+        plies_to_mate(score),
+    );
+    assert_pv_is_legal(fen, &root, depth, &pv);
+}
+
+/// An ordinary, non-mate search reports a substantial multi-ply line, not a truncated stub. The
+/// exact figure depends on how far reductions shorten the exact prefix and how far the
+/// transposition-table extension carries it, so this asserts a robust floor — enough to catch a
+/// regression that collapses the reported line — while the deterministic cap test pins an exact
+/// extended length. The precise recovery of a fail-high tail is covered by the mate test.
+#[test]
+fn a_non_mate_search_reports_a_multi_ply_line() {
+    chess::init::init_globals();
+
+    let root = Position::start_pos();
+    let engine = SearchEngine::new(1);
+    const DEPTH: u8 = 6;
+    const FLOOR: usize = 4;
+
+    let (depth, score, pv) = reported_progress(&engine, &root, DEPTH)
+        .into_iter()
+        .next_back()
+        .expect("the search reports at least one iteration");
+
+    assert!(!score.is_mate(), "the opening is not a forced mate");
+    assert!(
+        pv.len() >= FLOOR,
+        "reported opening line [{}] is only {} plies, expected at least {FLOOR}",
+        pv.iter()
+            .map(Move::to_uci_string)
+            .collect::<Vec<_>>()
+            .join(" "),
+        pv.len(),
+    );
+    assert_pv_is_legal("startpos", &root, depth, &pv);
+}
+
+/// Stores `mov` as the transposition-table best move for `pos`, so a reported-PV walk following the
+/// table from `pos` will play it. Depth and bound are irrelevant to the walk, which follows any
+/// stored move it can legally play.
+fn store_tt_move(table: &Table, pos: &Position, mov: &Move) {
+    table.store(pos.zobrist().0, Score::zero(), None, 1, Bound::Exact, mov);
+}
+
+/// The extension stops the moment the transposition table has nothing to follow: an empty table is a
+/// miss at the very first probe, so the reported line is only whatever exact prefix it began with.
+#[test]
+fn pv_extension_stops_on_a_transposition_table_miss() {
+    chess::init::init_globals();
+
+    let flag = AtomicBool::new(false);
+    let table = Table::new(1);
+    let search = Search::new(Position::start_pos(), &flag, None, &table);
+
+    assert!(
+        search.extend_pv(Vec::new(), MAX_PLY).is_empty(),
+        "an empty table must extend nothing"
+    );
+}
+
+/// A stored move that cannot be played in the position reached — here a move from an empty square,
+/// standing in for a stale entry or a Zobrist collision on a foreign position — ends the extension
+/// rather than being spliced into the reported line.
+#[test]
+fn pv_extension_stops_on_a_stale_or_illegal_tt_move() {
+    chess::init::init_globals();
+
+    let flag = AtomicBool::new(false);
+    let table = Table::new(1);
+    let root = Position::start_pos();
+
+    // One legal step the walk should take, then a bogus move it must refuse.
+    let mut after_e4 = root.clone();
+    let e4 = after_e4.make_uci_move("e2e4").unwrap();
+    store_tt_move(&table, &root, &e4);
+
+    // `e5e6` is not playable after `1. e4`: e5 is empty. Reconstructed against that position it is
+    // not even pseudolegal, so the walk stops with only the legal first move reported.
+    let stale = Move::build(Square::E5, Square::E6, None, MoveType::QUIET);
+    store_tt_move(&table, &after_e4, &stale);
+
+    let search = Search::new(root, &flag, None, &table);
+    assert_eq!(
+        search.extend_pv(Vec::new(), MAX_PLY),
+        vec![e4],
+        "the walk must play the legal move and stop at the stale one"
+    );
+}
+
+/// A table whose moves cycle back to a position already on the line stops the walk instead of
+/// looping. Knights out and back reach the starting position again — identical in every field the
+/// Zobrist key covers — and the repeat is caught before the closing move is added.
+#[test]
+fn pv_extension_stops_on_a_repetition() {
+    chess::init::init_globals();
+
+    let flag = AtomicBool::new(false);
+    let table = Table::new(1);
+    let root = Position::start_pos();
+
+    let mut pos = root.clone();
+    let nf3 = pos.make_uci_move("g1f3").unwrap();
+    store_tt_move(&table, &root, &nf3);
+    let nf6 = pos.make_uci_move("g8f6").unwrap();
+    store_tt_move_for_prev(&table, &root, &[nf3], &nf6);
+    let ng1 = pos.make_uci_move("f3g1").unwrap();
+    store_tt_move_for_prev(&table, &root, &[nf3, nf6], &ng1);
+    // The closing move returns the other knight home, transposing back to the start position.
+    let ng8 = pos.make_uci_move("f6g8").unwrap();
+    store_tt_move_for_prev(&table, &root, &[nf3, nf6, ng1], &ng8);
+
+    let search = Search::new(root, &flag, None, &table);
+    assert_eq!(
+        search.extend_pv(Vec::new(), MAX_PLY),
+        vec![nf3, nf6, ng1],
+        "the walk must stop when the closing move repeats the start position"
+    );
+}
+
+/// A walk that repeats a position from earlier in the *game* — not one already on the reported
+/// line — is stopped by the draw-by-repetition test, which the per-line `seen` set cannot do: it
+/// only knows positions since the root. This is the case a self-play runner flags as a PV that
+/// "continues past a threefold repetition". Here the start position is reached for a third time by
+/// a move the walk makes, and the extension stops at it rather than following the further move the
+/// table still offers.
+#[test]
+fn pv_extension_stops_on_a_threefold_against_game_history() {
+    chess::init::init_globals();
+
+    let flag = AtomicBool::new(false);
+    let table = Table::new(1);
+
+    // Two knight round-trips bring the start position back twice; a third arrival during the walk
+    // completes a threefold. A final white knight move takes the game off the start square so the
+    // search root is not itself a repetition and does not coincide with any position on the walk.
+    let mut root = Position::start_pos();
+    for uci in ["g1f3", "g8f6", "f3g1", "f6g8", "b1c3"] {
+        root.make_uci_move(uci).unwrap();
+    }
+
+    // From the root the walk shuffles the remaining knights back to the start position, whose two
+    // earlier occurrences make this arrival a threefold.
+    let mut pos = root.clone();
+    let nc6 = pos.make_uci_move("b8c6").unwrap();
+    store_tt_move(&table, &root, &nc6);
+    let nb1 = pos.make_uci_move("c3b1").unwrap();
+    store_tt_move_for_prev(&table, &root, &[nc6], &nb1);
+    let nb8 = pos.make_uci_move("c6b8").unwrap();
+    store_tt_move_for_prev(&table, &root, &[nc6, nb1], &nb8);
+    // A further move is on offer from the repeated start position: only the draw test, not a table
+    // miss, must be what stops the walk here.
+    store_tt_move_for_prev(
+        &table,
+        &root,
+        &[nc6, nb1, nb8],
+        &Move::build(Square::G1, Square::F3, None, MoveType::QUIET),
+    );
+
+    let search = Search::new(root, &flag, None, &table);
+    assert_eq!(
+        search.extend_pv(Vec::new(), MAX_PLY),
+        vec![nc6, nb1, nb8],
+        "the walk must stop at the threefold, keeping the move that reaches it and reporting no more"
+    );
+}
+
+/// A walk that reaches the fifty-move-rule threshold is stopped by the same reversible-draw test
+/// as a threefold. The walk favours reversible moves, so a table of knight shuffles keeps the
+/// halfmove clock climbing; once a move carries it to the fifty-move limit the position is drawn and
+/// has no truthful continuation. This is the fifty-move analogue of the "PV continues past a
+/// threefold" case a self-play runner flags. The root's clock sits one ply below the limit, so the
+/// first walked move reaches the draw and the extension keeps that move but reports nothing after
+/// it, even though the table still offers a further move.
+#[test]
+fn pv_extension_stops_on_a_fifty_move_rule_draw() {
+    chess::init::init_globals();
+
+    let flag = AtomicBool::new(false);
+    let table = Table::new(1);
+
+    // Bare kings and a lone white knight: every move is reversible, and the halfmove clock is set
+    // one ply short of the fifty-move limit so a single knight move reaches the draw.
+    let root = Position::from_fen("4k3/8/8/8/8/5N2/8/4K3 w - - 99 100").unwrap();
+
+    let mut pos = root.clone();
+    // The knight move carries the clock to the fifty-move limit; this is the move that reaches the
+    // draw and must be kept in the reported line.
+    let ne5 = pos.make_uci_move("f3e5").unwrap();
+    store_tt_move(&table, &root, &ne5);
+    // A further move is on offer from the drawn position, so only the fifty-move test — not a table
+    // miss — can be what stops the walk here.
+    let kd8 = pos.make_uci_move("e8d8").unwrap();
+    store_tt_move_for_prev(&table, &root, &[ne5], &kd8);
+
+    let search = Search::new(root, &flag, None, &table);
+    assert_eq!(
+        search.extend_pv(Vec::new(), MAX_PLY),
+        vec![ne5],
+        "the walk must stop at the fifty-move draw, keeping the move that reaches it and reporting no more"
+    );
+}
+
+/// The length cap bounds the reported line even when the table could keep supplying legal,
+/// non-repeating moves. A chain of pawn advances never repeats, so only the cap stops it.
+#[test]
+fn pv_extension_stops_at_the_length_cap() {
+    chess::init::init_globals();
+
+    let flag = AtomicBool::new(false);
+    let table = Table::new(1);
+    let root = Position::start_pos();
+
+    // A run of single-square pawn advances: every position is distinct, so nothing but the cap can
+    // halt the walk.
+    let advances = ["a2a3", "a7a6", "b2b3", "b7b6", "c2c3", "c7c6"];
+    let mut pos = root.clone();
+    let mut played = Vec::new();
+    for uci in advances {
+        let mov = pos.make_uci_move(uci).unwrap();
+        store_tt_move_for_prev(&table, &root, &played, &mov);
+        played.push(mov);
+    }
+
+    let search = Search::new(root, &flag, None, &table);
+    let capped = search.extend_pv(Vec::new(), 3);
+    assert_eq!(
+        capped,
+        played[..3].to_vec(),
+        "the cap must truncate the line to three plies"
+    );
+    assert_eq!(
+        search.extend_pv(Vec::new(), MAX_PLY).len(),
+        advances.len(),
+        "without the cap the walk follows every distinct stored move"
+    );
+}
+
+/// Assembling the reported PV is a read-only reporting step: it extends the exact triangular prefix
+/// without ever touching the search. It leaves the triangular table's line as an untouched prefix,
+/// and the node count the search recorded is identical before and after it runs — so the extension
+/// cannot perturb which move is played or how much of the tree is explored.
+#[test]
+fn pv_extension_preserves_the_exact_prefix_and_visits_no_nodes() {
+    chess::init::init_globals();
+
+    let root =
+        Position::from_fen("r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5Q2/PPPP1PPP/RNB1K1NR w KQkq - 4 4")
+            .unwrap();
+    let flag = AtomicBool::new(false);
+    let table = Table::new(1);
+    let mut search = Search::new(root.clone(), &flag, None, &table);
+
+    search
+        .search::<Master, Root>(Score::INF_N, Score::INF_P, 6, 0)
+        .expect("an uncancelled search must produce a score");
+
+    let exact_prefix = search.pvt.pv().copied().collect::<Vec<_>>();
+    let nodes_before = search.trace.nodes_visited();
+
+    let reported = search.reported_pv();
+
+    assert_eq!(
+        search.trace.nodes_visited(),
+        nodes_before,
+        "assembling the reported PV must not count as visiting any node"
+    );
+    assert!(
+        reported.starts_with(&exact_prefix),
+        "the reported PV must keep the exact triangular line as its prefix: prefix [{}], reported [{}]",
+        exact_prefix.iter().map(Move::to_uci_string).collect::<Vec<_>>().join(" "),
+        reported.iter().map(Move::to_uci_string).collect::<Vec<_>>().join(" "),
+    );
+    assert_pv_is_legal("midgame", &root, 6, &reported);
+}
+
+/// Replays `prefix` from `root` and stores `mov` as the transposition-table move for the position
+/// reached, so a reported-PV walk that has followed `prefix` will play `mov` next.
+fn store_tt_move_for_prev(table: &Table, root: &Position, prefix: &[Move], mov: &Move) {
+    let mut pos = root.clone();
+    for m in prefix {
+        pos.make_move(m);
+    }
+    store_tt_move(table, &pos, mov);
+}
+
 /// An extended subtree runs deeper than the horizon the PV table was sized for, so it reaches
 /// plies the table has no row for.
 ///
