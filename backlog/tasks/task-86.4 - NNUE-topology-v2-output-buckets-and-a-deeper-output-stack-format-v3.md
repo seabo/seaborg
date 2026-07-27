@@ -1,11 +1,11 @@
 ---
 id: TASK-86.4
 title: 'NNUE topology v2: output buckets and a deeper output stack (format v3)'
-status: Changes Requested
+status: Done
 assignee:
   - '@george'
 created_date: '2026-07-25 12:23'
-updated_date: '2026-07-27 14:04'
+updated_date: '2026-07-27 16:48'
 labels:
   - nnue
 dependencies:
