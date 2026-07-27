@@ -1028,3 +1028,58 @@ Depth-reached-at-time is read separately from the **uninstrumented** release
 (`go movetime 2000`) so instrumentation overhead does not bias the clock. The
 ratios and node counts reproduce on any host; the time figure is host- and
 load-dependent.
+
+## Selectivity tuning experiments (from the profile above)
+
+Each experiment below is one knob from the ranked list, measured individually by
+self-play SPRT at a real time control and gated on its own result. A negative is
+a recorded, informative outcome, not a failure.
+
+### Reduce harder in LMR — raise the base and growth of the reduction curve
+
+Ranked experiment 1. Raised the base reduction and steepened its logarithmic
+growth so the tail of the move ordering is cut harder: `LMR_BASE` 0.5 → 1.0 and
+`LMR_DIVISOR` 2.0 → 1.5 in `engine/src/search.rs`.
+
+**Selection sweep (self-instrumented, no games).** Ten `(LMR_BASE, LMR_DIVISOR)`
+points were profiled with `tools/diag/selectivity_profile.py` (fixed depth 14,
+`bench-positions.epd`, 64 MB hash). The headline finding is that the LMR
+re-search rate is remarkably insensitive to the reduction amount: from the
+baseline 1.6% it reaches only ~1.9% even at an extreme `base=2.0, div=1.0`. Of
+every reduced scout, ~98% fail low exactly as ordering predicted across the whole
+range — direct confirmation that the ordering is trustworthy enough to reduce the
+tail hard, and that the pre-change schedule was leaving depth unclaimed rather
+than sitting at the edge of safety. `base=1.0, div=1.5` was chosen as a moderate
+point that raises both terms; the decisive arbiter is the SPRT, not the profile.
+
+**Profile movement at the chosen point** (baseline → candidate, matched runs):
+
+| Signal | Fixed depth 14 | Fixed 2M nodes |
+| --- | --- | --- |
+| LMR mean reduction | 2.16 → 2.45 ply | 2.07 → 2.44 ply |
+| LMR re-search rate | 1.60% → 1.75% | 1.99% → 2.73% |
+| Reduction tail (≥4 ply) | 6.6% → 15.8% | 5.6% → 16.2% |
+| Effective branching factor | 2.81 → 2.71 | 2.86 → 2.47 |
+
+The mean reduction rose and the reduction distribution shifted right as intended;
+the re-search rate rose without exploding; and at equal nodes the effective
+branching factor fell 2.86 → 2.47 — the mechanism the experiment bet on: fewer
+nodes per subtree buying more iterative-deepening depth at equal effort.
+
+**SPRT verdict.**
+
+| Field | Value |
+| --- | --- |
+| Baseline | `git:153a720` (branch base, `LMR_BASE=0.5, LMR_DIVISOR=2.0`), binary sha256 `7e2c728e…` |
+| Candidate | `git:6b5100d` (`LMR_BASE=1.0, LMR_DIVISOR=1.5`), binary sha256 `867275e5…` |
+| Result | **PASS** — SPRT crossed the upper boundary (LLR 2.94, bounds ±2.94) |
+| Elo | **+26.07 ± 11.47** (fastchess pentanomial error) |
+| Games | 1856 (W-D-L 569-857-430), pentanomial 44-201-346-246-91, 0 crashes, 0 forfeits |
+| Time control | `tc=10+0.1`, 64 MB hash, one worker per engine |
+| SPRT | `elo0=-5, elo1=0, alpha=0.05, beta=0.05` (the no-regression gate) |
+| Runner | fastchess alpha 1.5.0, `openings-v1.epd`, `target-cpu=native` release |
+| Machine | Apple M3 Pro, concurrency 6 |
+
+Retained: a measured, conclusive gain from the profile's top-ranked lever, and a
+first-principles confirmation that Seaborg's move ordering is good enough to
+reduce the tail harder than the pre-change schedule did.
