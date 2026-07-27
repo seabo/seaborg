@@ -1,11 +1,11 @@
 ---
 id: TASK-89.1
 title: 'Reduce harder in LMR: raise the reduction base and growth'
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-27 15:08'
-updated_date: '2026-07-27 16:46'
+updated_date: '2026-07-27 20:31'
 labels:
   - search
   - selectivity
@@ -44,3 +44,38 @@ TASK-88 experiment 1 (top-ranked). Mechanism: raise the reduction so the mean cl
 6. Retain only on a non-negative SPRT; on a strength drop, revert the constants and record the informative negative (reductions already near-optimal). Record the sweep, chosen values, SPRT verdict, and profile movement in BENCHMARKS.md.
 7. Run the repo-required checks (fmt/clippy --all-features/test) and hand off to review.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Raised the LMR reduction curve: LMR_BASE 0.5->1.0, LMR_DIVISOR 2.0->1.5 in engine/src/search.rs (ranked experiment 1 from the TASK-88 selectivity profile).
+
+Sweep (self-instrumented, no games): profiled 10 (base,divisor) points via tools/diag/selectivity_profile.py at fixed depth 14. Key finding — the LMR re-search rate is nearly insensitive to the reduction amount (1.6% baseline, only ~1.9% even at an extreme base=2.0/div=1.0): ~98% of reduced scouts fail low as ordering predicts across the whole range, confirming the pre-change schedule left depth unclaimed rather than sitting at the edge of safety. Chose base=1.0/div=1.5 as a moderate point raising both terms.
+
+Profile movement (baseline->candidate): mean reduction 2.16->2.45 ply (fixed depth), 2.07->2.44 (fixed 2M nodes); re-search rate 1.60->1.75% / 1.99->2.73% (rose, did not explode); reduction tail >=4 ply 6.6->15.8% / 5.6->16.2%; EBF at equal nodes 2.86->2.47 (the depth-buying mechanism). Satisfies AC#2.
+
+SPRT (AC#1/#3): authoritative self-play, tc=10+0.1, 64MB hash, 1 worker/engine, concurrency 6, fastchess 1.5.0, openings-v1.epd, target-cpu=native release. Baseline git:153a720 (base constants) vs candidate git:6b5100d. Verdict PASS, LLR 2.94 crossed +2.94 bound at 1856 games; Elo +26.07 +/- 11.47 (pentanomial), W-D-L 569-857-430, pentanomial 44-201-346-246-91, 0 crashes/forfeits. Retained. Recorded in BENCHMARKS.md ('Selectivity tuning experiments'). AC#4 satisfied: conclusion rests solely on Seaborg self-play and self-instrumentation; no cross-engine diffing.
+
+Test maintenance: child_mate_windows_preserve_distance_parity re-pinned from depth 7 to depth 8 — the harder schedule delays when this position's forced mate first surfaces (depth 7 now returns a non-mate Cp score, depth 8 surfaces Mate(7)). The test's subject (mate-distance parity plumbing through an aspiration fail-high re-search) and the true mate distance (mate in 4) are unchanged; only the fixture depth moved. Verified via a temporary depth-14 probe.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @claude
+created: 2026-07-27 20:31
+---
+Implementation handoff
+Branch: task-89.1-lmr-reduce-harder
+Worktree: /Users/seabo/seaborg-worktrees/task-89.1-lmr-reduce-harder
+Base: 153a7206c3f3cb652d7fda97498a95bba96f4dcc
+Implementation target: ea6a3a1
+Resolved findings: none (initial implementation)
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean)
+- cargo test --workspace: pass (450 engine + 157 lichess + workspace suites; 0 failed, 2 ignored)
+- Authoritative SPRT tc=10+0.1: PASS, +26.07 +/- 11.47 Elo, 1856 games (569-857-430), LLR 2.94. Report + games.pgn under /tmp/lmr89/sprt (git-ignored; key figures in BENCHMARKS.md). SPRT binaries built from base 153a720 and candidate 6b5100d; the later test-only commit 169b9a9 does not alter the release binary.
+Known failures: none
+---
+<!-- COMMENTS:END -->
