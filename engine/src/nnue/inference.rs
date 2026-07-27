@@ -26,7 +26,7 @@
 
 use chess::position::Player;
 
-use super::{Accumulator, Network};
+use super::{Accumulator, Activation, Network};
 
 /// The centipawn band a network evaluation is clamped into before it becomes a
 /// score. It matches the range [`crate::score::Score`] reserves for centipawn
@@ -52,6 +52,12 @@ const EVAL_CP_MAX: i64 = 10_000;
 /// first is what makes the output already relative to the mover, so unlike the
 /// hand-crafted evaluation this value needs no perspective flip applied by the
 /// caller.
+///
+/// The `a[j]` line above is the CReLU activation. A network may instead carry the
+/// SCReLU activation, `a[j] = round_div(clamp(x[j], 0, QA)², QA)`; only that one
+/// stage changes, and because it too produces a value in `[0, QA]`, every
+/// subsequent step — the i32 sum, the `SCALE` multiply, the rounded divide — is
+/// identical. See `docs/nnue-design-contract.md`.
 ///
 /// The output accumulator `s` is i32 and the multiply by `SCALE` widens to i64
 /// before the divide, exactly as the contract requires: with the accumulator in
@@ -99,9 +105,21 @@ fn forward_with(
     let (own_weights, enemy_weights) = weights.split_at(hidden);
 
     // Output bias seeds the i32 accumulator; `OUTPUT_DIM` is 1, so there is one.
+    // The activation is the only stage that varies between networks: CReLU feeds
+    // the raw accumulator block to the clipped dot (whose clip performs the
+    // activation), while SCReLU squares each clipped entry first and then feeds the
+    // pre-activated block through the identical clipped dot.
     let mut s: i32 = network.output_bias()[0];
-    s += dot(own, own_weights, qa);
-    s += dot(enemy, enemy_weights, qa);
+    match network.activation() {
+        Activation::ClippedRelu => {
+            s += dot(own, own_weights, qa);
+            s += dot(enemy, enemy_weights, qa);
+        }
+        Activation::SquaredClippedRelu => {
+            s += dot_screlu(own, own_weights, qa, &dot);
+            s += dot_screlu(enemy, enemy_weights, qa, &dot);
+        }
+    }
 
     // Widen to i64 before scaling: `s` fits i32 but `s · SCALE` need not.
     let numerator = i64::from(s) * i64::from(network.scale());
@@ -145,6 +163,55 @@ fn dot_clipped(activations: &[i16], weights: &[i16], qa: i32) -> i32 {
         .zip(weights)
         .map(|(&a, &w)| i32::from(a).clamp(0, qa) * i32::from(w))
         .sum()
+}
+
+/// The squared-clipped-ReLU activation of one accumulator entry: clamp to
+/// `[0, QA]`, square, and divide by `QA` rounding half away from zero.
+///
+/// With `c = clamp(x, 0, QA)` the result is `round(c²/QA)`, which is at most
+/// `c ≤ QA ≤ i16::MAX`, so it lands back in the `[0, QA]` i16 activation domain the
+/// output layer expects — the same domain a CReLU activation occupies. Keeping the
+/// activated value in `[0, QA]` is what lets the SCReLU path reuse the CReLU output
+/// kernels unchanged: their own clip to `[0, QA]` is a no-op on this value.
+#[inline]
+fn screlu_activation(x: i16, qa: i32) -> i16 {
+    let c = i64::from(i32::from(x).clamp(0, qa));
+    // `c ≤ QA`, so `round(c²/QA) ≤ c ≤ i16::MAX`; the cast cannot truncate.
+    round_div(c * c, i64::from(qa)) as i16
+}
+
+/// The SCReLU-activated dot product of one perspective block: pre-activate each
+/// entry with [`screlu_activation`], then run the given clipped dot over the
+/// activated values and their output weights.
+///
+/// Pre-activation happens in a fixed stack buffer processed in `CHUNK`-sized
+/// slices, so the whole forward pass allocates nothing per evaluation regardless of
+/// the hidden width. `CHUNK` is a multiple of 16 and the hidden width is too, so
+/// every slice handed to `dot` — including the last — keeps the AVX2 kernel's
+/// 16-lane precondition. Integer addition is associative, so summing the block in
+/// chunks yields the same total as summing it whole, and passing the same
+/// pre-activated buffer to the scalar and AVX2 dots makes the two bit-identical for
+/// an SCReLU network by construction.
+#[inline]
+fn dot_screlu<F: Fn(&[i16], &[i16], i32) -> i32>(
+    block: &[i16],
+    weights: &[i16],
+    qa: i32,
+    dot: &F,
+) -> i32 {
+    const CHUNK: usize = 256;
+    let mut buf = [0i16; CHUNK];
+    let mut sum: i32 = 0;
+    let mut offset = 0;
+    while offset < block.len() {
+        let len = (block.len() - offset).min(CHUNK);
+        for (dst, &x) in buf[..len].iter_mut().zip(&block[offset..offset + len]) {
+            *dst = screlu_activation(x, qa);
+        }
+        sum += dot(&buf[..len], &weights[offset..offset + len], qa);
+        offset += len;
+    }
+    sum
 }
 
 /// AVX2 implementation of [`dot_clipped`], computing the bit-identical i32 sum
@@ -276,9 +343,22 @@ mod tests {
         PieceType::King,
     ];
 
-    /// Builds a deterministic test network with the given hidden width and blocks,
-    /// at the default scales.
+    /// Builds a deterministic CReLU test network with the given hidden width and
+    /// blocks, at the default scales.
     fn network(
+        hidden: u32,
+        w_ft: Vec<i16>,
+        b_ft: Vec<i16>,
+        w_out: Vec<i16>,
+        b_out: i32,
+    ) -> Network {
+        network_with(Activation::ClippedRelu, hidden, w_ft, b_ft, w_out, b_out)
+    }
+
+    /// Builds a deterministic test network with a chosen activation, so the SCReLU
+    /// path can be exercised over the same weight patterns the CReLU tests use.
+    fn network_with(
+        activation: Activation,
         hidden: u32,
         w_ft: Vec<i16>,
         b_ft: Vec<i16>,
@@ -287,6 +367,7 @@ mod tests {
     ) -> Network {
         Network::new(
             hidden,
+            activation,
             QA,
             QB,
             SCALE,
@@ -308,6 +389,12 @@ mod tests {
     /// span `[-24, 24]` so scores range across hundreds of centipawns rather than
     /// clustering, making the golden vectors discriminating.
     fn patterned_network(hidden: u32) -> Network {
+        patterned_network_with(Activation::ClippedRelu, hidden)
+    }
+
+    /// [`patterned_network`] with a chosen activation, so the same discriminating
+    /// weight pattern can drive either the CReLU or the SCReLU path.
+    fn patterned_network_with(activation: Activation, hidden: u32) -> Network {
         let h = hidden as usize;
         let mut w_ft = vec![0i16; INPUT_DIM as usize * h];
         for (feature, column) in w_ft.chunks_mut(h).enumerate() {
@@ -317,7 +404,7 @@ mod tests {
         }
         let b_ft: Vec<i16> = (0..h).map(|unit| (unit as i16 % 7) - 3).collect();
         let w_out: Vec<i16> = (0..2 * h).map(|j| ((j * 13) % 49) as i16 - 24).collect();
-        network(hidden, w_ft, b_ft, w_out, 0)
+        network_with(activation, hidden, w_ft, b_ft, w_out, 0)
     }
 
     /// An independent, dense reference forward pass, written to share no code with
@@ -356,12 +443,23 @@ mod tests {
         let w_out = net.output_weights();
         let qa = i64::from(net.qa());
 
+        // The activation, applied independently of `forward`'s implementation so the
+        // two derive the SCReLU value by different code. `x` is non-negative after
+        // the clamp, so the rounded divide is `(c² + QA/2) / QA`.
+        let activate = |x: i64| -> i64 {
+            let c = x.clamp(0, qa);
+            match net.activation() {
+                Activation::ClippedRelu => c,
+                Activation::SquaredClippedRelu => (c * c + qa / 2) / qa,
+            }
+        };
+
         let mut s = i64::from(net.output_bias()[0]);
         for (j, &a) in own.iter().enumerate() {
-            s += a.clamp(0, qa) * i64::from(w_out[j]);
+            s += activate(a) * i64::from(w_out[j]);
         }
         for (j, &a) in enemy.iter().enumerate() {
-            s += a.clamp(0, qa) * i64::from(w_out[h + j]);
+            s += activate(a) * i64::from(w_out[h + j]);
         }
 
         let scale = i64::from(net.scale());
@@ -436,16 +534,24 @@ mod tests {
     const GOLDEN_NET_BYTES: &[u8] = include_bytes!("../../tests/fixtures/golden_v1.sbnn");
     const GOLDEN_VECTORS: &str = include_str!("../../tests/fixtures/golden_v1.vectors");
 
+    /// The SCReLU counterpart of the CReLU golden fixture above, emitted by the same
+    /// exporter (`python export.py --emit-golden engine/tests/fixtures`) from a
+    /// network whose only difference is `activation_id = 1`. Committing it makes the
+    /// three-way cross-language check cover SCReLU in every `cargo test` run.
+    const GOLDEN_SCRELU_NET_BYTES: &[u8] =
+        include_bytes!("../../tests/fixtures/golden_screlu_v1.sbnn");
+    const GOLDEN_SCRELU_VECTORS: &str =
+        include_str!("../../tests/fixtures/golden_screlu_v1.vectors");
+
     /// The four position kinds the golden set must span. The differential test
     /// asserts each is present so a regenerated fixture cannot silently drop one.
     const GOLDEN_CATEGORIES: [&str; 4] = ["tactical", "endgame", "king-safety", "near-overflow"];
 
-    /// Parses the committed vectors file into `(category, FEN, expected)` triples,
+    /// Parses a committed vectors file into `(category, FEN, expected)` triples,
     /// skipping the `#` comment header. Each line is three tab-separated fields; a
     /// FEN contains spaces but no tab, so the split is unambiguous.
-    fn parse_golden_vectors() -> Vec<(&'static str, &'static str, i32)> {
-        GOLDEN_VECTORS
-            .lines()
+    fn parse_golden_vectors(text: &'static str) -> Vec<(&'static str, &'static str, i32)> {
+        text.lines()
             .map(str::trim)
             .filter(|line| !line.is_empty() && !line.starts_with('#'))
             .map(|line| {
@@ -466,23 +572,23 @@ mod tests {
             .collect()
     }
 
-    /// The cross-language sync guarantee as a differential test: for every golden
-    /// position the score the Python exporter emitted, the Rust scalar forward pass,
-    /// and — on a CPU with AVX2 — the Rust SIMD forward pass are the identical
-    /// integer. The expected values in `GOLDEN_VECTORS` were produced by the
-    /// exporter's integer forward pass over the same network committed in
-    /// `GOLDEN_NET_BYTES`, so equality here is exact agreement across the language
-    /// boundary — on the feature encoding, the clipped quantized arithmetic, and the
-    /// rounded read-out — over tactical, endgame, king-safety, and near-overflow
-    /// positions. The scalar and AVX2 kernels are driven explicitly through the
-    /// shared forward tail, so where the instructions exist the third check is a real
-    /// one rather than the same runtime dispatch counted twice.
-    #[test]
-    fn golden_vectors_agree_across_python_scalar_and_simd() {
+    /// The cross-language sync guarantee as a differential test, run over one
+    /// committed fixture: for every golden position the score the Python exporter
+    /// emitted, the Rust scalar forward pass, and — on a CPU with AVX2 — the Rust
+    /// SIMD forward pass are the identical integer. The expected values were produced
+    /// by the exporter's integer forward pass over the same committed network, so
+    /// equality here is exact agreement across the language boundary — on the feature
+    /// encoding, the quantized activation and output arithmetic, and the rounded
+    /// read-out — over tactical, endgame, king-safety, and near-overflow positions.
+    /// The scalar and AVX2 kernels are driven explicitly through the shared forward
+    /// tail, so where the instructions exist the third check is a real one rather than
+    /// the same runtime dispatch counted twice. The network's own header selects the
+    /// activation, so passing the SCReLU fixture exercises the squared activation on
+    /// all three paths.
+    fn assert_golden_three_way(net_bytes: &[u8], vectors_text: &'static str) {
         init_globals();
-        let net =
-            Network::read(&mut &GOLDEN_NET_BYTES[..]).expect("the exporter's golden network loads");
-        let vectors = parse_golden_vectors();
+        let net = Network::read(&mut &net_bytes[..]).expect("the exporter's golden network loads");
+        let vectors = parse_golden_vectors(vectors_text);
         assert!(!vectors.is_empty(), "the golden fixture has vectors");
         for category in GOLDEN_CATEGORIES {
             assert!(
@@ -520,6 +626,21 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The CReLU cross-language differential check over the committed CReLU fixture.
+    #[test]
+    fn golden_vectors_agree_across_python_scalar_and_simd() {
+        assert_golden_three_way(GOLDEN_NET_BYTES, GOLDEN_VECTORS);
+    }
+
+    /// The SCReLU cross-language differential check over the committed SCReLU fixture:
+    /// the same three-way guarantee for a network whose header selects the squared
+    /// activation, so the Python integer forward, the Rust scalar pre-activation, and
+    /// the Rust AVX2 path all agree bit for bit on squared-clipped-ReLU semantics.
+    #[test]
+    fn screlu_golden_vectors_agree_across_python_scalar_and_simd() {
+        assert_golden_three_way(GOLDEN_SCRELU_NET_BYTES, GOLDEN_SCRELU_VECTORS);
     }
 
     /// The scalar forward pass agrees with the independent dense reference across a
@@ -623,6 +744,64 @@ mod tests {
         assert_eq!(round_div(7, 3), 2); // 2.33 -> 2
         assert_eq!(round_div(8, 3), 3); // 2.66 -> 3
         assert_eq!(round_div(-8, 3), -3);
+    }
+
+    /// The squared-clipped-ReLU activation clips to `[0, QA]`, squares, and divides
+    /// by `QA` rounding half away from zero, always landing back in `[0, QA]`.
+    #[test]
+    fn screlu_activation_clips_squares_and_rounds() {
+        let qa = 255;
+        // Below the clip: negatives and zero activate to zero.
+        assert_eq!(screlu_activation(-5, qa), 0);
+        assert_eq!(screlu_activation(0, qa), 0);
+        // At and above the clip: c saturates at QA, so a = round(QA²/QA) = QA.
+        assert_eq!(screlu_activation(255, qa), 255);
+        assert_eq!(screlu_activation(300, qa), 255);
+        assert_eq!(screlu_activation(i16::MAX, qa), 255);
+        // Inside the band: a = round(c²/QA), half away from zero.
+        assert_eq!(screlu_activation(100, qa), 39); // round(10000/255) = round(39.22)
+        assert_eq!(screlu_activation(128, qa), 64); // round(16384/255) = round(64.25)
+        assert_eq!(screlu_activation(12, qa), 1); // round(144/255)  = round(0.56)
+        assert_eq!(screlu_activation(11, qa), 0); // round(121/255)  = round(0.47)
+
+        // A QA above i16::MAX: c is capped by the i16 input, and round(c²/QA) still
+        // fits i16 (c²/QA < c ≤ i16::MAX), so the i16 cast never truncates.
+        let big_qa = 40_000;
+        let expected = ((i64::from(i16::MAX)).pow(2) + i64::from(big_qa) / 2) / i64::from(big_qa);
+        assert_eq!(screlu_activation(i16::MAX, big_qa), expected as i16);
+        assert!(expected <= i64::from(i16::MAX));
+    }
+
+    /// The scalar SCReLU forward pass reproduces the independent dense reference over
+    /// a range of positions and widths. This runs on every target — it does not need
+    /// AVX2 — so it guards the squared-activation arithmetic (clip, square, rounded
+    /// divide, then the shared output layer) against a from-the-board computation that
+    /// shares no code with `forward`.
+    #[test]
+    fn screlu_forward_agrees_with_the_dense_reference() {
+        init_globals();
+        let fens = [
+            "4k3/8/8/8/8/8/8/4K3 w - - 0 1",
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R b KQkq - 0 1",
+            "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 b - - 0 1",
+            "r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 1",
+        ];
+        // Widths on both sides of the pre-activation chunk (256) so the chunked and
+        // whole-block sums are both exercised.
+        for hidden in [16u32, 256, 272] {
+            let net = patterned_network_with(Activation::SquaredClippedRelu, hidden);
+            for fen in fens {
+                let pos = Position::from_fen(fen).expect("test FEN is valid");
+                let stm = pos.turn();
+                let acc = Accumulator::from_position(&net, &pos);
+                assert_eq!(
+                    forward(&net, &acc, stm),
+                    reference_forward(&net, &pos, stm),
+                    "SCReLU forward vs dense reference on {fen} at H={hidden}"
+                );
+            }
+        }
     }
 
     /// Constructs an accumulator whose every entry is a chosen constant by setting
@@ -755,7 +934,7 @@ mod tests {
     /// the regime the paths are defined to agree on. `|acc| ≤ 500 + 32·200 = 6900`
     /// and `|s| ≤ 2H·QA·300 + |b_out|` both sit well inside their integer types.
     #[cfg(target_arch = "x86_64")]
-    fn random_contract_network(rng: &mut SmallRng, hidden: u32) -> Network {
+    fn random_contract_network(rng: &mut SmallRng, activation: Activation, hidden: u32) -> Network {
         let h = hidden as usize;
         let w_ft: Vec<i16> = (0..INPUT_DIM as usize * h)
             .map(|_| rng.random_range(-200..=200))
@@ -763,7 +942,7 @@ mod tests {
         let b_ft: Vec<i16> = (0..h).map(|_| rng.random_range(-500..=500)).collect();
         let w_out: Vec<i16> = (0..2 * h).map(|_| rng.random_range(-300..=300)).collect();
         let b_out: i32 = rng.random_range(-100_000..=100_000);
-        network(hidden, w_ft, b_ft, w_out, b_out)
+        network_with(activation, hidden, w_ft, b_ft, w_out, b_out)
     }
 
     /// Reaches a random legal position by walking up to `plies` random legal moves
@@ -862,7 +1041,7 @@ mod tests {
                 // Randomized positions against randomized contract-valid networks.
                 let mut rng = SmallRng::seed_from_u64(0x9E37_79B9);
                 for hidden in [16u32, 32, 256] {
-                    let net = random_contract_network(&mut rng, hidden);
+                    let net = random_contract_network(&mut rng, Activation::ClippedRelu, hidden);
                     for _ in 0..40 {
                         let plies = rng.random_range(1..=40);
                         let pos = random_position(&mut rng, plies);
@@ -896,5 +1075,42 @@ mod tests {
                 }
             },
         );
+    }
+
+    /// For an SCReLU network the scalar and AVX2 forward passes are bit-identical,
+    /// and both reproduce the independent dense reference, over randomized networks
+    /// and positions. The squared activation is a shared scalar pre-step, so the
+    /// forward passes differ only in the output dot kernel; this asserts the SCReLU
+    /// path inherits the same scalar/SIMD agreement the CReLU path has. Widths
+    /// straddle the pre-activation chunk so the chunked kernel dispatch is covered.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn screlu_scalar_and_avx2_forward_are_bit_identical() {
+        with_avx2("screlu_scalar_and_avx2_forward_are_bit_identical", || {
+            init_globals();
+            let mut rng = SmallRng::seed_from_u64(0x5C2E_1011);
+            for hidden in [16u32, 32, 256, 272] {
+                let net = random_contract_network(&mut rng, Activation::SquaredClippedRelu, hidden);
+                for _ in 0..40 {
+                    let plies = rng.random_range(1..=40);
+                    let pos = random_position(&mut rng, plies);
+                    let stm = pos.turn();
+                    let acc = Accumulator::from_position(&net, &pos);
+
+                    let scalar = forward_with(&net, &acc, stm, dot_clipped);
+                    // SAFETY: AVX2 presence confirmed by `with_avx2`; `forward_with`
+                    // hands the kernel equal-length H (a multiple of 16) blocks.
+                    let simd = forward_with(&net, &acc, stm, |a, w, q| unsafe {
+                        dot_clipped_avx2(a, w, q)
+                    });
+                    assert_eq!(scalar, simd, "SCReLU scalar vs AVX2 at H={hidden}");
+                    assert_eq!(
+                        scalar,
+                        reference_forward(&net, &pos, stm),
+                        "SCReLU forward vs dense reference at H={hidden}"
+                    );
+                }
+            }
+        });
     }
 }

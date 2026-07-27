@@ -45,6 +45,13 @@ from testsupport import (
 _GOLDEN_VECTORS_PATH = (
     Path(__file__).resolve().parents[2] / "engine" / "tests" / "fixtures" / "golden_v1.vectors"
 )
+_GOLDEN_SCRELU_VECTORS_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "engine"
+    / "tests"
+    / "fixtures"
+    / "golden_screlu_v1.vectors"
+)
 
 # The exported integer network reproduces the quantization-aware model's own
 # centipawn output to within the dequantizing divide's rounding: with the same
@@ -101,6 +108,26 @@ class QuantizationTest(unittest.TestCase):
         np.testing.assert_array_equal(
             export._round_half_even(np.array([0.25, 0.75]), scale=10.0), [2.0, 8.0]
         )
+
+    def test_screlu_model_quantizes_and_tags_the_activation(self):
+        # A SCReLU model exports the same weight blocks as a CReLU one (only the
+        # activation differs), and the quantized network records activation id 1 so
+        # the written header selects the squared activation.
+        h = 16
+        w_ft = np.linspace(-0.4, 0.4, PERSPECTIVE_768_DIM * h).reshape(PERSPECTIVE_768_DIM, h)
+        b_ft = np.linspace(-0.1, 0.1, h)
+        w_out = np.linspace(-0.5, 0.5, 2 * h).reshape(1, 2 * h)
+        b_out = np.array([0.037])
+        crelu = quantize(_model_with_weights(NnueConfig(hidden=h, activation="crelu"), w_ft, b_ft, w_out, b_out))
+        screlu = quantize(
+            _model_with_weights(NnueConfig(hidden=h, activation="screlu"), w_ft, b_ft, w_out, b_out)
+        )
+        self.assertEqual(crelu.activation, export.ACTIVATION_CRELU)
+        self.assertEqual(screlu.activation, export.ACTIVATION_SCRELU)
+        # Same float weights -> identical quantized blocks; the activation is the
+        # only header field that changed.
+        np.testing.assert_array_equal(screlu.w_ft, crelu.w_ft)
+        np.testing.assert_array_equal(screlu.w_out, crelu.w_out)
 
     def test_overflowing_output_weight_is_rejected(self):
         config = NnueConfig(hidden=16)
@@ -181,10 +208,24 @@ class SerializationTest(unittest.TestCase):
         self.assertEqual(int.from_bytes(raw[4:6], "little"), export.FORMAT_VERSION)
         self.assertEqual(int.from_bytes(raw[8:12], "little"), PERSPECTIVE_768_DIM)
         self.assertEqual(int.from_bytes(raw[12:16], "little"), 16)  # hidden width
+        self.assertEqual(int.from_bytes(raw[18:20], "little"), export.ACTIVATION_CRELU)
         self.assertEqual(int.from_bytes(raw[20:22], "little"), 255)  # qa
         self.assertEqual(int.from_bytes(raw[22:24], "little"), 64)  # qb
         # Reserved bytes are all zero.
         self.assertEqual(raw[40:64], bytes(24))
+
+    def test_activation_id_is_written_and_round_trips(self):
+        # The activation is part of the header: a SCReLU network serializes id 1 and
+        # reloads as SCReLU, and an unimplemented id is rejected like the engine.
+        net = export._golden_screlu_network()
+        raw = net.to_bytes()
+        self.assertEqual(int.from_bytes(raw[18:20], "little"), export.ACTIVATION_SCRELU)
+        self.assertEqual(QuantizedNetwork.from_bytes(raw).activation, export.ACTIVATION_SCRELU)
+
+        bad = bytearray(raw)
+        bad[18:20] = (2).to_bytes(2, "little")  # id 2 is not implemented
+        with self.assertRaises(ExportError):
+            QuantizedNetwork.from_bytes(bytes(bad))
 
     def test_reader_rejects_corruption_like_the_engine_loader(self):
         raw = bytearray(self._demo().to_bytes())
@@ -226,13 +267,38 @@ class IntegerInferenceTest(unittest.TestCase):
         got = integer_eval_cp(net, np.array([0, 5], dtype=np.int64), np.array([9], dtype=np.int64))
         self.assertEqual(got, expected)
 
+    def test_screlu_constant_accumulator_matches_a_hand_computation(self):
+        # SCReLU squares each clipped activation and divides by QA (round half away
+        # from zero) before the output layer. With every accumulator entry at a
+        # constant below QA, the whole forward pass is a closed form.
+        h, qa, qb, scale = 16, 255, 64, 400
+        entry, w_out_value = 100, 3  # 0 < 100 < qa, so the clip is inactive
+        activated = (entry * entry + qa // 2) // qa  # round(100^2 / 255) = 39
+        self.assertEqual(activated, 39)
+        net = QuantizedNetwork(
+            hidden=h,
+            qa=qa,
+            qb=qb,
+            scale=scale,
+            w_ft=np.zeros(PERSPECTIVE_768_DIM * h, dtype=np.int16),
+            b_ft=np.full(h, entry, dtype=np.int16),
+            w_out=np.full(2 * h, w_out_value, dtype=np.int16),
+            b_out=np.zeros(1, dtype=np.int32),
+            activation=export.ACTIVATION_SCRELU,
+        )
+        s = 2 * h * activated * w_out_value
+        num, den = s * scale, qa * qb
+        expected = (num + den // 2) // den
+        got = integer_eval_cp(net, np.array([0, 5], dtype=np.int64), np.array([9], dtype=np.int64))
+        self.assertEqual(got, expected)
+
 
 class ReproductionTest(unittest.TestCase):
-    def test_exported_network_reproduces_the_trained_model(self):
+    def _train_and_measure_reproduction(self, activation: str) -> float:
         # Train a small quantization-aware model on a synthetic but learnable
-        # signal (an advanced white pawn wins), quantize it, and check the integer
-        # forward pass reproduces the model's own centipawn evaluation across every
-        # fixture position to within the dequantizing divide's rounding.
+        # signal (an advanced white pawn wins), quantize it, and return the worst
+        # gap between the integer forward pass and the model's own centipawn
+        # evaluation across every fixture position.
         rng = np.random.default_rng(0)
         records = []
         for _ in range(1200):
@@ -253,7 +319,7 @@ class ReproductionTest(unittest.TestCase):
         dataset = _InMemory(records)
         model, _ = train.train(
             dataset,
-            NnueConfig(hidden=32),
+            NnueConfig(hidden=32, activation=activation),
             epochs=10,
             batch_size=256,
             lr=1e-2,
@@ -264,6 +330,7 @@ class ReproductionTest(unittest.TestCase):
         )
         model.eval()
         net = quantize(model)
+        self.assertEqual(net.activation, model.config.activation_id)
 
         batch = dataset.batch(np.arange(len(dataset)))
         with torch.no_grad():
@@ -283,6 +350,18 @@ class ReproductionTest(unittest.TestCase):
             end = offsets[k + 1] if k + 1 < total else batch.stm_indices.shape[0]
             got = integer_eval_cp(net, batch.stm_indices[start:end], batch.nstm_indices[start:end])
             worst = max(worst, abs(got - float_cp[k]))
+        return worst
+
+    def test_exported_network_reproduces_the_trained_model(self):
+        worst = self._train_and_measure_reproduction("crelu")
+        self.assertLessEqual(worst, _REPRODUCTION_TOLERANCE_CP, f"max reproduction error {worst:.3f}cp")
+
+    def test_exported_screlu_network_reproduces_the_trained_model(self):
+        # The integer SCReLU forward pass reproduces the quantization-aware model's
+        # own centipawn output as tightly as CReLU does: with QA = 255 odd, the
+        # per-unit round-half-away divide coincides with the trainer's round-half-to-
+        # even fake-quantize, so the only gap is the final dequantizing rounding.
+        worst = self._train_and_measure_reproduction("screlu")
         self.assertLessEqual(worst, _REPRODUCTION_TOLERANCE_CP, f"max reproduction error {worst:.3f}cp")
 
 
@@ -431,6 +510,29 @@ class GoldenVectorTest(unittest.TestCase):
             golden_vectors(net),
             _parse_vectors_file(_GOLDEN_VECTORS_PATH),
             "golden_v1.vectors is stale; re-emit",
+        )
+
+    def test_committed_screlu_fixture_matches_current_export(self):
+        # The SCReLU fixture shares the CReLU network's weights but selects the
+        # squared activation, so its expected scores differ; this pins both the
+        # committed network bytes and the SCReLU integer forward pass that produced
+        # the vectors. Regenerate with `python export.py --emit-golden <dir>`.
+        net = export._golden_screlu_network()
+        committed_net = (_GOLDEN_SCRELU_VECTORS_PATH.parent / "golden_screlu_v1.sbnn").read_bytes()
+        self.assertEqual(net.to_bytes(), committed_net, "golden_screlu_v1.sbnn is stale; re-emit")
+        committed_vectors = _parse_vectors_file(_GOLDEN_SCRELU_VECTORS_PATH)
+        self.assertEqual(
+            golden_vectors(net),
+            committed_vectors,
+            "golden_screlu_v1.vectors is stale; re-emit",
+        )
+        # The activation genuinely changes the evaluation: at least one position
+        # scores differently from the CReLU fixture over the same weights.
+        crelu_vectors = _parse_vectors_file(_GOLDEN_VECTORS_PATH)
+        self.assertNotEqual(
+            [cp for _, _, cp in committed_vectors],
+            [cp for _, _, cp in crelu_vectors],
+            "SCReLU and CReLU golden scores are identical; the activation had no effect",
         )
 
     def test_golden_network_round_trips_through_the_reader(self):
