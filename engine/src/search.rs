@@ -1640,6 +1640,9 @@ impl<'engine> Search<'engine> {
         )
     }
 
+    // A thin constructor over `build` for the event-emitting search path: it forwards the same
+    // inputs plus the event sender, so it necessarily carries one more argument than `build`. See
+    // `build` for why the wide signature is kept rather than bundled into a struct.
     #[allow(clippy::too_many_arguments)]
     fn with_events(
         pos: Position,
@@ -1663,6 +1666,12 @@ impl<'engine> Search<'engine> {
         )
     }
 
+    // The engine's search constructor threads every borrowed engine resource (cancellation flag,
+    // deadlines, shared transposition table) alongside the owned per-search inputs (position, node
+    // limit, optional event sender, network handle, MultiPV count) into the `Search`. Each has its
+    // own lifetime and ownership and is consumed exactly once here, so bundling them into a
+    // parameter struct would relocate the same list without removing an argument or simplifying any
+    // caller — the width is inherent to this seam.
     #[allow(clippy::too_many_arguments)]
     fn build(
         pos: Position,
