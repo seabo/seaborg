@@ -372,10 +372,10 @@ def main(argv=None) -> int:
         "--num-workers",
         type=int,
         default=default_num_workers(),
-        help="CPU processes decoding batches in parallel (1 = serial). Decode is "
-        "the training bottleneck; set this to the host's physical core count. The "
-        "batch sequence is identical for any worker count, so this never changes "
-        "the trained result.",
+        help="threads decoding batches in parallel (1 = serial). Decode is the "
+        "training bottleneck; it is memory-bandwidth bound, so a few threads "
+        "saturate it (tune against --benchmark). The batch sequence is identical "
+        "for any worker count, so this never changes the trained result.",
     )
     parser.add_argument("--device", default="cpu")
     parser.add_argument(

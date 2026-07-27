@@ -638,8 +638,9 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--device", default="cpu")
     p.add_argument(
         "--num-workers", type=int, default=min(8, os.cpu_count() or 1),
-        help="decode workers per candidate training run; set to the host's physical "
-        "core count. Fixed across the sweep; changes only wall time, not the nets.",
+        help="decode threads per candidate training run; a few saturate memory "
+        "bandwidth (tune against train.py --benchmark). Fixed across the sweep; "
+        "changes only wall time, not the nets.",
     )
     p.add_argument("--limit", default="tc=10+0.1", help="SPRT time control for the finalists")
     p.add_argument("--elo0", type=float, default=0.0)
