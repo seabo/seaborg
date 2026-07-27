@@ -35,7 +35,7 @@ pub use accumulator::{feature_index, Accumulator};
 pub use embedded::BUILT_IN_NETWORK_ID;
 pub use embedded::{built_in_network, ActiveEvaluator, NetworkOrigin};
 pub use format::{
-    BuildError, LoadError, Network, Parameters, ACTIVATION_CRELU, FEATURE_SET_PERSPECTIVE_768,
-    FORMAT_VERSION, HEADER_LEN, INPUT_DIM, MAGIC, OUTPUT_DIM,
+    Activation, BuildError, LoadError, Network, Parameters, ACTIVATION_CRELU, ACTIVATION_SCRELU,
+    FEATURE_SET_PERSPECTIVE_768, FORMAT_VERSION, HEADER_LEN, INPUT_DIM, MAGIC, OUTPUT_DIM,
 };
 pub use inference::forward;

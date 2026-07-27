@@ -560,6 +560,7 @@ fn test_network() -> Network {
     let w_out: Vec<i16> = (0..2 * h).map(|j| ((j * 13) % 49) as i16 - 24).collect();
     Network::new(
         hidden,
+        nnue::Activation::ClippedRelu,
         255,
         64,
         400,

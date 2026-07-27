@@ -269,6 +269,7 @@ mod tests {
         let b_ft: Vec<i16> = (0..h).map(|unit| (unit as i16 % 5) - 2).collect();
         Network::new(
             hidden,
+            crate::nnue::Activation::ClippedRelu,
             255,
             64,
             400,

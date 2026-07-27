@@ -45,7 +45,11 @@ from model import (
 MAGIC = b"SBNN"
 HEADER_LEN = 64
 FORMAT_VERSION = 1
+# Activation ids from the contract's file-format header: 0 = clipped ReLU,
+# 1 = squared clipped ReLU. Both have integer inference in engine and exporter.
 ACTIVATION_CRELU = 0
+ACTIVATION_SCRELU = 1
+_SUPPORTED_ACTIVATIONS = (ACTIVATION_CRELU, ACTIVATION_SCRELU)
 OUTPUT_DIM = 1
 
 # Header field byte offsets (little-endian throughout).
@@ -118,6 +122,10 @@ class QuantizedNetwork:
     b_ft: np.ndarray  # int16, H
     w_out: np.ndarray  # int16, 2H, own block then enemy block
     b_out: np.ndarray  # int32, OUTPUT_DIM
+    # The activation id from the header; defaults to CReLU so existing callers and
+    # fixtures are unchanged. Only the activation stage of the forward pass depends
+    # on it (see :func:`integer_eval_cp`); the weight blocks are identical either way.
+    activation: int = ACTIVATION_CRELU
 
     def param_bytes(self) -> int:
         return 2 * self.w_ft.size + 2 * self.b_ft.size + 2 * self.w_out.size + 4 * self.b_out.size
@@ -145,7 +153,9 @@ class QuantizedNetwork:
         header[_OFF_INPUT_DIM : _OFF_INPUT_DIM + 4] = PERSPECTIVE_768_DIM.to_bytes(4, "little")
         header[_OFF_HIDDEN_WIDTH : _OFF_HIDDEN_WIDTH + 4] = int(self.hidden).to_bytes(4, "little")
         header[_OFF_OUTPUT_DIM : _OFF_OUTPUT_DIM + 2] = OUTPUT_DIM.to_bytes(2, "little")
-        header[_OFF_ACTIVATION_ID : _OFF_ACTIVATION_ID + 2] = ACTIVATION_CRELU.to_bytes(2, "little")
+        header[_OFF_ACTIVATION_ID : _OFF_ACTIVATION_ID + 2] = int(self.activation).to_bytes(
+            2, "little"
+        )
         header[_OFF_QA : _OFF_QA + 2] = int(self.qa).to_bytes(2, "little")
         header[_OFF_QB : _OFF_QB + 2] = int(self.qb).to_bytes(2, "little")
         header[_OFF_SCALE : _OFF_SCALE + 4] = int(self.scale).to_bytes(4, "little", signed=True)
@@ -176,8 +186,9 @@ class QuantizedNetwork:
             raise ExportError(f"unsupported version {u16(_OFF_FORMAT_VERSION)}")
         if u16(_OFF_FEATURE_SET_ID) != PERSPECTIVE_768_ID:
             raise ExportError(f"unsupported feature set {u16(_OFF_FEATURE_SET_ID)}")
-        if u16(_OFF_ACTIVATION_ID) != ACTIVATION_CRELU:
-            raise ExportError(f"unsupported activation {u16(_OFF_ACTIVATION_ID)}")
+        activation = u16(_OFF_ACTIVATION_ID)
+        if activation not in _SUPPORTED_ACTIVATIONS:
+            raise ExportError(f"unsupported activation {activation}")
         input_dim = u32(_OFF_INPUT_DIM)
         if input_dim != PERSPECTIVE_768_DIM:
             raise ExportError(f"input dim {input_dim} inconsistent with feature set")
@@ -223,6 +234,7 @@ class QuantizedNetwork:
             b_ft=take(hidden, "<i2"),
             w_out=take(2 * hidden, "<i2"),
             b_out=take(OUTPUT_DIM, "<i4"),
+            activation=activation,
         )
 
 
@@ -249,9 +261,10 @@ def quantize(model: NnueModel) -> QuantizedNetwork:
     """Quantize a trained model to the engine's integer network, checking that no
     weight overflows its type and that the accumulator stays inside i16."""
     config = model.config
-    if config.activation_id != ACTIVATION_CRELU:
+    if config.activation_id not in _SUPPORTED_ACTIVATIONS:
         raise ExportError(
-            f"activation {config.activation!r} has no v1 integer inference; export needs crelu"
+            f"activation {config.activation!r} has no integer inference; "
+            "export needs crelu or screlu"
         )
     state = model.state_dict()
     w_ft = state["feature_transformer.weight"].detach().cpu().numpy()  # [768, H]
@@ -264,6 +277,7 @@ def quantize(model: NnueModel) -> QuantizedNetwork:
         qa=config.qa,
         qb=config.qb,
         scale=config.scale,
+        activation=config.activation_id,
         # Row-major flatten of [768, H] is the feature-major f*H + i order on disk.
         w_ft=_checked_cast(
             _round_half_even(w_ft, config.qa).reshape(-1), _I16_MIN, _I16_MAX, "w_ft", np.int16
@@ -287,8 +301,11 @@ def integer_eval_cp(
 ) -> int:
     """The contract's integer forward pass for one position, in centipawns from the
     side to move. This is the same arithmetic as ``engine::nnue::forward``: an i16
-    accumulator per perspective, activations clipped to ``[0, QA]``, an i32 output
-    sum, then a rounded (half away from zero) dequantizing divide by ``QA·QB``.
+    accumulator per perspective, the header's activation applied to ``[0, QA]``, an
+    i32 output sum, then a rounded (half away from zero) dequantizing divide by
+    ``QA·QB``. The activation is the only stage that depends on ``net.activation``:
+    CReLU leaves the clipped value as is; SCReLU squares it and divides by ``QA``,
+    rounding half away from zero, landing back in ``[0, QA]``.
 
     ``stm_features`` and ``nstm_features`` are the active feature indices for the
     side-to-move and other perspectives (what :func:`data.decode` produces)."""
@@ -300,6 +317,12 @@ def integer_eval_cp(
     enemy = bias + columns[np.asarray(nstm_features, dtype=np.int64)].sum(axis=0)
     own = np.clip(own, 0, net.qa)
     enemy = np.clip(enemy, 0, net.qa)
+    if net.activation == ACTIVATION_SCRELU:
+        # a = round(c^2 / QA); the clipped c is non-negative so the round-half-away
+        # divide is (c*c + QA//2) // QA, matching the engine's screlu_activation.
+        half = net.qa // 2
+        own = (own * own + half) // net.qa
+        enemy = (enemy * enemy + half) // net.qa
 
     w_out = net.w_out.astype(np.int64)
     s = int(net.b_out[0])
@@ -416,7 +439,7 @@ def _demo_network(hidden: int = 16) -> QuantizedNetwork:
     )
 
 
-def _golden_network(hidden: int = 16) -> QuantizedNetwork:
+def _golden_network(hidden: int = 16, activation: int = ACTIVATION_CRELU) -> QuantizedNetwork:
     """The deterministic network the golden-vector fixture is evaluated with.
 
     Like :func:`_demo_network` it is patterned rather than trained, so both
@@ -447,10 +470,26 @@ def _golden_network(hidden: int = 16) -> QuantizedNetwork:
     w_out = ((((j * 23) % 97) - 48) * 6).astype(np.int16)
     b_out = np.array([12000], dtype=np.int32)
     net = QuantizedNetwork(
-        hidden=hidden, qa=255, qb=64, scale=400, w_ft=w_ft, b_ft=b_ft, w_out=w_out, b_out=b_out
+        hidden=hidden,
+        qa=255,
+        qb=64,
+        scale=400,
+        w_ft=w_ft,
+        b_ft=b_ft,
+        w_out=w_out,
+        b_out=b_out,
+        activation=activation,
     )
     _assert_accumulator_fits_i16(net)
     return net
+
+
+def _golden_screlu_network(hidden: int = 16) -> QuantizedNetwork:
+    """The SCReLU counterpart of :func:`_golden_network`: the identical weights with
+    ``activation_id = 1``, so the golden fixture pins the squared-activation integer
+    path across the language boundary. The accumulator (and its overflow guard) is
+    unaffected by the activation, so the same near-overflow stressor applies."""
+    return _golden_network(hidden=hidden, activation=ACTIVATION_SCRELU)
 
 
 # The golden positions, tagged by the aspect of the evaluation each set stresses.
@@ -553,10 +592,16 @@ def main(argv=None) -> int:
 
     if args.emit_golden is not None:
         args.emit_golden.mkdir(parents=True, exist_ok=True)
-        net_path = args.emit_golden / "golden_v1.sbnn"
-        vectors_path = args.emit_golden / "golden_v1.vectors"
-        vectors = write_golden_fixture(net_path, vectors_path)
-        print(f"wrote {len(vectors)} golden vectors to {net_path} and {vectors_path}")
+        # Emit one fixture per implemented activation so the engine's differential
+        # test covers CReLU and SCReLU from the same deterministic network.
+        for name, net in (
+            ("golden_v1", _golden_network()),
+            ("golden_screlu_v1", _golden_screlu_network()),
+        ):
+            net_path = args.emit_golden / f"{name}.sbnn"
+            vectors_path = args.emit_golden / f"{name}.vectors"
+            vectors = write_golden_fixture(net_path, vectors_path, net)
+            print(f"wrote {len(vectors)} golden vectors to {net_path} and {vectors_path}")
         return 0
 
     if args.checkpoint is None or args.out is None:

@@ -30,8 +30,44 @@ pub const FEATURE_SET_PERSPECTIVE_768: u16 = 0;
 /// `2 colours × 6 piece types × 64 squares`, one perspective's sparse input.
 pub const INPUT_DIM: u32 = 768;
 
-/// Activation id for clipped ReLU — the only activation this build implements.
+/// Activation id for clipped ReLU: `a = clamp(x, 0, QA)`.
 pub const ACTIVATION_CRELU: u16 = 0;
+
+/// Activation id for squared clipped ReLU: `a = round_div(clamp(x, 0, QA)^2, QA)`.
+pub const ACTIVATION_SCRELU: u16 = 1;
+
+/// The elementwise activation applied to the concatenated perspectives before the
+/// output layer. It is the only stage that differs between activation ids; every
+/// other stage of the forward pass is identical, and both variants produce a value
+/// in `[0, QA]` so they share the same i16 activation domain and output kernels.
+/// See `docs/nnue-design-contract.md` for the normative integer arithmetic.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Activation {
+    /// Clipped ReLU: `a = clamp(x, 0, QA)`.
+    ClippedRelu,
+    /// Squared clipped ReLU: `a = round_div(clamp(x, 0, QA)^2, QA)`.
+    SquaredClippedRelu,
+}
+
+impl Activation {
+    /// The on-disk `activation_id` this variant serializes as.
+    pub fn id(self) -> u16 {
+        match self {
+            Activation::ClippedRelu => ACTIVATION_CRELU,
+            Activation::SquaredClippedRelu => ACTIVATION_SCRELU,
+        }
+    }
+
+    /// The variant for an on-disk `activation_id`, or `None` for an id this build
+    /// does not implement.
+    fn from_id(id: u16) -> Option<Self> {
+        match id {
+            ACTIVATION_CRELU => Some(Activation::ClippedRelu),
+            ACTIVATION_SCRELU => Some(Activation::SquaredClippedRelu),
+            _ => None,
+        }
+    }
+}
 
 /// Output dimension: the network emits a single scalar.
 pub const OUTPUT_DIM: u16 = 1;
@@ -84,6 +120,7 @@ pub struct Parameters {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Network {
     hidden_width: u32,
+    activation: Activation,
     qa: u16,
     qb: u16,
     scale: i32,
@@ -106,6 +143,7 @@ impl Network {
     /// is non-positive, or if a weight block's length disagrees with the width.
     pub fn new(
         hidden_width: u32,
+        activation: Activation,
         qa: u16,
         qb: u16,
         scale: i32,
@@ -132,6 +170,7 @@ impl Network {
 
         Ok(Self {
             hidden_width,
+            activation,
             qa,
             qb,
             scale,
@@ -145,6 +184,11 @@ impl Network {
     /// The feature-transformer output width per perspective (`H`).
     pub fn hidden_width(&self) -> u32 {
         self.hidden_width
+    }
+
+    /// The elementwise activation applied before the output layer.
+    pub fn activation(&self) -> Activation {
+        self.activation
     }
 
     /// The feature-transformer / activation scale (`QA`).
@@ -224,7 +268,7 @@ impl Network {
             .copy_from_slice(&self.hidden_width.to_le_bytes());
         header[OFF_OUTPUT_DIM..OFF_OUTPUT_DIM + 2].copy_from_slice(&OUTPUT_DIM.to_le_bytes());
         header[OFF_ACTIVATION_ID..OFF_ACTIVATION_ID + 2]
-            .copy_from_slice(&ACTIVATION_CRELU.to_le_bytes());
+            .copy_from_slice(&self.activation.id().to_le_bytes());
         header[OFF_QA..OFF_QA + 2].copy_from_slice(&self.qa.to_le_bytes());
         header[OFF_QB..OFF_QB + 2].copy_from_slice(&self.qb.to_le_bytes());
         header[OFF_SCALE..OFF_SCALE + 4].copy_from_slice(&self.scale.to_le_bytes());
@@ -282,9 +326,8 @@ impl Network {
             return Err(LoadError::UnsupportedFeatureSet(feature_set_id));
         }
         let activation_id = u16_le(&header, OFF_ACTIVATION_ID);
-        if activation_id != ACTIVATION_CRELU {
-            return Err(LoadError::UnsupportedActivation(activation_id));
-        }
+        let activation = Activation::from_id(activation_id)
+            .ok_or(LoadError::UnsupportedActivation(activation_id))?;
 
         // Architecture consistency. `feature_set_id` fixes the input dimension,
         // so a disagreeing `input_dim` is a corrupt or foreign file.
@@ -362,12 +405,26 @@ impl Network {
             });
         }
 
-        Ok(Self::decode_blob(hidden_width, qa, qb, scale, &blob))
+        Ok(Self::decode_blob(
+            hidden_width,
+            activation,
+            qa,
+            qb,
+            scale,
+            &blob,
+        ))
     }
 
     /// Splits a validated blob into the four weight blocks. The blob length was
     /// already checked against these dimensions, so the slicing is exact.
-    fn decode_blob(hidden_width: u32, qa: u16, qb: u16, scale: i32, blob: &[u8]) -> Self {
+    fn decode_blob(
+        hidden_width: u32,
+        activation: Activation,
+        qa: u16,
+        qb: u16,
+        scale: i32,
+        blob: &[u8],
+    ) -> Self {
         let h = hidden_width as usize;
         let mut cursor = BlobCursor::new(blob);
         let w_ft = cursor.take_i16(INPUT_DIM as usize * h);
@@ -376,6 +433,7 @@ impl Network {
         let b_out = cursor.take_i32(OUTPUT_DIM as usize);
         Self {
             hidden_width,
+            activation,
             qa,
             qb,
             scale,
@@ -660,6 +718,7 @@ mod tests {
         let b_out: Vec<i32> = vec![-1_234_567];
         Network::new(
             H,
+            Activation::ClippedRelu,
             QA,
             QB,
             SCALE,
@@ -767,11 +826,43 @@ mod tests {
     #[test]
     fn unknown_activation_is_rejected() {
         let mut bytes = to_bytes(&sample_network());
-        bytes[OFF_ACTIVATION_ID..OFF_ACTIVATION_ID + 2].copy_from_slice(&1u16.to_le_bytes());
+        // Id 0 (CReLU) and 1 (SCReLU) are implemented; 2 is not.
+        bytes[OFF_ACTIVATION_ID..OFF_ACTIVATION_ID + 2].copy_from_slice(&2u16.to_le_bytes());
         assert!(matches!(
             Network::read(&mut bytes.as_slice()),
-            Err(LoadError::UnsupportedActivation(1))
+            Err(LoadError::UnsupportedActivation(2))
         ));
+    }
+
+    #[test]
+    fn screlu_activation_round_trips() {
+        // A network's activation is part of its architecture: it survives a write
+        // and reload, and the reloaded network reports the SCReLU variant.
+        let net = Network::new(
+            H,
+            Activation::SquaredClippedRelu,
+            QA,
+            QB,
+            SCALE,
+            Parameters {
+                w_ft: vec![0i16; INPUT_DIM as usize * H as usize],
+                b_ft: vec![0i16; H as usize],
+                w_out: vec![0i16; 2 * H as usize],
+                b_out: vec![0i32],
+            },
+        )
+        .unwrap();
+        assert_eq!(net.activation(), Activation::SquaredClippedRelu);
+
+        let bytes = to_bytes(&net);
+        assert_eq!(
+            u16_le(&bytes, OFF_ACTIVATION_ID),
+            ACTIVATION_SCRELU,
+            "the stored activation id is written, not a hardcoded CReLU"
+        );
+        let reloaded = Network::read(&mut bytes.as_slice()).unwrap();
+        assert_eq!(reloaded.activation(), Activation::SquaredClippedRelu);
+        assert_eq!(reloaded, net);
     }
 
     #[test]
@@ -896,12 +987,12 @@ mod tests {
     fn new_rejects_bad_hidden_width_and_scales_and_lengths() {
         // Not a multiple of 16.
         assert!(matches!(
-            Network::new(17, QA, QB, SCALE, empty_params()),
+            Network::new(17, Activation::ClippedRelu, QA, QB, SCALE, empty_params()),
             Err(BuildError::InvalidHiddenWidth(17))
         ));
         // Non-positive scale.
         assert!(matches!(
-            Network::new(H, 0, QB, SCALE, empty_params()),
+            Network::new(H, Activation::ClippedRelu, 0, QB, SCALE, empty_params()),
             Err(BuildError::NonPositiveScale { field: "qa", .. })
         ));
         // Right width and scales but a short weight block.
@@ -909,6 +1000,7 @@ mod tests {
         assert!(matches!(
             Network::new(
                 H,
+                Activation::ClippedRelu,
                 QA,
                 QB,
                 SCALE,
