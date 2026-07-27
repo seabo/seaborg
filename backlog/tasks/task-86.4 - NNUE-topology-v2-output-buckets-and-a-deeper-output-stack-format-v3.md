@@ -1,11 +1,11 @@
 ---
 id: TASK-86.4
 title: 'NNUE topology v2: output buckets and a deeper output stack (format v3)'
-status: In Progress
+status: In Review
 assignee:
   - '@george'
 created_date: '2026-07-25 12:23'
-updated_date: '2026-07-27 10:38'
+updated_date: '2026-07-27 13:39'
 labels:
   - nnue
 dependencies:
@@ -67,4 +67,48 @@ VERIFY: cargo fmt --check; clippy -D warnings; cargo test --workspace; python tr
 
 <!-- SECTION:NOTES:BEGIN -->
 Contract-first checkpoint: wrote docs/nnue-topology-v2.md (normative spec for format v2 topology). Key decisions: reuse QB as the int8 tail weight scale (scale-uniform stack: input @ QA, weights int8 @ QB, bias i32 @ QA*QB, acc = QA*QB*out_float); inter-layer requantize round_div(acc,QB) clamp [0,QA] then activation; final layer dequantize as v1. Activations stay [0,QA=255], tail weights full int8 [-127,127]; AVX2 widens int8->i16 and uses non-saturating vpmaddwd (not vpmaddubsw) so scalar==SIMD bit-identical. Buckets/dims parameterizable in header (num_buckets @off40, num_output_layers @off42, stack_dims table in blob prefix); defaults 8 buckets, 2H->16->32->1. Bucket rule: min((p-1)*B/32, B-1) from pos.occupied().popcnt(). v1 nets (gen-002) still load/eval unchanged. Awaiting approval before implementing.
+
+Implemented NNUE topology v2: bucketed multi-layer output stack with an int8 dense tail, format version 2, matching PyTorch/export and scalar+AVX2 bit-identical Rust inference. Contract-first: docs/nnue-topology-v2.md is the normative spec (per-layer int8 scales stack_scales, qb==QB_last; bucket rule min((p-1)*B/32,B-1); scale-uniform tail: input @QA, weights int8 @QB_k, bias i32 @QA*QB_k; requantize round_div(acc,QB_k) clamp[0,QA]+activation between layers; final dequantize as v1; AVX2 widens int8->i16 and uses non-saturating vpmaddwd so scalar==SIMD).
+
+Rust (engine/src/nnue):
+- format.rs: Network now holds an OutputStack enum (Single = v1 unchanged; Bucketed = v2). read() branches on format_version (1 or 2); v2 header carries num_buckets@40, num_output_layers@42, reserved 44..64 must be zero; blob prefix stack_dims + stack_scales (u32 each), then FT, then per-bucket int8 layers. new_bucketed(BucketedParameters) builder. 7 new LoadError + matching BuildError variants; each rejection covered by a test. v1 path/tests byte-identical (built-in gen-002 net still loads).
+- inference.rs: select_bucket(); forward() gains piece_count and dispatches Single->v1 path, Bucketed->forward_bucketed_with (materializes activated 2H input into a stack-or-heap Scratch buffer, runs only the selected bucket's stack, ping-pong buffers). Scalar dot_i8 + AVX2 dot_i8_avx2 (_mm256_cvtepi8_epi16 + _mm256_madd_epi16). Tests: select_bucket rule; independent dense bucketed reference; scalar==AVX2 bit-identity (x86); bucket-selection-drives-output; three-way Python/scalar/SIMD golden over golden_v2 + golden_screlu_v2 spanning buckets {0,2,7} with distinct per-layer scales.
+- search.rs: two forward() call sites pass pos.occupied().popcnt().
+
+Python (tools/trainer):
+- model.py: NnueConfig gains num_buckets/output_stack/output_stack_scales (+validation mirroring the loader); NnueModel builds per-bucket ParameterList stacks and routes by bucket via bmm; QAT fake-quantizes each layer on its 1/QB_k int8 grid + inter-layer activation on 1/QA; clamp_for_quantization bounds stack weights to int8.
+- export.py: QuantizedBucketedNetwork (to_bytes/from_bytes = independent loader mirror), integer_eval_cp_bucketed (= engine forward), quantize_bucketed(model), select_bucket, golden v2 builders + emission; write_network routes v1/v2.
+- data.py: Batch exposes piece_count. train.py: per-sample buckets threaded to model.forward; --num-buckets/--output-stack/--output-stack-scales CLI.
+- test_topology_v2.py (17 tests): config validation, bucket routing, export round-trip, int8 dtype, integer-vs-model reproduction (<=4cp; measured 0.64 CReLU / 1.71 SCReLU), golden spans buckets + distinct scales, per-layer scale honored.
+
+Golden fixtures engine/tests/fixtures/golden_v2.{sbnn,vectors} and golden_screlu_v2.{sbnn,vectors} regenerated via `python export.py --emit-golden engine/tests/fixtures`; v1 fixtures byte-unchanged.
+
+Note: the AVX2 legs (dot_i8_avx2 bit-identity + SIMD side of the three-way golden) are x86-gated and skip on this arm64 host exactly as the pre-existing v1 AVX2 tests do; verified they compile+lint clean for x86_64-apple-darwin and link under Rosetta (AVX2 undetected there). They execute on x86 CI. The portable scalar path is fully cross-checked against an independent dense reference and the Python exporter.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @george
+created: 2026-07-27 13:39
+---
+Implementation handoff
+Branch: task-86.4-nnue-topology-v2
+Worktree: /Users/seabo/seaborg-worktrees/task-86.4-nnue-topology-v2
+Base: 4722f814d5e1be00d4526dd06993ff4ff48d48d5
+Implementation target: c39451d0eb123602e6474e20bf9a166ad2744153
+Resolved findings: none (new work)
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean)
+- cargo test --workspace: pass (chess 57, engine 460 +2 ignored, lichess 157, seaborg 6, integration all green; 0 failed)
+- tools/trainer pytest: pass (73 passed, incl. 17 new v2 tests)
+- Cross-language golden: engine three-way (Python exporter / Rust scalar / Rust SIMD) over golden_v2 + golden_screlu_v2, spanning buckets {0,2,7} with distinct per-layer scales [64,128,256]; scalar+Python legs verified on this host
+- x86_64: cargo clippy -p engine --lib --tests --target x86_64-apple-darwin clean; AVX2 kernels compile and link
+Known failures: none
+Notes for review:
+- AC#1 format v2 in engine/src/nnue/format.rs (round-trip + 7 rejection rules tested); AC#2 bucket selection + scalar/AVX2 in inference.rs; AC#3 PyTorch model+QAT+quantize_bucketed in tools/trainer; AC#4 golden three-way test in inference.rs.
+- AVX2 legs (dot_i8_avx2 bit-identity; SIMD side of the three-way golden) are x86-gated and skip on this arm64 host, exactly like the pre-existing v1 AVX2 tests; they run on x86 CI. The scalar path is independently cross-checked against a dense reference and the Python exporter.
+- Normative spec: docs/nnue-topology-v2.md (approved contract-first). v1 nets (built-in gen-002) load and evaluate byte-identically.
+---
+<!-- COMMENTS:END -->
