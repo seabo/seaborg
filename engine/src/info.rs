@@ -27,6 +27,8 @@ pub fn format_search_event(event: &SearchEvent) -> String {
             "info depth {} currmove {} currmovenumber {}",
             current.depth, current.current_move, current.number
         ),
+        #[cfg(feature = "selstats")]
+        SearchEvent::SelStats(json) => format!("info string selstats {json}"),
     }
 }
 

@@ -14,6 +14,14 @@ rust-version.workspace = true
 [features]
 default = ["embedded-net"]
 embedded-net = []
+# Off-by-default search selectivity instrumentation. When disabled (the shipped
+# default) the counters, their hot-loop increment sites, and the summary
+# emission compile out entirely, so the engine's behaviour and speed are
+# unchanged. Enabling it accumulates per-node selectivity statistics (cutoff
+# move index, LMR re-search and reduction distribution, PV/non-PV and aspiration
+# re-search rates, quiescence widening, TT-move availability) and emits them as a
+# final `info string selstats {json}` line for offline analysis.
+selstats = []
 
 [dependencies]
 chess = { path = "../chess" }

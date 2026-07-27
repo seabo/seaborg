@@ -2088,6 +2088,8 @@ fn typed_api_delivers_iterative_deepening_events() {
         .filter_map(|event| match event {
             SearchEvent::Progress(progress) => Some(progress),
             SearchEvent::CurrentMove(_) => None,
+            #[cfg(feature = "selstats")]
+            SearchEvent::SelStats(_) => None,
         })
         .collect::<Vec<_>>();
 
@@ -2412,6 +2414,8 @@ fn typed_api_cancels_running_search() {
             progress.principal_variation.len() <= usize::from(progress.depth)
         }
         SearchEvent::CurrentMove(_) => true,
+        #[cfg(feature = "selstats")]
+        SearchEvent::SelStats(_) => true,
     }));
 }
 
@@ -3268,6 +3272,8 @@ fn reported_pvs(engine: &SearchEngine, root: &Position, depth: u8) -> Vec<(u8, V
         .filter_map(|event| match event {
             SearchEvent::Progress(progress) => Some((progress.depth, progress.principal_variation)),
             SearchEvent::CurrentMove(_) => None,
+            #[cfg(feature = "selstats")]
+            SearchEvent::SelStats(_) => None,
         })
         .collect()
 }

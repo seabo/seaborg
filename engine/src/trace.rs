@@ -42,6 +42,80 @@ pub struct Tracer {
     /// the same post-suppression basis as [`killer_attempts`](Self::killer_attempts).
     killer_cutoffs: [u64; MAX_KILLER_SLOTS],
     pub hash_found: Averager<u32>,
+    /// Off-by-default selectivity counters. Present only under the `selstats` feature so the shipped
+    /// build carries neither the fields nor the increments that feed them.
+    #[cfg(feature = "selstats")]
+    sel: SelStats,
+}
+
+/// Per-search selectivity counters, accumulated only when the `selstats` feature is on.
+///
+/// These answer "where does the search spend its effective depth" from the engine's own point of
+/// view: how early beta cutoffs land (move ordering), how often reductions and scouts are undone by
+/// a re-search (reduction calibration), how wide quiescence runs, and how available the transposition
+/// move is. They never influence a search decision — every counter is written after the decision it
+/// observes — so a `selstats` build explores exactly the same tree as a default build.
+#[cfg(feature = "selstats")]
+#[derive(Default)]
+pub struct SelStats {
+    /// Main-search node entries at PV nodes (the root counts as a PV node) and at non-PV nodes.
+    pub nodes_pv: u64,
+    pub nodes_nonpv: u64,
+    /// Beta cutoffs (fail-high nodes) and, of those, the ones that cut on the first move searched.
+    /// `fh_first / fh_total` is the first-move-cutoff rate, the headline move-ordering signal.
+    pub fh_total: u64,
+    pub fh_first: u64,
+    /// Cutoff move-index histogram: index `i` counts cutoffs on the `(i+1)`-th move searched, with
+    /// the final bucket absorbing every later move. Shows how far down the ordering cutoffs migrate.
+    pub fh_idx: [u64; 8],
+    /// Fail-high (cutoff) counts split by node type, cross-checking `fh_total`.
+    pub pv_fail_high: u64,
+    pub nonpv_fail_high: u64,
+    /// Nodes that reached the move loop (ran ordering), split by node type and by whether a
+    /// transposition-table move was available to seed that ordering. These are the denominators for a
+    /// per-node-type TT-move availability, measured only where ordering actually happens (a node
+    /// short-circuited before its move loop is excluded, so a trivially-present TT move at an early
+    /// cutoff does not inflate the figure).
+    pub ord_pv_tt: u64,
+    pub ord_pv_nott: u64,
+    pub ord_nonpv_tt: u64,
+    pub ord_nonpv_nott: u64,
+    /// Beta cutoffs and first-move cutoffs split by whether the cutting node had a TT move. The gap
+    /// between `fh_tt_first / fh_tt` and `fh_nott_first / fh_nott` is the ordering penalty a missing
+    /// TT move actually costs — the quantity that says whether low TT-move availability matters.
+    pub fh_tt: u64,
+    pub fh_tt_first: u64,
+    pub fh_nott: u64,
+    pub fh_nott_first: u64,
+    /// Non-cutoff outcomes of a completed move loop, split by node type: a PV node that raised alpha
+    /// (an exact score) versus one that did not (fail-low), and non-PV fail-lows. Non-PV nodes are
+    /// searched with a null window and so are never exact.
+    pub pv_exact: u64,
+    pub pv_fail_low: u64,
+    pub nonpv_fail_low: u64,
+    /// Late-move reductions applied (a reduced scout was searched), and of those how many the shallow
+    /// verdict beat alpha and forced a full-depth re-search. `lmr_research / lmr_applied` is the
+    /// re-search rate: too high means the reductions are too aggressive, near zero means too timid.
+    pub lmr_applied: u64,
+    pub lmr_research: u64,
+    /// Sum of reduction plies over all applications (for the mean) and a histogram of the amount:
+    /// index `i` counts a reduction of `i+1` plies, the last bucket absorbing larger reductions.
+    pub lmr_red_sum: u64,
+    pub lmr_red_hist: [u64; 6],
+    /// PV-node scouts of a non-first move (searched first with a null window) and, of those, how many
+    /// raised alpha and were re-searched with the full window. The PVS re-search rate.
+    pub pv_scout: u64,
+    pub pv_scout_research: u64,
+    /// Root aspiration searches that ran with a finite window, and the fail-low / fail-high re-search
+    /// events that widened it. `(asp_fail_low + asp_fail_high) / asp_windows` is the aspiration
+    /// re-search rate.
+    pub asp_windows: u64,
+    pub asp_fail_low: u64,
+    pub asp_fail_high: u64,
+    /// Non-PV nodes short-circuited by a transposition-table entry before the move loop ran.
+    pub tt_cutoffs: u64,
+    /// Quiescence nodes that were in check and therefore widened from captures-only to every evasion.
+    pub q_incheck: u64,
 }
 
 impl Default for Tracer {
@@ -66,6 +140,8 @@ impl Tracer {
             killer_attempts: [0; MAX_KILLER_SLOTS],
             killer_cutoffs: [0; MAX_KILLER_SLOTS],
             hash_found: Averager::new(0),
+            #[cfg(feature = "selstats")]
+            sel: SelStats::default(),
         }
     }
 
@@ -224,6 +300,193 @@ impl Tracer {
     /// there is no closed form rearrangement in terms of x.
     pub fn eff_branching(&self, depth: u8) -> f32 {
         eff_branching_factor(self.all_nodes_visited(), depth)
+    }
+}
+
+/// Selectivity instrumentation, compiled only under the `selstats` feature. Every method observes a
+/// decision the search has already made; none changes one, so a build with these calls active
+/// searches the same tree as one without them.
+#[cfg(feature = "selstats")]
+impl Tracer {
+    /// Record a main-search node entry, classified PV or non-PV.
+    #[inline(always)]
+    pub fn sel_node(&mut self, pv: bool) {
+        if pv {
+            self.sel.nodes_pv += 1;
+        } else {
+            self.sel.nodes_nonpv += 1;
+        }
+    }
+
+    /// Record a node that reached its move loop (ran ordering), classified by node type and by
+    /// whether a transposition-table move was available to seed that ordering.
+    #[inline(always)]
+    pub fn sel_node_ordering(&mut self, pv: bool, tt_move: bool) {
+        match (pv, tt_move) {
+            (true, true) => self.sel.ord_pv_tt += 1,
+            (true, false) => self.sel.ord_pv_nott += 1,
+            (false, true) => self.sel.ord_nonpv_tt += 1,
+            (false, false) => self.sel.ord_nonpv_nott += 1,
+        }
+    }
+
+    /// Record a beta cutoff at the given node type, cutting on the `move_count`-th move searched, at a
+    /// node that did or did not have a TT move to order by.
+    #[inline(always)]
+    pub fn sel_cutoff(&mut self, pv: bool, move_count: u32, tt_move: bool) {
+        self.sel.fh_total += 1;
+        let first = move_count == 1;
+        if first {
+            self.sel.fh_first += 1;
+        }
+        let bucket = (move_count.max(1) - 1).min(self.sel.fh_idx.len() as u32 - 1) as usize;
+        self.sel.fh_idx[bucket] += 1;
+        if pv {
+            self.sel.pv_fail_high += 1;
+        } else {
+            self.sel.nonpv_fail_high += 1;
+        }
+        if tt_move {
+            self.sel.fh_tt += 1;
+            self.sel.fh_tt_first += u64::from(first);
+        } else {
+            self.sel.fh_nott += 1;
+            self.sel.fh_nott_first += u64::from(first);
+        }
+    }
+
+    /// Record the non-cutoff outcome of a completed move loop: for a PV node whether it raised alpha
+    /// (an exact score) or not (a fail-low); a non-PV node's null-window loss is always a fail-low.
+    #[inline(always)]
+    pub fn sel_node_result(&mut self, pv: bool, raised_alpha: bool) {
+        if pv {
+            if raised_alpha {
+                self.sel.pv_exact += 1;
+            } else {
+                self.sel.pv_fail_low += 1;
+            }
+        } else {
+            self.sel.nonpv_fail_low += 1;
+        }
+    }
+
+    /// Record a late-move reduction of `reduction` plies and whether its shallow verdict beat alpha
+    /// and forced a full-depth re-search.
+    #[inline(always)]
+    pub fn sel_lmr(&mut self, reduction: u32, researched: bool) {
+        self.sel.lmr_applied += 1;
+        self.sel.lmr_red_sum += u64::from(reduction);
+        let bucket = (reduction.max(1) - 1).min(self.sel.lmr_red_hist.len() as u32 - 1) as usize;
+        self.sel.lmr_red_hist[bucket] += 1;
+        if researched {
+            self.sel.lmr_research += 1;
+        }
+    }
+
+    /// Record a PV-node null-window scout of a non-first move.
+    #[inline(always)]
+    pub fn sel_pv_scout(&mut self) {
+        self.sel.pv_scout += 1;
+    }
+
+    /// Record a full-window re-search after a PV-node scout raised alpha.
+    #[inline(always)]
+    pub fn sel_pv_research(&mut self) {
+        self.sel.pv_scout_research += 1;
+    }
+
+    /// Record a root aspiration search that ran with a finite window.
+    #[inline(always)]
+    pub fn sel_asp_window(&mut self) {
+        self.sel.asp_windows += 1;
+    }
+
+    /// Record an aspiration fail-low re-search.
+    #[inline(always)]
+    pub fn sel_asp_fail_low(&mut self) {
+        self.sel.asp_fail_low += 1;
+    }
+
+    /// Record an aspiration fail-high re-search.
+    #[inline(always)]
+    pub fn sel_asp_fail_high(&mut self) {
+        self.sel.asp_fail_high += 1;
+    }
+
+    /// Record a non-PV node short-circuited by a transposition-table entry before its move loop.
+    #[inline(always)]
+    pub fn sel_tt_cutoff(&mut self) {
+        self.sel.tt_cutoffs += 1;
+    }
+
+    /// Record a quiescence node searched in check, which widens from captures to all evasions.
+    #[inline(always)]
+    pub fn sel_q_incheck(&mut self) {
+        self.sel.q_incheck += 1;
+    }
+
+    /// Serialise the full selectivity profile for this search as one compact JSON object, tagged with
+    /// the deepest completed `depth`. Combines the selectivity counters with the always-on node, TT,
+    /// and killer figures so a single line captures the whole profile. Field order is stable so the
+    /// analysis script can rely on it, though the values are keyed and read by name.
+    pub fn sel_json(&self, depth: u8) -> String {
+        use std::fmt::Write as _;
+
+        // A search that visited no node (an immediate abort) leaves the branching factor and the
+        // TT-move average as `0/0`. JSON has no NaN literal, so an unsanitised value would emit a
+        // token the analysis parser rejects; both are reported as zero instead.
+        let finite = |x: f64| if x.is_finite() { x } else { 0.0 };
+        let ebf = f64::from(self.eff_branching(depth));
+
+        let s = &self.sel;
+        let mut out = String::with_capacity(768);
+        out.push('{');
+        let _ = write!(
+            out,
+            "\"depth\":{},\"nodes\":{},\"qnodes\":{},\"all_nodes\":{},\"ebf\":{:.4},",
+            depth,
+            self.nodes_visited(),
+            self.q_nodes_visited(),
+            self.all_nodes_visited(),
+            finite(ebf),
+        );
+        let _ = write!(
+            out,
+            "\"hash_probes\":{},\"hash_hits\":{},\"hash_misses\":{},\"hash_collisions\":{},\"tt_move_avail\":{:.6},\"tt_cutoffs\":{},",
+            self.hash_probes(),
+            self.hash_hits(),
+            self.hash_misses(),
+            self.hash_collisions(),
+            finite(self.hash_found.avg()),
+            s.tt_cutoffs,
+        );
+        let _ = write!(
+            out,
+            "\"nodes_pv\":{},\"nodes_nonpv\":{},\"fh_total\":{},\"fh_first\":{},\"fh_idx\":{:?},",
+            s.nodes_pv, s.nodes_nonpv, s.fh_total, s.fh_first, s.fh_idx,
+        );
+        let _ = write!(
+            out,
+            "\"pv_fail_high\":{},\"nonpv_fail_high\":{},\"pv_exact\":{},\"pv_fail_low\":{},\"nonpv_fail_low\":{},",
+            s.pv_fail_high, s.nonpv_fail_high, s.pv_exact, s.pv_fail_low, s.nonpv_fail_low,
+        );
+        let _ = write!(
+            out,
+            "\"ord_pv_tt\":{},\"ord_pv_nott\":{},\"ord_nonpv_tt\":{},\"ord_nonpv_nott\":{},\"fh_tt\":{},\"fh_tt_first\":{},\"fh_nott\":{},\"fh_nott_first\":{},",
+            s.ord_pv_tt, s.ord_pv_nott, s.ord_nonpv_tt, s.ord_nonpv_nott, s.fh_tt, s.fh_tt_first, s.fh_nott, s.fh_nott_first,
+        );
+        let _ = write!(
+            out,
+            "\"lmr_applied\":{},\"lmr_research\":{},\"lmr_red_sum\":{},\"lmr_red_hist\":{:?},",
+            s.lmr_applied, s.lmr_research, s.lmr_red_sum, s.lmr_red_hist,
+        );
+        let _ = write!(
+            out,
+            "\"pv_scout\":{},\"pv_scout_research\":{},\"asp_windows\":{},\"asp_fail_low\":{},\"asp_fail_high\":{},\"q_incheck\":{}",
+            s.pv_scout, s.pv_scout_research, s.asp_windows, s.asp_fail_low, s.asp_fail_high, s.q_incheck,
+        );
+        out.push('}');
+        out
     }
 }
 

@@ -866,3 +866,165 @@ The node-based figures reproduce on any host. The NPS and time-based figures are
 host- and load-dependent, and on ARM understate seaborg's speed; a confirmatory
 NPS pass on an idle x86 AVX2 host (e.g. the datagen rig) would tighten the speed
 axis, though it cannot change the conclusion that selectivity dominates.
+
+## Search selectivity profile (self-instrumented)
+
+The strength-gulf diagnostic above localised a large deficit to *selectivity*:
+depth per node. That told us the axis, not the site. This section locates where
+Seaborg's own search loses effective depth, measured entirely from Seaborg's own
+instrumentation, and turns the profile into a ranked set of first-principles
+experiments. It follows the project philosophy: no behaviour is diffed against
+another engine, and every conclusion is derivable from a Seaborg-measured signal.
+It ships no permanent engine change — the instrumentation lives behind an
+off-by-default `selstats` build feature.
+
+### Instrumentation and method
+
+A `--features selstats` build accumulates per-node selectivity counters (see
+`engine/src/trace.rs::SelStats`) and emits them once per search as a final
+`info string selstats {json}` line. The feature is off in every shipped build, so
+the counters, their hot-loop increment sites, and the emission compile out
+entirely; a `selstats` build searches the **identical tree** as a default build
+(verified: startpos-family position at depth 15 visits 1,204,096 nodes under both
+builds), because every counter is written *after* the decision it observes.
+Because the signals are ratios and node counts, they are independent of the
+instrumentation's own wall-clock overhead; depth-reached-at-fixed-time is instead
+read from the uninstrumented release.
+
+- **Suite:** `tools/diag/bench-positions.epd`, the same phase-balanced 20-position
+  set the strength-gulf diagnostic used.
+- **Budgets:** fixed depth 14 and fixed 2,000,000 nodes (both instrumented, for
+  the ratios); fixed movetime 2000 ms on the uninstrumented release (for honest
+  depth-reached-at-time). 64 MB hash, single thread.
+- **Hardware/build:** Apple M3 Pro, `RUSTFLAGS="-C target-cpu=native"` release,
+  scalar NNUE (no ARM NEON path). Ratios and node counts are ISA-independent.
+- **Driver:** `tools/diag/selectivity_profile.py` (reuses the `tools/diag/uci.py`
+  driver and pools each rate's numerator and denominator across the suite, so a
+  rate reflects the typical *node* rather than the typical *position*).
+
+### The profile
+
+Fixed depth 14 (identical trees per position) unless noted; the fixed-node run
+agrees within a point or two on every ordering/reduction rate.
+
+| Signal | Measured | Reading |
+| --- | ---: | --- |
+| Mean depth reached at 2000 ms (uninstrumented) | 15.3 (median 15) | — |
+| Effective branching factor (nodes^(1/depth)) | 2.55–2.86 | high; less selective than a frontier search |
+| Quiescence fraction of all nodes | 48–54% | qsearch is ~half the tree |
+| — of those qnodes, in check (widened to all evasions) | ~16% | — |
+| First-move beta-cutoff rate | 88.8% | move ordering is strong |
+| Cutoff move-index distribution (1st,2nd,3rd,…) | 88.8 / 6.7 / 2.4 / … % | cutoffs concentrate on move 1 |
+| Non-PV node fraction | 99.7% | tree is overwhelmingly zero-window |
+| TT-move availability, pooled | 29% (37% at 2M nodes) | dominated by the non-PV frontier |
+| — at PV nodes / at non-PV nodes | 79–97% / 29–34% | PV spine is well covered; the frontier is not |
+| First-move-cutoff at TT-hit / TT-miss nodes | 91–93% / 86–87% | a missing TT move costs only ~5–7 pp |
+| Hash hit rate | 29–37% | — |
+| Non-PV TT early-cutoff rate | 14–18% | — |
+| **LMR re-search rate** (reduced scouts re-searched at full depth) | **1.6–2.0%** | **reductions almost never overturned** |
+| LMR mean reduction / distribution | 2.1 ply / concentrated at 1–3 ply | tail (≥4 ply) is <7% |
+| PVS re-search rate (PV scouts that beat alpha) | 5.1% | moderate |
+| Aspiration re-search per window | 12–13% | moderate |
+
+### Where effective depth is lost — first-principles reading
+
+Each point is backed only by a Seaborg-measured signal.
+
+1. **Late-move reduction is too timid — the clearest signal.** The re-search rate
+   is 1.6–2.0%: of every reduced scout, ~98.4% fail low exactly as ordering
+   predicted, and only ~1.6% surprise us and are re-verified at full depth. A
+   reduction schedule calibrated to the edge of safety produces a materially
+   higher re-search rate (undoing a reduction is the *price* of reducing hard
+   enough to matter); a rate this low is the signature of reductions that are
+   provably conservative, spending full-ish depth on moves ordering already
+   distrusts. The mean reduction is ~2.1 ply with almost nothing beyond 3. This is
+   depth left unclaimed: the same ordering that yields an 88.8% first-move-cutoff
+   rate is trustworthy enough to reduce the tail harder.
+
+2. **Quiescence is about half of every search.** 48–54% of all nodes are
+   quiescence nodes. Every qnode is effort not spent extending the main-search
+   horizon, so the width of the quiescence tree directly caps effective depth. The
+   in-check widening (≈16% of qnodes expand from captures-only to all evasions) is
+   a smaller sub-lever within it.
+
+Move ordering itself (88.8% first-move cutoffs, cutoffs sharply front-loaded) is
+**not** a primary loss site; PVS (5.1%) and aspiration (12–13%) re-search costs
+are secondary.
+
+**Investigated and ruled out — TT-move availability.** The pooled figure (~1/3 of
+nodes carry a hash move) initially reads as a large ordering weakness. Split by
+node type it is not: PV nodes — the spine that iterative deepening re-walks every
+iteration — are 79–97% covered, and the low pooled number is almost entirely the
+non-PV frontier, which is dominated by first-visit nodes that *no* engine has a
+stored move for. More to the point, the ordering penalty of a missing TT move is
+small: a node that cuts still does so **on its first move 86–87% of the time
+without a TT move, versus 91–93% with one** — a ~5–7 pp gap. Seaborg's non-TT
+ordering (captures by capture-history/SEE, killers, counter-move, quiet history)
+is strong enough that the hash move is a modest refinement, not a load-bearing
+input. This is consistent with the engine's existing IIR result (+28 Elo, TASK-52):
+IIR pays off by *reducing* depth at TT-miss nodes — safe precisely because those
+nodes are already decently ordered and cheap to get slightly wrong — not by
+needing better ordering there. Raising TT-move availability is therefore a
+low-leverage lever and is not recommended; the coupling to selectivity means the
+number would rise on its own if the reduction and quiescence work below lands.
+
+*Single external sanity check (not a basis for any recommendation).* The
+strength-gulf diagnostic's one external reading — a frontier engine showing EBF
+≈2.0 and ~8 plies more at equal time on comparable hardware — is directionally
+consistent with "Seaborg is under-selective" and nothing here contradicts it. It
+is cited only as a reality check; every recommendation below rests solely on
+Seaborg's own instrumented signal.
+
+### Ranked candidate experiments
+
+Each is independently testable by self-play SPRT at a real time control (e.g.
+10 s + 0.1 s, the strength harness's default), with an explicit expected
+mechanism. Ranked by expected leverage × cheapness.
+
+1. **Reduce harder in LMR (raise the base and/or growth of the reduction curve).**
+   *Mechanism:* push the mean reduction above ~2.1 ply so the re-search rate
+   climbs from ~1.7% toward a healthier band; fewer nodes per subtree buys more
+   iterative-deepening depth at equal time. *Signal to watch:* re-search rate and
+   EBF under the same profile; *risk:* if strength drops, the reductions were
+   already near-optimal, which is itself an informative result. Tunables:
+   `LMR_BASE`, `LMR_DIVISOR` in `engine/src/search.rs`.
+2. **Engage LMR earlier (lower `LMR_MOVE_THRESHOLD`, and/or reduce the first few
+   non-PV moves).** *Mechanism:* the same "ordering is trustworthy" argument
+   applied to the front of the tail — start reducing before the current threshold,
+   claiming depth on moves ordering already ranks low. Cheap; pairs naturally with
+   experiment 1 but should be gated separately to attribute the gain.
+3. **Deepen the reduction for low-history / non-improving quiets.** *Mechanism:*
+   the reduction distribution has almost no mass beyond 3 ply; widen the
+   history-and-improving modulation so the least-promising late quiets are cut
+   harder while the trusted prefix keeps its depth. *Signal:* reduction-ply
+   distribution shifts right without the re-search rate exploding.
+4. **Tighten quiescence width (delta margin / SEE threshold).** *Mechanism:*
+   qsearch is ~half the tree; a tighter `QUIESCENCE_DELTA_MARGIN` or SEE cut trims
+   the leaf explosion, converting quiescence nodes into main-search plies. (This
+   tunes the existing, already net-positive quiescence SEE prune — it does **not**
+   reintroduce a main-search SEE prune, which measured net-harmful.)
+5. **Aspiration window sizing (`ASPIRATION_INITIAL_DELTA`).** Lowest expected
+   payoff — a 12–13% per-window re-search rate is already modest — but a cheap
+   parameter sweep.
+
+Raising TT-move availability is deliberately **not** on this list: the node-type /
+TT-hit-miss split above shows the ordering penalty of a missing TT move is only
+~5–7 pp, so it is a low-leverage lever, and IIR already handles the TT-miss
+population.
+
+### Reproducing this profile
+
+```sh
+# Build the instrumented release (off-by-default feature; shipped builds omit it).
+RUSTFLAGS="-C target-cpu=native" cargo build --release --features selstats
+
+python3 tools/diag/selectivity_profile.py \
+    --seaborg target/release/seaborg \
+    --suite tools/diag/bench-positions.epd \
+    --depth 14 --nodes 2000000 --hash 64 --out selectivity_profile.json
+```
+
+Depth-reached-at-time is read separately from the **uninstrumented** release
+(`go movetime 2000`) so instrumentation overhead does not bias the clock. The
+ratios and node counts reproduce on any host; the time figure is host- and
+load-dependent.

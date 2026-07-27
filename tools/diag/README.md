@@ -50,6 +50,13 @@ physics matters for where each is measured:
   search limit; parses Elo and W-L-D. Handicap Stockfish (fewer nodes / less
   time) and sweep to find the even point.
 - `bench-positions.epd` — phase-balanced fixed suite for NPS/EBF.
+- `selectivity_profile.py` — Seaborg's own selectivity profile (no external
+  engine). Drives a `--features selstats` build over the same suite at fixed
+  depth and fixed nodes, parses the `info string selstats {json}` line it emits,
+  and reports the ordering / reduction / re-search / quiescence signals that say
+  where effective depth is spent. The `selstats` feature is off by default and
+  behaviour-transparent; see the "Search selectivity profile" section of
+  `BENCHMARKS.md` for the findings.
 
 ## Reproduce
 
