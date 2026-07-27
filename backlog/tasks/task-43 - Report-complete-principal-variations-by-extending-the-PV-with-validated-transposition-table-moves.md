@@ -3,11 +3,11 @@ id: TASK-43
 title: >-
   Report complete principal variations by extending the PV with validated
   transposition-table moves
-status: In Review
+status: Changes Requested
 assignee:
   - '@claude'
 created_date: '2026-07-18 13:59'
-updated_date: '2026-07-27 10:41'
+updated_date: '2026-07-27 12:41'
 labels:
   - engine
   - search
@@ -86,5 +86,37 @@ Verification:
 - cargo test --workspace: pass (all binaries, no failures)
 - fastchess self-play depth=8, 64 games, 16 three-fold draws: 0 'Illegal PV move', 0 'PV continues after threefold' warnings
 Known failures: none
+---
+
+author: @claude
+created: 2026-07-27 12:41
+---
+Review attempt: 1
+Reviewed branch: task-43-hybrid-pv-tt-extension
+Reviewed implementation: a9ed22d8ba94939978358213695a0fc64109a88e
+Verdict: changes_requested
+
+REV-1-01 [P1] PV extension does not stop at fifty-move-rule draws
+Location: engine/src/search.rs, extend_pv() — the draw stop only tests pos.in_threefold().
+Impact: The TT walk keeps extending the reported PV through positions already drawn by the fifty-move rule, so fastchess emits "PV continues after fifty-move rule" warnings. This is the exact class of defect the implementation already fixes for threefold repetition (the in_threefold stop plus pv_extension_stops_on_a_threefold_against_game_history), left unhandled for the other reversible-draw rule. It is a regression introduced by this change and undercuts the task's stated goal of making PV reporting more legible.
+Reproduction: Build release on base a56acdd and on target a9ed22d; for each run
+  fastchess -engine cmd=<bin> name=A -engine cmd=<bin> name=B -each proto=uci depth=9 \
+    -openings file=tools/strength/openings-v1.epd format=epd order=sequential -rounds 24 -repeat -concurrency 6
+  then grep the log for "PV continues after fifty-move rule".
+  base a56acdd: 0 warnings across 48 games. target a9ed22d: 924 warnings across 48 games. Both builds emit 0 "Illegal PV move" and 0 "PV continues after threefold" warnings.
+Expected: The extension stops at a fifty-move-rule draw exactly as it stops at a threefold — keep the move that first reaches the draw, report nothing after it. chess::Position::fifty_move_rule_reached() already exists; a symmetric check beside the in_threefold() stop resolves it. Add a unit test mirroring the threefold stop test, and re-run fixed-depth self-play to confirm the warnings are gone.
+Note on AC #4: AC #4 as literally worded (zero "Illegal PV move" warnings) is met, but the implementer's own verification bar and notes extended to "PV continues past threefold"; the fifty-move analog is the same reporting defect and is a measured regression against base.
+
+REV-1-02 [P2] Unrelated fastchess artifact committed to the branch and left dirty in the worktree
+Location: config.json (repo root), introduced in handoff commit fee137a; also present as an uncommitted modification in the worktree.
+Impact: config.json is a fastchess config/results file. It is absent at base a56acdd and at the code target a9ed22d, is untracked on master, and is not gitignored. It was committed into the handoff commit (152 lines) and would land on primary at merge, and it leaves the worktree dirty on every self-play run. This violates scope discipline, the "commits after the implementation target contain only handoff metadata" rule, and the clean-worktree requirement.
+Reproduction: git cat-file -t a9ed22d:config.json (absent) vs git show --stat fee137a (adds config.json); git status shows config.json modified in the worktree.
+Expected: Drop config.json from the task branch (it must not be in the handoff commit) and add the fastchess artifact to .gitignore so it neither gets committed nor dirties the worktree. Leave the worktree clean.
+
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (confirmed with a clean CARGO_TARGET_DIR)
+- cargo test --workspace: pass (all suites; new PV tests and reported_principal_variations_are_legal green)
+- fixed-depth self-play A/B (base a56acdd vs target a9ed22d, depth 9, 48 games): base 0 / target 924 "PV continues after fifty-move rule" warnings; 0 "Illegal PV move" on both
 ---
 <!-- COMMENTS:END -->
