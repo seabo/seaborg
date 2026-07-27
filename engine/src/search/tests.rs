@@ -2109,7 +2109,7 @@ fn typed_api_delivers_iterative_deepening_events() {
 /// ply count, and formatting the progress event tripped Score's parity assertion on the UCI
 /// driver thread.
 ///
-/// The mate surfaces at depth seven: the previous iteration returns a non-mate centipawn score,
+/// The mate surfaces at depth eight: the previous iteration returns a non-mate centipawn score,
 /// so an aspiration window centred on it first fails high on the mate and only the widening
 /// re-search recovers it. This exercises that a mate reported out of a re-search still carries
 /// correct distance parity. (The exact iteration the mate first appears at depends on the
@@ -2124,17 +2124,17 @@ fn child_mate_windows_preserve_distance_parity() {
     // whatever network the build embeds.
     let mut engine = SearchEngine::new(1);
     engine.set_network(None);
-    let search = engine.start(position, SearchLimit::Depth(7));
+    let search = engine.start(position, SearchLimit::Depth(8));
     let events = search.events().clone();
     let outcome = search.wait();
     let progress = events
         .try_iter()
         .filter_map(|event| match event {
-            SearchEvent::Progress(progress) if progress.depth == 7 => Some(progress),
+            SearchEvent::Progress(progress) if progress.depth == 8 => Some(progress),
             _ => None,
         })
         .next()
-        .expect("depth-seven progress must be emitted");
+        .expect("depth-eight progress must be emitted");
 
     assert!(matches!(outcome, SearchOutcome::Completed(Some(_))));
     assert_eq!(progress.score, Score::mate(7));
