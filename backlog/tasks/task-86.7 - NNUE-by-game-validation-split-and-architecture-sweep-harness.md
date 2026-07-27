@@ -1,9 +1,11 @@
 ---
 id: TASK-86.7
 title: NNUE by-game validation split and architecture-sweep harness
-status: To Do
-assignee: []
+status: In Review
+assignee:
+  - '@george'
 created_date: '2026-07-27 17:46'
+updated_date: '2026-07-27 18:13'
 labels:
   - nnue
   - tooling
@@ -42,3 +44,52 @@ This task delivers both as reviewable, unit-tested in-repo code and stops at pro
 - [ ] #4 The driver computes the loss/NPS Pareto frontier, discarding every dominated candidate, and emits a machine-readable finalist selection plus the exact fixed-TC SPRT commands (tools/strength/strength_test.py) to run against the gen-002 default; unit tests cover the domination/frontier logic including ties and single-candidate cases
 - [ ] #5 Usage docs explain how to run the screen and the single-thread NPS protocol on the rig, consistent with docs/nnue-architecture-sweep.md and docs/strength-testing.md, including the fastchess prerequisite
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. split.py: deterministic by-shard (by-game) train/val split from corpus.manifest.json. Reconstruct each shard's contiguous record span in the concatenated corpus, hash each shard's run identity (opening_seed+file) with a fixed split seed, rank shards by hash, reserve lowest-hash whole shards for validation until cumulative records first reach val_fraction*total (never emptying train). Returns disjoint int64 train/val index arrays + the reserved shard set. Guards: manifest total_records must equal corpus len; degenerate (<2 shards, frac<=0/>=1, empty side) raises.
+2. Wire train.py: add --split {by-position,by-shard} and --manifest PATH; when by-shard, build the split via split.py and pass precomputed (train_idx,val_idx) into train(); by-position stays the default legacy path. Refactor train() to accept an optional precomputed split.
+3. test_split.py: no shard straddles the boundary (val indices are exactly whole-shard spans; train/val disjoint and cover the corpus), byte-identical split across repeated invocations for one corpus+seed, fraction is met, degenerate cases raise.
+4. sweep.py: one-factor-at-a-time candidate enumeration from a fixed baseline architecture (hidden width, CReLU/SCReLU, output buckets, output-stack depth, dense-tail int8 scales) with all non-architectural config held fixed; dedup by canonical arch key. run_sweep orchestrator with injected train_and_export + measure_nps callables (datagen_campaign pattern) records post-QAT val loss and single-thread NPS with attribution (exported param hash + binary commit). Pareto frontier (drop weakly-dominated), finalist selection spanning the loss/NPS trade, and exact tools/strength/strength_test.py SPRT commands vs the gen-002 default; machine-readable JSON report. Production main() wires real train.py/export.py subprocess + a minimal single-thread UCI NPS reader over the committed bench suite.
+5. test_sweep.py: domination/frontier incl. ties, single-candidate, all-dominated; finalist spanning; one-factor enumeration holds non-arch config fixed; SPRT command shape; end-to-end run_sweep with fake runners.
+6. Docs: extend docs/nnue-architecture-sweep.md usage + tools/trainer/README.md with how to run the screen, the single-thread NPS protocol on the rig, and the fastchess prerequisite; keep consistent with strength-testing.md.
+7. Run python unittest suites + repo-required cargo fmt/clippy/test.
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Delivered the two sweep-enabling tools as reviewable, unit-tested code; the multi-day GPU training and SPRT games remain TASK-86.5.
+
+By-shard split (AC#1, AC#2): tools/trainer/split.py reconstructs each shard's contiguous record span from corpus.manifest.json and reserves whole lowest-hash shards for validation (fixed BLAKE2b hash of run identity folded with --split-seed) until they first cover --val-fraction, never emptying training. Wired into train.py via --split by-shard/--manifest/--split-seed; the trainer rejects a corpus whose record count disagrees with the manifest. test_split.py proves no shard straddles the boundary (val indices are exactly whole-shard spans; train/val disjoint and cover the corpus), byte-identical splits for one corpus+seed, the fraction is met minimally, degenerate cases (single shard, frac<=0/>=1) raise, and the train.py --split by-shard CLI path runs end-to-end on a tiny real corpus.
+
+Sweep driver (AC#3, AC#4): tools/trainer/sweep.py enumerates candidates one factor at a time (width, CReLU/SCReLU, buckets, stack depth, dense-tail int8 quant) from a fixed baseline/v2 reference with all non-architectural config in TrainingConfig held fixed; dedups by canonical arch key. run_sweep records post-QAT validation loss and single-thread NPS with attribution (exported SBNN parameter hash + binary commit), computes the loss/NPS Pareto frontier (weak domination, strict in >=1), selects finalists spanning the trade, and writes sweep.json with the exact strength_test.py commands vs the gen-002 default. Heavy train/export/NPS steps are injected callables (datagen_campaign pattern); the CLI wires real train.py/export.py subprocesses and a single-thread UCI NPS reader over the committed bench suite. test_sweep.py covers domination/frontier incl. ties, single-candidate and all-dominated cases, finalist spanning, one-factor enumeration, the SPRT command shape, param-hash reading, and an end-to-end run with fake runners.
+
+Docs (AC#5): tools/trainer/README.md gains a by-shard split note and an architecture-sweep section (how to run the screen, the single-thread NPS protocol on the rig, the fastchess prerequisite); docs/nnue-architecture-sweep.md gains a 'Running the screen' section tying the methodology to the tools. Consistent with docs/strength-testing.md.
+
+Note: on-rig execution of the screen (real training/NPS/SPRT runs) is not verifiable in review by design — it is the TASK-86.5 campaign that depends on this. Reviewable here: the leak-free split and the frontier/finalist logic (Python unit tests).
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @george
+created: 2026-07-27 18:13
+---
+Implementation handoff
+Branch: task-86.7-nnue-split-and-sweep
+Worktree: /Users/seabo/seaborg-worktrees/task-86.7-nnue-split-and-sweep
+Base: 0bedf79
+Implementation target: 85333e4
+Resolved findings: none
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean)
+- cargo test --workspace: pass (all suites ok, incl. doc-tests)
+- tools/trainer .venv/bin/python -m unittest discover -p 'test_*.py': pass (112 tests, incl. new test_split and test_sweep)
+Known failures: none
+
+Note: Python deps are not committed; the trainer README documents a .venv (numpy>=1.24, torch>=2.0). A local .venv was created only to run the suites (gitignored). torch 2.13 installed cleanly on Python 3.14 for CPU.
+---
+<!-- COMMENTS:END -->
