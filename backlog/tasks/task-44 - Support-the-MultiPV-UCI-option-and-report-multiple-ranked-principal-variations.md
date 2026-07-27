@@ -1,11 +1,11 @@
 ---
 id: TASK-44
 title: Support the MultiPV UCI option and report multiple ranked principal variations
-status: Ready to Merge
+status: Done
 assignee:
   - '@george'
 created_date: '2026-07-18 14:02'
-updated_date: '2026-07-27 17:49'
+updated_date: '2026-07-27 17:55'
 labels:
   - engine
   - search
