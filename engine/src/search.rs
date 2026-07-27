@@ -704,6 +704,10 @@ pub struct CurrentMove {
 pub enum SearchEvent {
     Progress(SearchProgress),
     CurrentMove(CurrentMove),
+    /// A one-shot selectivity profile emitted at the end of a search under the `selstats` feature,
+    /// carrying a compact JSON summary. Absent from the default build.
+    #[cfg(feature = "selstats")]
+    SelStats(String),
 }
 
 /// The final result from a completed iterative-deepening iteration.
@@ -1812,6 +1816,13 @@ impl<'engine> Search<'engine> {
             self.min_search_complete = true;
         }
 
+        #[cfg(feature = "selstats")]
+        if T::is_master() {
+            self.emit(SearchEvent::SelStats(
+                self.trace.sel_json(self.depth_reached),
+            ));
+        }
+
         // A completed iteration can carry an exact score but no move: a root already drawn by
         // repetition scores zero without any move raising alpha, leaving the principal variation
         // empty. Reporting that as-is hands back a null move — a `bestmove 0000` forfeit — even
@@ -1872,10 +1883,15 @@ impl<'engine> Search<'engine> {
         let mut alpha = aspiration_bound(centre, -lo_delta);
         let mut beta = aspiration_bound(centre, hi_delta);
 
+        #[cfg(feature = "selstats")]
+        self.trace.sel_asp_window();
+
         loop {
             let value = self.search::<T, Root>(alpha, beta, Depth::from(d), 0)?;
 
             if value <= alpha {
+                #[cfg(feature = "selstats")]
+                self.trace.sel_asp_fail_low();
                 // Fail low: the true score is at or below alpha. Widen downward and re-search,
                 // keeping beta so a subsequent fail high is still detected. A mate return means
                 // being mated; no centipawn window can bracket it, so open alpha fully at once.
@@ -1886,6 +1902,8 @@ impl<'engine> Search<'engine> {
                     alpha = aspiration_bound(centre, -lo_delta);
                 }
             } else if value >= beta {
+                #[cfg(feature = "selstats")]
+                self.trace.sel_asp_fail_high();
                 // Fail high, the mirror of the above: widen beta upward, snapping to infinity for a
                 // mate score.
                 if value.is_mate() {
@@ -1980,6 +1998,8 @@ impl<'engine> Search<'engine> {
         ply: usize,
     ) -> NodeResult {
         self.trace.visit_node();
+        #[cfg(feature = "selstats")]
+        self.trace.sel_node(Node::pv());
 
         debug_assert!(!Node::root() || ply == 0);
 
@@ -2103,10 +2123,14 @@ impl<'engine> Search<'engine> {
             }) {
                 match entry.bound() {
                     Bound::Exact => {
+                        #[cfg(feature = "selstats")]
+                        self.trace.sel_tt_cutoff();
                         return Some(entry.score());
                     }
                     Bound::Lower => {
                         if entry.score() > beta {
+                            #[cfg(feature = "selstats")]
+                            self.trace.sel_tt_cutoff();
                             return Some(entry.score());
                         } else if entry.score() > alpha {
                             alpha = entry.score()
@@ -2114,6 +2138,8 @@ impl<'engine> Search<'engine> {
                     }
                     Bound::Upper => {
                         if entry.score() < alpha {
+                            #[cfg(feature = "selstats")]
+                            self.trace.sel_tt_cutoff();
                             return Some(entry.score());
                         } else if entry.score() < beta {
                             beta = entry.score()
@@ -2123,6 +2149,8 @@ impl<'engine> Search<'engine> {
             }
 
             if alpha >= beta {
+                #[cfg(feature = "selstats")]
+                self.trace.sel_tt_cutoff();
                 return Some(alpha);
             }
         }
@@ -2534,6 +2562,20 @@ impl<'engine> Search<'engine> {
                     };
                     value = child.neg().inc_mate();
 
+                    #[cfg(feature = "selstats")]
+                    {
+                        // A PV node reaches this scout only for a non-first move (`move_count > 1`);
+                        // a reduced scout is one with `reduction > 0`. `value > alpha` is exactly the
+                        // condition that forces the re-search just below, so the two records stay in
+                        // step with the search's own decision.
+                        if Node::pv() {
+                            self.trace.sel_pv_scout();
+                        }
+                        if reduction > 0 {
+                            self.trace.sel_lmr(reduction as u32, value > alpha);
+                        }
+                    }
+
                     // Late-move-reduction re-search. A reduced scout that raised alpha may have done
                     // so only because it stopped short; the shallow result is not trusted to carry a
                     // move back into contention, so it is confirmed at full depth. A reduced scout
@@ -2562,6 +2604,12 @@ impl<'engine> Search<'engine> {
                 if Node::pv()
                     && (move_count == 1 || (value > alpha && (Node::root() || value < beta)))
                 {
+                    // A re-search only when this is not the first move; the first move's full search
+                    // is the baseline PV search, not a scout being redone.
+                    #[cfg(feature = "selstats")]
+                    if move_count > 1 {
+                        self.trace.sel_pv_research();
+                    }
                     let child = self.search::<T, Pv>(
                         beta.child_bound(),
                         alpha.child_bound(),
@@ -2617,6 +2665,8 @@ impl<'engine> Search<'engine> {
                         } else {
                             debug_assert!(value >= beta);
                             // beta-cutoff; record killer and history
+                            #[cfg(feature = "selstats")]
+                            self.trace.sel_cutoff(Node::pv(), u32::from(move_count));
                             if let Some(slot) = killer_slot {
                                 self.trace.killer_cutoff(slot);
                             }
@@ -2709,6 +2759,15 @@ impl<'engine> Search<'engine> {
                 },
                 &best_move,
             );
+        }
+
+        // Record the node's non-cutoff outcome for the selectivity profile. A fail-high (`best_value
+        // >= beta`) was already counted where it cut; a move-less node is a terminal mate/stalemate,
+        // not a searched interior node, so it is excluded. What remains is a PV node that is exact or
+        // a fail-low, or a non-PV fail-low.
+        #[cfg(feature = "selstats")]
+        if move_count > 0 && best_value < beta {
+            self.trace.sel_node_result(Node::pv(), did_raise_alpha);
         }
 
         // Step 25. Return best value.
@@ -3623,6 +3682,9 @@ impl<'engine> Search<'engine> {
         moves: &BasicMoveList,
         history_draws_on_entry: u64,
     ) -> NodeResult {
+        #[cfg(feature = "selstats")]
+        self.trace.sel_q_incheck();
+
         // In check there is no stand pat, so the caller's alpha reaches here untouched and is still
         // the window this node was given.
         let alpha_on_entry = alpha;
