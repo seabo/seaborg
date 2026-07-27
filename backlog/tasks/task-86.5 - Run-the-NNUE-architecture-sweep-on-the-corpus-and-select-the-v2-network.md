@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@george'
 created_date: '2026-07-25 12:24'
-updated_date: '2026-07-27 21:43'
+updated_date: '2026-07-27 22:47'
 labels:
   - nnue
 dependencies:
@@ -43,3 +43,9 @@ Phase 1 (this session, bounded): run the sweep.py screen on the rig.
 Phase 2 (after approval): run finalist SPRT vs gen-002 (+head-to-heads); record results/attribution in BENCHMARKS.md (AC#2).
 Phase 3: select the net by fixed-TC Elo, write rationale + label-limited vs capacity-limited read, promote (AC#3).
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Paused pending TASK-86.8 (parallelize the packed dataloader). Phase-0 rig setup done and preserved on this branch: rig clone synced to this branch, target-cpu=native release built, by-shard split pre-flighted (92.8M train / 10.3M val, shards 000+018 held out, deterministic), sweep width axis extended to 1024 (14 candidates). Measured per-epoch ~2.5-3.2 min, GPU ~19% (single-thread dataloader is the bottleneck), so the 14-candidate screen is an overnight job at the default budget; parallelizing the loader first (86.8) makes it ~3-4h. Resume here after 86.8 lands: rebuild engine, run tools/trainer/sweep.py on corpus-gen-002.
+<!-- SECTION:NOTES:END -->
