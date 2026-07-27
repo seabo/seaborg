@@ -1,11 +1,11 @@
 ---
 id: TASK-86.2
 title: Add SCReLU activation support end-to-end for NNUE
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-25 12:23'
-updated_date: '2026-07-27 09:56'
+updated_date: '2026-07-27 10:09'
 labels:
   - nnue
 dependencies: []
