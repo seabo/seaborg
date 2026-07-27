@@ -10,6 +10,24 @@ fails the change exactly as a test failure does. Fix warnings at the source.
 Use a local `#[allow]` only where the warned construct is genuinely required,
 with a comment stating why.
 
+## Project philosophy
+
+Seaborg's goal is to build the strongest chess engine we can, on our own terms.
+
+- **Self-play only.** The evaluation is trained solely on Seaborg's own self-play
+  labels. No supervised learning; no external games, positions, or evaluations
+  enter training.
+- **Borrow ideas, not implementations.** Learn techniques freely from Stockfish
+  and other strong engines, but Seaborg is not a port, and no other engine is an
+  oracle or supervision teacher.
+- **Improve from first principles.** Strength gains come from reasoning about and
+  measuring *our own* engine. Comparison against another engine is allowed only
+  as a lightweight sanity check — never the driver of a change or a
+  situation-by-situation gap-closing target.
+- **Our own direction.** We will implement many ideas that strong engines also
+  have, but the aim is our engine, not feature parity — and the closer we get to
+  the frontier, the more we lean into our own approaches.
+
 ## Task lifecycle
 
 Backlog task statuses have these meanings:
