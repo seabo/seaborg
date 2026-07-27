@@ -1,11 +1,11 @@
 ---
 id: TASK-89.1
 title: 'Reduce harder in LMR: raise the reduction base and growth'
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-27 15:08'
-updated_date: '2026-07-27 21:02'
+updated_date: '2026-07-27 21:22'
 labels:
   - search
   - selectivity
