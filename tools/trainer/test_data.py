@@ -20,6 +20,8 @@ from testsupport import (
     mirror,
 )
 
+_BATCH_FIELDS = ("stm_indices", "nstm_indices", "offsets", "score", "wdl", "piece_count")
+
 
 class FeatureIndexTest(unittest.TestCase):
     def test_indices_match_the_contract_formula(self):
@@ -127,6 +129,71 @@ class MirrorInvarianceTest(unittest.TestCase):
         flipped = data.decode(np.stack([encode_record(mirror(pieces), black_to_move=True)]))
         self.assertEqual(sorted(original.stm_indices), sorted(flipped.stm_indices))
         self.assertEqual(sorted(original.nstm_indices), sorted(flipped.nstm_indices))
+
+
+class ParallelLoaderTest(unittest.TestCase):
+    """The parallel :class:`data.BatchLoader` must be a pure speedup: for a given
+    index order and batch size it yields exactly the batches, in exactly the order,
+    that the serial loader does. Turning workers on must never change what the
+    trainer sees, because the architecture sweep compares candidates trained under
+    an otherwise-identical config."""
+
+    def _fixture(self, n: int) -> Path:
+        # Distinct records so the batch stream genuinely varies from batch to batch
+        # (an all-identical corpus would pass even a broken loader): vary a pawn's
+        # square, the side to move, the score, and the outcome by index.
+        records = [
+            encode_record(
+                {4: WHITE_KING, 60: BLACK_KING, 8 + (i % 48): WHITE_PAWN},
+                black_to_move=bool(i % 2),
+                score=(i * 7) % 500 - 250,
+                wdl=i % 3,
+            )
+            for i in range(n)
+        ]
+        handle = tempfile.NamedTemporaryFile(suffix=".bin", delete=False)
+        handle.write(encode_stream(records))
+        handle.close()
+        path = Path(handle.name)
+        self.addCleanup(path.unlink)
+        return path
+
+    def _assert_batches_equal(self, expected, actual):
+        self.assertEqual(len(expected), len(actual))
+        for i, (x, y) in enumerate(zip(expected, actual)):
+            for name in _BATCH_FIELDS:
+                self.assertTrue(
+                    np.array_equal(getattr(x, name), getattr(y, name)),
+                    msg=f"batch {i} field {name} differs between serial and parallel",
+                )
+
+    def test_parallel_matches_serial(self):
+        packed = data.PackedData(self._fixture(97))
+        order = np.random.default_rng(0).permutation(len(packed))
+        batch_size = 10  # 97 records -> nine full batches and a ragged tail
+        serial = list(data.iter_batches(packed, order, batch_size))
+        with data.BatchLoader(packed, num_workers=4) as loader:
+            parallel = list(loader.iter_batches(order, batch_size))
+        self._assert_batches_equal(serial, parallel)
+
+    def test_single_worker_is_the_serial_path(self):
+        packed = data.PackedData(self._fixture(50))
+        order = np.arange(len(packed))
+        serial = list(data.iter_batches(packed, order, 8))
+        with data.BatchLoader(packed, num_workers=1) as loader:
+            single = list(loader.iter_batches(order, 8))
+        self._assert_batches_equal(serial, single)
+
+    def test_order_holds_when_prefetch_cap_drains_mid_stream(self):
+        # Far more batches than the in-flight cap (2 workers -> 6 in flight) forces
+        # the loader to drain and refill repeatedly; the yielded order must stay
+        # exact through every drain.
+        packed = data.PackedData(self._fixture(200))
+        order = np.arange(len(packed))
+        serial = list(data.iter_batches(packed, order, 4))  # 50 batches
+        with data.BatchLoader(packed, num_workers=2) as loader:
+            parallel = list(loader.iter_batches(order, 4))
+        self._assert_batches_equal(serial, parallel)
 
 
 if __name__ == "__main__":

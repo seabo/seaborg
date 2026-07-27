@@ -37,6 +37,9 @@ per-sample ``offsets`` array serves both.
 
 from __future__ import annotations
 
+import collections
+import os
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import numpy as np
@@ -195,3 +198,87 @@ def iter_batches(data: PackedData, indices: np.ndarray, batch_size: int):
     ``indices`` before calling."""
     for start in range(0, len(indices), batch_size):
         yield data.batch(indices[start : start + batch_size])
+
+
+# --------------------------------------------------------------------------- #
+# Parallel decoding
+#
+# Decoding is the training bottleneck (the network is tiny), and a single thread
+# decodes one batch at a time while the other cores sit idle. Because a batch is a
+# pure function of its slice of the shuffled index array, the decode work
+# parallelises trivially: hand each slice to a worker thread and collect the
+# results in submission order. The batch sequence — and therefore the training
+# trajectory — is identical to the serial loader; only the wall time changes. That
+# equivalence is what lets a fixed-config architecture sweep turn on parallel
+# decoding without perturbing the comparison it depends on.
+#
+# Threads, not processes: the decode is almost entirely vectorised NumPy over a
+# shared memory-mapped file, and NumPy releases the GIL for those operations, so
+# threads decode concurrently while sharing the memmap with no per-batch pickling.
+# On this workload processes measured no faster — decode is memory-bandwidth bound
+# and both plateau at the same rate — and threads avoid inter-process copies of the
+# multi-MB decoded batches and the fork-after-CUDA-init hazard a process pool would
+# raise in a training run that has already put a model on the GPU.
+# --------------------------------------------------------------------------- #
+
+
+def default_num_workers() -> int:
+    """A conservative parallel default: enough decode threads to keep the GPU fed
+    on a typical multi-core host without oversubscribing, since decode is
+    memory-bandwidth bound and stops scaling a few threads in. A dedicated training
+    host can tune this against its own ``--benchmark`` figure."""
+    return min(8, os.cpu_count() or 1)
+
+
+class BatchLoader:
+    """Decodes batches over an index order, across worker threads when asked.
+
+    With ``num_workers <= 1`` this is exactly :func:`iter_batches` — the serial
+    reference path, unchanged. With more workers, slices are decoded concurrently
+    and yielded in submission order, so the batch stream is identical to the serial
+    one; the only difference is that the decode is spread across cores. The pool is
+    created once and reused for every epoch and the validation pass, so its startup
+    cost is paid a single time per training run.
+    """
+
+    # In-flight decode tasks are capped at this multiple of the worker count so a
+    # fast pool cannot race ahead of a slower consumer and buffer the whole epoch's
+    # decoded batches (several MB each) in memory. It still keeps every worker busy.
+    _PREFETCH_PER_WORKER = 3
+
+    def __init__(self, data: PackedData, num_workers: int = 1) -> None:
+        self._data = data
+        self._num_workers = max(1, int(num_workers))
+        self._pool = (
+            ThreadPoolExecutor(max_workers=self._num_workers)
+            if self._num_workers > 1
+            else None
+        )
+
+    def iter_batches(self, indices: np.ndarray, batch_size: int):
+        """Yield decoded batches over ``indices`` in order (see the class docstring
+        for the ordering/equivalence guarantee)."""
+        if self._pool is None:
+            yield from iter_batches(self._data, indices, batch_size)
+            return
+        max_in_flight = self._num_workers * self._PREFETCH_PER_WORKER
+        pending: "collections.deque" = collections.deque()
+        decode = self._data.batch
+        for start in range(0, len(indices), batch_size):
+            sl = indices[start : start + batch_size]
+            pending.append(self._pool.submit(decode, sl))
+            if len(pending) >= max_in_flight:
+                yield pending.popleft().result()
+        while pending:
+            yield pending.popleft().result()
+
+    def close(self) -> None:
+        if self._pool is not None:
+            self._pool.shutdown(wait=True)
+            self._pool = None
+
+    def __enter__(self) -> "BatchLoader":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()

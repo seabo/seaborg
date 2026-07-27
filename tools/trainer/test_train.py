@@ -7,11 +7,16 @@ effect on the blended target down on a small hand-built fixture."""
 
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
 
-from train import LambdaSchedule, resolve_lambda, targets
+import data
+from model import NnueConfig
+from testsupport import BLACK_KING, WHITE_KING, WHITE_PAWN, encode_record, encode_stream
+from train import LambdaSchedule, resolve_lambda, targets, train
 
 
 class LambdaScheduleTest(unittest.TestCase):
@@ -87,6 +92,55 @@ class TargetBlendTest(unittest.TestCase):
         early = targets(self.score, self.wdl, self.scale, resolve_lambda(schedule, 0))
         late = targets(self.score, self.wdl, self.scale, resolve_lambda(schedule, 4))
         self.assertFalse(np.allclose(early, late))
+
+
+class ParallelTrainingEquivalenceTest(unittest.TestCase):
+    """Training with decode workers must reach exactly the same place as serial
+    training: identical batches in identical order, plus a fixed seed, means the
+    optimisation trajectory does not depend on the worker count. This is the
+    property that lets the sweep switch on parallel decoding without disturbing the
+    fixed-config comparison between candidates."""
+
+    def _fixture(self, n: int) -> Path:
+        records = [
+            encode_record(
+                {4: WHITE_KING, 60: BLACK_KING, 8 + (i % 48): WHITE_PAWN},
+                black_to_move=bool(i % 2),
+                score=(i * 11) % 600 - 300,
+                wdl=i % 3,
+            )
+            for i in range(n)
+        ]
+        handle = tempfile.NamedTemporaryFile(suffix=".bin", delete=False)
+        handle.write(encode_stream(records))
+        handle.close()
+        path = Path(handle.name)
+        self.addCleanup(path.unlink)
+        return path
+
+    def _train_history(self, packed, num_workers):
+        # A tiny net and a fixed seed so the run is fast and fully determined by the
+        # batch stream; only num_workers varies between the two calls.
+        _, history = train(
+            packed,
+            NnueConfig(hidden=16),
+            epochs=3,
+            batch_size=8,
+            lr=1e-2,
+            lam=0.3,
+            val_fraction=0.2,
+            seed=1234,
+            device="cpu",
+            num_workers=num_workers,
+            log=lambda *_: None,
+        )
+        return [(round(r.train_loss, 10), round(r.val_loss, 10)) for r in history]
+
+    def test_worker_count_does_not_change_the_trajectory(self):
+        packed = data.PackedData(self._fixture(120))
+        serial = self._train_history(packed, num_workers=1)
+        parallel = self._train_history(packed, num_workers=3)
+        self.assertEqual(serial, parallel)
 
 
 if __name__ == "__main__":
