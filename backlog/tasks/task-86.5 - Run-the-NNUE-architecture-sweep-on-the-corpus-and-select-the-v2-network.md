@@ -1,10 +1,11 @@
 ---
 id: TASK-86.5
 title: Run the NNUE architecture sweep on the corpus and select the v2 network
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@george'
 created_date: '2026-07-25 12:24'
-updated_date: '2026-07-27 17:47'
+updated_date: '2026-07-27 21:43'
 labels:
   - nnue
 dependencies:
@@ -29,3 +30,16 @@ Execute the architecture sweep defined by the methodology decision doc (TASK-86.
 - [ ] #2 Frontier finalists are evaluated by fixed-time-control SPRT against the gen-002 default, with results and attribution recorded in BENCHMARKS.md
 - [ ] #3 A single network is selected with a written rationale grounded in fixed-TC Elo, and the report states whether the corpus is label-limited or capacity-limited at that size
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+Phase 1 (this session, bounded): run the sweep.py screen on the rig.
+1. Sync rig seaborg clone to this task branch's tip; build release with target-cpu=native.
+2. Locate corpus-gen-002 + provenance manifest + baseline gen-002 net; assemble a fixed NPS position suite.
+3. Run tools/trainer/sweep.py --device cuda: enumerate one-factor-at-a-time candidates, train+export each on the leak-free by-shard split, record post-QAT val loss + single-thread NPS with attribution, compute loss/NPS Pareto frontier, select finalists, emit strength_test.py commands.
+4. Install fastchess on the rig (prereq for phase 2), verify.
+5. Commit the frontier report + finalist list under the task branch; record coverage limits (AC#1). PAUSE for go/no-go before the multi-day SPRT.
+Phase 2 (after approval): run finalist SPRT vs gen-002 (+head-to-heads); record results/attribution in BENCHMARKS.md (AC#2).
+Phase 3: select the net by fixed-TC Elo, write rationale + label-limited vs capacity-limited read, promote (AC#3).
+<!-- SECTION:PLAN:END -->
