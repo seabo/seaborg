@@ -1,11 +1,11 @@
 ---
 id: TASK-44
 title: Support the MultiPV UCI option and report multiple ranked principal variations
-status: Changes Requested
+status: Ready to Merge
 assignee:
   - '@george'
 created_date: '2026-07-18 14:02'
-updated_date: '2026-07-27 17:32'
+updated_date: '2026-07-27 17:49'
 labels:
   - engine
   - search
@@ -36,13 +36,13 @@ Relevant code: engine/src/info.rs (format_search_event), engine/src/uci.rs (opti
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The engine advertises a MultiPV spin option in its response to "uci" with a default of 1 and a documented maximum, and "setoption name MultiPV value N" is parsed and applied
-- [ ] #2 With MultiPV set to N > 1, each completed search iteration emits N info lines carrying distinct multipv indices 1..N, ordered best first, each with its own score and principal variation
-- [ ] #3 The multipv field reflects the actual line index rather than a constant, and with MultiPV set to 1 the emitted output is unchanged from current behaviour
-- [ ] #4 Every move of every reported line is legal in the position reached after playing the preceding moves of that same line; the reported_principal_variations_are_legal regression test is extended to cover all lines when MultiPV > 1
-- [ ] #5 The move played is the multipv 1 move, and with MultiPV set to 1 the selected best move and search node counts are identical to the pre-change build for the same position and depth
-- [ ] #6 Requesting more lines than there are legal moves reports only the available lines without error, and MultiPV is accepted in a position with a single legal move
-- [ ] #7 FastChess (or cutechess) seaborg self-play at fixed depth produces zero "Illegal PV move" warnings across a multi-game match with MultiPV at its default
+- [x] #1 The engine advertises a MultiPV spin option in its response to "uci" with a default of 1 and a documented maximum, and "setoption name MultiPV value N" is parsed and applied
+- [x] #2 With MultiPV set to N > 1, each completed search iteration emits N info lines carrying distinct multipv indices 1..N, ordered best first, each with its own score and principal variation
+- [x] #3 The multipv field reflects the actual line index rather than a constant, and with MultiPV set to 1 the emitted output is unchanged from current behaviour
+- [x] #4 Every move of every reported line is legal in the position reached after playing the preceding moves of that same line; the reported_principal_variations_are_legal regression test is extended to cover all lines when MultiPV > 1
+- [x] #5 The move played is the multipv 1 move, and with MultiPV set to 1 the selected best move and search node counts are identical to the pre-change build for the same position and depth
+- [x] #6 Requesting more lines than there are legal moves reports only the available lines without error, and MultiPV is accepted in a position with a single legal move
+- [x] #7 FastChess (or cutechess) seaborg self-play at fixed depth produces zero "Illegal PV move" warnings across a multi-game match with MultiPV at its default
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -131,4 +131,38 @@ Verification:
 - cargo test --workspace: pass (all suites 0 failed; 2 pre-existing ignored subprocess probes)
 - Live UCI: setoption name MultiPV value 3 / position startpos / go depth 8 -> 3 ranked lines per iteration, distinct first moves, bestmove == line 1 (e2e4)
 ---
+
+author: @george
+created: 2026-07-27 17:49
+---
+Review attempt: 1 (continued under user authorization to fix and approve)
+Reviewed branch: task-44-multipv
+Reviewed implementation: 7e5704f
+Verdict: approved
+
+REV-1-01 resolved: the two #[allow(clippy::too_many_arguments)] attributes on Search::with_events and Search::build (engine/src/search.rs) now each carry a local comment stating why the wide constructor signature is required rather than bundled into a struct. No other implementation change was made; the fix is comment-only.
+
+The user explicitly authorized the reviewer to apply this simple doc-comment fix directly and approve. No implementation file changed between the code target 7e5704f and this task-only approval commit.
+
+All acceptance criteria proven:
+- AC1: live handshake advertises 'option name MultiPV type spin default 1 min 1 max 256'; setoption parsed/applied (options/uci/engine tests).
+- AC2/AC3: live 'go depth 8' with MultiPV 3 emits three ranked best-first lines per iteration with real 1..N indices, distinct first moves, per-line scores; MultiPV=1 output unchanged (search/info tests).
+- AC4: reported_multipv_lines_are_all_legal covers all lines across the shared pv_legality_positions/assert_pv_is_legal suite, warm and cold.
+- AC5: multipv_one_reports_a_single_line_and_does_not_perturb_the_search asserts identical node counts at MultiPV=1; played move == line 1 == single-line move. Interior (non-root) hot path is unchanged (new logic is Node::root()-gated, dead code for non-root monomorphisations).
+- AC6: multipv_caps_at_the_available_moves covers single-legal-move and 3-move-under-MultiPV-8 positions.
+- AC7: a 24-game fastchess self-play match at depth 6 with default MultiPV produced zero Illegal PV move / Illegal move warnings (exit 0, all games finished).
+
+Verification (at 7e5704f):
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (exit 0)
+- cargo test --workspace: pass (0 failed; 2 pre-existing ignored subprocess probes)
+- Live UCI: setoption name MultiPV value 3 / position startpos / go depth 8 -> 3 ranked lines, distinct first moves, bestmove == line 1 (e2e4)
+- fastchess self-play, 24 games, depth 6, default MultiPV: zero illegal-PV warnings
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+MultiPV UCI option implemented as a master-thread analysis overlay that never changes play: at the default MultiPV=1 the single-line aspiration path is byte-identical to the pre-change build (same nodes, same PV, now with an explicit multipv 1); MultiPV>1 runs one full-window root pass per line, each excluding the moves already reported, capped at the legal root move count, and emits N ranked best-first info lines with real 1..N indices. REV-1-01 resolved by documenting the two too_many_arguments allows on the search constructors. Verified at implementation target 7e5704f: cargo fmt --check, cargo clippy --workspace --all-targets --all-features -D warnings (exit 0), and cargo test --workspace (0 failed; 2 pre-existing ignored subprocess probes) all pass; the seven MultiPV unit tests pass; a live UCI 'go depth 8' with MultiPV 3 emits three distinct ranked lines with bestmove == line 1; and a 24-game fastchess self-play match at depth 6 with default MultiPV produced zero Illegal PV move warnings.
+<!-- SECTION:FINAL_SUMMARY:END -->
