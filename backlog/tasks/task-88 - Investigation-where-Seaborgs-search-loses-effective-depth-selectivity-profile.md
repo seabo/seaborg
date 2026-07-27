@@ -3,11 +3,11 @@ id: TASK-88
 title: >-
   Investigation: where Seaborg's search loses effective depth (selectivity
   profile)
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-27 10:15'
-updated_date: '2026-07-27 12:35'
+updated_date: '2026-07-27 12:50'
 labels:
   - search
   - selectivity
@@ -39,11 +39,11 @@ Deliverable: a report of Seaborg's selectivity profile plus a prioritized backlo
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Seaborg's own selectivity profile is measured on a representative suite at fixed time and fixed nodes and recorded (EBF, depth reached, first-move-cutoff rate, LMR re-search rate and reduction distribution, quiescence fraction, PV/non-PV and aspiration re-search rates), using only Seaborg's instrumentation
-- [ ] #2 The findings identify from first principles where effective depth is lost, each backed by our own measured signal rather than a comparison to another engine
-- [ ] #3 A ranked list of candidate selectivity experiments is produced, each individually testable by self-play SPRT at a real time control, with an expected mechanism stated
-- [ ] #4 Any external-engine comparison is limited to a single lightweight sanity check and is explicitly not the basis for any recommendation
-- [ ] #5 Methodology (suite, time and node budgets, instrumentation, hardware) is recorded for reproducibility, and no permanent engine behaviour change is shipped by this task
+- [x] #1 Seaborg's own selectivity profile is measured on a representative suite at fixed time and fixed nodes and recorded (EBF, depth reached, first-move-cutoff rate, LMR re-search rate and reduction distribution, quiescence fraction, PV/non-PV and aspiration re-search rates), using only Seaborg's instrumentation
+- [x] #2 The findings identify from first principles where effective depth is lost, each backed by our own measured signal rather than a comparison to another engine
+- [x] #3 A ranked list of candidate selectivity experiments is produced, each individually testable by self-play SPRT at a real time control, with an expected mechanism stated
+- [x] #4 Any external-engine comparison is limited to a single lightweight sanity check and is explicitly not the basis for any recommendation
+- [x] #5 Methodology (suite, time and node budgets, instrumentation, hardware) is recorded for reproducibility, and no permanent engine behaviour change is shipped by this task
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -115,4 +115,37 @@ Verification (clean idle run):
 Known failures: none.
 Change since prior target: engine/src/trace.rs + search.rs add node-type x TT-availability and TT-hit/miss cutoff counters; tools/diag/selectivity_profile.py aggregates/derives the split; BENCHMARKS.md rewrites the TT-move-availability finding as 'investigated and ruled out' and removes that experiment from the ranked list. No default-build behaviour change (selstats off => compiles out).
 ---
+
+author: @claude
+created: 2026-07-27 12:50
+---
+Review attempt: 1
+Reviewed branch: task-88-selectivity-profile
+Reviewed implementation: f144f8915d7964053ab7db7e8705d6260989d787
+Verdict: approved
+
+All five acceptance criteria proven by objective evidence; no blocking findings.
+
+AC#1 (profile measured/recorded, Seaborg-only instrumentation): met. BENCHMARKS.md 'Search selectivity profile (self-instrumented)' records EBF, depth-at-time, first-move-cutoff rate, LMR re-search rate + reduction distribution, quiescence fraction, PV/non-PV and aspiration re-search rates, at fixed depth 14 and fixed 2M nodes (instrumented) plus depth-at-2000ms from the uninstrumented release. Reproduced live via tools/diag/selectivity_profile.py on the bench suite (first-move-cutoff 88.8%, LMR re-search 1.68%, mean reduction 2.10 ply, quiescence ~55%).
+AC#2 (first-principles findings, each backed by our own signal): met. LMR under-reduction (1.6-2.0% re-search) and quiescence ~half the tree, each tied to a measured counter; no cross-engine behaviour diffing.
+AC#3 (ranked SPRT-testable experiments with mechanism): met. Five ranked experiments at 10s+0.1s, each with an expected mechanism, signal to watch, and named tunables (LMR_BASE/LMR_DIVISOR/LMR_MOVE_THRESHOLD/QUIESCENCE_DELTA_MARGIN/ASPIRATION_INITIAL_DELTA — all confirmed present in engine/src/search.rs).
+AC#4 (single external sanity check, not a basis): met. Only TASK-82's single EBF/depth reading is cited, explicitly not a basis for any recommendation.
+AC#5 (methodology recorded; no permanent behaviour change): met. Suite/budgets/hardware/driver and reproduce commands recorded. Instrumentation is off-by-default and compiles out; every counter is written after the decision it observes.
+
+Verification (on the implementation target, this machine):
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean CARGO_TARGET_DIR=/tmp/task88-clippy, so the gated selstats code was actually linted)
+- cargo clippy --workspace --all-targets -- -D warnings (default features): pass
+- cargo test --workspace: pass (0 failed; 10 'test result: ok' summaries, doctests included)
+- Behaviour transparency: default and selstats release builds both visit 1,017,413 nodes and return bestmove e2e4 on startpos depth 15 (identical tree). Perft/movegen benchmarks not run: every added statement in the shipped hot path is #[cfg(feature="selstats")]-gated and compiles out, so the default machine code is unchanged.
+- Deliverable end-to-end: tools/diag/selectivity_profile.py drives a --features selstats build over bench-positions.epd and emits the reported profile.
+
+Scope: base 4722f814 -> target f144f891 touches only in-scope files (selstats feature + instrumentation + driver + BENCHMARKS.md + necessary SearchEvent match arms). Commit 203030d after the target touches only the task file (metadata). Worktree clean.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Adds an off-by-default 'selstats' cargo feature that instruments Seaborg's own search (engine/src/trace.rs::SelStats wired at the selectivity decision points in search.rs, emitted once per search as 'info string selstats {json}'), a stdlib driver tools/diag/selectivity_profile.py that pools the counters across the 20-position bench suite, and a self-instrumented selectivity report + ranked first-principles experiment list in BENCHMARKS.md. Findings: LMR is under-reducing (re-search rate 1.6-2.0%, mean ~2.1 ply) and quiescence is ~half the tree; TT-move availability investigated and ruled out via a node-type x TT-hit/miss split. Every counter is written after the decision it observes, so shipped (feature-off) behaviour is unchanged. Verified: cargo fmt --check pass; cargo clippy --workspace --all-targets --all-features -D warnings pass on a clean CARGO_TARGET_DIR (compiles the gated code) and default-feature clippy pass; cargo test --workspace pass (0 failed); behaviour transparency confirmed independently — default and selstats release builds both visit 1,017,413 nodes with identical bestmove e2e4 on startpos depth 15; the driver reproduces the reported profile on the bench suite.
+<!-- SECTION:FINAL_SUMMARY:END -->
