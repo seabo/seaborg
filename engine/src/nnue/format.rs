@@ -142,6 +142,24 @@ pub struct Parameters {
     pub b_out: Vec<i32>,
 }
 
+/// The parameters of a version-2 bucketed network, grouped so [`Network::new_bucketed`]
+/// keeps a readable signature. The feature transformer plus the shared stack shape
+/// (`layer_dims`, `layer_scales`) and the per-bucket layers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BucketedParameters {
+    /// Feature-transformer weights, `INPUT_DIM × H`, feature-major.
+    pub w_ft: Vec<i16>,
+    /// Feature-transformer bias, length `H`.
+    pub b_ft: Vec<i16>,
+    /// Per-layer output dimensions; the last is [`OUTPUT_DIM`].
+    pub layer_dims: Vec<u32>,
+    /// Per-layer int8 weight scales `QB_k`, shared across buckets; the last is the
+    /// network's `qb`.
+    pub layer_scales: Vec<u32>,
+    /// `buckets[b][k]` is bucket `b`'s layer `k`.
+    pub buckets: Vec<Vec<StackLayer>>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Network {
     hidden_width: u32,
@@ -272,11 +290,7 @@ impl Network {
         activation: Activation,
         qa: u16,
         scale: i32,
-        w_ft: Vec<i16>,
-        b_ft: Vec<i16>,
-        layer_dims: Vec<u32>,
-        layer_scales: Vec<u32>,
-        buckets: Vec<Vec<StackLayer>>,
+        params: BucketedParameters,
     ) -> Result<Self, BuildError> {
         if hidden_width == 0 || !hidden_width.is_multiple_of(HIDDEN_WIDTH_MULTIPLE) {
             return Err(BuildError::InvalidHiddenWidth(hidden_width));
@@ -284,6 +298,13 @@ impl Network {
         check_scale("qa", i64::from(qa))?;
         check_scale("scale", i64::from(scale))?;
 
+        let BucketedParameters {
+            w_ft,
+            b_ft,
+            layer_dims,
+            layer_scales,
+            buckets,
+        } = params;
         let h = u64::from(hidden_width);
         check_block_len("w_ft", u64::from(INPUT_DIM) * h, w_ft.len())?;
         check_block_len("b_ft", h, b_ft.len())?;
@@ -1746,11 +1767,13 @@ mod tests {
             Activation::SquaredClippedRelu,
             V2_QA,
             V2_SCALE,
-            w_ft,
-            b_ft,
-            V2_DIMS.to_vec(),
-            V2_SCALES.to_vec(),
-            buckets,
+            BucketedParameters {
+                w_ft,
+                b_ft,
+                layer_dims: V2_DIMS.to_vec(),
+                layer_scales: V2_SCALES.to_vec(),
+                buckets,
+            },
         )
         .expect("the bucketed sample satisfies the build invariant")
     }
@@ -1943,11 +1966,13 @@ mod tests {
                 Activation::ClippedRelu,
                 V2_QA,
                 V2_SCALE,
-                w_ft.clone(),
-                b_ft.clone(),
-                vec![16, 2],
-                vec![64, 64],
-                vec![vec![good_layer(16, 2 * h), good_layer(2, 16)]],
+                BucketedParameters {
+                    w_ft: w_ft.clone(),
+                    b_ft: b_ft.clone(),
+                    layer_dims: vec![16, 2],
+                    layer_scales: vec![64, 64],
+                    buckets: vec![vec![good_layer(16, 2 * h), good_layer(2, 16)]],
+                },
             ),
             Err(BuildError::StackFinalDimMismatch { found: 2, .. })
         ));
@@ -1958,17 +1983,19 @@ mod tests {
                 Activation::ClippedRelu,
                 V2_QA,
                 V2_SCALE,
-                w_ft,
-                b_ft,
-                vec![16, 1],
-                vec![64, 64],
-                vec![vec![
-                    StackLayer {
-                        w: vec![0i8; 16 * (2 * h) - 1],
-                        b: vec![0i32; 16]
-                    },
-                    good_layer(1, 16)
-                ]],
+                BucketedParameters {
+                    w_ft,
+                    b_ft,
+                    layer_dims: vec![16, 1],
+                    layer_scales: vec![64, 64],
+                    buckets: vec![vec![
+                        StackLayer {
+                            w: vec![0i8; 16 * (2 * h) - 1],
+                            b: vec![0i32; 16]
+                        },
+                        good_layer(1, 16)
+                    ]],
+                },
             ),
             Err(BuildError::WeightCountMismatch { block: "stack_layer_w", .. })
         ));
