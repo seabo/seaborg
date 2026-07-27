@@ -1,10 +1,11 @@
 ---
 id: TASK-44
 title: Support the MultiPV UCI option and report multiple ranked principal variations
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@george'
 created_date: '2026-07-18 14:02'
-updated_date: '2026-07-18 14:05'
+updated_date: '2026-07-27 16:51'
 labels:
   - engine
   - search
@@ -43,3 +44,14 @@ Relevant code: engine/src/info.rs (format_search_event), engine/src/uci.rs (opti
 - [ ] #6 Requesting more lines than there are legal moves reports only the available lines without error, and MultiPV is accepted in a position with a single legal move
 - [ ] #7 FastChess (or cutechess) seaborg self-play at fixed depth produces zero "Illegal PV move" warnings across a multi-game match with MultiPV at its default
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Config/plumbing: add MultiPV to EngineConfig (default 1, min 1, max 256, validate); add advertised spin option line; add EngineOpt::MultiPV variant; parse 'setoption name MultiPV value N' in uci.rs. Wire EngineOpt::MultiPV through the driver to SearchEngine::set_multipv.
+2. SearchEngine: hold a multipv count (default 1), setter, pass by value into Search::build via start_inner.
+3. Search struct: add multipv field and a root_excluded move set. In the root move loop, skip an excluded root move before it is counted. Suppress the root TT store and the root_fallback upgrade while exclusions are active (an excluded pass describes a restricted move list, not the position).
+4. iterative_deepening: factor per-depth work into a helper. MultiPV==1 (and terminal roots, and workers) keep the exact current single-line aspiration path so node counts and output are byte-identical. MultiPV>1 (master) runs K full-window root passes, each excluding the moves already reported that iteration, capped at the legal root move count; capture each line's exact score + reported_pv. Line 1 drives bestmove/stability bookkeeping.
+5. Reporting: add a multipv index to SearchProgress; emit one info line per line, indices 1..N best-first, sharing one nodes/nps/time snapshot. format_search_event uses the real index. Update info.rs + ui/wire.rs literals.
+6. Tests: MultiPV=1 output/nodes unchanged; MultiPV>1 emits N distinct best-first lines each legal (extend reported_principal_variations_are_legal); more lines than legal moves and single-legal-move positions are accepted; option round-trips through parse+handshake. Run fmt/clippy/test.
+<!-- SECTION:PLAN:END -->
