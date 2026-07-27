@@ -3315,7 +3315,11 @@ fn reported_progress(
         .try_iter()
         .filter_map(|event| match event {
             SearchEvent::Progress(p) => Some((p.depth, p.score, p.principal_variation)),
+            // Only Progress events carry a PV to assert against, so every other event is dropped.
+            // SelStats exists only under the `selstats` feature, so its arm is gated to match.
             SearchEvent::CurrentMove(_) => None,
+            #[cfg(feature = "selstats")]
+            SearchEvent::SelStats(_) => None,
         })
         .collect()
 }
