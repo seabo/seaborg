@@ -1,11 +1,11 @@
 ---
 id: TASK-86.4
 title: 'NNUE topology v2: output buckets and a deeper output stack (format v3)'
-status: In Review
+status: Changes Requested
 assignee:
   - '@george'
 created_date: '2026-07-25 12:23'
-updated_date: '2026-07-27 13:39'
+updated_date: '2026-07-27 14:04'
 labels:
   - nnue
 dependencies:
@@ -110,5 +110,55 @@ Notes for review:
 - AC#1 format v2 in engine/src/nnue/format.rs (round-trip + 7 rejection rules tested); AC#2 bucket selection + scalar/AVX2 in inference.rs; AC#3 PyTorch model+QAT+quantize_bucketed in tools/trainer; AC#4 golden three-way test in inference.rs.
 - AVX2 legs (dot_i8_avx2 bit-identity; SIMD side of the three-way golden) are x86-gated and skip on this arm64 host, exactly like the pre-existing v1 AVX2 tests; they run on x86 CI. The scalar path is independently cross-checked against a dense reference and the Python exporter.
 - Normative spec: docs/nnue-topology-v2.md (approved contract-first). v1 nets (built-in gen-002) load and evaluate byte-identically.
+---
+
+author: @george
+created: 2026-07-27 14:04
+---
+Review attempt: 1
+Reviewed branch: task-86.4-nnue-topology-v2
+Reviewed implementation: c39451d0eb123602e6474e20bf9a166ad2744153
+Base: 4722f814d5e1be00d4526dd06993ff4ff48d48d5
+Verdict: changes_requested
+
+The implementation is otherwise excellent: all four acceptance criteria are
+covered by tests, and every repository-required check passes on the target
+(fmt clean; clippy clean under a fresh CARGO_TARGET_DIR; cargo test --workspace
+all green; trainer pytest 73 passed). The committed golden v2/v2-screlu fixtures
+regenerate byte-identically from `python export.py --emit-golden`, so the
+Python leg of the three-way differential is genuine, and the v2 golden spans
+buckets {0,2,7} with distinct per-layer scales [64,128,256]. One blocking
+finding on a repository standard prevents approval.
+
+REV-1-01 [P3] Undocumented `#[allow(clippy::too_many_arguments)]` suppressions
+Location: engine/src/nnue/format.rs:582 (read_v1_body), engine/src/nnue/format.rs:641 (read_v2_body), engine/src/nnue/inference.rs:328 (affine_activate)
+Impact: CLAUDE.md (an OVERRIDE instruction) requires a local `#[allow]` "only
+  where the warned construct is genuinely required, with a comment stating why",
+  and the review standard treats an undocumented allowance that silences the
+  strict-clippy gate as a blocking finding. These three allows are new in this
+  diff and carry no justifying comment. The established repo convention is that
+  such allows are documented: both pre-existing occurrences
+  (lichess/src/run.rs:594, :845) carry a comment explaining the argument count
+  is inherent because a closure prevents folding the arguments into a struct.
+  Here the reason is not self-evident — read_v1_body/read_v2_body take plain
+  header/scale/dim data that could plausibly be grouped into a parsed-header
+  struct, and affine_activate's inputs could likewise be grouped — so the diff
+  either needs the justifying comment or the argument-count refactor the comment
+  would rule out. (The neighbouring `#[allow(clippy::large_enum_variant)]` at
+  inference.rs:178 is the correct pattern: it has a thorough justifying comment
+  and is not part of this finding.)
+Reproduction: `git show 4722f81..c39451d -- engine/src/nnue/format.rs engine/src/nnue/inference.rs | grep -B2 'allow(clippy::too_many_arguments)'` shows the three new allows with no preceding rationale comment; contrast `git show 4722f81:lichess/src/run.rs | sed -n '588,595p'`.
+Expected: Each new `#[allow(clippy::too_many_arguments)]` carries a comment
+  stating why the argument count is inherent rather than a missing abstraction,
+  matching the repo's existing convention; or the functions are refactored to
+  group their arguments so the allow is unnecessary.
+
+Verification:
+- cargo fmt --check: pass
+- CARGO_TARGET_DIR=/tmp/task864-clean-clippy cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (clean, no cached results)
+- cargo test --workspace: pass (chess 57, engine 460 +2 ignored, lichess 157, seaborg 6, integration all green; 0 failed)
+- tools/trainer .venv pytest: 73 passed
+- python export.py --emit-golden: golden_v1/screlu_v1/v2/screlu_v2 {.sbnn,.vectors} byte-identical to committed fixtures
+- cargo clippy -p engine --lib --tests --target x86_64-apple-darwin -- -D warnings: pass (AVX2 kernels compile+lint clean)
 ---
 <!-- COMMENTS:END -->
