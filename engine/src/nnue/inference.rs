@@ -325,6 +325,10 @@ fn forward_bucketed_with(
 /// dot over the input, requantize with the layer's scale, and activate back into
 /// `[0, QA]` for the next layer. `output` is `out_dim` long and `input` `in_dim`.
 #[inline]
+// The `dot` parameter is the scalar or AVX2 kernel the caller selected — a
+// function, which like any closure cannot be folded into a plain-data struct
+// alongside the layer's dimensions and buffers. The argument count is inherent
+// here rather than a sign of a missing abstraction.
 #[allow(clippy::too_many_arguments)]
 fn affine_activate(
     input: &[i16],

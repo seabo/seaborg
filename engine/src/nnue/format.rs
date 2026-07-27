@@ -579,6 +579,11 @@ impl Network {
 
     /// Reads the version-1 body: the single-linear-layer blob, after the shared
     /// header validation. All of the reserved region must be zero.
+    // The parameters are the header fields `read` has already parsed and
+    // validated before dispatching to a version body; each is consumed
+    // individually and a struct would only shuttle the same fields through this
+    // one private dispatch, so the count mirrors the header layout rather than a
+    // missing abstraction.
     #[allow(clippy::too_many_arguments)]
     fn read_v1_body<R: Read>(
         input: &mut R,
@@ -638,6 +643,9 @@ impl Network {
     /// `stack_scales` prefix is read and validated first — it determines the rest
     /// of the blob's size — then the feature transformer and per-bucket layers.
     /// Only the header bytes past the two v2 counts must be zero.
+    // Same as `read_v1_body`: these are the header fields `read` has already
+    // parsed and validated, threaded into this private version arm; the count
+    // mirrors the header layout rather than a missing abstraction.
     #[allow(clippy::too_many_arguments)]
     fn read_v2_body<R: Read>(
         input: &mut R,
