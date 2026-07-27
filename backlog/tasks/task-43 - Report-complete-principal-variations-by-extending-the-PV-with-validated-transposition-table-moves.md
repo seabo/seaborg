@@ -3,11 +3,11 @@ id: TASK-43
 title: >-
   Report complete principal variations by extending the PV with validated
   transposition-table moves
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-18 13:59'
-updated_date: '2026-07-27 12:52'
+updated_date: '2026-07-27 13:22'
 labels:
   - engine
   - search
@@ -33,12 +33,12 @@ The verification harness already exists and should be reused rather than rebuilt
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A search that reports a mate score reports the full mating line: the PV length in plies equals the mate distance whenever that line is recoverable from the triangular table plus the transposition table
-- [ ] #2 Every move in every reported PV is still legal in the position reached after playing the preceding PV moves, on mate-scored, beta-cutoff and ordinary lines; the existing reported_principal_variations_are_legal regression test still passes unmodified
-- [ ] #3 PV extension terminates safely and never emits a wrong or unbounded line: a transposition-table miss, a stale or illegal TT move, a repetition, and a length cap each stop the extension, and a test covers each of these stop conditions
-- [ ] #4 FastChess (or cutechess) seaborg self-play at fixed depth produces zero "Illegal PV move" warnings across a multi-game match
-- [ ] #5 The engine selected/played best move is unchanged and search node counts are identical to the pre-change build for the same position and depth, proving PV extension happens only at reporting time and does not perturb the search
-- [ ] #6 A test asserts reported PV length, not just legality, for at least one known forced-mate position and one non-mate position searched to a fixed depth
+- [x] #1 A search that reports a mate score reports the full mating line: the PV length in plies equals the mate distance whenever that line is recoverable from the triangular table plus the transposition table
+- [x] #2 Every move in every reported PV is still legal in the position reached after playing the preceding PV moves, on mate-scored, beta-cutoff and ordinary lines; the existing reported_principal_variations_are_legal regression test still passes unmodified
+- [x] #3 PV extension terminates safely and never emits a wrong or unbounded line: a transposition-table miss, a stale or illegal TT move, a repetition, and a length cap each stop the extension, and a test covers each of these stop conditions
+- [x] #4 FastChess (or cutechess) seaborg self-play at fixed depth produces zero "Illegal PV move" warnings across a multi-game match
+- [x] #5 The engine selected/played best move is unchanged and search node counts are identical to the pre-change build for the same position and depth, proving PV extension happens only at reporting time and does not perturb the search
+- [x] #6 A test asserts reported PV length, not just legality, for at least one known forced-mate position and one non-mate position searched to a fixed depth
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -142,4 +142,39 @@ Verification:
 - fixed-depth self-play (release seaborg vs seaborg, depth 9, 48 games, 36 draws): 0 'PV continues after fifty-move rule', 0 'PV continues after threefold', 0 'Illegal PV move' warnings
 Known failures: none
 ---
+
+author: @claude
+created: 2026-07-27 13:22
+---
+Review attempt: 2
+Reviewed branch: task-43-hybrid-pv-tt-extension
+Reviewed implementation: 11ea6f5 (immutable; base a56acdd; branch tip fa3cddb adds task metadata only)
+Verdict: approved
+
+Both attempt-1 findings resolved:
+- REV-1-01 [P1] fifty-move PV stop: extend_pv() now stops on pos.fifty_move_rule_reached() beside pos.in_threefold(), checked before extending so the move reaching the draw is kept and nothing after it is reported. Independently re-ran the reviewer's self-play (fastchess seaborg vs seaborg, depth 9, 48 games incl. 3-fold and fifty-move draws): 0 'PV continues after fifty-move rule' (was 924 on the prior target), 0 'PV continues after threefold', 0 'Illegal PV move'. New unit test pv_extension_stops_on_a_fifty_move_rule_draw covers it.
+- REV-1-02 [P2] stray config.json: removed from the branch and /config.json added to .gitignore; net base..target diff contains no config.json and the worktree is clean.
+
+Acceptance criteria (all proven):
+- AC1: a_resolved_mate_reports_the_full_mating_line asserts reported PV length == plies-to-mate.
+- AC2: reported_principal_variations_are_legal byte-unchanged (only additions after it) and green over extended PVs.
+- AC3: six stop-condition tests — TT miss, stale/illegal move, in-line cycle, threefold-against-history, fifty-move draw, length cap.
+- AC4: independently verified — fastchess depth 9, 48 games, 0 illegal-PV / threefold-continuation / fifty-move-continuation warnings.
+- AC5: pv_extension_preserves_the_exact_prefix_and_visits_no_nodes proves node count unchanged; reported_pv() runs once per iteration in emit_progress, outside the node loop, cloning+probing only.
+- AC6: mate + non-mate length assertions plus the deterministic cap test.
+
+Verification commands (on target 11ea6f5):
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (fresh compile, no warnings)
+- cargo test --workspace: pass (0 failed)
+- fastchess -engine cmd=seaborg name=A -engine cmd=seaborg name=B -each proto=uci depth=9 -openings file=tools/strength/openings-v1.epd format=epd order=sequential -rounds 24 -repeat -concurrency 6: 0 PV warnings across 48 games
+
+No new #[allow] introduced; comments are self-contained and explain the reasoning (stale-sibling splice, reversible-draw rules), not just task references. Code target 11ea6f5 remains the immutable implementation; this approval commit adds task metadata only.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Reporting-only hybrid PV: reported_pv()/extend_pv() in engine/src/search.rs take the triangular table's exact line as a trusted prefix and extend it by walking TT best moves on a clone of the root, validating each ply (pseudolegal valid_move + enemy_in_check) and stopping on TT miss, stale/illegal move, in-line cycle, threefold or fifty-move draw against full history, or the MAX_PLY cap. Called once per iteration in emit_progress (line 1807), outside the node loop, so the played move and node counts are unchanged. Verified on immutable target 11ea6f5: cargo fmt --check pass; cargo clippy --workspace --all-targets --all-features -- -D warnings clean (fresh compile); cargo test --workspace 0 failed; new PV tests cover full-mate length (AC1/6), non-mate length (AC6), and all six stop conditions (AC3), reported_principal_variations_are_legal unchanged and green (AC2), pv_extension_preserves_the_exact_prefix_and_visits_no_nodes proves the reporting-only invariant (AC5). AC4 independently verified: fastchess seaborg self-play depth 9, 48 games (incl. 3-fold and fifty-move draws) — 0 'Illegal PV move', 0 'PV continues after threefold', 0 'PV continues after fifty-move rule' warnings.
+<!-- SECTION:FINAL_SUMMARY:END -->
