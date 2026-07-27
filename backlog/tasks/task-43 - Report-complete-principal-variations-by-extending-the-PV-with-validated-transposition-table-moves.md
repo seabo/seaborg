@@ -3,10 +3,11 @@ id: TASK-43
 title: >-
   Report complete principal variations by extending the PV with validated
   transposition-table moves
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-18 13:59'
-updated_date: '2026-07-19 13:34'
+updated_date: '2026-07-27 10:05'
 labels:
   - engine
   - search
@@ -39,3 +40,13 @@ The verification harness already exists and should be reused rather than rebuilt
 - [ ] #5 The engine selected/played best move is unchanged and search node counts are identical to the pre-change build for the same position and depth, proving PV extension happens only at reporting time and does not perturb the search
 - [ ] #6 A test asserts reported PV length, not just legality, for at least one known forced-mate position and one non-mate position searched to a fixed depth
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Add a reporting-only hybrid PV assembler in engine/src/search.rs: keep the triangular PVTable line as the trusted exact prefix, then extend past its last ply by walking the transposition table on a clone of the root position.
+2. Validate each extended ply against the real position reached (pseudolegal via valid_move, then reject moves leaving the mover's king in check) and stop on: TT miss, move-less entry, stale/illegal move, a repeated position (cycle), or a MAX_PLY length cap.
+3. Wire emit_progress to the assembler; the walk only probes the TT and mutates a local clone, so played move and node counts are unchanged.
+4. Tests: mate-line length == plies-to-mate (AC1/6), non-mate length assertion (AC6), each stop condition (AC3), and confirm reported_principal_variations_are_legal still passes unmodified (AC2).
+5. Run required checks; verify no illegal-PV warnings in fixed-depth self-play (AC4).
+<!-- SECTION:PLAN:END -->
