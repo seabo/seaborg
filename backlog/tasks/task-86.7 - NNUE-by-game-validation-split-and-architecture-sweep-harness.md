@@ -1,11 +1,11 @@
 ---
 id: TASK-86.7
 title: NNUE by-game validation split and architecture-sweep harness
-status: Ready to Merge
+status: Done
 assignee:
   - '@george'
 created_date: '2026-07-27 17:46'
-updated_date: '2026-07-27 20:30'
+updated_date: '2026-07-27 20:54'
 labels:
   - nnue
   - tooling
