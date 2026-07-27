@@ -3,11 +3,11 @@ id: TASK-43
 title: >-
   Report complete principal variations by extending the PV with validated
   transposition-table moves
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-18 13:59'
-updated_date: '2026-07-27 12:43'
+updated_date: '2026-07-27 12:52'
 labels:
   - engine
   - search
@@ -66,6 +66,12 @@ Tests (engine/src/search/tests.rs):
 - reported_principal_variations_are_legal: unchanged and still passing, now over extended PVs.
 
 AC #4 evidence: fastchess self-play, seaborg vs seaborg, depth 8 fixed, 64 games (16 ending in 3-fold-repetition draws), concurrency 4: zero 'Illegal PV move' warnings and zero 'PV continues after threefold' warnings.
+
+Rework for review attempt 1 (changes requested).
+
+Resolved REV-1-01 [P1] (fifty-move-rule PV stop): extend_pv() in engine/src/search.rs now stops the reported-PV walk on pos.fifty_move_rule_reached() as well as pos.in_threefold(), checked before extending so the move that reaches the draw is kept and nothing after it is reported. New unit test pv_extension_stops_on_a_fifty_move_rule_draw (engine/src/search/tests.rs) sets a root one ply below the fifty-move limit, offers a further TT move from the drawn position, and asserts the walk keeps only the move that reaches the draw. Re-ran the reviewer's fixed-depth self-play (release seaborg vs seaborg, depth 9, 48 games, run in /tmp so no worktree artifact): 0 'PV continues after fifty-move rule' warnings (reviewer measured 924 on the prior target), 0 'PV continues after threefold', 0 'Illegal PV move'; result 6W/6L/36D, Elo 0.00 as expected for identical-engine self-play.
+
+Resolved REV-1-02 [P2] (stray config.json): removed config.json from the branch (git rm) and added /config.json to the repo-root .gitignore so a fastchess run from the root neither commits the results file nor dirties the worktree. Worktree left clean.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -118,5 +124,22 @@ Verification:
 - cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (confirmed with a clean CARGO_TARGET_DIR)
 - cargo test --workspace: pass (all suites; new PV tests and reported_principal_variations_are_legal green)
 - fixed-depth self-play A/B (base a56acdd vs target a9ed22d, depth 9, 48 games): base 0 / target 924 "PV continues after fifty-move rule" warnings; 0 "Illegal PV move" on both
+---
+
+author: @claude
+created: 2026-07-27 12:52
+---
+Implementation handoff (rework, attempt 1)
+Branch: task-43-hybrid-pv-tt-extension
+Worktree: /Users/seabo/seaborg-worktrees/task-43-hybrid-pv-tt-extension
+Base: a56acdde4c2c5d83c2d1e02c5d9be1993a74e9e3
+Implementation target: 11ea6f5
+Resolved findings: REV-1-01, REV-1-02
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass
+- cargo test --workspace: pass (all suites, 0 failed; new pv_extension_stops_on_a_fifty_move_rule_draw green, reported_principal_variations_are_legal unchanged and green)
+- fixed-depth self-play (release seaborg vs seaborg, depth 9, 48 games, 36 draws): 0 'PV continues after fifty-move rule', 0 'PV continues after threefold', 0 'Illegal PV move' warnings
+Known failures: none
 ---
 <!-- COMMENTS:END -->
