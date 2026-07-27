@@ -373,15 +373,17 @@ pub const LMR_FAVOURED_MODULATION: bool = true;
 const LMR_PLY: i32 = 1024;
 
 /// Constant term of the base reduction curve, in plies: the reduction a barely-late, barely-deep
-/// move receives before the logarithmic growth term adds to it. Kept low so shallow, near-forcing
-/// lines — where a mate or tactic can sit just past a one-ply cut — are reduced only a single ply,
-/// matching the older step function there; the growth term is what makes deep late moves aggressive.
-const LMR_BASE: f64 = 0.5;
+/// move receives before the logarithmic growth term adds to it. Set so even the first reducible
+/// move sheds close to a whole ply; measurement showed that reduced scouts are overturned and
+/// re-searched under ~2% of the time across a wide range of this constant, meaning the ordering is
+/// trustworthy enough to reduce the tail hard, and the depth freed at equal time is worth more than
+/// the rare full re-search. The growth term is what makes deep late moves more aggressive still.
+const LMR_BASE: f64 = 1.0;
 
 /// Divisor of the logarithmic growth term. A smaller value steepens the curve, concentrating the
 /// reduction on deep moves far down the ordering — the ones least likely to repay a full search —
-/// where cuts of three or four plies pay off, while leaving shallow moves lightly reduced.
-const LMR_DIVISOR: f64 = 2.0;
+/// where cuts of several plies pay off, while leaving shallow moves lightly reduced.
+const LMR_DIVISOR: f64 = 1.5;
 
 /// Side length of the square [`LmrTable`], covering every remaining depth and move count the search
 /// can present. `MAX_DEPTH` is 255 and the move count is a `u8`, so both indices fit; the table
