@@ -3,11 +3,11 @@ id: TASK-81
 title: >-
   Generate an expanded self-play training corpus with gen-002 for the next NNUE
   architecture
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-24 10:56'
-updated_date: '2026-07-27 09:54'
+updated_date: '2026-07-27 10:00'
 labels:
   - nnue
   - datagen
