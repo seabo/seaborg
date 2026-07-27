@@ -3,9 +3,11 @@ id: TASK-88
 title: >-
   Investigation: where Seaborg's search loses effective depth (selectivity
   profile)
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-27 10:15'
+updated_date: '2026-07-27 10:19'
 labels:
   - search
   - selectivity
