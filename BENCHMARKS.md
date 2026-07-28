@@ -1083,3 +1083,67 @@ nodes per subtree buying more iterative-deepening depth at equal effort.
 Retained: a measured, conclusive gain from the profile's top-ranked lever, and a
 first-principles confirmation that Seaborg's move ordering is good enough to
 reduce the tail harder than the pre-change schedule did.
+
+### Engage LMR earlier — lower the move threshold (informative negative)
+
+Ranked experiment 2. Move ordering searches the most promising moves first, so
+the same "the ordering is trustworthy" argument the reduce-harder experiment
+applied to the *amount* of reduction was applied to *where* it starts: engage
+late-move reduction one move earlier by lowering `LMR_MOVE_THRESHOLD` (the count
+of moves searched at full depth before reduction begins) from 3 in
+`engine/src/search.rs`. The bet was to claim depth on a move the ordering already
+ranks low without the re-search rate exploding.
+
+**Selection sweep (self-instrumented, no games).** Three threshold values were
+profiled with `tools/diag/selectivity_profile.py` (fixed depth 14 and fixed 2M
+nodes, `bench-positions.epd`, 64 MB hash):
+
+| `LMR_MOVE_THRESHOLD` | fixed-depth EBF | fixed-depth re-search | fixed-nodes depth | fixed-nodes EBF |
+| --- | --- | --- | --- | --- |
+| 3 (baseline) | 2.710 | 1.75% | 16.25 | 2.472 |
+| **2 (candidate)** | 2.614 | 1.79% | **17.70** | 2.375 |
+| 1 | 2.614 | 1.99% | 19.15 | 4.066 (noisy) |
+
+The profile said exactly what the mechanism predicted: at threshold 2 the
+re-search rate barely moved (1.75% → 1.79% at fixed depth), so the ordering still
+predicted the reduced scout's fate ~98% of the time, while the extra reduction
+bought +1.45 ply at equal nodes and lowered EBF. Threshold 1 begins reducing the
+very first alternative move (the one most likely to overturn the PV), raised the
+re-search rate more, and produced a noisy, inconsistent fixed-nodes EBF — so the
+moderate step to 2 was taken to the SPRT, the decisive arbiter as in experiment 1.
+
+**Profile movement at the chosen point** (baseline → candidate, matched runs):
+
+| Signal | Fixed depth 14 | Fixed 2M nodes |
+| --- | --- | --- |
+| LMR re-search rate | 1.75% → 1.79% | 2.73% → 2.28% |
+| LMR mean reduction | 2.45 → 2.46 ply | 2.44 → 2.50 ply |
+| Depth reached | 14 (fixed) | 16.25 → 17.70 |
+| Effective branching factor | 2.71 → 2.61 | 2.47 → 2.38 |
+
+**SPRT verdict.**
+
+| Field | Value |
+| --- | --- |
+| Baseline | `git:644153a` (`LMR_MOVE_THRESHOLD=3`), binary sha256 `ae25648d…` |
+| Candidate | `LMR_MOVE_THRESHOLD=2`, binary sha256 `348d8768…` |
+| Result | **FAIL** — SPRT crossed the lower boundary (LLR −2.95, bounds ±2.94) |
+| Elo | **−10.43 ± 6.36** (fastchess pentanomial error) |
+| Games | 5964 (W-D-L 1479-2827-1658), pentanomial 217-793-1124-648-200, 0 crashes, 0 forfeits |
+| Time control | `tc=10+0.1`, 64 MB hash, one worker per engine |
+| SPRT | `elo0=-5, elo1=0, alpha=0.05, beta=0.05` (the no-regression gate) |
+| Runner | fastchess alpha 1.5.0, `openings-v1.epd`, `target-cpu=native` release |
+| Machine | Apple M3 Pro, concurrency 6 |
+
+**Reverted.** `LMR_MOVE_THRESHOLD` stays at 3. This is the informative counterpart
+to experiment 1: reducing *harder* on the tail the ordering already distrusts won
++26 Elo, but starting to reduce *earlier* — pulling the third move (the first
+alternative just past the top two) into the reduced band — lost ~10 Elo even
+though the profile showed more nominal depth per node. The re-search rate is the
+wrong safety signal here: it stays flat because the ordering is usually right, but
+the rare positions where the third move is the one that matters are exactly the
+ones that decide games, and a shallow scout of them is not corrected often enough
+to pay for the depth. The full-depth prefix of three moves is load-bearing, not
+slack; the depth "reclaimed" at equal nodes was measuring a shallower search of
+real alternatives, not free selectivity. A first-principles negative from
+Seaborg's own self-play, with no cross-engine comparison.
