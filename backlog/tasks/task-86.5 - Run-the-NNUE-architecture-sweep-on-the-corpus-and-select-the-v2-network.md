@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@george'
 created_date: '2026-07-25 12:24'
-updated_date: '2026-07-27 23:43'
+updated_date: '2026-07-28 09:16'
 labels:
   - nnue
 dependencies:
@@ -48,4 +48,6 @@ Phase 3: select the net by fixed-TC Elo; write rationale + label-limited vs capa
 
 <!-- SECTION:NOTES:BEGIN -->
 Paused pending TASK-86.8 (parallelize the packed dataloader). Phase-0 rig setup done and preserved on this branch: rig clone synced to this branch, target-cpu=native release built, by-shard split pre-flighted (92.8M train / 10.3M val, shards 000+018 held out, deterministic), sweep width axis extended to 1024 (14 candidates). Measured per-epoch ~2.5-3.2 min, GPU ~19% (single-thread dataloader is the bottleneck), so the 14-candidate screen is an overnight job at the default budget; parallelizing the loader first (86.8) makes it ~3-4h. Resume here after 86.8 lands: rebuild engine, run tools/trainer/sweep.py on corpus-gen-002.
+
+Phase-1 screen launched on the rig (2026-07-28T09:16Z). Engine commit 6793c34 (target-cpu=native release). sweep.py: 14 candidates, --device cuda --num-workers 8 --epochs 30 --batch-size 8192 --lambda 0.3 --scale 400, by-shard split (seed 0), finalists 3, elo0/elo1 0/5 tc=10+0.1. Corpus corpus-gen-002 (103,086,342 records; 92.8M train / 10.3M val, shards 000+018 held out). Out-dir ~/rl/sweep-86.5. Measured parallel per-epoch ~2 min (GPU ~73%); ETA ~15h. Parallel-loader equivalence confirmed on real data (epoch1/2 losses byte-identical to serial). fastchess NOT yet installed (phase-2 prereq; deferred so NPS measurements stay uncontended).
 <!-- SECTION:NOTES:END -->
