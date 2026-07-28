@@ -1,11 +1,11 @@
 ---
 id: TASK-89.2
 title: 'Engage LMR earlier: lower the move threshold'
-status: Ready to Merge
+status: Done
 assignee:
   - '@george'
 created_date: '2026-07-27 15:08'
-updated_date: '2026-07-28 09:26'
+updated_date: '2026-07-28 09:39'
 labels:
   - search
   - selectivity
