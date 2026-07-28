@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@george'
 created_date: '2026-07-25 12:24'
-updated_date: '2026-07-28 09:16'
+updated_date: '2026-07-28 17:46'
 labels:
   - nnue
 dependencies:
@@ -50,4 +50,11 @@ Phase 3: select the net by fixed-TC Elo; write rationale + label-limited vs capa
 Paused pending TASK-86.8 (parallelize the packed dataloader). Phase-0 rig setup done and preserved on this branch: rig clone synced to this branch, target-cpu=native release built, by-shard split pre-flighted (92.8M train / 10.3M val, shards 000+018 held out, deterministic), sweep width axis extended to 1024 (14 candidates). Measured per-epoch ~2.5-3.2 min, GPU ~19% (single-thread dataloader is the bottleneck), so the 14-candidate screen is an overnight job at the default budget; parallelizing the loader first (86.8) makes it ~3-4h. Resume here after 86.8 lands: rebuild engine, run tools/trainer/sweep.py on corpus-gen-002.
 
 Phase-1 screen launched on the rig (2026-07-28T09:16Z). Engine commit 6793c34 (target-cpu=native release). sweep.py: 14 candidates, --device cuda --num-workers 8 --epochs 30 --batch-size 8192 --lambda 0.3 --scale 400, by-shard split (seed 0), finalists 3, elo0/elo1 0/5 tc=10+0.1. Corpus corpus-gen-002 (103,086,342 records; 92.8M train / 10.3M val, shards 000+018 held out). Out-dir ~/rl/sweep-86.5. Measured parallel per-epoch ~2 min (GPU ~73%); ETA ~15h. Parallel-loader equivalence confirmed on real data (epoch1/2 losses byte-identical to serial). fastchess NOT yet installed (phase-2 prereq; deferred so NPS measurements stay uncontended).
+
+Bucket-track finding + planned diagnostic (analysis, not yet run):
+The loss/NPS screen fairly ranks the width axis (all widths share the mature feature-transformer + single-output path) but CANNOT fairly rank the v2 features (output stack / buckets / SCReLU). Two own-engine biases:
+- Loss: bucketed nets are undertrained under the fixed 30-epoch budget. Per-epoch val-loss tails (from the .pt history) show buckets still descending at epoch 30 (b4 drop_last5 0.51%, b1 0.28%) while every non-bucketed net is flat (<=0.13%). Buckets split data per piece-count bin so each bucket's stack converges slower; fixed LR (1e-2) is tuned for the shallow baseline. The 'buckets' axis also conflates buckets with the output-stack addition (b1 = stack+1bucket already regresses vs baseline).
+- NPS: the output layer runs fresh per node (FT is incremental), so output-path overhead is amplified. Measured per-node cost jump far exceeds the added arithmetic: +0.57 us/node for a tiny output stack (b1), +1.75 us/node for SCReLU (256 square-and-clamps). AVX2 kernels exist but the fresh-per-node output path (per-layer dequant/activation/bucket-select, slower dot_screlu) over-charges the v2 features. So the cost axis reflects inference immaturity, not architectural cost.
+
+Decision (user): quantify the training half now. After the screen completes, retrain the stack-only (buckets__b1) and canonical bucketed (buckets__b8) candidates from scratch at 2-3x epochs (target 90) on the same by-shard split, same config; compare converged val loss to the baseline (already flat-tailed at 30, so a fair converged reference). If the gap collapses, the screen's bucket loss was a convergence artifact; if it barely moves, buckets are genuinely weaker on this corpus. The inference-cost half (profile/optimize the output-stack + SCReLU path) is deferred to a possible follow-up. This bucket-convergence result feeds AC#1 coverage limits and the AC#3 label-vs-capacity read; the raw screen must NOT be read as 'buckets dominated'.
 <!-- SECTION:NOTES:END -->
