@@ -1147,3 +1147,39 @@ to pay for the depth. The full-depth prefix of three moves is load-bearing, not
 slack; the depth "reclaimed" at equal nodes was measuring a shallower search of
 real alternatives, not free selectivity. A first-principles negative from
 Seaborg's own self-play, with no cross-engine comparison.
+
+### Deepen LMR for low-history / non-improving quiets (informative negative)
+
+Ranked experiment 3. Widened the history-and-improving reduction modulation so the
+least-promising late quiets are cut harder while the trusted prefix keeps its
+depth: the symmetric history clamp was split into an asymmetric pair (deepen the
+distrusted side to 3 ply, hold the trusted ease side at 2 ply), the history slope
+was steepened (`LMR_HISTORY_DIVISOR` 40 → 30), and the non-improving penalty was
+raised to 1.5 ply (`LMR_IMPROVING_PENALTY`), all in `engine/src/search.rs`.
+
+**Selection sweep (selstats, no games).** Four points (baseline plus three
+widths) were profiled with `tools/diag/selectivity_profile.py` (fixed depth 14
+and fixed 2M nodes, `bench-positions.epd`, 64 MB hash). The chosen point moved the
+intended signal exactly as the mechanism predicted: at fixed depth the
+reduction-ply mass beyond 3 ply rose 15.8% → 17.2% and the mean reduction 2.45 →
+2.51 ply, while the re-search rate stayed flat (1.75% → 1.73%); at fixed 2M nodes
+the depth reached rose 16.25 → 16.90 ply. The distribution shifted right without
+the re-search rate exploding.
+
+**SPRT verdict (stopped early).** Self-play at `tc=10+0.1`
+(`elo0=-5, elo1=0, alpha=beta=0.05`, 64 MB, concurrency 6), baseline `git:e35205c`
+vs candidate `git:308c85b`, was halted by decision at 2319 games without crossing
+a boundary: W-D-L 545-1202-572, score 49.42%, **Elo ≈ −4.0 ± 7.2** (trinomial).
+No improvement — leaning slightly negative, the confidence interval still spanning
+zero.
+
+**Not retained; not merged.** This is the same shape as experiment 2: the profile
+moved the right signal (distribution shifted right, re-search flat, more nominal
+depth per node) but it did not convert to strength. The extra depth "reclaimed" on
+the distrusted tail at equal nodes is a shallower search of real alternatives, not
+free selectivity — reducing the tail *harder* was already banked by experiment 1
+(+26 Elo), and pushing the low-history / non-improving modulation wider past that
+buys nothing measurable. Closed as an informative negative rather than run to a
+boundary: with the change ~neutral, the remaining games would only sharpen a
+verdict that is already "no gain." LMR is worth revisiting once other parts of the
+engine give the reduction schedule more to exploit.
