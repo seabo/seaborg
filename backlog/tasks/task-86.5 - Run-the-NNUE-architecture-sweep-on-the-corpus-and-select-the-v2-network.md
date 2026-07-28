@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@george'
 created_date: '2026-07-25 12:24'
-updated_date: '2026-07-28 22:24'
+updated_date: '2026-07-28 23:05'
 labels:
   - nnue
 dependencies:
@@ -65,4 +65,6 @@ Gap = (val-train)/val at epoch 30:
 
 Why width saturates early (~h512) vs much wider frontier nets -- own-data reasoning, not a methodology bug:
 The usable width is capped by our corpus, and our own train/val gap shows it: h1024 has the LOWEST train loss (0.010264) of all candidates but a 7.4% train/val gap with flat val loss (h512->h1024 val 0.011119->0.011085). Width IS extracting more from the training labels; it just stops generalizing -- a data/label ceiling, not underfitting or a broken FT (h1024 optimizes fine, unlike the buckets). Root causes: (1) corpus is ~93M train positions vs the tens of billions large frontier nets train on -> far fewer examples per parameter; (2) labels are gen-002 self-play search scores at the TASK-81 datagen node budget (early generation, modest sharpness) -> limited information ceiling; (3) single-generation fixed corpus vs many-generation data/net co-evolution. Implication (label-limited branch, AC#3): width is not fundamentally capped at ~512 -- it is capped by our data. Unlocking wider nets requires more/sharper labels (datagen node budget + more positions + more generations), then a width re-sweep; it is a datagen/RL investment, not a width knob in this sweep. For THIS decision: pick the best width on the current corpus (~h512 pending SPRT); treat 'go wider' as gated on a label investment.
+
+Screen COMPLETE (14/14, SWEEP_EXIT=0). Frontier (4): width h128, baseline h256, width h512, width h1024 -- the entire frontier is the plain-width CReLU axis. Auto-finalists (3): h1024/h256/h128 -- the even-NPS sampling SKIPPED h512 (the loss/NPS knee); h512 should be added to the phase-2 SPRT set. gen-002 (default.sbnn) NPS reference = 716,725 (next to the retrained h256 baseline, same architecture). Full screen table + reading committed to artifacts/sweep-86.5/RESULTS.md and sweep.json. Follow-ups launched: baseline/b1/b8 retrain at 60 epochs (bucket-undertraining quantification); gen-002-vs-new-corpus loss decomposition at fixed h256 still to build. Phase-2 SPRT (multi-day) awaiting go/no-go.
 <!-- SECTION:NOTES:END -->

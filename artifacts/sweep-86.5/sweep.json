@@ -1,0 +1,294 @@
+{
+  "schema_version": 1,
+  "training": {
+    "corpus": "/home/seabo/rl/corpus-gen-002/corpus.bin",
+    "manifest": "/home/seabo/rl/corpus-gen-002/corpus.manifest.json",
+    "epochs": 30,
+    "batch_size": 8192,
+    "lr": 0.01,
+    "lam": 0.3,
+    "scale": 400,
+    "qb": 64,
+    "val_fraction": 0.1,
+    "split_seed": 0,
+    "seed": 0,
+    "generation": 0,
+    "device": "cuda",
+    "num_workers": 8
+  },
+  "binary_commit": null,
+  "candidates": [
+    {
+      "name": "baseline__h256_crelu_v1",
+      "factor": "baseline",
+      "architecture": {
+        "hidden": 256,
+        "activation": "crelu",
+        "num_buckets": 1,
+        "output_stack": null,
+        "output_stack_scales": null
+      },
+      "val_loss": 0.011288,
+      "nps": 750458.6563307493,
+      "param_hash": "0xc10b9a80afbbdfb8",
+      "net_path": "/home/seabo/rl/sweep-86.5/nets/baseline__h256_crelu_v1.sbnn",
+      "binary_commit": null
+    },
+    {
+      "name": "width__h128_crelu_v1",
+      "factor": "width",
+      "architecture": {
+        "hidden": 128,
+        "activation": "crelu",
+        "num_buckets": 1,
+        "output_stack": null,
+        "output_stack_scales": null
+      },
+      "val_loss": 0.011633,
+      "nps": 886366.9501822601,
+      "param_hash": "0x5396dd66ec34c287",
+      "net_path": "/home/seabo/rl/sweep-86.5/nets/width__h128_crelu_v1.sbnn",
+      "binary_commit": null
+    },
+    {
+      "name": "width__h384_crelu_v1",
+      "factor": "width",
+      "architecture": {
+        "hidden": 384,
+        "activation": "crelu",
+        "num_buckets": 1,
+        "output_stack": null,
+        "output_stack_scales": null
+      },
+      "val_loss": 0.011183,
+      "nps": 674175.0108837613,
+      "param_hash": "0x51074c6fbb893295",
+      "net_path": "/home/seabo/rl/sweep-86.5/nets/width__h384_crelu_v1.sbnn",
+      "binary_commit": null
+    },
+    {
+      "name": "width__h512_crelu_v1",
+      "factor": "width",
+      "architecture": {
+        "hidden": 512,
+        "activation": "crelu",
+        "num_buckets": 1,
+        "output_stack": null,
+        "output_stack_scales": null
+      },
+      "val_loss": 0.011119,
+      "nps": 676860.5419695969,
+      "param_hash": "0xf10fc5f6d3422836",
+      "net_path": "/home/seabo/rl/sweep-86.5/nets/width__h512_crelu_v1.sbnn",
+      "binary_commit": null
+    },
+    {
+      "name": "width__h1024_crelu_v1",
+      "factor": "width",
+      "architecture": {
+        "hidden": 1024,
+        "activation": "crelu",
+        "num_buckets": 1,
+        "output_stack": null,
+        "output_stack_scales": null
+      },
+      "val_loss": 0.011085,
+      "nps": 434298.6753765197,
+      "param_hash": "0x31390dd764b5a672",
+      "net_path": "/home/seabo/rl/sweep-86.5/nets/width__h1024_crelu_v1.sbnn",
+      "binary_commit": null
+    },
+    {
+      "name": "activation__h256_screlu_v1",
+      "factor": "activation",
+      "architecture": {
+        "hidden": 256,
+        "activation": "screlu",
+        "num_buckets": 1,
+        "output_stack": null,
+        "output_stack_scales": null
+      },
+      "val_loss": 0.011393,
+      "nps": 324879.1306276336,
+      "param_hash": "0x71b941b4124b2c69",
+      "net_path": "/home/seabo/rl/sweep-86.5/nets/activation__h256_screlu_v1.sbnn",
+      "binary_commit": null
+    },
+    {
+      "name": "buckets__h256_crelu_stack16-32_b1",
+      "factor": "buckets",
+      "architecture": {
+        "hidden": 256,
+        "activation": "crelu",
+        "num_buckets": 1,
+        "output_stack": [
+          16,
+          32
+        ],
+        "output_stack_scales": null
+      },
+      "val_loss": 0.011429,
+      "nps": 524798.4644913628,
+      "param_hash": "0x8243f63ade5c0f33",
+      "net_path": "/home/seabo/rl/sweep-86.5/nets/buckets__h256_crelu_stack16-32_b1.sbnn",
+      "binary_commit": null
+    },
+    {
+      "name": "buckets__h256_crelu_stack16-32_b4",
+      "factor": "buckets",
+      "architecture": {
+        "hidden": 256,
+        "activation": "crelu",
+        "num_buckets": 4,
+        "output_stack": [
+          16,
+          32
+        ],
+        "output_stack_scales": null
+      },
+      "val_loss": 0.011833,
+      "nps": 495865.6591099916,
+      "param_hash": "0xcf854365de23d4d9",
+      "net_path": "/home/seabo/rl/sweep-86.5/nets/buckets__h256_crelu_stack16-32_b4.sbnn",
+      "binary_commit": null
+    },
+    {
+      "name": "buckets__h256_crelu_stack16-32_b8",
+      "factor": "buckets",
+      "architecture": {
+        "hidden": 256,
+        "activation": "crelu",
+        "num_buckets": 8,
+        "output_stack": [
+          16,
+          32
+        ],
+        "output_stack_scales": null
+      },
+      "val_loss": 0.011944,
+      "nps": 487852.24676313787,
+      "param_hash": "0x79851b006ac4a264",
+      "net_path": "/home/seabo/rl/sweep-86.5/nets/buckets__h256_crelu_stack16-32_b8.sbnn",
+      "binary_commit": null
+    },
+    {
+      "name": "buckets__h256_crelu_stack16-32_b16",
+      "factor": "buckets",
+      "architecture": {
+        "hidden": 256,
+        "activation": "crelu",
+        "num_buckets": 16,
+        "output_stack": [
+          16,
+          32
+        ],
+        "output_stack_scales": null
+      },
+      "val_loss": 0.012118,
+      "nps": 527961.2614849764,
+      "param_hash": "0x1e79b8cf0a69c279",
+      "net_path": "/home/seabo/rl/sweep-86.5/nets/buckets__h256_crelu_stack16-32_b16.sbnn",
+      "binary_commit": null
+    },
+    {
+      "name": "stack-depth__h256_crelu_stack16_b8",
+      "factor": "stack-depth",
+      "architecture": {
+        "hidden": 256,
+        "activation": "crelu",
+        "num_buckets": 8,
+        "output_stack": [
+          16
+        ],
+        "output_stack_scales": null
+      },
+      "val_loss": 0.011631,
+      "nps": 621063.0059838084,
+      "param_hash": "0xdb2576a3210dde20",
+      "net_path": "/home/seabo/rl/sweep-86.5/nets/stack-depth__h256_crelu_stack16_b8.sbnn",
+      "binary_commit": null
+    },
+    {
+      "name": "stack-depth__h256_crelu_stack16-32-32_b8",
+      "factor": "stack-depth",
+      "architecture": {
+        "hidden": 256,
+        "activation": "crelu",
+        "num_buckets": 8,
+        "output_stack": [
+          16,
+          32,
+          32
+        ],
+        "output_stack_scales": null
+      },
+      "val_loss": 0.012322,
+      "nps": 505252.78770163475,
+      "param_hash": "0x69a0caa0c9171ad3",
+      "net_path": "/home/seabo/rl/sweep-86.5/nets/stack-depth__h256_crelu_stack16-32-32_b8.sbnn",
+      "binary_commit": null
+    },
+    {
+      "name": "tail-quant__h256_crelu_stack16-32_b8_qb32-32-64",
+      "factor": "tail-quant",
+      "architecture": {
+        "hidden": 256,
+        "activation": "crelu",
+        "num_buckets": 8,
+        "output_stack": [
+          16,
+          32
+        ],
+        "output_stack_scales": [
+          32,
+          32,
+          64
+        ]
+      },
+      "val_loss": 0.012644,
+      "nps": 494325.6711139688,
+      "param_hash": "0xca163b0e28e34c6b",
+      "net_path": "/home/seabo/rl/sweep-86.5/nets/tail-quant__h256_crelu_stack16-32_b8_qb32-32-64.sbnn",
+      "binary_commit": null
+    },
+    {
+      "name": "tail-quant__h256_crelu_stack16-32_b8_qb128-128-64",
+      "factor": "tail-quant",
+      "architecture": {
+        "hidden": 256,
+        "activation": "crelu",
+        "num_buckets": 8,
+        "output_stack": [
+          16,
+          32
+        ],
+        "output_stack_scales": [
+          128,
+          128,
+          64
+        ]
+      },
+      "val_loss": 0.011715,
+      "nps": 544367.0411985018,
+      "param_hash": "0x7592f32134b09f3c",
+      "net_path": "/home/seabo/rl/sweep-86.5/nets/tail-quant__h256_crelu_stack16-32_b8_qb128-128-64.sbnn",
+      "binary_commit": null
+    }
+  ],
+  "frontier": [
+    "baseline__h256_crelu_v1",
+    "width__h128_crelu_v1",
+    "width__h512_crelu_v1",
+    "width__h1024_crelu_v1"
+  ],
+  "finalists": [
+    "width__h1024_crelu_v1",
+    "baseline__h256_crelu_v1",
+    "width__h128_crelu_v1"
+  ],
+  "sprt_commands": [
+    "python3 tools/strength/strength_test.py --baseline /home/seabo/rl/seaborg/target/release/seaborg --baseline-id 'gen-002 (engine/nets/default.sbnn; built-in default)' --candidate /home/seabo/rl/seaborg/target/release/seaborg --candidate-id width__h1024_crelu_v1:param_hash=0x31390dd764b5a672 --build-settings 'RUSTFLAGS=-C target-cpu=native cargo build --release -p seaborg; rustc 1.97.1; commit 6793c34' --baseline-option EvalFile=/home/seabo/rl/seaborg/engine/nets/default.sbnn --candidate-option EvalFile=/home/seabo/rl/sweep-86.5/nets/width__h1024_crelu_v1.sbnn --limit tc=10+0.1 --elo0 0.0 --elo1 5.0 --max-games 40000 --output /home/seabo/rl/sweep-86.5/sprt/width__h1024_crelu_v1",
+    "python3 tools/strength/strength_test.py --baseline /home/seabo/rl/seaborg/target/release/seaborg --baseline-id 'gen-002 (engine/nets/default.sbnn; built-in default)' --candidate /home/seabo/rl/seaborg/target/release/seaborg --candidate-id baseline__h256_crelu_v1:param_hash=0xc10b9a80afbbdfb8 --build-settings 'RUSTFLAGS=-C target-cpu=native cargo build --release -p seaborg; rustc 1.97.1; commit 6793c34' --baseline-option EvalFile=/home/seabo/rl/seaborg/engine/nets/default.sbnn --candidate-option EvalFile=/home/seabo/rl/sweep-86.5/nets/baseline__h256_crelu_v1.sbnn --limit tc=10+0.1 --elo0 0.0 --elo1 5.0 --max-games 40000 --output /home/seabo/rl/sweep-86.5/sprt/baseline__h256_crelu_v1",
+    "python3 tools/strength/strength_test.py --baseline /home/seabo/rl/seaborg/target/release/seaborg --baseline-id 'gen-002 (engine/nets/default.sbnn; built-in default)' --candidate /home/seabo/rl/seaborg/target/release/seaborg --candidate-id width__h128_crelu_v1:param_hash=0x5396dd66ec34c287 --build-settings 'RUSTFLAGS=-C target-cpu=native cargo build --release -p seaborg; rustc 1.97.1; commit 6793c34' --baseline-option EvalFile=/home/seabo/rl/seaborg/engine/nets/default.sbnn --candidate-option EvalFile=/home/seabo/rl/sweep-86.5/nets/width__h128_crelu_v1.sbnn --limit tc=10+0.1 --elo0 0.0 --elo1 5.0 --max-games 40000 --output /home/seabo/rl/sweep-86.5/sprt/width__h128_crelu_v1"
+  ]
+}
