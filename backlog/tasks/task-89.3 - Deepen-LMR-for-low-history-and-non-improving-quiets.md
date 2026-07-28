@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@george'
 created_date: '2026-07-27 15:08'
-updated_date: '2026-07-28 17:22'
+updated_date: '2026-07-28 22:27'
 labels:
   - search
   - selectivity
@@ -61,4 +61,10 @@ Two fixed-depth surfacing tests deferred one iteration by the harder reduction (
 Required checks: fmt PASS, clippy -D warnings PASS, cargo test --workspace PASS (0 failures).
 
 SPRT launched tc=10+0.1, elo0=-5 elo1=0, alpha=beta=0.05, 64MB, concurrency 6. baseline git:e35205c (sha 5a110dc1) vs candidate git:308c85b (sha de766c9b). Pending.
+
+OUTCOME: informative negative, closed early by human decision (not worth further effort now).
+
+SPRT tc=10+0.1 (elo0=-5, elo1=0, alpha=beta=0.05), baseline git:e35205c vs candidate git:308c85b, stopped at 2319 games (no boundary crossed): cand W-D-L 545-1202-572, score 49.42%, Elo ~= -4.0 +/- 7.2 (trinomial). No improvement; leaning slightly negative, CI spans zero.
+
+Same shape as TASK-89.2: the selstats profile moved the intended signal (reduction-ply distribution shifted right, re-search rate stayed flat ~1.7%, +0.65 ply at fixed nodes) but it did not convert to strength. The distrusted-tail depth reclaimed at equal nodes is a shallower search of real alternatives, not free selectivity. Not pursued further; the change is not merged (master unchanged). LMR can be revisited once the rest of the engine gives it more raw material.
 <!-- SECTION:NOTES:END -->
