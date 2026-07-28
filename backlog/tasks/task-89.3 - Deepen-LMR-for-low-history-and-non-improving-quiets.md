@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@george'
 created_date: '2026-07-27 15:08'
-updated_date: '2026-07-28 17:00'
+updated_date: '2026-07-28 17:22'
 labels:
   - search
   - selectivity
@@ -42,3 +42,23 @@ TASK-88 experiment 3. Mechanism: the reduction distribution has almost no mass b
 4. Run self-play SPRT at tc=10+0.1 (elo0=-5, elo1=0) baseline (branch base) vs candidate via tools/strength/strength_test.py.
 5. Record profile movement + SPRT verdict in BENCHMARKS.md. Retain on non-negative SPRT; on a negative, revert the constants to baseline and record the informative negative (AC#3). No cross-engine diffing (AC#4).
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implementation complete (commit 308c85b). Widened LMR history+improving modulation: asymmetric history clamp (LMR_HISTORY_DEEPEN_MAX 3*PLY vs LMR_HISTORY_EASE_MAX 2*PLY), LMR_HISTORY_DIVISOR 40->30, LMR_IMPROVING_PENALTY 1.5*PLY.
+
+Selection sweep (selstats, bench-positions.epd, 64MB; base=master-equiv refactor, candidates A/B/C):
+ fixed-depth 14 reduction-ply mass >=4ply | mean red | re-search | EBF | fixed-2M-nodes depth
+ base 15.8% | 2.45 | 1.75% | 2.710 | 16.25
+ A    16.5% | 2.49 | 1.66% | 2.701 | 16.40
+ B    17.2% | 2.51 | 1.73% | 2.669 | 16.90  <- selected (moderate; best fixed-node depth)
+ C    17.6% | 2.55 | 1.67% | 2.650 | 16.45
+Distribution shifts right monotonically with re-search flat (mechanism confirmed, AC#2). B chosen as the moderate point with the largest fixed-node depth gain (+0.65 ply). SPRT is the arbiter.
+
+Two fixed-depth surfacing tests deferred one iteration by the harder reduction (objective best move unchanged, verified with the hand-crafted eval the tests use): KP-race win surfaces depth 25 not 24 (best a1b2/a1b1 already at d24); mate-parity mate at depth 9 not 8 (best b5e2 stable). Bumped both depths + comments.
+
+Required checks: fmt PASS, clippy -D warnings PASS, cargo test --workspace PASS (0 failures).
+
+SPRT launched tc=10+0.1, elo0=-5 elo1=0, alpha=beta=0.05, 64MB, concurrency 6. baseline git:e35205c (sha 5a110dc1) vs candidate git:308c85b (sha de766c9b). Pending.
+<!-- SECTION:NOTES:END -->
