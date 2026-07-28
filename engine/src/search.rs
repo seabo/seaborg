@@ -357,9 +357,9 @@ pub const LMR_LOG_TABLE: bool = true;
 /// less, a poorly scored one more. Flip to `false` and rebuild to isolate this refinement's effect.
 pub const LMR_HISTORY_MODULATION: bool = true;
 
-/// Whether a side to move that is not improving takes one extra ply of reduction while an improving
-/// side keeps the base. When the position is deteriorating the moves matter less and can be trimmed
-/// harder. Flip to `false` and rebuild to isolate this refinement's effect.
+/// Whether a side to move that is not improving takes an extra [`LMR_IMPROVING_PENALTY`] of reduction
+/// while an improving side keeps the base. When the position is deteriorating the moves matter less
+/// and can be trimmed harder. Flip to `false` and rebuild to isolate this refinement's effect.
 pub const LMR_IMPROVING_MODULATION: bool = true;
 
 /// Whether PV nodes and killer/counter moves are reduced less than a plain late quiet at the same
@@ -392,11 +392,29 @@ const MAX_LMR_DIM: usize = 256;
 
 /// Divisor mapping a move's accumulated quiet history to a reduction adjustment in milliplies. A
 /// smaller value lets history move the reduction more per unit of evidence; the result is clamped by
-/// [`LMR_HISTORY_MAX_ADJUST`] so one extreme table entry cannot swamp the base reduction.
-const LMR_HISTORY_DIVISOR: i32 = 40;
+/// [`LMR_HISTORY_DEEPEN_MAX`] / [`LMR_HISTORY_EASE_MAX`] so one extreme table entry cannot swamp the
+/// base reduction.
+const LMR_HISTORY_DIVISOR: i32 = 30;
 
-/// Largest reduction adjustment, in milliplies, the history term may contribute in either direction.
-const LMR_HISTORY_MAX_ADJUST: i32 = 2 * LMR_PLY;
+/// Largest reduction *increase*, in milliplies, a distrusted (low-history) quiet may take. This is
+/// the deepen side of the history modulation: the least-promising late quiets — those the ordering
+/// tables score most negatively — are the safest to trim, since a scout that fails low as predicted
+/// is never re-searched. The bound is deliberately wider than the ease side below so the reduction
+/// distribution carries mass past the base+improving cut on its distrusted tail without letting a
+/// single extreme table entry dominate.
+const LMR_HISTORY_DEEPEN_MAX: i32 = 3 * LMR_PLY;
+
+/// Largest reduction *decrease*, in milliplies, a trusted (high-history) quiet may take. This is the
+/// ease side of the history modulation and is held narrower than the deepen bound: easing a
+/// well-scored late move further would spend nodes re-deepening moves the ordering already trusts,
+/// so the trusted prefix keeps the depth the base curve already grants it rather than gaining more.
+const LMR_HISTORY_EASE_MAX: i32 = 2 * LMR_PLY;
+
+/// Extra reduction, in milliplies, applied when the side to move is *not* improving. A deteriorating
+/// position's late quiets matter less, so they are trimmed harder than the same move in an improving
+/// line. Set above one whole ply so the non-improving tail joins the low-history tail in carrying the
+/// reduction distribution's right-hand mass.
+const LMR_IMPROVING_PENALTY: i32 = LMR_PLY + LMR_PLY / 2;
 
 /// Base late-move reduction, in milliplies, as a function of remaining depth and move count.
 ///
@@ -454,7 +472,10 @@ static LMR_TABLE: LazyLock<LmrTable> = LazyLock::new(LmrTable::new);
 ///
 /// * a move with strong accumulated quiet history (main plus continuation) is reduced less and a
 ///   poorly scored one more, since history is the engine's own estimate of how promising the move is;
-/// * a non-improving side to move takes an extra ply, trimming harder in a deteriorating position;
+///   the distrusted side is deepened further than the trusted side is eased, so the tail is cut
+///   harder while the trusted prefix only keeps the depth the base curve already grants it;
+/// * a non-improving side to move takes an extra fixed penalty, trimming harder in a deteriorating
+///   position;
 /// * PV nodes and killer/counter moves are reduced less, keeping the trusted ordering prefix deep.
 ///
 /// The growth is bounded and the result never negative: a modulation sum below zero means "do not
@@ -488,13 +509,17 @@ fn lmr_reduction(
     };
 
     if LMR_HISTORY_MODULATION {
+        // Distrusted (negative-history) moves may be deepened further than trusted ones are eased:
+        // the deepen bound is wider than the ease bound. `adjust` is subtracted, so a negative
+        // history (deepen) is bounded below by `-LMR_HISTORY_DEEPEN_MAX` and a positive history
+        // (ease) above by `LMR_HISTORY_EASE_MAX`.
         let adjust = (quiet_history / LMR_HISTORY_DIVISOR)
-            .clamp(-LMR_HISTORY_MAX_ADJUST, LMR_HISTORY_MAX_ADJUST);
+            .clamp(-LMR_HISTORY_DEEPEN_MAX, LMR_HISTORY_EASE_MAX);
         r -= adjust;
     }
 
     if LMR_IMPROVING_MODULATION && !improving {
-        r += LMR_PLY;
+        r += LMR_IMPROVING_PENALTY;
     }
 
     if LMR_FAVOURED_MODULATION {

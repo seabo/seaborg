@@ -50,12 +50,15 @@ fn suite() -> Vec<(&'static str, u8, Score, Score, &'static [&'static str])> {
             // win away (a2a4 draws, a2a3 loses), so the king must step aside
             // first. The two king moves are equally optimal, and which one the
             // search returns depends on quiet-move ordering, so both are
-            // accepted. Searched two plies deeper than the winning move needs:
-            // the transposition-miss depth reduction speculatively shortens the
-            // long, move-less king-and-pawn lines, so the winning score surfaces
-            // at depth 24 rather than 22. The best move is found well before
-            // either — only the promotion's full value lags behind the horizon.
-            ("8/6pk/8/8/8/8/P7/K7 w - - 0 1", 24, Score::cp(450), Score::cp(920), &["a1b1", "a1b2"]),
+            // accepted. Searched several plies deeper than the winning move
+            // needs: reductions speculatively shorten the long, move-less
+            // king-and-pawn lines, so the promotion's full value lags behind the
+            // horizon and the winning score only surfaces at depth 25 (the
+            // correct king step-aside is already played a ply earlier, at depth
+            // 24, while the score still reads near zero). The deeper the tail is
+            // reduced, the later the score surfaces, so this depth tracks the
+            // reduction schedule rather than the position.
+            ("8/6pk/8/8/8/8/P7/K7 w - - 0 1", 25, Score::cp(450), Score::cp(920), &["a1b1", "a1b2"]),
     ]
 }
 
@@ -2110,11 +2113,13 @@ fn typed_api_delivers_iterative_deepening_events() {
 /// ply count, and formatting the progress event tripped Score's parity assertion on the UCI
 /// driver thread.
 ///
-/// The mate surfaces at depth eight: the previous iteration returns a non-mate centipawn score,
+/// The mate surfaces at depth nine: the previous iteration returns a non-mate centipawn score,
 /// so an aspiration window centred on it first fails high on the mate and only the widening
 /// re-search recovers it. This exercises that a mate reported out of a re-search still carries
 /// correct distance parity. (The exact iteration the mate first appears at depends on the
-/// reduction schedule and is not itself the subject; only the parity plumbing is.)
+/// reduction schedule and is not itself the subject; only the parity plumbing is. A harder
+/// late-move reduction schedule defers the mate by an iteration, so this depth tracks the
+/// reduction knobs rather than the position.)
 #[test]
 fn child_mate_windows_preserve_distance_parity() {
     chess::init::init_globals();
@@ -2125,17 +2130,17 @@ fn child_mate_windows_preserve_distance_parity() {
     // whatever network the build embeds.
     let mut engine = SearchEngine::new(1);
     engine.set_network(None);
-    let search = engine.start(position, SearchLimit::Depth(8));
+    let search = engine.start(position, SearchLimit::Depth(9));
     let events = search.events().clone();
     let outcome = search.wait();
     let progress = events
         .try_iter()
         .filter_map(|event| match event {
-            SearchEvent::Progress(progress) if progress.depth == 8 => Some(progress),
+            SearchEvent::Progress(progress) if progress.depth == 9 => Some(progress),
             _ => None,
         })
         .next()
-        .expect("depth-eight progress must be emitted");
+        .expect("depth-nine progress must be emitted");
 
     assert!(matches!(outcome, SearchOutcome::Completed(Some(_))));
     assert_eq!(progress.score, Score::mate(7));
