@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@george'
 created_date: '2026-07-25 12:24'
-updated_date: '2026-07-28 17:58'
+updated_date: '2026-07-28 22:24'
 labels:
   - nnue
 dependencies:
@@ -62,4 +62,7 @@ Train/val-gap diagnosis (from checkpoint histories; no data-scaling in the sweep
 Gap = (val-train)/val at epoch 30:
 - Width axis is LABEL/DATA-limited at the top: gap climbs monotonically 1.19% (h128), 2.62% (h256), 3.89% (h384), 4.84% (h512), 7.41% (h1024). Val loss flattens h512->h1024 (0.011119->0.011085) while train keeps dropping (0.010581->0.010264): more width fits train labels but not val. => beyond ~h512 the lever is better labels (datagen node budget), not more params. This is the AC#3 capacity-vs-label read for width.
 - Buckets are NOT data-limited -- they UNDERFIT. b8 train loss (0.011633) is higher than baseline train (0.010992), with a normal gap (b1 2.40%, b4 1.86%, b8 2.60%, <= baseline 2.62%). A data-limited net would show low train + large gap; instead both losses are elevated => epoch/optimization-limited (slow per-bucket convergence under the fixed budget). This validates the higher-epoch/LR retrain as the correct diagnostic for buckets; data volume is not the bucket bottleneck.
+
+Why width saturates early (~h512) vs much wider frontier nets -- own-data reasoning, not a methodology bug:
+The usable width is capped by our corpus, and our own train/val gap shows it: h1024 has the LOWEST train loss (0.010264) of all candidates but a 7.4% train/val gap with flat val loss (h512->h1024 val 0.011119->0.011085). Width IS extracting more from the training labels; it just stops generalizing -- a data/label ceiling, not underfitting or a broken FT (h1024 optimizes fine, unlike the buckets). Root causes: (1) corpus is ~93M train positions vs the tens of billions large frontier nets train on -> far fewer examples per parameter; (2) labels are gen-002 self-play search scores at the TASK-81 datagen node budget (early generation, modest sharpness) -> limited information ceiling; (3) single-generation fixed corpus vs many-generation data/net co-evolution. Implication (label-limited branch, AC#3): width is not fundamentally capped at ~512 -- it is capped by our data. Unlocking wider nets requires more/sharper labels (datagen node budget + more positions + more generations), then a width re-sweep; it is a datagen/RL investment, not a width knob in this sweep. For THIS decision: pick the best width on the current corpus (~h512 pending SPRT); treat 'go wider' as gated on a label investment.
 <!-- SECTION:NOTES:END -->
