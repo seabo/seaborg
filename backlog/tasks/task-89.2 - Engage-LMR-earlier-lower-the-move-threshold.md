@@ -1,11 +1,11 @@
 ---
 id: TASK-89.2
 title: 'Engage LMR earlier: lower the move threshold'
-status: In Review
+status: Ready to Merge
 assignee:
   - '@george'
 created_date: '2026-07-27 15:08'
-updated_date: '2026-07-28 09:20'
+updated_date: '2026-07-28 09:26'
 labels:
   - search
   - selectivity
@@ -27,10 +27,10 @@ TASK-88 experiment 2. Mechanism: apply the 'ordering is trustworthy' argument to
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 LMR_MOVE_THRESHOLD (and/or first-few-non-PV reduction) is swept; chosen value measured by self-play SPRT at 10s+0.1s vs the pre-change baseline and recorded in BENCHMARKS.md
-- [ ] #2 The selstats profile confirms depth reached / EBF improved without the re-search rate exploding
-- [ ] #3 Retained only on a non-negative SPRT; a negative is recorded and reverted
-- [ ] #4 Conclusion derived from Seaborg's own signals and self-play; no cross-engine behaviour diffing
+- [x] #1 LMR_MOVE_THRESHOLD (and/or first-few-non-PV reduction) is swept; chosen value measured by self-play SPRT at 10s+0.1s vs the pre-change baseline and recorded in BENCHMARKS.md
+- [x] #2 The selstats profile confirms depth reached / EBF improved without the re-search rate exploding
+- [x] #3 Retained only on a non-negative SPRT; a negative is recorded and reverted
+- [x] #4 Conclusion derived from Seaborg's own signals and self-play; no cross-engine behaviour diffing
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -84,4 +84,36 @@ Verification:
 - selstats sweep + self-play SPRT: candidate threshold=2 FAIL, -10.43 +/- 6.36 Elo, 5964 games (see BENCHMARKS.md 'Engage LMR earlier')
 Known failures: none
 ---
+
+author: @george
+created: 2026-07-28 09:26
+---
+Review attempt: 1
+Reviewed branch: task-89.2-lmr-earlier-threshold
+Reviewed implementation: 2468e0742f34bcb9bd45b215442f537ea0cd30f4
+Base: 644153ae4d9413cc0243e1211f0ce7641719979a
+Verdict: approved
+
+Outcome is an informative NEGATIVE handled exactly as AC#3 requires: measured, recorded in BENCHMARKS.md, and reverted. The base->target diff touches only BENCHMARKS.md and the task file — engine code is byte-identical (LMR_MOVE_THRESHOLD stays 3, engine/src/search.rs:322), so no hot-path benchmark is warranted.
+
+Acceptance criteria:
+- AC#1 PASS — threshold swept 3/2/1 via selectivity_profile.py; candidate 2 measured by self-play SPRT at tc=10+0.1 vs base 644153a and recorded in BENCHMARKS.md.
+- AC#2 PASS — selstats profile shows depth/EBF improved (fixed-nodes 16.25->17.70 ply, EBF 2.472->2.375) with re-search rate flat (1.75%->1.79%); recorded.
+- AC#3 PASS — SPRT negative (-10.43 +/- 6.36 Elo, FAIL); recorded and constant reverted to 3 (zero engine-code diff).
+- AC#4 PASS — conclusion from Seaborg's own selstats + self-play only; no cross-engine diffing.
+
+Internal consistency checked: WDL 1479-2827-1658 = 5964 games; pentanomial 217-793-1124-648-200 = 2982 pairs = 5964. Target is an ancestor of the branch tip; the only later commit is handoff metadata.
+
+Verification on target 2468e07:
+- cargo fmt --check: PASS
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: PASS (no warnings)
+- cargo test --workspace: PASS (476 + 157 + 57 + suites; 0 failed)
+- git diff base..target: BENCHMARKS.md + task file only; no engine code change
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Informative negative, reverted — no engine code lands. Swept LMR_MOVE_THRESHOLD (3->2->1) with tools/diag/selectivity_profile.py; candidate 2 showed the predicted profile movement (fixed-nodes +1.45 ply, EBF 2.472->2.375, re-search rate flat 1.75%->1.79%) but a self-play SPRT at tc=10+0.1 (elo0=-5,elo1=0) FAILED: -10.43 +/- 6.36 Elo over 5964 games (WDL 1479-2827-1658; LLR -2.95 crossed -2.94). Threshold reverted to 3 (base=target for engine code); only BENCHMARKS.md 'Engage LMR earlier' write-up added. The full-depth prefix of three moves is load-bearing; re-search rate is the wrong safety signal. Verified fmt/clippy/test all green on target 2468e07.
+<!-- SECTION:FINAL_SUMMARY:END -->
