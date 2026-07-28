@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@george'
 created_date: '2026-07-25 12:24'
-updated_date: '2026-07-28 17:46'
+updated_date: '2026-07-28 17:58'
 labels:
   - nnue
 dependencies:
@@ -57,4 +57,9 @@ The loss/NPS screen fairly ranks the width axis (all widths share the mature fea
 - NPS: the output layer runs fresh per node (FT is incremental), so output-path overhead is amplified. Measured per-node cost jump far exceeds the added arithmetic: +0.57 us/node for a tiny output stack (b1), +1.75 us/node for SCReLU (256 square-and-clamps). AVX2 kernels exist but the fresh-per-node output path (per-layer dequant/activation/bucket-select, slower dot_screlu) over-charges the v2 features. So the cost axis reflects inference immaturity, not architectural cost.
 
 Decision (user): quantify the training half now. After the screen completes, retrain the stack-only (buckets__b1) and canonical bucketed (buckets__b8) candidates from scratch at 2-3x epochs (target 90) on the same by-shard split, same config; compare converged val loss to the baseline (already flat-tailed at 30, so a fair converged reference). If the gap collapses, the screen's bucket loss was a convergence artifact; if it barely moves, buckets are genuinely weaker on this corpus. The inference-cost half (profile/optimize the output-stack + SCReLU path) is deferred to a possible follow-up. This bucket-convergence result feeds AC#1 coverage limits and the AC#3 label-vs-capacity read; the raw screen must NOT be read as 'buckets dominated'.
+
+Train/val-gap diagnosis (from checkpoint histories; no data-scaling in the sweep -- every candidate gets the full 92.8M-record train set and 30 epochs regardless of parameter count).
+Gap = (val-train)/val at epoch 30:
+- Width axis is LABEL/DATA-limited at the top: gap climbs monotonically 1.19% (h128), 2.62% (h256), 3.89% (h384), 4.84% (h512), 7.41% (h1024). Val loss flattens h512->h1024 (0.011119->0.011085) while train keeps dropping (0.010581->0.010264): more width fits train labels but not val. => beyond ~h512 the lever is better labels (datagen node budget), not more params. This is the AC#3 capacity-vs-label read for width.
+- Buckets are NOT data-limited -- they UNDERFIT. b8 train loss (0.011633) is higher than baseline train (0.010992), with a normal gap (b1 2.40%, b4 1.86%, b8 2.60%, <= baseline 2.62%). A data-limited net would show low train + large gap; instead both losses are elevated => epoch/optimization-limited (slow per-bucket convergence under the fixed budget). This validates the higher-epoch/LR retrain as the correct diagnostic for buckets; data volume is not the bucket bottleneck.
 <!-- SECTION:NOTES:END -->
