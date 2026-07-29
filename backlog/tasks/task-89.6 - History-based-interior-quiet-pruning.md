@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-29 13:47'
-updated_date: '2026-07-29 14:39'
+updated_date: '2026-07-29 15:01'
 labels:
   - search
   - selectivity
@@ -50,3 +50,11 @@ This task adds history-based quiet pruning to the main-search interior and measu
 5. Run required checks (fmt, clippy -D warnings, test --workspace).
 6. Measure: selstats before/after (interior quiet width + geomean EBF) and a self-play SPRT at tc=10+0.1 vs the pre-change baseline; record in BENCHMARKS.md. Retain only on a non-negative SPRT; otherwise record and revert.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Selstats (AC#2) confirms the mechanism decisively. Fixed depth 14 on bench-positions.epd: interior quiet width more than halves — rem-depth 4 6.15->2.76, 5 9.51->4.14, 6 10.53->4.45, 7 7.13->3.31, 8 7.44->3.29 quiets/node; depth>8 unchanged (prune is capped at 8). Geomean EBF 2.710->2.619; nodes-to-depth-14 drop 20.36M->14.59M (-28%). Fixed 2M nodes/pos: mean depth reached 16.25->17.30 (+1.05 ply), EBF 2.472->2.370. LMR re-search rate rises 1.75%->2.68% (fixed depth) / 2.73%->3.58% (fixed nodes); non-PV fail-low 23.0%->26.3% / 25.1%->28.5% — both modest, not pathological.
+
+Regression surfaced by gives_correct_answers: the depth-24 KPvKP pawn-race (8/6pk/8/8/8/8/P7/K7 w) drops from a won >=+450 to cp 0. The candidate plays a2a4 and reads the win as a draw; interior history pruning removes the winning quiet king step-aside (a1b1/a1b2) and follow-up king maneuvers deep in the sparse endgame, where history is unreliable and maneuvering moves carry negative scores. Baseline finds a1b1 (+475 at depth 20, climbing past +1300). This is a genuine soundness cost of the flat hist<0 interior rule, and the reason AC#3 gates retention on a non-negative SPRT. Running the SPRT now as the arbiter.
+<!-- SECTION:NOTES:END -->

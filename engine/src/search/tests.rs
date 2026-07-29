@@ -1858,6 +1858,86 @@ fn late_move_pruning_keeps_a_decisive_capture() {
     }
 }
 
+/// History-based quiet pruning must earn its keep: on a quiet middlegame position with a long tail
+/// of quiet moves at every node, the pruned search visits strictly fewer nodes than the same search
+/// with the prune switched off. The prune keys on a negative combined history, and history malus is
+/// only handed out at cutoff nodes, so the search must produce real beta cutoffs to charge the tail
+/// moves that the prune then drops — a full-window alpha-beta search does, while a uniformly
+/// failing-low window would leave every history at a neutral zero and nothing to prune. The search
+/// is driven directly at one fixed depth rather than through iterative deepening so the two runs
+/// differ only in the prune, not in aspiration-window or table-seeding feedback across iterations.
+/// The depth sits inside `HISTORY_PRUNING_MAX_DEPTH` so the interior prune engages; the prune acts
+/// only at the non-PV nodes below the PV root.
+#[test]
+fn history_pruning_reduces_the_search_tree() {
+    chess::init::init_globals();
+
+    let position =
+        Position::from_fen("2kr3r/ppp1qpb1/5n2/5b1p/6p1/1PNP4/PBPQBPPP/2KRR3 b - - 6 14").unwrap();
+    let flag = AtomicBool::new(false);
+    let depth = 8;
+
+    let nodes = |history_pruning_disabled: bool| {
+        let table = Table::new(16);
+        let mut search = Search::new(position.clone(), &flag, None, &table);
+        search.pvt = PVTable::new(depth as u8);
+        search.history_pruning_disabled = history_pruning_disabled;
+        search
+            .search::<Master, Pv>(Score::INF_N, Score::INF_P, depth, 0)
+            .unwrap();
+        search.trace.all_nodes_visited()
+    };
+
+    let pruned_nodes = nodes(false);
+    let plain_nodes = nodes(true);
+
+    assert!(
+        pruned_nodes < plain_nodes,
+        "history pruning did not reduce the tree: {pruned_nodes} pruned vs {plain_nodes} plain"
+    );
+}
+
+/// History pruning discards only distrusted quiet moves; a decisive move that wins material is a
+/// winning capture, ordered far ahead of the quiet phase, so the prune must never reach it. From a
+/// position whose best move is a free capture of the enemy queen, the pruned search still finds that
+/// capture with a winning score, exactly as the search with the prune switched off does. (The two
+/// searches' exact scores need not coincide — pruning the quiet tail deeper in the tree can shift the
+/// backed-up value by a hair — so the decisive move and a winning margin are what is asserted, not a
+/// bit-identical score.) This guards against the prune reaching into the ordering prefix and dropping
+/// a move that actually decides the position.
+#[test]
+fn history_pruning_keeps_a_decisive_capture() {
+    chess::init::init_globals();
+
+    // White to move: the rook on d1 wins the undefended black queen on d4 outright.
+    let position = Position::from_fen("4k3/8/8/8/3q4/8/8/3RK3 w - - 0 1").unwrap();
+    let flag = AtomicBool::new(false);
+    let depth = 5;
+
+    let pruned_table = Table::new(16);
+    let mut pruned = Search::new(position.clone(), &flag, None, &pruned_table);
+    let pruned_result = pruned.run::<Master>(depth).unwrap();
+
+    let plain_table = Table::new(16);
+    let mut plain = Search::new(position, &flag, None, &plain_table);
+    plain.history_pruning_disabled = true;
+    let plain_result = plain.run::<Master>(depth).unwrap();
+
+    for (label, result) in [("pruned", &pruned_result), ("plain", &plain_result)] {
+        let best = result.best_move.expect("a legal move exists");
+        assert_eq!(
+            (best.orig(), best.dest()),
+            (Square::D1, Square::D4),
+            "{label} search did not play the decisive capture"
+        );
+        assert!(
+            result.score >= Score::cp(500),
+            "{label} search lost the winning score: {:?}",
+            result.score
+        );
+    }
+}
+
 /// The main search does not consider underpromotions: they are the final ordering phase and are
 /// dropped from every non-quiescence node, on the reasoning that a rook, knight or bishop
 /// promotion decides a game so rarely that resolving it can be left to quiescence. This test pins
