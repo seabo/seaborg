@@ -1,11 +1,11 @@
 ---
 id: TASK-97.7
 title: 'A1: Oracle-ordering ceiling (the single most important measurement)'
-status: In Progress
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-29 18:46'
-updated_date: '2026-07-29 19:29'
+updated_date: '2026-07-29 19:44'
 labels:
   - search
   - selectivity
@@ -54,3 +54,44 @@ Track A / item A1 — the single most important measurement in the investigation
 
 6. cargo fmt --check, clippy -D warnings (default AND --features oracle), cargo test --workspace. AC#3: default build unchanged; oracle path only exists under the feature and in an example gated by required-features.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+A1 oracle-ordering ceiling. Added an off-by-default `oracle` cargo feature (mirrors `selstats`: the shipped default build compiles the oracle fields, the per-node recording and the ordering injection out entirely, so behaviour/speed are unchanged). No permanent engine change ships (AC#3).
+
+Method (two-pass, ordering-only): #[cfg(feature="oracle")] hooks on Search — pass 1 records the best move proved at each completed node at the Step-24 TT-store site (keyed by Zobrist, deepest-proof wins); pass 2 forces that move to the front in MoveLoader::load_hash (legality-guarded against Zobrist collisions). Only ordering changes: the resolved TT move still drives IIR and the singular check and is searched in its own generated phase, so no legal move is dropped. SearchEngine::oracle_profile runs the passes from a cold table each time (mandatory — a warm table would supply the ordering itself); a new engine/examples/oracle_ordering.rs (required-features=["oracle"]) drives bench-positions.epd through the built-in network and reports the split.
+
+Results (geomean over 20 positions, 64 MB hash, built-in net):
+- depth 12: EBF_real 2.935, EBF_oracle 2.895; headroom 0.040 (4.4% of frontier gap); node ratio 0.864.
+- depth 14: EBF_real 2.695 (arith mean 2.710 = recorded baseline 2.71, validated), EBF_oracle 2.649 (1 pass) / 2.628 (converged, 2 passes); headroom 0.046 (6.8%); node ratio 0.806.
+- depth 16: EBF_real 2.514, EBF_oracle 2.470; headroom 0.045 (8.9%); node ratio 0.773.
+Frontier reference 2.01; eval/pruning-limited remainder (oracle-frontier) 0.885/0.639/0.460.
+
+AC#1: two-pass build measures node counts at fixed depth 12/14/16 on bench-positions.epd with true best moves forced to the front at every node. AC#2: EBF_real, EBF_oracle and frontier ~2.01 reported; split real-oracle (free ordering, 0.04-0.05) vs oracle-frontier (eval/pruning-limited, 0.46-0.89) stated. AC#3: temporary; behind the oracle feature + a required-features example, default build unchanged. AC#4: feeds guardrail 4 — the free-EBF ordering lever is small (4-9% of the frontier gap); the gap is overwhelmingly eval/pruning-limited (flywheel-gated).
+
+Honest caveats (in BENCHMARKS.md Phase 4 and the example docs): the effect is bimodal (tactical cut-node-heavy positions ~halve; quiet all-node-heavy positions worsen) and node savings grow with depth (ratio 0.86->0.77). Forcing best-first at full depth interacts with LMR, so EBF_oracle is a conservative 'best-first under the engine's real reductions' figure, not a strict lower bound — true headroom is >= measured, but even generously a minority of the frontier gap. Findings documented in BENCHMARKS.md Phase 4 (documentation, not engine behaviour).
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @claude
+created: 2026-07-29 19:44
+---
+Implementation handoff
+Branch: task-97.7-oracle-ordering-ceiling
+Worktree: /Users/seabo/seaborg-worktrees/task-97.7-oracle-ordering-ceiling
+Base: a360df285502e85d85d4a8c9a0f5be88cc54a5ee
+Implementation target: 2594608a7a4cafc919457a7411f2fc2dbe6996e5
+Resolved findings: none (initial implementation)
+Verification:
+- cargo fmt --check: PASS
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: PASS (no warnings; --all-features exercises the oracle path and the oracle_ordering example)
+- cargo test --workspace: PASS (all suites green; default features, oracle path compiled out)
+- Reproducibility: EBF_real arithmetic mean 2.710 at depth 14 reproduces the recorded fixed-depth-14 baseline (2.71) exactly
+Known failures: none
+
+Scope note for reviewer: spike / measurement only. base..target diff touches engine/Cargo.toml (new off-by-default `oracle` feature + required-features example entry), engine/src/search.rs (all new code under #[cfg(feature="oracle")]), engine/examples/oracle_ordering.rs (required-features=["oracle"]), and BENCHMARKS.md (Phase 4 write-up, documentation). AC#3 (no permanent engine change) satisfied by construction: default build is byte-behaviour unchanged, same standard as the existing selstats feature. To reproduce: RUSTFLAGS="-C target-cpu=native" cargo run --release -p engine --features oracle --example oracle_ordering -- tools/diag/bench-positions.epd 14 2 64 (and depths 12, 16).
+---
+<!-- COMMENTS:END -->
