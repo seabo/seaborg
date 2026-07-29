@@ -1,11 +1,11 @@
 ---
 id: TASK-97.7
 title: 'A1: Oracle-ordering ceiling (the single most important measurement)'
-status: In Review
+status: Changes Requested
 assignee:
   - '@claude'
 created_date: '2026-07-29 18:46'
-updated_date: '2026-07-29 19:44'
+updated_date: '2026-07-29 20:04'
 labels:
   - search
   - selectivity
@@ -93,5 +93,35 @@ Verification:
 Known failures: none
 
 Scope note for reviewer: spike / measurement only. base..target diff touches engine/Cargo.toml (new off-by-default `oracle` feature + required-features example entry), engine/src/search.rs (all new code under #[cfg(feature="oracle")]), engine/examples/oracle_ordering.rs (required-features=["oracle"]), and BENCHMARKS.md (Phase 4 write-up, documentation). AC#3 (no permanent engine change) satisfied by construction: default build is byte-behaviour unchanged, same standard as the existing selstats feature. To reproduce: RUSTFLAGS="-C target-cpu=native" cargo run --release -p engine --features oracle --example oracle_ordering -- tools/diag/bench-positions.epd 14 2 64 (and depths 12, 16).
+---
+
+author: @claude
+created: 2026-07-29 20:04
+---
+Review attempt: 1
+Reviewed branch: task-97.7-oracle-ordering-ceiling
+Reviewed implementation: 2594608a7a4cafc919457a7411f2fc2dbe6996e5
+Verdict: changes_requested
+
+Scope is exactly as handed off (engine/Cargo.toml oracle feature + required-features example, all search.rs additions #[cfg(feature="oracle")], engine/examples/oracle_ordering.rs, BENCHMARKS.md Phase 4). The measurement is sound and reproducible: I re-ran depth 12 and it matches BENCHMARKS.md exactly (EBF_real 2.935, EBF_oracle 2.895, headroom 0.040, node ratio 0.864, 4.4% of gap). Ordering-only isolation is correct — load_hash injects the oracle move into the hash segment, and OrderedMoves::segregate_duplicates de-dups later phases against that segment (not self.hash_move), so the real TT move still flows through its generated phase (no move dropped, no double search) and still drives IIR/singular; the valid_move guard covers Zobrist collisions. Two blocking documentation/harness defects remain in the deliverable.
+
+REV-1-01 [P2] BENCHMARKS.md Phase 4 header misattributes A1 to TASK-97.1
+Location: BENCHMARKS.md — "### Phase 4 — the oracle-ordering ceiling: the free-EBF lever is small (TASK-97.1 / A1)"
+Impact: TASK-97.1 is item A2 (first-move-cutoff decomposition, already merged); this A1 oracle-ordering work is TASK-97.7. The permanent benchmark log — whose whole purpose here is a citable, traceable measurement — attributes A1 to the wrong sub-task, conflating it with A2.
+Reproduction: git diff a360df2..2594608 -- BENCHMARKS.md ; header line references TASK-97.1.
+Expected: Reference the task that produced the measurement (TASK-97.7, or the umbrella TASK-97), consistent with the task branch/commits (all "TASK-97.7").
+
+REV-1-02 [P2] oracle_ordering example: iterations usage doc is wrong and iterations=0 panics
+Location: engine/examples/oracle_ordering.rs:34-35 (usage doc) and main() line 104 (`let oracle = &passes[1];`)
+Impact: The doc states the iterations arg's 0 value "leaves just the specified real->oracle two-pass". It does the opposite: oracle_profile runs `0..=iterations`, so iterations=0 produces a single reference pass, after which `passes[1]` indexes out of bounds and the harness panics. The comment is factually inaccurate (a comment must be correct standalone) and the documented boundary input crashes rather than fail-fast with a clear message.
+Reproduction: RUSTFLAGS="-C target-cpu=native" cargo run --release -p engine --features oracle --example oracle_ordering -- tools/diag/bench-positions.epd 12 0 64  -> panics at index 1.
+Expected: Either correct the usage doc to describe the real semantics (iterations = number of oracle passes; 1 = the two-pass; must be >= 1), and/or reject iterations < 1 with a clear assertion/message instead of an out-of-bounds panic.
+
+Verification (on target-equivalent HEAD; 2594608..HEAD touches only the task md):
+- cargo fmt --check: PASS (exit 0)
+- cargo clippy --workspace --all-targets -- -D warnings: PASS (exit 0)
+- cargo clippy --workspace --all-targets --all-features -- -D warnings (clean CARGO_TARGET_DIR): PASS (exit 0)
+- cargo test --workspace: PASS (exit 0)
+- Reproduced depth-12 oracle_ordering run: matches BENCHMARKS.md exactly
 ---
 <!-- COMMENTS:END -->
