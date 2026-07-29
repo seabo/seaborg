@@ -597,14 +597,6 @@ impl OrderedMoves {
         self.phase
     }
 
-    /// How many quiet moves this node has, i.e. the size of the quiet segment. Valid once the quiet
-    /// phase has been loaded (it is zero before then, while the segment is still empty). This is the
-    /// node's quiet mobility — how many alternatives the history-ordered quiet tail actually holds —
-    /// which the search uses to decide whether that tail is long enough for pruning it to be safe.
-    pub fn quiet_count(&self) -> usize {
-        self.segments.quiets.len()
-    }
-
     /// The number of entries currently held in the ordering buffer. Every move loaded across every
     /// phase occupies one slot — including duplicates a later phase segregates out but does not
     /// remove — so once all phases are loaded this is the worst-case occupancy the fixed capacity
