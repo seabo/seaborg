@@ -36,6 +36,9 @@ from uci import Engine, load_fens
 
 SELSTATS_TAG = "info string selstats "
 
+# Must match SEL_DEPTH_BUCKETS in engine/src/trace.rs.
+SEL_DEPTH_BUCKETS = 24
+
 
 def run_one(engine: Engine, fen: str, go: str) -> dict:
     """Run a single search and return the selectivity JSON it emitted.
@@ -107,6 +110,9 @@ class Pooled:
     asp_fail_low: int = 0
     asp_fail_high: int = 0
     q_incheck: int = 0
+    depth_nodes: list = field(default_factory=lambda: [0] * SEL_DEPTH_BUCKETS)
+    depth_moves: list = field(default_factory=lambda: [0] * SEL_DEPTH_BUCKETS)
+    depth_quiets: list = field(default_factory=lambda: [0] * SEL_DEPTH_BUCKETS)
 
     def add(self, s: dict) -> None:
         self.positions += 1
@@ -150,6 +156,12 @@ class Pooled:
         self.asp_fail_low += s["asp_fail_low"]
         self.asp_fail_high += s["asp_fail_high"]
         self.q_incheck += s["q_incheck"]
+        for i, v in enumerate(s["depth_nodes"]):
+            self.depth_nodes[i] += v
+        for i, v in enumerate(s["depth_moves"]):
+            self.depth_moves[i] += v
+        for i, v in enumerate(s["depth_quiets"]):
+            self.depth_quiets[i] += v
 
 
 def _rate(num: int, den: int) -> float:
@@ -195,6 +207,16 @@ def derive(p: Pooled) -> dict:
         "aspiration_research_rate": _rate(
             p.asp_fail_low + p.asp_fail_high, p.asp_windows
         ),
+        "depth_width": [
+            {
+                "depth": d,
+                "nodes": p.depth_nodes[d],
+                "mean_moves": _rate(p.depth_moves[d], p.depth_nodes[d]),
+                "mean_quiets": _rate(p.depth_quiets[d], p.depth_nodes[d]),
+            }
+            for d in range(SEL_DEPTH_BUCKETS)
+            if p.depth_nodes[d]
+        ],
     }
 
 
@@ -252,6 +274,13 @@ def format_summary(mode: str, agg: dict) -> str:
     lines.append(
         f"aspiration re-search    {agg['aspiration_research_rate'] * 100:.1f}% per window"
     )
+    lines.append("width by remaining depth (non-PV, not in check; LMP fires at depth<=3):")
+    lines.append("  rem-depth      nodes  moves/node  quiets/node")
+    for row in agg["depth_width"]:
+        lines.append(
+            f"  {row['depth']:>9}  {row['nodes']:>9}  {row['mean_moves']:>10.2f}  "
+            f"{row['mean_quiets']:>11.2f}"
+        )
     return "\n".join(lines)
 
 

@@ -2703,6 +2703,15 @@ impl<'engine> Search<'engine> {
                     continue;
                 }
 
+                // Selectivity width profile. This move survived move-count and futility pruning and is
+                // about to be searched, so it counts toward the residual tree width at LMP-eligible
+                // nodes. Recorded before the reduction below, which shrinks the move's search depth but
+                // does not remove the node — the untapped opportunity is to prune it away entirely.
+                #[cfg(feature = "selstats")]
+                if !Node::pv() && !node_in_check {
+                    self.trace.sel_move_searched(depth, mov.is_quiet());
+                }
+
                 // Step 17 (applied). Late move reduction.
                 //
                 // Search a late, quiet move with less depth first: ordering has already placed the
@@ -2908,6 +2917,16 @@ impl<'engine> Search<'engine> {
 
         if self.stopping() {
             return None;
+        }
+
+        // Record this fully-searched node in the per-remaining-depth width profile. Only the
+        // LMP-eligible population (non-PV, not in check) is counted, matching the per-move record
+        // above, so `depth_moves / depth_nodes` reads as the quiet-tail width that move-count or
+        // history pruning could still act on at each remaining depth. A move-less node is a terminal
+        // mate/stalemate, not a searched interior node, and is excluded.
+        #[cfg(feature = "selstats")]
+        if !Node::pv() && !node_in_check && move_count > 0 {
+            self.trace.sel_depth_node(depth);
         }
 
         debug_assert!(

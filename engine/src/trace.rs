@@ -48,6 +48,12 @@ pub struct Tracer {
     sel: SelStats,
 }
 
+/// Number of remaining-depth buckets in the selectivity width profile. Interior search depth stays
+/// well below this in the measured regimes; the final bucket absorbs anything deeper. Kept at or
+/// below 32 so the array still derives `Default`.
+#[cfg(feature = "selstats")]
+const SEL_DEPTH_BUCKETS: usize = 24;
+
 /// Per-search selectivity counters, accumulated only when the `selstats` feature is on.
 ///
 /// These answer "where does the search spend its effective depth" from the engine's own point of
@@ -116,6 +122,17 @@ pub struct SelStats {
     pub tt_cutoffs: u64,
     /// Quiescence nodes that were in check and therefore widened from captures-only to every evasion.
     pub q_incheck: u64,
+    /// Per-remaining-depth tree-width profile over the LMP-eligible node population — non-PV nodes
+    /// that are not in check, which is exactly where move-count and history pruning of the quiet tail
+    /// could act. Indexed by remaining depth, the final bucket absorbing deeper nodes. `depth_nodes`
+    /// counts such nodes that ran a move loop; `depth_moves` sums the moves actually recursed into
+    /// (counted after the current move-count and futility prunes have already removed a tail), and
+    /// `depth_quiets` the quiet subset of those. `depth_moves / depth_nodes` by depth shows where the
+    /// tree stays wide: the residual quiet width at remaining depths past `LMP_MAX_DEPTH` is the
+    /// untapped pruning opportunity these counters exist to size.
+    pub depth_nodes: [u64; SEL_DEPTH_BUCKETS],
+    pub depth_moves: [u64; SEL_DEPTH_BUCKETS],
+    pub depth_quiets: [u64; SEL_DEPTH_BUCKETS],
 }
 
 impl Default for Tracer {
@@ -425,6 +442,27 @@ impl Tracer {
         self.sel.q_incheck += 1;
     }
 
+    /// Record an LMP-eligible node (non-PV, not in check) that ran a move loop, keyed by its remaining
+    /// depth, for the tree-width profile. This is the denominator for the per-depth width means.
+    #[inline(always)]
+    pub fn sel_depth_node(&mut self, depth: i16) {
+        let bucket = depth.clamp(0, SEL_DEPTH_BUCKETS as i16 - 1) as usize;
+        self.sel.depth_nodes[bucket] += 1;
+    }
+
+    /// Record a move that survived the current move-count and futility prunes and is about to be
+    /// searched at an LMP-eligible node of the given remaining depth, noting whether it is quiet. The
+    /// totals therefore measure the tree width that remains *after* today's pruning, so the residual
+    /// quiet count is exactly what a deeper-reaching prune could still remove.
+    #[inline(always)]
+    pub fn sel_move_searched(&mut self, depth: i16, is_quiet: bool) {
+        let bucket = depth.clamp(0, SEL_DEPTH_BUCKETS as i16 - 1) as usize;
+        self.sel.depth_moves[bucket] += 1;
+        if is_quiet {
+            self.sel.depth_quiets[bucket] += 1;
+        }
+    }
+
     /// Serialise the full selectivity profile for this search as one compact JSON object, tagged with
     /// the deepest completed `depth`. Combines the selectivity counters with the always-on node, TT,
     /// and killer figures so a single line captures the whole profile. Field order is stable so the
@@ -439,7 +477,7 @@ impl Tracer {
         let ebf = f64::from(self.eff_branching(depth));
 
         let s = &self.sel;
-        let mut out = String::with_capacity(768);
+        let mut out = String::with_capacity(1024);
         out.push('{');
         let _ = write!(
             out,
@@ -482,8 +520,13 @@ impl Tracer {
         );
         let _ = write!(
             out,
-            "\"pv_scout\":{},\"pv_scout_research\":{},\"asp_windows\":{},\"asp_fail_low\":{},\"asp_fail_high\":{},\"q_incheck\":{}",
+            "\"pv_scout\":{},\"pv_scout_research\":{},\"asp_windows\":{},\"asp_fail_low\":{},\"asp_fail_high\":{},\"q_incheck\":{},",
             s.pv_scout, s.pv_scout_research, s.asp_windows, s.asp_fail_low, s.asp_fail_high, s.q_incheck,
+        );
+        let _ = write!(
+            out,
+            "\"depth_nodes\":{:?},\"depth_moves\":{:?},\"depth_quiets\":{:?}",
+            s.depth_nodes, s.depth_moves, s.depth_quiets,
         );
         out.push('}');
         out
