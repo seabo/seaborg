@@ -1,9 +1,11 @@
 ---
 id: TASK-89.6
 title: History-based interior quiet pruning
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@codex'
 created_date: '2026-07-29 13:47'
+updated_date: '2026-07-29 14:39'
 labels:
   - search
   - selectivity
@@ -37,3 +39,14 @@ This task adds history-based quiet pruning to the main-search interior and measu
 - [ ] #3 Retained only on a non-negative SPRT; a negative result is recorded and reverted
 - [ ] #4 Conclusion is derived from Seaborg own signals and self-play; no cross-engine behaviour diffing
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Add interior history-based quiet pruning to the main search move loop (search.rs), mirroring the winning shadow-counter rule C3 from TASK-91: prune a quiet-phase move whose combined main+continuation history is negative, once past a short move-count prefix, in the tree interior (remaining depth <= 8). Guards match the existing forward-pruning steps: non-PV, not in check, quiet phase only (killers/counter/TT are separate phases, already exempt), and a checking move is exempt.
+2. Place the prune after LMP and futility, before the selstats width/shadow recording, so the population it acts on matches the shadow measurement and the selstats width profile reflects the reduction.
+3. Add constants HISTORY_PRUNING_MAX_DEPTH (8) and HISTORY_PRUNING_MOVE_THRESHOLD (3) with reader-standalone doc comments, and a #[cfg(test)] history_pruning_disabled toggle + history_pruning_enabled() helper matching the LMP/LMR pattern.
+4. Add regression tests: prune shrinks the tree at fixed depth; prune keeps a decisive capture (never reaches the winning prefix).
+5. Run required checks (fmt, clippy -D warnings, test --workspace).
+6. Measure: selstats before/after (interior quiet width + geomean EBF) and a self-play SPRT at tc=10+0.1 vs the pre-change baseline; record in BENCHMARKS.md. Retain only on a non-negative SPRT; otherwise record and revert.
+<!-- SECTION:PLAN:END -->
