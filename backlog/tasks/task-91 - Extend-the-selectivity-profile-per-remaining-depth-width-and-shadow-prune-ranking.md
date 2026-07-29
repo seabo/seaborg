@@ -3,11 +3,11 @@ id: TASK-91
 title: >-
   Extend the selectivity profile: per-remaining-depth width and shadow-prune
   ranking
-status: Ready to Merge
+status: Done
 assignee:
   - '@george'
 created_date: '2026-07-29 13:57'
-updated_date: '2026-07-29 14:14'
+updated_date: '2026-07-29 14:30'
 labels:
   - search
   - selectivity
