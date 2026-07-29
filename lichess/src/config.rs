@@ -335,6 +335,10 @@ pub struct EngineSettings {
     /// latency, in milliseconds. Prevents flagging when a move is computed just
     /// under the clock.
     pub move_overhead_ms: u32,
+    /// Whether each played-move log line carries the search's score, depth, and a
+    /// short principal variation. On by default so game logs convey what the
+    /// engine saw; turning it off restores the bare `playing <move>` line.
+    pub log_pv: bool,
 }
 
 impl Default for EngineSettings {
@@ -342,6 +346,7 @@ impl Default for EngineSettings {
         EngineSettings {
             hash_mb: 64,
             move_overhead_ms: 100,
+            log_pv: true,
         }
     }
 }
@@ -383,7 +388,21 @@ mod tests {
         assert_eq!(config.engine.hash_mb, 256);
         // Untouched fields keep their defaults.
         assert_eq!(config.engine.move_overhead_ms, 100);
+        assert!(config.engine.log_pv);
         assert_eq!(config.challenge.variants, vec!["standard".to_string()]);
+    }
+
+    #[test]
+    fn log_pv_can_be_disabled_from_toml() {
+        // The move-log annotations are on by default; a config may turn them off.
+        let config = Config::parse(
+            r#"
+                [engine]
+                log_pv = false
+            "#,
+        )
+        .unwrap();
+        assert!(!config.engine.log_pv);
     }
 
     #[test]
@@ -513,6 +532,7 @@ mod tests {
         let settings = EngineSettings {
             hash_mb: 128,
             move_overhead_ms: 50,
+            log_pv: true,
         };
         let opts = settings.engine_options();
         assert!(matches!(

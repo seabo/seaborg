@@ -11,7 +11,8 @@ use std::time::Duration;
 
 use chess::mov::Move;
 use chess::position::{Player, Position};
-use engine::search::{SearchEngine, SearchLimit};
+use engine::score::Score;
+use engine::search::{SearchEngine, SearchEvent, SearchLimit};
 use engine::time::TimeControl;
 
 use crate::backoff::{Backoff, RECONNECT_BASE, RECONNECT_MAX};
@@ -22,13 +23,57 @@ use crate::game_stream::{GameEvent, GameFull, GameState};
 use crate::shutdown::Shutdown;
 use crate::transport::Transport;
 
+/// Longest principal variation, in plies, shown on a played-move log line. The
+/// tail beyond this is elided with an ellipsis so the line stays a compact
+/// summary rather than a full readout of the search's line.
+const LOG_PV_MAX_PLIES: usize = 6;
+
+/// A move chosen for play, with the search information behind it when one is
+/// available.
+///
+/// `info` is present when a real search produced the move, carrying the score,
+/// depth, and principal variation for logging; it is absent for a chooser that
+/// picks a move without searching (as the test doubles do).
+pub struct Chosen {
+    pub mov: Move,
+    pub info: Option<MoveInfo>,
+}
+
+/// The score, depth, and principal variation of the search that chose a move,
+/// as reported by its final single-line (`multipv == 1`) progress snapshot.
+pub struct MoveInfo {
+    pub score: Score,
+    pub depth: u8,
+    pub pv: Vec<Move>,
+}
+
+impl MoveInfo {
+    /// Render the parenthesised annotation for a played-move log line, e.g.
+    /// `cp 34, depth 18, pv e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 ...`. The score uses
+    /// the engine's own `cp N` / `mate N` rendering, and the variation is capped
+    /// at [`LOG_PV_MAX_PLIES`] plies with a trailing ellipsis when it is longer.
+    fn annotation(&self) -> String {
+        let mut pv = self
+            .pv
+            .iter()
+            .take(LOG_PV_MAX_PLIES)
+            .map(Move::to_uci_string)
+            .collect::<Vec<_>>()
+            .join(" ");
+        if self.pv.len() > LOG_PV_MAX_PLIES {
+            pv.push_str(" ...");
+        }
+        format!("{}, depth {}, pv {}", self.score, self.depth, pv)
+    }
+}
+
 /// Chooses the move to play in a position under a time budget.
 ///
 /// `None` means the position has no legal move — the bot is checkmated or
 /// stalemated — so there is nothing to submit and the server's terminal state
 /// will follow.
 pub trait MoveChooser {
-    fn choose(&self, position: &Position, limit: SearchLimit) -> Option<Move>;
+    fn choose(&self, position: &Position, limit: SearchLimit) -> Option<Chosen>;
 }
 
 /// A [`MoveChooser`] backed by the search engine.
@@ -53,12 +98,30 @@ impl EngineMoveChooser {
 }
 
 impl MoveChooser for EngineMoveChooser {
-    fn choose(&self, position: &Position, limit: SearchLimit) -> Option<Move> {
-        self.engine
-            .start(position.clone(), limit)
-            .wait()
-            .result()
-            .and_then(|result| result.best_move)
+    fn choose(&self, position: &Position, limit: SearchLimit) -> Option<Chosen> {
+        // The final search result carries the move, score, and depth but not the
+        // principal variation, so the events channel is captured before the
+        // search is joined and drained afterwards for the last single-line
+        // snapshot — the same source the UCI path formats its `info` lines from.
+        let search = self.engine.start(position.clone(), limit);
+        let events = search.events().clone();
+        let outcome = search.wait();
+        let mov = outcome.result().and_then(|result| result.best_move)?;
+
+        let info = events
+            .try_iter()
+            .filter_map(|event| match event {
+                SearchEvent::Progress(progress) if progress.multipv == 1 => Some(progress),
+                _ => None,
+            })
+            .last()
+            .map(|progress| MoveInfo {
+                score: progress.score,
+                depth: progress.depth,
+                pv: progress.principal_variation,
+            });
+
+        Some(Chosen { mov, info })
     }
 }
 
@@ -252,6 +315,8 @@ struct GameContext<'a, T: Transport, C: MoveChooser> {
     base: Position,
     /// Time held back from our clock before allocating a move, in milliseconds.
     move_overhead_ms: u32,
+    /// Whether the played-move log line is annotated with score, depth, and PV.
+    log_pv: bool,
 }
 
 impl<'a, T: Transport, C: MoveChooser> GameContext<'a, T, C> {
@@ -274,6 +339,7 @@ impl<'a, T: Transport, C: MoveChooser> GameContext<'a, T, C> {
             our_side,
             base,
             move_overhead_ms: config.engine.move_overhead_ms,
+            log_pv: config.engine.log_pv,
         })
     }
 
@@ -300,9 +366,20 @@ impl<'a, T: Transport, C: MoveChooser> GameContext<'a, T, C> {
 
         let limit = search_limit(state, &position, self.move_overhead_ms);
         match self.chooser.choose(&position, limit) {
-            Some(mov) => {
-                let uci = mov.to_uci_string();
-                log::info!("game {}: playing {uci}", self.game_id);
+            Some(chosen) => {
+                let uci = chosen.mov.to_uci_string();
+                match chosen.info {
+                    Some(info) if self.log_pv => {
+                        log::info!(
+                            "game {}: playing {uci} ({})",
+                            self.game_id,
+                            info.annotation()
+                        );
+                    }
+                    // Without search info, or with annotations disabled, the line
+                    // is exactly the bare `playing <move>` form.
+                    _ => log::info!("game {}: playing {uci}", self.game_id),
+                }
                 self.client.play_move(self.game_id, &uci)?;
             }
             None => {
@@ -398,9 +475,12 @@ mod tests {
     struct FirstLegalMove;
 
     impl MoveChooser for FirstLegalMove {
-        fn choose(&self, position: &Position, _limit: SearchLimit) -> Option<Move> {
+        fn choose(&self, position: &Position, _limit: SearchLimit) -> Option<Chosen> {
             let moves = position.generate::<BasicMoveList, All, Legal>();
-            (&moves).into_iter().next().copied()
+            let mov = (&moves).into_iter().next().copied()?;
+            // A picker that does not search reports no info; the move log falls
+            // back to the bare line for it.
+            Some(Chosen { mov, info: None })
         }
     }
 
@@ -498,6 +578,55 @@ mod tests {
         r#"{"type":"gameState","moves":"e2e4 e7e5 f1c4 b8c6 d1h5 g8f6 h5f7","wtime":300000,"btime":300000,"winc":3000,"binc":3000,"status":"mate","winner":"white"}"#,
         "\n",
     );
+
+    /// Build a principal variation by replaying a UCI move list from the
+    /// standard start, collecting each applied move.
+    fn pv_from(moves: &[&str]) -> Vec<Move> {
+        let mut position = Position::start_pos();
+        moves
+            .iter()
+            .map(|uci| position.make_uci_move(uci).expect("pv move is legal"))
+            .collect()
+    }
+
+    #[test]
+    fn move_log_annotation_caps_pv_at_six_plies_with_an_ellipsis() {
+        // A principal variation longer than the cap is truncated to six plies
+        // and marked with a trailing ellipsis, and the score renders as `cp N`.
+        let info = MoveInfo {
+            score: Score::cp(34),
+            depth: 18,
+            pv: pv_from(&[
+                "e2e4", "e7e5", "g1f3", "b8c6", "f1b5", "a7a6", "b5a4", "g8f6",
+            ]),
+        };
+        assert_eq!(
+            info.annotation(),
+            "cp 34, depth 18, pv e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 ..."
+        );
+    }
+
+    #[test]
+    fn move_log_annotation_omits_ellipsis_when_pv_fits() {
+        // A variation at or under the cap is shown in full with no ellipsis.
+        let info = MoveInfo {
+            score: Score::cp(-12),
+            depth: 9,
+            pv: pv_from(&["d2d4", "d7d5", "c2c4"]),
+        };
+        assert_eq!(info.annotation(), "cp -12, depth 9, pv d2d4 d7d5 c2c4");
+    }
+
+    #[test]
+    fn move_log_annotation_renders_a_mate_score() {
+        // A forced mate uses the engine's `mate N` rendering rather than a cp value.
+        let info = MoveInfo {
+            score: Score::mate(5),
+            depth: 22,
+            pv: pv_from(&["e2e4"]),
+        };
+        assert_eq!(info.annotation(), "mate 3, depth 22, pv e2e4");
+    }
 
     #[test]
     fn plays_a_legal_move_on_each_of_its_turns() {
