@@ -1,11 +1,11 @@
 ---
 id: TASK-90
 title: 'Lichess move log: add optional score and PV to the "playing <move>" line'
-status: Ready to Merge
+status: Done
 assignee:
   - '@george'
 created_date: '2026-07-28 22:25'
-updated_date: '2026-07-28 22:48'
+updated_date: '2026-07-29 06:57'
 labels: []
 dependencies: []
 ordinal: 159000
