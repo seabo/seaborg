@@ -1,11 +1,11 @@
 ---
 id: TASK-89.6
 title: History-based interior quiet pruning
-status: In Review
+status: Done
 assignee:
   - '@codex'
 created_date: '2026-07-29 13:47'
-updated_date: '2026-07-29 17:26'
+updated_date: '2026-07-29 18:45'
 labels:
   - search
   - selectivity
@@ -34,10 +34,10 @@ This task adds history-based quiet pruning to the main-search interior and measu
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 History-based pruning of interior quiet moves is added to the main search, gated by a toggle like the other forward-pruning steps, and measured by a self-play SPRT at tc=10+0.1 versus the pre-change baseline and recorded in BENCHMARKS.md
-- [ ] #2 The selstats profile confirms the intended signal: the interior (remaining depth 4-8) quiet width and the geomean EBF both drop, without the LMR re-search rate or non-PV fail-low behaviour degrading pathologically
-- [ ] #3 Retained only on a non-negative SPRT; a negative result is recorded and reverted
-- [ ] #4 Conclusion is derived from Seaborg own signals and self-play; no cross-engine behaviour diffing
+- [x] #1 History-based pruning of interior quiet moves is added to the main search, gated by a toggle like the other forward-pruning steps, and measured by a self-play SPRT at tc=10+0.1 versus the pre-change baseline and recorded in BENCHMARKS.md
+- [x] #2 The selstats profile confirms the intended signal: the interior (remaining depth 4-8) quiet width and the geomean EBF both drop, without the LMR re-search rate or non-PV fail-low behaviour degrading pathologically
+- [x] #3 Retained only on a non-negative SPRT; a negative result is recorded and reverted
+- [x] #4 Conclusion is derived from Seaborg own signals and self-play; no cross-engine behaviour diffing
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -97,4 +97,15 @@ Verification:
 - cargo test --workspace: pass (476 engine + 161 lichess + others; 0 failed, 2 ignored)
 - git diff b46e8bb -- engine/: empty (clean revert to base behaviour)
 Known failures: none. (During investigation the lichess concurrency test run::tests::incoming_challenge_is_handled_while_a_matchmaking_call_is_blocked failed once under concurrent load; it is pre-existing flaky and passes in isolation and in the final clean run.)
+
+CLOSING SUMMARY (why this is Done as an informative negative).
+
+What we set out to do: add the shadow-counter's top-ranked selectivity lever — history-based pruning of the interior quiet tail — and measure whether it converts to strength.
+
+What happened:
+- Mechanism confirmed (AC#2). selstats showed exactly the intended movement: interior (rem-depth 4-8) quiet width more than halved, geomean EBF 2.71->2.62 (fixed depth 14), nodes-to-depth-14 -28%, +1.05 ply at fixed 2M nodes, with LMR re-search and non-PV fail-low rising only modestly.
+- Soundness regression found and fixed. The flat hist<0 rule turned a won KPvKP ending into a draw. A depth-scaled history margin could not separate the winning maneuvering move from the junk tail (both only mildly negative) and was a dead end; a quiet-mobility floor (>=12 quiets, since a lone king has <=8 moves) fixed it cleanly while retaining ~90% of the EBF gain.
+- Retention decided by SPRT (AC#1/AC#3). Sound floor-12 variant vs base on the rig (tc=10+0.1): AUTHORITATIVE FAIL, LLR -2.97, Elo -31.97 [-48.5,-15.6], W-D-L 401-772-560, 1733 games. The unsound flat upper bound was ~-35.7 over 1307 games — so fixing the endgame casualties changed strength by nothing, proving the loss is the mechanism (a no-re-search discard of interior subtrees that were being spent on real alternatives), not the soundness bug.
+
+Why closed: AC#3 mandates revert on a negative SPRT. The engine is restored to base b46e8bb exactly (git diff b46e8bb -- engine/ is empty); the full write-up is retained in BENCHMARKS.md as an informative negative, alongside the methodological lesson (coverage-per-damage ranks *which* quiets a rule removes, not whether removing them helps — a screen, not a strength predictor). All four acceptance criteria are satisfied by the measurement-and-revert; there is no engine change to ship. Disposition: reverted, recorded, Done.
 <!-- SECTION:NOTES:END -->
