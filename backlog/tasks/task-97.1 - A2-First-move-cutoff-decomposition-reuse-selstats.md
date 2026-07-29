@@ -1,11 +1,11 @@
 ---
 id: TASK-97.1
 title: 'A2: First-move-cutoff decomposition (reuse selstats)'
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-29 18:45'
-updated_date: '2026-07-29 19:13'
+updated_date: '2026-07-29 19:21'
 labels:
   - search
   - selectivity
