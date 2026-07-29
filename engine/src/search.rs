@@ -563,17 +563,32 @@ fn late_move_count(depth: Depth) -> u8 {
 /// close enough that a distrusted quiet is very unlikely to be the node's answer.
 const HISTORY_PRUNING_MAX_DEPTH: Depth = 8;
 
-/// Number of moves that must have been searched at a node before a negative-history quiet becomes
+/// Number of moves that must have been searched at a node before a distrusted-history quiet becomes
 /// eligible for the history-based prune.
 ///
 /// A short prefix is always searched in full regardless of history, so the hash move, the captures,
 /// the killers and counter, and the best-scored quiets — everything the ordering ranks first — is
-/// never dropped by this rule. Only once the search is into the tail, where a negative history score
+/// never dropped by this rule. Only once the search is into the tail, where a poor history score
 /// genuinely marks an unpromising move, does the prune engage. The count is over *all* moves searched
 /// so far, not only quiets, for the same reason move-count pruning counts them all: the quiet phase
 /// always follows the hash move, captures and refutations, so a noisy node has already spent part of
 /// the prefix before its first quiet.
 const HISTORY_PRUNING_MOVE_THRESHOLD: u8 = 3;
+
+/// Smallest quiet mobility — number of quiet moves at a node — for which history pruning is allowed.
+///
+/// The prune must never discard a move the search actually needed, and negative history alone does
+/// not promise that: history malus is charged to *every* quiet tried before a cutoff, so a move can
+/// score negative only because a sibling once cut, not because the move is bad. Whether that is safe
+/// to act on depends on how many alternatives the node has. Where a long tail of quiets fans out —
+/// the middlegame interior this prune exists to trim — a distrusted move deep in that tail is very
+/// unlikely to be the one that matters, and skipping it costs almost nothing. Where only a handful of
+/// quiets exist — a king-and-pawn ending, a fortress, a zugzwang, decided by one precise maneuver —
+/// there is no junk tail: every move is load-bearing, history is a poor guide, and the one move that
+/// holds the win is often exactly the incidentally-penalised one. Dropping it there turns a win into
+/// a draw. Requiring a minimum quiet mobility confines the prune to nodes that genuinely have a tail
+/// to trim, which is a property of the position rather than a carve-out for any particular ending.
+const HISTORY_PRUNING_MIN_QUIETS: usize = 12;
 
 /// Whether the side to move is doing better than the last time it was on move.
 ///
@@ -2617,6 +2632,11 @@ impl<'engine> Search<'engine> {
             // iterator borrows `moves` for that batch, so read it once here rather than inside.
             let phase = moves.phase();
 
+            // The node's quiet mobility, read before the iterator borrows `moves`. It is the count of
+            // the whole quiet segment (valid once that phase is loaded; zero before then), and history
+            // pruning below consults it to skip nodes whose quiet tail is too short to prune safely.
+            let quiet_count = moves.quiet_count();
+
             // Underpromotions are excluded from the main search. They are the final ordering phase,
             // and each is derived from a queen promotion that has already been searched from this
             // node, so skipping them never removes the last legal move (the mate/stalemate check
@@ -2753,15 +2773,20 @@ impl<'engine> Search<'engine> {
                 // past the full-depth prefix. Unlike move-count pruning this looks at the move's own
                 // learned quality rather than its position in the list, which is why it is allowed to
                 // act across the whole interior (up to `HISTORY_PRUNING_MAX_DEPTH`) where a blind count
-                // would be unsafe. `lmr_history` was sampled before the move was made, while the mover
-                // still stood on its origin; it is zero for a non-quiet move, but the phase guard means
-                // that value is never tested. A quiet move that gives check is exempt for the same
-                // reason it is under move-count pruning: a check is forcing and can still deliver mate
-                // near the horizon, and whether it checks is only known once it is on the board — hence
-                // this sits after the move is made. There is no verifying re-search: a move dropped
-                // here is never looked at again, the same discard move-count pruning makes.
+                // would be unsafe. It is confined to nodes with a genuine quiet tail
+                // (`HISTORY_PRUNING_MIN_QUIETS`): where only a few quiets exist every move is
+                // load-bearing and history is a poor guide, so a distrusted move there may be the one
+                // resource that holds the position — the failure mode a sparse king-and-pawn ending
+                // exhibits. `lmr_history` was sampled before the move was made, while the mover still
+                // stood on its origin; it is zero for a non-quiet move, but the phase guard means that
+                // value is never tested. A quiet move that gives check is exempt for the same reason it
+                // is under move-count pruning: a check is forcing and can still deliver mate near the
+                // horizon, and whether it checks is only known once it is on the board — hence this
+                // sits after the move is made. There is no verifying re-search: a move dropped here is
+                // never looked at again, the same discard move-count pruning makes.
                 if history_pruning
                     && phase == Phase::Quiet
+                    && quiet_count >= HISTORY_PRUNING_MIN_QUIETS
                     && move_count > HISTORY_PRUNING_MOVE_THRESHOLD
                     && lmr_history < 0
                     && !self.pos.in_check()

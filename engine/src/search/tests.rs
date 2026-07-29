@@ -1938,6 +1938,66 @@ fn history_pruning_keeps_a_decisive_capture() {
     }
 }
 
+/// History pruning must never convert a won position into a drawn one. Its danger case is the
+/// sparse maneuvering endgame — a king-and-pawn ending, an opposition or zugzwang fight — where a
+/// handful of quiet moves are all load-bearing and the history heuristic, trained on richer
+/// middlegames, is a poor guide: the one move that holds the win can carry a negative score only
+/// because a sibling once cut, and a rule that discards distrusted quiets outright would drop it. The
+/// mobility floor exists to keep the prune out of exactly these low-branching nodes. This test pins
+/// that guarantee generally rather than for one position: over several winning endgames it runs the
+/// search with the prune on and with it disabled, and wherever the un-pruned search sees a clear win
+/// the pruned search must still see a win, not a draw. The threshold is wide so ordinary
+/// pruning-induced score jitter cannot trip it — only a genuine win-to-draw collapse can. Asserting
+/// against the engine's own un-pruned verdict, rather than a hand-supplied evaluation, keeps the test
+/// honest about what the search actually knows at each depth.
+#[test]
+fn history_pruning_never_draws_a_won_endgame() {
+    chess::init::init_globals();
+
+    // (fen, depth) — sparse king-and-pawn wins the un-pruned search already resolves at a shallow
+    // depth, each turning on precise king maneuvering rather than material. The deep king-and-pawn
+    // race that first exposed this failure is pinned separately by `gives_correct_answers`; these keep
+    // the class covered cheaply and guard against the mobility floor being weakened.
+    let endgames = [
+        // King and pawn versus king, won by taking the opposition first.
+        ("8/8/8/3k4/8/3K4/3P4/8 w - - 0 1", 12u8),
+        // King and pawn versus king with the pawn already advanced, a clean win.
+        ("6k1/8/6K1/6P1/8/8/8/8 w - - 0 1", 12u8),
+    ];
+
+    // A margin wide enough that pruning's incidental score shifts cannot trip the test, yet far above
+    // any drawn score: if the un-pruned search clears the win bar, the pruned search must stay well
+    // above draw territory.
+    let clear_win = Score::cp(350);
+    let still_winning = Score::cp(150);
+
+    for (fen, depth) in endgames {
+        let position = Position::from_fen(fen).unwrap();
+        let flag = AtomicBool::new(false);
+
+        let plain_table = Table::new(16);
+        let mut plain = Search::new(position.clone(), &flag, None, &plain_table);
+        plain.history_pruning_disabled = true;
+        let plain_score = plain.run::<Master>(depth).unwrap().score;
+
+        // Only positions the un-pruned search already resolves as won constrain the pruned search;
+        // for any other the requirement is vacuous, so the fixtures need no external win proof.
+        if plain_score < clear_win {
+            continue;
+        }
+
+        let pruned_table = Table::new(16);
+        let mut pruned = Search::new(position, &flag, None, &pruned_table);
+        let pruned_score = pruned.run::<Master>(depth).unwrap().score;
+
+        assert!(
+            pruned_score >= still_winning,
+            "{fen}: history pruning collapsed a won endgame — un-pruned {plain_score:?}, \
+             pruned {pruned_score:?}"
+        );
+    }
+}
+
 /// The main search does not consider underpromotions: they are the final ordering phase and are
 /// dropped from every non-quiescence node, on the reasoning that a rook, knight or bishop
 /// promotion decides a game so rarely that resolving it can be left to quiescence. This test pins
