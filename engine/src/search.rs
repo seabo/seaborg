@@ -2710,6 +2710,12 @@ impl<'engine> Search<'engine> {
                 #[cfg(feature = "selstats")]
                 if !Node::pv() && !node_in_check {
                     self.trace.sel_move_searched(depth, mov.is_quiet());
+                    // Phase 2 shadow counters: score this searched quiet-phase move against the
+                    // candidate pruning rules. `lmr_history` was sampled above for quiet moves.
+                    if phase == Phase::Quiet {
+                        self.trace
+                            .sel_shadow_searched(depth, u32::from(move_count), lmr_history);
+                    }
                 }
 
                 // Step 17 (applied). Late move reduction.
@@ -2861,6 +2867,14 @@ impl<'engine> Search<'engine> {
 
                     if value > alpha {
                         best_move = mov;
+
+                        // Phase 2 shadow counters: this quiet move raised alpha or forced the cutoff,
+                        // so any candidate that would have pruned it is charged a soundness cost.
+                        #[cfg(feature = "selstats")]
+                        if !Node::pv() && !node_in_check && phase == Phase::Quiet {
+                            self.trace
+                                .sel_shadow_good(depth, u32::from(move_count), lmr_history);
+                        }
 
                         if Node::pv() && value < beta {
                             // Only an exact score at a PV node establishes a variation worth
