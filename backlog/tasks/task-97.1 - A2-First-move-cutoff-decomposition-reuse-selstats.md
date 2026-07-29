@@ -1,11 +1,11 @@
 ---
 id: TASK-97.1
 title: 'A2: First-move-cutoff decomposition (reuse selstats)'
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-29 18:45'
-updated_date: '2026-07-29 18:59'
+updated_date: '2026-07-29 19:13'
 labels:
   - search
   - selectivity
@@ -28,9 +28,9 @@ Track A / item A2. Hypothesis: most of the ordering loss is concentrated at no-T
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The selectivity profile is re-run at fixed depth and fixed nodes on bench-positions.epd, reporting first-move-cutoff split by TT-hit vs TT-miss, the cutoff move-index histogram, and TT-move-availability by node type
-- [ ] #2 The share of total beta cutoffs occurring at no-TT-move nodes and the TT vs no-TT first-move-cutoff gap are quantified against the recorded baseline
-- [ ] #3 No permanent engine change ships; only diagnostic output is produced
+- [x] #1 The selectivity profile is re-run at fixed depth and fixed nodes on bench-positions.epd, reporting first-move-cutoff split by TT-hit vs TT-miss, the cutoff move-index histogram, and TT-move-availability by node type
+- [x] #2 The share of total beta cutoffs occurring at no-TT-move nodes and the TT vs no-TT first-move-cutoff gap are quantified against the recorded baseline
+- [x] #3 No permanent engine change ships; only diagnostic output is produced
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -81,4 +81,37 @@ Known failures: none
 
 Scope note for reviewer: spike / diagnostic only. No engine source changed (git diff vs base touches BENCHMARKS.md only; the *.json profile artifact is gitignored). AC#3 satisfied by construction. ACs #1/#2 evidenced by the appended findings notes and the BENCHMARKS.md Phase-3 table.
 ---
+
+author: @claude
+created: 2026-07-29 19:13
+---
+Review attempt: 1
+Reviewed branch: task-97.1-first-move-cutoff-decomp
+Reviewed implementation: c1da3a7 (immutable target; base 7af6f1e)
+Branch tip: 7c0b180 (task-only handoff metadata; git diff c1da3a7..7c0b180 touches the task file only — no implementation change after the target)
+Verdict: approved
+
+Scope: spike / diagnostic. The base..target diff touches BENCHMARKS.md (Phase-3 write-up, documentation) and the task file only. No engine source changed; the selstats profile *.json output is gitignored. AC#3 satisfied by construction.
+
+Acceptance criteria — all proven:
+- AC#1: selectivity_profile.py re-run at fixed depth 14 and fixed 2M nodes on bench-positions.epd, reporting first-move-cutoff split by TT hit/miss, the cutoff move-index histogram, and TT-move availability (pooled + PV/non-PV). Evidenced in notes and independently reproduced.
+- AC#2: no-TT cutoff share and the TT vs no-TT first-move-cutoff gap quantified vs the recorded baseline (6.3 pp / 6.2 pp gap; no-TT nodes carry 79.2% / 73.9% of ordering waste). Figures match the recorded baseline exactly.
+- AC#3: no permanent engine change; only diagnostic output. Confirmed by diff.
+
+Independent verification:
+- git diff --stat 7af6f1e c1da3a7: BENCHMARKS.md + task file only; handoff commit 7c0b180 = task file only.
+- cargo fmt --check: PASS
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: PASS (no warnings)
+- cargo test --workspace: PASS (all suites green)
+- Reproduced the fixed-2M operating point (RUSTFLAGS="-C target-cpu=native" cargo build --release --features selstats; selectivity_profile.py --depth 0 --nodes 2000000 --hash 64 over bench-positions.epd): mean EBF 2.472, mean depth 16.25, first-move-cutoff 89.4%, TT 93.1% vs no-TT 86.9%, no-TT cutoff share 60%, TT-avail 35.4%, derived no-TT waste share 73.9% — matches every reported figure.
+- selstats plumbing confirmed real: engine/src/trace.rs increments fh_tt/fh_tt_first/fh_nott/fh_nott_first from actual search and emits raw counts in the selstats JSON; the fixed-depth figures are internally consistent with the same decomposition arithmetic.
+
+Approved implementation SHA (code target): c1da3a7.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+A2 spike: decomposed Seaborg's first-move-cutoff (ordering-health) gap by TT-move presence, reusing tools/diag/selectivity_profile.py with a --features selstats build over bench-positions.epd — no permanent engine change. The ordering waste concentrates at no-TT-move nodes: they carry 79.2% (fixed depth 14) / 73.9% (fixed 2M nodes) of all late cutoffs, a larger majority than their 67%/60% share of cutoffs, because they both miss move-one more often (86.4% vs 92.7%; 86.9% vs 93.1%) and are where most cutoffs happen. The cutoff-index histogram shows the misses are shallow, so the lever is the right first move at no-TT nodes (scopes A1's oracle ceiling to that population; points Track D at seeding ordering, not raising TT-move availability). Verified independently: reproduced the fixed-2M operating point on the same suite — EBF 2.472, depth 16.25, first-move-cutoff 89.4%, TT 93.1% vs no-TT 86.9%, no-TT cutoff share 60%, TT-avail 35.4%, derived no-TT waste share 73.9% — all matching the reported figures exactly. Findings are documented in BENCHMARKS.md (Phase 3, documentation only). cargo fmt/clippy/test all green on the target.
+<!-- SECTION:FINAL_SUMMARY:END -->
