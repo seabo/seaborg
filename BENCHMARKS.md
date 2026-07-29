@@ -1106,6 +1106,42 @@ than blindly by position. This is the candidate carried into **TASK-89.6**
 (history-based interior quiet pruning), to be validated by self-play SPRT at
 `tc=10+0.1`; the shadow screen ranks, it does not green-light.
 
+### Phase 3 — the ordering waste is concentrated at no-TT-move nodes (TASK-97.1 / A2)
+
+The first-move-cutoff rate is the direct ordering-health readout: when a node
+fails high, did the *first* move searched cause the cutoff? The gap from 100 %
+is wasted work — a beta cutoff that the ordering found late instead of first.
+Decomposing that gap by whether the node had a transposition-table move to seed
+its ordering localises where the waste lives (fixed depth 14 and fixed 2 M nodes,
+`bench-positions.epd`, 64 MB; figures reproduce the recorded baseline exactly):
+
+| | fixed depth 14 | fixed 2 M nodes |
+|---|---:|---:|
+| First-move-cutoff, overall | 88.5 % | 89.4 % |
+| First-move-cutoff, TT-move present | 92.7 % | 93.1 % |
+| First-move-cutoff, no TT move | 86.4 % | 86.9 % |
+| TT vs no-TT gap | 6.3 pp | 6.2 pp |
+| Share of *cutoffs* at no-TT nodes | 67 % | 60 % |
+| **Share of ordering *waste* at no-TT nodes** | **79.2 %** | **73.9 %** |
+
+"Waste" is the volume of late cutoffs (fail-highs whose first move did not cut):
+347 k of them at fixed depth 14, of which 275 k (79 %) are at nodes with no TT
+move. No-TT nodes are already the majority of cutoffs, but they are a *larger*
+majority of the misordering — a node without a hash move both fails to cut on
+move one more often (86.4 % vs 92.7 %) and is where most cutoffs happen, so the
+two effects compound. The cutoff-index histogram confirms the waste is shallow,
+not a long tail: of the ~11.5 % that miss move one, almost all cut by move 2–3
+(`[88.5 6.9 2.5 0.6 …]`), so the opportunity is getting the *right first move* at
+these nodes, not searching deeper into the list.
+
+Consequence for the investigation: the free (ordering-recoverable) EBF, if it
+exists, lives overwhelmingly at no-TT-move nodes. This scopes **A1** (the
+oracle-ordering ceiling) to that population — measure how much EBF a perfect
+first move would reclaim specifically where there is no TT move — and points any
+Track-D lever at seeding ordering there (IIR / a move-synthesising alternative)
+rather than at raising TT-move availability, which the earlier profile already
+ruled low-leverage. This phase only measures; no engine behaviour changed.
+
 ## Selectivity tuning experiments (from the profile above)
 
 Each experiment below is one knob from the ranked list, measured individually by
