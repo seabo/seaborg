@@ -1142,7 +1142,7 @@ Track-D lever at seeding ordering there (IIR / a move-synthesising alternative)
 rather than at raising TT-move availability, which the earlier profile already
 ruled low-leverage. This phase only measures; no engine behaviour changed.
 
-### Phase 4 — the oracle-ordering ceiling: the free-EBF lever is small (TASK-97.1 / A1)
+### Phase 4 — the oracle-ordering ceiling: the free-EBF lever is small (TASK-97.7 / A1)
 
 A1 is the measurement the whole strategy hinges on: of the gap between our
 effective branching factor and the minimal-tree frontier, how much is pure move

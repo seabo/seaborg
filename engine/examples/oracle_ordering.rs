@@ -31,8 +31,10 @@
 //!     --example oracle_ordering -- tools/diag/bench-positions.epd 14 1 64
 //! ```
 //!
-//! Arguments (all optional, in order): EPD suite path, fixed depth, extra oracle replay passes
-//! (0 leaves just the specified real→oracle two-pass), transposition-table size in MB.
+//! Arguments (all optional, in order): EPD suite path, fixed depth, number of oracle passes,
+//! transposition-table size in MB. Oracle passes must be at least 1: 1 (the default) is the
+//! real→oracle two-pass this measurement reports; a higher value adds replay passes that chase the
+//! fixpoint.
 
 use chess::init::init_globals;
 use chess::position::Position;
@@ -57,6 +59,11 @@ fn main() {
     let iterations: usize = args
         .next()
         .map_or(1, |a| a.parse().expect("iterations must be an integer"));
+    assert!(
+        iterations >= 1,
+        "oracle passes must be at least 1: one oracle pass is needed to compare against the \
+         reference search"
+    );
     let hash_mb: usize = args
         .next()
         .map_or(64, |a| a.parse().expect("hash size must be an integer"));
