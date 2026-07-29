@@ -1,11 +1,11 @@
 ---
 id: TASK-89.6
 title: History-based interior quiet pruning
-status: In Progress
+status: Needs Human
 assignee:
   - '@codex'
 created_date: '2026-07-29 13:47'
-updated_date: '2026-07-29 15:01'
+updated_date: '2026-07-29 15:20'
 labels:
   - search
   - selectivity
@@ -57,4 +57,16 @@ This task adds history-based quiet pruning to the main-search interior and measu
 Selstats (AC#2) confirms the mechanism decisively. Fixed depth 14 on bench-positions.epd: interior quiet width more than halves — rem-depth 4 6.15->2.76, 5 9.51->4.14, 6 10.53->4.45, 7 7.13->3.31, 8 7.44->3.29 quiets/node; depth>8 unchanged (prune is capped at 8). Geomean EBF 2.710->2.619; nodes-to-depth-14 drop 20.36M->14.59M (-28%). Fixed 2M nodes/pos: mean depth reached 16.25->17.30 (+1.05 ply), EBF 2.472->2.370. LMR re-search rate rises 1.75%->2.68% (fixed depth) / 2.73%->3.58% (fixed nodes); non-PV fail-low 23.0%->26.3% / 25.1%->28.5% — both modest, not pathological.
 
 Regression surfaced by gives_correct_answers: the depth-24 KPvKP pawn-race (8/6pk/8/8/8/8/P7/K7 w) drops from a won >=+450 to cp 0. The candidate plays a2a4 and reads the win as a draw; interior history pruning removes the winning quiet king step-aside (a1b1/a1b2) and follow-up king maneuvers deep in the sparse endgame, where history is unreliable and maneuvering moves carry negative scores. Baseline finds a1b1 (+475 at depth 20, climbing past +1300). This is a genuine soundness cost of the flat hist<0 interior rule, and the reason AC#3 gates retention on a non-negative SPRT. Running the SPRT now as the arbiter.
+
+PARKED: Needs Human. Two coupled reasons.
+
+(1) Genuine soundness regression fails a required check. cargo test --workspace is red on search::tests::gives_correct_answers: the depth-24 KPvKP pawn-race (8/6pk/8/8/8/8/P7/K7 w) is a won >=+450 ending that the candidate reads as cp 0 and plays a2a4, because interior history pruning removes the winning quiet king step-aside (a1b1/a1b2) and its follow-up maneuvers deep in the sparse endgame, where history is unreliable and maneuvering moves carry negative scores. Baseline finds a1b1 (+475 at depth 20, climbing past +1300). This is a real defect, not an over-specified bound, so widening the test to accept a drawn score for a won ending would mask it and is not an acceptable fix.
+
+(2) The mandated retention SPRT (AC#1, AC#3) cannot be run trustworthily now. The shared measurement host (Apple M3 Pro, 12 cores) is saturated at load ~11 by another active session's open-ended node-budget gauntlet sweep in worktree task-92-unbalanced-opening-book. Stacking a concurrency-6 tc=10+0.1 SPRT on top oversubscribes to ~18 and causes time forfeits; BENCHMARKS.md and repo practice require an idle host and never trust contended time-based results. My launched SPRT was stopped to avoid biasing both runs.
+
+Decisions needed from a human:
+- (a) Provide/free a quiet measurement host (or authorize a scheduled quiet-time run) so the retention SPRT can run against the committed target 1dcb1eb: python3 tools/strength/strength_test.py --baseline <b46e8bb-release> --candidate <1dcb1eb-release> --limit tc=10+0.1 --concurrency 6 --hash-mb 64 --mode authoritative (elo0=-5 elo1=0 alpha=beta=0.05). Native release binaries staged at /tmp/sb-base-89.6 and /tmp/sb-cand-89.6.
+- (b) Decide whether the KP-endgame soundness cost should be fixed with a guard (e.g. skip the prune in pawn-only endgames / require non-pawn material) BEFORE measuring — which would change the rule from the measured shadow C3 and need re-profiling — or whether to revert per AC#3 if the SPRT is negative. Prior selectivity experiments (BENCHMARKS.md experiments 2 and 3) moved the profile correctly yet did not convert to Elo, so a negative/neutral SPRT is a live possibility.
+
+State: implementation + tests + selstats evidence committed on task-89.6-history-interior-quiet-pruning at 1dcb1eb (base b46e8bb). fmt and clippy -D warnings are green; only the endgame behaviour test is red. Worktree clean. Not moved to In Review because a required check is red and the retention gate is unmeasured.
 <!-- SECTION:NOTES:END -->
