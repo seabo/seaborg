@@ -1,11 +1,11 @@
 ---
 id: TASK-97.7
 title: 'A1: Oracle-ordering ceiling (the single most important measurement)'
-status: In Review
+status: Ready to Merge
 assignee:
   - '@claude'
 created_date: '2026-07-29 18:46'
-updated_date: '2026-07-29 20:29'
+updated_date: '2026-07-29 20:43'
 labels:
   - search
   - selectivity
@@ -30,10 +30,10 @@ Track A / item A1 — the single most important measurement in the investigation
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A two-pass oracle-ordering build measures node counts at fixed depth (12–16) on bench-positions.epd with true best moves forced to the front of ordering at every node
-- [ ] #2 EBF_real, EBF_oracle, and the frontier reference (~2.01) are reported, and the split EBF_real − EBF_oracle (free ordering headroom) versus EBF_oracle − frontier (eval/pruning-limited) is stated
-- [ ] #3 The instrumentation is temporary; no permanent engine change ships
-- [ ] #4 The result explicitly feeds guardrail 4: whether the free-EBF ordering lever is large enough to pursue
+- [x] #1 A two-pass oracle-ordering build measures node counts at fixed depth (12–16) on bench-positions.epd with true best moves forced to the front of ordering at every node
+- [x] #2 EBF_real, EBF_oracle, and the frontier reference (~2.01) are reported, and the split EBF_real − EBF_oracle (free ordering headroom) versus EBF_oracle − frontier (eval/pruning-limited) is stated
+- [x] #3 The instrumentation is temporary; no permanent engine change ships
+- [x] #4 The result explicitly feeds guardrail 4: whether the free-EBF ordering lever is large enough to pursue
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -162,4 +162,38 @@ Verification (re-run on 05b8ed0):
 - cargo test --workspace: PASS (0 failed)
 Known failures: none. Worktree clean; review the target at 05b8ed0.
 ---
+
+author: @claude
+created: 2026-07-29 20:43
+---
+Verdict: approved
+Reviewed branch: task-97.7-oracle-ordering-ceiling
+Implementation target (code): 05b8ed026a9fe1f896fcdaa69270c4d36d3a24ce
+Base: a360df285502e85d85d4a8c9a0f5be88cc54a5ee
+
+Human explicitly authorized this reviewer to sign off after the two doc/harness fixes were applied in-session (low-risk, documentation/harness only). REV-1-01 and REV-1-02 are resolved in 05b8ed0.
+
+Acceptance criteria (all proven):
+- AC#1: SearchEngine::oracle_profile + the oracle_ordering example measure node counts at fixed depth on bench-positions.epd with the reference pass's proved best move forced to the front at every node. Reproduced at depth 12.
+- AC#2: EBF_real, EBF_oracle, and the ~2.01 frontier are reported with the split (free ordering 0.04-0.05 vs eval/pruning-limited 0.46-0.89) in BENCHMARKS.md Phase 4 and the example output.
+- AC#3: instrumentation is temporary — all oracle code is #[cfg(feature="oracle")]-gated and the example is required-features gated; default build byte-behaviour unchanged (default clippy + full test suite green).
+- AC#4: BENCHMARKS.md Phase 4 reads the result against guardrail 4 — the free-EBF ordering lever is small, pointing the bulk of the gap back to the eval flywheel.
+
+Correctness: ordering-only isolation confirmed — load_hash injects the oracle move into the hash segment and segregate_duplicates de-dups later phases against that segment (not self.hash_move), so the real TT move still flows through its generated phase (no move dropped/double-searched) and still drives IIR/singular; valid_move guards Zobrist collisions.
+
+Verification on 05b8ed0:
+- cargo fmt --check: PASS (exit 0)
+- cargo clippy --workspace --all-targets -- -D warnings: PASS (exit 0)
+- cargo clippy --workspace --all-targets --all-features -- -D warnings (clean CARGO_TARGET_DIR): PASS (exit 0)
+- cargo test --workspace: PASS (exit 0)
+- depth-12 oracle_ordering run reproduces BENCHMARKS.md exactly; iterations=0 aborts with a clear guard message (no index panic)
+
+The approved code target is 05b8ed0. This task-only approval commit is the branch tip presented for merge.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+A1 oracle-ordering ceiling: a two-pass, off-by-default (oracle feature) measurement forces each node's proved best move to the front and compares EBF_real vs EBF_oracle at fixed depth 12/14/16 on bench-positions.epd. Result: the free ordering lever is small — EBF_real-EBF_oracle is 0.04-0.05 (4-9% of the gap to the ~2.01 frontier), the rest is eval/pruning-limited (flywheel-gated); node savings are bimodal and grow with depth (0.86->0.77). No permanent engine change ships (all oracle code #[cfg(feature="oracle")]-gated). Verified: fmt/clippy(default+all-features clean)/test all green on 05b8ed0, and a depth-12 run reproduces the recorded figures exactly.
+<!-- SECTION:FINAL_SUMMARY:END -->
