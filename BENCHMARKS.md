@@ -1029,6 +1029,83 @@ Depth-reached-at-time is read separately from the **uninstrumented** release
 ratios and node counts reproduce on any host; the time figure is host- and
 load-dependent.
 
+## Selectivity re-baseline and interior-width profile (2026-07-29)
+
+A diagnostic re-baseline on current `master` (commit `90f1dea`, Apple M-series, 1
+thread, 64 MB, `bench-positions.epd`), motivated by the observation that both the
+TASK-82 strength-gulf table and the TASK-88 profile predate substantial search
+and NNUE work (the LMR log table, incremental NNUE, the 89.x tuning). It confirms
+and sharpens the diagnosis, and adds two new self-instrumented views that localise
+the loss and rank the fix. The instruments live in
+`tools/diag/selectivity_profile.py` and the `selstats` feature (branch
+`diag-phase1-depth-width`, commits `505adc9` and `9ac84b1`); both are
+behaviour-transparent — a `selstats` build searches the same tree (identical EBF,
+quiescence fraction, first-move-cutoff) as a default build.
+
+### Phase 0 — the gap is now entirely selectivity, not speed
+
+NPS / EBF vs Stockfish 18 (`go depth 14` + `movetime 1500`):
+
+| Metric | TASK-82 | **now (`90f1dea`)** | SF18 now |
+|---|---|---|---|
+| Aggregate NPS | 642 k | **888 k** | 883 k |
+| Geomean EBF @ depth 14 | 2.42 | **2.297** | 2.007 |
+| Mean nodes to reach depth 14 | 373 k | **170 k** | 24.6 k |
+| Median depth @ 1500 ms | 14 | **17** | 23 |
+
+Single-thread NPS has reached **parity** (was 0.88×; the incremental-NNUE work
+closed it), so the remaining deficit is **100 % selectivity**. The ~6-ply depth
+gap (17 vs 23) is fully explained by the EBF gap: `(2.297 / 2.007)^14 ≈ 6.6×`,
+which matches the measured 6.9× node-to-depth ratio. No residual unexplained hole.
+
+### Phase 1 — the excess width is a cliff at the LMP boundary
+
+A new per-remaining-depth width profile counts, over the LMP-eligible population
+(non-PV, not in check), the moves and quiet moves actually recursed into per node,
+bucketed by remaining depth (fixed depth 14):
+
+| rem-depth | nodes | quiets/node | |
+|---:|---:|---:|---|
+| 1–3 | 2.27 M–317 k | 0.83 → 1.99 | LMP active (`LMP_MAX_DEPTH = 3`) |
+| **4** | 136 k | **6.15** | **LMP off — quiet width triples** |
+| 5 | 48 k | 9.51 | |
+| 6 | 21 k | **10.53** | peak |
+| 7–12 | ~8 k–166 | ~7 | fat tail |
+
+The instant move-count pruning switches off at remaining depth 4 the searched
+quiet fan-out triples and peaks at ~10.5 quiets/node around depth 6. The interior
+(remaining depth 4–8) is searched at near-full quiet width — this band is the
+EBF-2.3 penalty, localised.
+
+A non-obvious corollary: the live keep-count `late_move_count(d) = 3 + d²/2`
+would, if simply un-capped, keep 11 / 15 / 21 moves at depths 4 / 5 / 6 — all
+*above* the measured 6–10 width — so merely lifting `LMP_MAX_DEPTH` prunes nothing
+in the fat band. The lever is a **flatter** schedule and/or **history-based**
+pruning, not a deeper cap.
+
+### Phase 2 — shadow-counter ranking of the candidate fix
+
+A new non-acting shadow screen scores candidate rules on the quiet-phase moves the
+live search actually searched: **coverage** = fraction removed (tree savings);
+**damage** = fraction of the quiets that actually raised alpha or forced the cutoff
+that the rule would wrongly kill (soundness cost, a pessimistic upper bound).
+Killers, counter-move and the TT move are separate phases and already exempt.
+Fixed depth 14 (the fixed-nodes run agrees):
+
+| candidate | coverage | damage | coverage/damage |
+|---|---:|---:|---:|
+| keep = 2 + d | 59.6 % | 17.75 % | 3.4 |
+| keep = 3 + d | 51.4 % | 11.66 % | 4.4 |
+| keep = 4 + d²/4 | 47.7 % | 11.16 % | 4.3 |
+| **history < 0, d ≤ 8** | **41.9 %** | **5.68 %** | **7.4** |
+
+**History-based interior pruning is decisively the best lever** — ~1.7× the
+coverage-per-damage of any move-count schedule — because it prunes by move
+*quality* (quiets whose history says they have never produced a cutoff) rather
+than blindly by position. This is the candidate carried into **TASK-89.6**
+(history-based interior quiet pruning), to be validated by self-play SPRT at
+`tc=10+0.1`; the shadow screen ranks, it does not green-light.
+
 ## Selectivity tuning experiments (from the profile above)
 
 Each experiment below is one knob from the ranked list, measured individually by

@@ -48,6 +48,39 @@ pub struct Tracer {
     sel: SelStats,
 }
 
+/// Number of remaining-depth buckets in the selectivity width profile. Interior search depth stays
+/// well below this in the measured regimes; the final bucket absorbs anything deeper. Kept at or
+/// below 32 so the array still derives `Default`.
+#[cfg(feature = "selstats")]
+const SEL_DEPTH_BUCKETS: usize = 24;
+
+/// Number of candidate quiet-pruning rules the shadow counters evaluate. Each is scored without
+/// acting on the search, so a run ranks the levers before any behaviour change is written.
+#[cfg(feature = "selstats")]
+pub const SHADOW_CANDIDATES: usize = 4;
+
+/// For a quiet-phase move the live search is about to search, which candidate pruning rules *would*
+/// have removed it. Non-acting: the result feeds the shadow counters only. `history` is the move's
+/// combined quiet history — higher is better, and a negative value marks a move that has historically
+/// failed to produce a cutoff. The rules deliberately span two families:
+///
+/// - C0 linear `keep = 3 + depth`  — a gentle move-count cap, extended to every remaining depth.
+/// - C1 linear `keep = 2 + depth`  — a sharper linear cap.
+/// - C2 `keep = 4 + depth^2/4`     — a flatter quadratic than the live `3 + depth^2/2`, all depths.
+/// - C3 history: `hist < 0`, `depth <= 8`, past a three-move prefix — prunes below-average quiets in
+///   the tree interior regardless of move count.
+#[cfg(feature = "selstats")]
+fn shadow_prune_mask(depth: i16, move_count: u32, history: i32) -> [bool; SHADOW_CANDIDATES] {
+    let mc = i32::from(depth);
+    let count = move_count as i32;
+    [
+        count > 3 + mc,
+        count > 2 + mc,
+        count > 4 + mc * mc / 4,
+        depth <= 8 && move_count > 3 && history < 0,
+    ]
+}
+
 /// Per-search selectivity counters, accumulated only when the `selstats` feature is on.
 ///
 /// These answer "where does the search spend its effective depth" from the engine's own point of
@@ -116,6 +149,28 @@ pub struct SelStats {
     pub tt_cutoffs: u64,
     /// Quiescence nodes that were in check and therefore widened from captures-only to every evasion.
     pub q_incheck: u64,
+    /// Per-remaining-depth tree-width profile over the LMP-eligible node population — non-PV nodes
+    /// that are not in check, which is exactly where move-count and history pruning of the quiet tail
+    /// could act. Indexed by remaining depth, the final bucket absorbing deeper nodes. `depth_nodes`
+    /// counts such nodes that ran a move loop; `depth_moves` sums the moves actually recursed into
+    /// (counted after the current move-count and futility prunes have already removed a tail), and
+    /// `depth_quiets` the quiet subset of those. `depth_moves / depth_nodes` by depth shows where the
+    /// tree stays wide: the residual quiet width at remaining depths past `LMP_MAX_DEPTH` is the
+    /// untapped pruning opportunity these counters exist to size.
+    pub depth_nodes: [u64; SEL_DEPTH_BUCKETS],
+    pub depth_moves: [u64; SEL_DEPTH_BUCKETS],
+    pub depth_quiets: [u64; SEL_DEPTH_BUCKETS],
+    /// Shadow evaluation of candidate quiet-pruning rules (see [`shadow_prune_mask`]), scored on the
+    /// quiet-phase moves the live search actually searched at LMP-eligible nodes — so every count is
+    /// an *incremental* effect beyond today's pruning. `shadow_denom` is the number of such moves
+    /// seen; `shadow_pruned[c]` how many candidate `c` would remove (coverage = tree savings).
+    /// `shadow_good[c]` counts, among the quiet moves that actually raised alpha or forced the cutoff
+    /// (`quiet_good_total` of them), how many candidate `c` would wrongly kill (damage = soundness
+    /// cost). A good lever has high coverage and near-zero damage.
+    pub shadow_denom: u64,
+    pub shadow_pruned: [u64; SHADOW_CANDIDATES],
+    pub quiet_good_total: u64,
+    pub shadow_good: [u64; SHADOW_CANDIDATES],
 }
 
 impl Default for Tracer {
@@ -425,6 +480,53 @@ impl Tracer {
         self.sel.q_incheck += 1;
     }
 
+    /// Record an LMP-eligible node (non-PV, not in check) that ran a move loop, keyed by its remaining
+    /// depth, for the tree-width profile. This is the denominator for the per-depth width means.
+    #[inline(always)]
+    pub fn sel_depth_node(&mut self, depth: i16) {
+        let bucket = depth.clamp(0, SEL_DEPTH_BUCKETS as i16 - 1) as usize;
+        self.sel.depth_nodes[bucket] += 1;
+    }
+
+    /// Record a move that survived the current move-count and futility prunes and is about to be
+    /// searched at an LMP-eligible node of the given remaining depth, noting whether it is quiet. The
+    /// totals therefore measure the tree width that remains *after* today's pruning, so the residual
+    /// quiet count is exactly what a deeper-reaching prune could still remove.
+    #[inline(always)]
+    pub fn sel_move_searched(&mut self, depth: i16, is_quiet: bool) {
+        let bucket = depth.clamp(0, SEL_DEPTH_BUCKETS as i16 - 1) as usize;
+        self.sel.depth_moves[bucket] += 1;
+        if is_quiet {
+            self.sel.depth_quiets[bucket] += 1;
+        }
+    }
+
+    /// Score a quiet-phase move the live search searched at an LMP-eligible node against every
+    /// candidate rule: bumps the coverage denominator and each candidate's would-prune count.
+    #[inline(always)]
+    pub fn sel_shadow_searched(&mut self, depth: i16, move_count: u32, history: i32) {
+        self.sel.shadow_denom += 1;
+        let mask = shadow_prune_mask(depth, move_count, history);
+        for (c, &pruned) in mask.iter().enumerate() {
+            if pruned {
+                self.sel.shadow_pruned[c] += 1;
+            }
+        }
+    }
+
+    /// Score a quiet-phase move that raised alpha or forced the cutoff at an LMP-eligible node — a
+    /// move no rule should prune, so each candidate that would is charged a soundness cost.
+    #[inline(always)]
+    pub fn sel_shadow_good(&mut self, depth: i16, move_count: u32, history: i32) {
+        self.sel.quiet_good_total += 1;
+        let mask = shadow_prune_mask(depth, move_count, history);
+        for (c, &pruned) in mask.iter().enumerate() {
+            if pruned {
+                self.sel.shadow_good[c] += 1;
+            }
+        }
+    }
+
     /// Serialise the full selectivity profile for this search as one compact JSON object, tagged with
     /// the deepest completed `depth`. Combines the selectivity counters with the always-on node, TT,
     /// and killer figures so a single line captures the whole profile. Field order is stable so the
@@ -439,7 +541,7 @@ impl Tracer {
         let ebf = f64::from(self.eff_branching(depth));
 
         let s = &self.sel;
-        let mut out = String::with_capacity(768);
+        let mut out = String::with_capacity(1024);
         out.push('{');
         let _ = write!(
             out,
@@ -482,8 +584,18 @@ impl Tracer {
         );
         let _ = write!(
             out,
-            "\"pv_scout\":{},\"pv_scout_research\":{},\"asp_windows\":{},\"asp_fail_low\":{},\"asp_fail_high\":{},\"q_incheck\":{}",
+            "\"pv_scout\":{},\"pv_scout_research\":{},\"asp_windows\":{},\"asp_fail_low\":{},\"asp_fail_high\":{},\"q_incheck\":{},",
             s.pv_scout, s.pv_scout_research, s.asp_windows, s.asp_fail_low, s.asp_fail_high, s.q_incheck,
+        );
+        let _ = write!(
+            out,
+            "\"depth_nodes\":{:?},\"depth_moves\":{:?},\"depth_quiets\":{:?}",
+            s.depth_nodes, s.depth_moves, s.depth_quiets,
+        );
+        let _ = write!(
+            out,
+            ",\"shadow_denom\":{},\"shadow_pruned\":{:?},\"quiet_good_total\":{},\"shadow_good\":{:?}",
+            s.shadow_denom, s.shadow_pruned, s.quiet_good_total, s.shadow_good,
         );
         out.push('}');
         out

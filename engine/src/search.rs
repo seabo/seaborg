@@ -2703,6 +2703,21 @@ impl<'engine> Search<'engine> {
                     continue;
                 }
 
+                // Selectivity width profile. This move survived move-count and futility pruning and is
+                // about to be searched, so it counts toward the residual tree width at LMP-eligible
+                // nodes. Recorded before the reduction below, which shrinks the move's search depth but
+                // does not remove the node — the untapped opportunity is to prune it away entirely.
+                #[cfg(feature = "selstats")]
+                if !Node::pv() && !node_in_check {
+                    self.trace.sel_move_searched(depth, mov.is_quiet());
+                    // Phase 2 shadow counters: score this searched quiet-phase move against the
+                    // candidate pruning rules. `lmr_history` was sampled above for quiet moves.
+                    if phase == Phase::Quiet {
+                        self.trace
+                            .sel_shadow_searched(depth, u32::from(move_count), lmr_history);
+                    }
+                }
+
                 // Step 17 (applied). Late move reduction.
                 //
                 // Search a late, quiet move with less depth first: ordering has already placed the
@@ -2853,6 +2868,14 @@ impl<'engine> Search<'engine> {
                     if value > alpha {
                         best_move = mov;
 
+                        // Phase 2 shadow counters: this quiet move raised alpha or forced the cutoff,
+                        // so any candidate that would have pruned it is charged a soundness cost.
+                        #[cfg(feature = "selstats")]
+                        if !Node::pv() && !node_in_check && phase == Phase::Quiet {
+                            self.trace
+                                .sel_shadow_good(depth, u32::from(move_count), lmr_history);
+                        }
+
                         if Node::pv() && value < beta {
                             // Only an exact score at a PV node establishes a variation worth
                             // reporting. A fail-high returns a lower bound whose "best" move was
@@ -2908,6 +2931,16 @@ impl<'engine> Search<'engine> {
 
         if self.stopping() {
             return None;
+        }
+
+        // Record this fully-searched node in the per-remaining-depth width profile. Only the
+        // LMP-eligible population (non-PV, not in check) is counted, matching the per-move record
+        // above, so `depth_moves / depth_nodes` reads as the quiet-tail width that move-count or
+        // history pruning could still act on at each remaining depth. A move-less node is a terminal
+        // mate/stalemate, not a searched interior node, and is excluded.
+        #[cfg(feature = "selstats")]
+        if !Node::pv() && !node_in_check && move_count > 0 {
+            self.trace.sel_depth_node(depth);
         }
 
         debug_assert!(
