@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@george'
 created_date: '2026-07-25 12:24'
-updated_date: '2026-07-29 06:58'
+updated_date: '2026-07-29 07:01'
 labels:
   - nnue
 dependencies:
@@ -71,4 +71,6 @@ Screen COMPLETE (14/14, SWEEP_EXIT=0). Frontier (4): width h128, baseline h256, 
 Bucket retrain (60 epochs, same config) RESULT -- refutes the epochs-undertraining hypothesis:
 val@30 -> val@60: baseline 0.011288 -> 0.011303 (flat, confirms converged); b1 0.011429 -> 0.011429 (ZERO change, already converged); b8 0.011944 -> 0.011871 (-0.6%, still ~5% above baseline). Doubling epochs did NOT close the bucket gap. So the earlier tail-slope read of 'undertraining' was misleading; more epochs is not the fix.
 BUT not an architecture verdict either: at 60 epochs b8 TRAIN loss (0.011603) is still higher than baseline TRAIN (0.010969) despite b8 having more capacity. A higher-capacity net underfitting even the train set => the training RECIPE is not exploiting the capacity (candidate causes: fixed LR 1e-2 wrong for the deeper stack; 256->16 bottleneck choking gradient flow; per-bucket routing weakening signal). Indicated next lever = training-recipe investigation (LR/schedule/init) for the deeper bucketed heads -- a proper follow-up task, NOT more epochs and NOT abandoning buckets. Screen still cannot fairly rank the v2 features until (a) this recipe issue and (b) the inference-cost overhead are addressed.
+
+gen-002-vs-new-corpus loss decomposition (loss_decomp.py; reconstruction reproduces the screen's 0.011288 exactly -> forward validated). All on the new by-shard val split, fixed h256 architecture: gen-002 (old bootstrap data) 0.012378; retrained h256 (new corpus) 0.011288; h512 (new corpus) 0.011119. Decomposition of the gen3 gain: corpus+recipe -8.8% (dominant), width h256->h512 -1.5% (secondary), total -10.2%. Answers 'was the corpus work worth it': yes, the corpus upgrade is the big lever. Caveat: loss proxy (distribution shift in gen-002's labels); SPRT is the strength arbiter.
 <!-- SECTION:NOTES:END -->

@@ -80,3 +80,23 @@ the loss/NPS knee; h512 should be added to the phase-2 SPRT set (see below).
 - In progress: bucket higher-epoch (60) retrain to quantify the undertraining, and a gen-002-vs-new-corpus
   loss decomposition at fixed h256 (isolates the corpus contribution from the width contribution).
 - The selected network + SPRT-grounded rationale (AC#2, AC#3) are recorded after phase 2.
+
+## gen-002 vs new-corpus loss decomposition (fixed h256, same val split)
+
+Both evaluated on the new corpus's held-out val shards via `loss_decomp.py` (dequantize
+the SBNN into an `NnueModel`, reuse the trainer's `_evaluate`; the retrained-h256
+reconstruction reproduces the screen's 0.011288 exactly, validating the forward).
+
+| Net | arch | trained on | val loss |
+| --- | --- | --- | ---: |
+| gen-002 (shipped) | h256 v1 | old bootstrap data | 0.012378 |
+| retrained baseline | h256 v1 | new 103M corpus | 0.011288 |
+| h512 (proposed gen3) | h512 v1 | new 103M corpus | 0.011119 |
+
+- Corpus+recipe (same h256): −8.8% (0.012378 → 0.011288) — dominant.
+- Width (h256 → h512): −1.5% (0.011288 → 0.011119).
+- Total (gen-002 → gen3 h512): −10.2%.
+
+The corpus upgrade is the big lever; width is secondary — consistent with the label-limited
+reading. Loss is a proxy (gen-002's labels differ; some of the gap is distribution shift);
+SPRT remains the strength arbiter.
