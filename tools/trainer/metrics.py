@@ -44,8 +44,10 @@ WINNER_DEADBAND_CP = 20
 
 
 def _sigmoid(x: np.ndarray) -> np.ndarray:
-    """Numerically stable logistic, elementwise."""
-    return np.where(x >= 0, 1.0 / (1.0 + np.exp(-x)), np.exp(x) / (1.0 + np.exp(x)))
+    """Logistic, elementwise. Inputs are clamped to a range where ``exp`` cannot
+    overflow (sigmoid has already saturated to 0/1 well before), so mate-band
+    logits do not raise a warning."""
+    return 1.0 / (1.0 + np.exp(-np.clip(x, -60.0, 60.0)))
 
 
 @dataclass
