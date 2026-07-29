@@ -3,11 +3,11 @@ id: TASK-91
 title: >-
   Extend the selectivity profile: per-remaining-depth width and shadow-prune
   ranking
-status: In Progress
+status: In Review
 assignee:
   - '@george'
 created_date: '2026-07-29 13:57'
-updated_date: '2026-07-29 13:57'
+updated_date: '2026-07-29 14:00'
 labels:
   - search
   - selectivity
@@ -57,3 +57,27 @@ Implementation is already complete on branch diag-phase1-depth-width (commits 50
 
 Note: implementation already committed on this branch (505ac9..dd47502); this task formalises it for independent review.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Formalises diagnostic work already committed on this branch (505adc9 width profile, 9ac84b1 shadow-counters, dd47502 BENCHMARKS record + follow-up TASK-89.6 file). No code was changed while formalising.
+
+Delivered: per-remaining-depth width profile and shadow-counter ranking in the selstats instrumentation (engine/src/trace.rs, engine/src/search.rs), parsed and printed by tools/diag/selectivity_profile.py; BENCHMARKS.md "Selectivity re-baseline and interior-width profile (2026-07-29)" section.
+
+Behaviour-transparency evidence (AC#3): fixed-depth-14 profile over bench-positions.epd is byte-for-byte identical on the pre-change and post-change selstats builds on every metric that reflects the tree shape - EBF 2.710, quiescence 53.3%, first-move-cutoff 88.5% - confirming the added counters observe decisions without changing them. All new fields/increments sit behind #[cfg(feature = "selstats")] and are absent from default builds.
+
+Note for the reviewer: the follow-up behaviour-change task TASK-89.6 (history-based interior quiet pruning) was created before this task and its file rides on this branch (commit dd47502); it is intentional context, not part of this task diff.
+
+Implementation handoff
+Branch: diag-phase1-depth-width
+Worktree: /Users/seabo/seaborg-worktrees/diag-phase1-depth-width
+Base: 90f1dea
+Implementation target: dd47502
+Resolved findings: none
+Verification:
+- cargo fmt --check: pass (exit 0)
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (exit 0)
+- cargo test --workspace: pass (722 passed, 0 failed)
+Known failures: none
+<!-- SECTION:NOTES:END -->
