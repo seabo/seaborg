@@ -72,10 +72,18 @@ impl<'engine> Search<'engine> {
             processed ^= from_set;
 
             if !(from_set & may_xray).is_empty() {
-                let from = from_set
-                    .to_square()
-                    .expect("least valuable attacker must be a single square");
-                atta_def |= self.pos.attack_defend_sliding(occ, from) & !processed;
+                // Removing the piece on `from` can uncover a sliding attacker that was lined up
+                // behind it on the ray toward `to`. Recompute the sliders that bear on `to` under
+                // the updated occupancy and fold in any not already accounted for.
+                //
+                // The query must target `to`, not the vacated `from`. A slider that attacks `from`
+                // along some *other* line — an enemy rook on `from`'s rank, a bishop on the
+                // opposite diagonal — does not bear on `to` and cannot legally recapture there;
+                // querying `from` would inject it as a phantom recapturer and mis-value the
+                // exchange. Only sliders collinear with the from->to ray can be genuine x-rays, and
+                // querying `to` returns exactly those. `& !processed` excludes pieces already spent
+                // in the sequence, whose real-board squares still appear in the piece bitboards.
+                atta_def |= self.pos.attack_defend_sliding(occ, to) & !processed;
             }
 
             (attacker, from_set) = self.least_valuable_piece(atta_def, side);
@@ -173,12 +181,26 @@ mod tests {
                 ("k7/8/3n4/5N2/8/8/8/K7 b - - 0 1", Square::D6, Square::F5, PieceType::Knight, PieceType::Knight, Score::cp(300)),
                 ("k4r2/8/8/5N2/8/8/8/K7 b - - 0 1", Square::F8, Square::F5, PieceType::Knight, PieceType::Rook, Score::cp(300)),
                 ("k4r2/8/8/5N2/8/6N1/8/K7 b - - 0 1", Square::F8, Square::F5, PieceType::Knight, PieceType::Rook, Score::cp(-200)),
-                ("k6q/6b1/5b2/4B3/8/2B5/1B6/K7 b - - 0 1", Square::F6, Square::E5, PieceType::Bishop, PieceType::Bishop, Score::cp(0)),
+                // A bishop battery on the a1-h8 diagonal. Black attacks e5 with three pieces
+                // (f6, g7, h8) and White defends with two (c3, b2), so Black nets one bishop:
+                // Bxe5, Bxe5, Bxe5, Bxe5, Qxe5 leaves Black up 300 with no White recapture left.
+                ("k6q/6b1/5b2/4B3/8/2B5/1B6/K7 b - - 0 1", Square::F6, Square::E5, PieceType::Bishop, PieceType::Bishop, Score::cp(300)),
                 ("k7/8/2B2n2/8/4Q3/8/3n1N2/K7 b - - 0 1", Square::F6, Square::E4, PieceType::Queen, PieceType::Knight, Score::cp(900)),
                 ("k7/8/8/3p1p2/4P3/3P1P2/8/K7 b - - 0 1", Square::D5, Square::E4, PieceType::Pawn, PieceType::Pawn, Score::cp(0)),
                 ("k7/7b/8/3p1p2/4P3/3P1P2/8/K7 b - - 0 1", Square::D5, Square::E4, PieceType::Pawn, PieceType::Pawn, Score::cp(100)),
                 ("k7/7b/8/5p2/4PK2/8/5N2/8 b - - 0 1", Square::F5, Square::E4, PieceType::Pawn, PieceType::Pawn, Score::cp(0)),
                 ("8/1b6/3k4/3p4/3KP3/8/6B1/8 w - - 0 1", Square::E4, Square::D5, PieceType::Pawn, PieceType::Pawn, Score::cp(100)),
+
+                // X-ray reveal must query the from->to ray, not the vacated origin. An enemy slider
+                // sharing the origin's rank/file/diagonal but off that ray cannot recapture on `to`.
+
+                // e4xd5 wins a free pawn. The black rook on a4 attacks the vacated e4 along rank 4
+                // but does not bear on d5, so it must not be counted as a defender.
+                ("k7/8/8/3p4/r3P3/8/8/7K w - - 0 1", Square::E4, Square::D5, PieceType::Pawn, PieceType::Pawn, Score::cp(100)),
+
+                // Rd1xd4 wins a free pawn. The black rook on a1 attacks the vacated d1 along rank 1
+                // but does not bear on d4, so it must not be counted as a recapturer.
+                ("k7/8/8/8/3p4/8/8/r2R3K w - - 0 1", Square::D1, Square::D4, PieceType::Pawn, PieceType::Rook, Score::cp(100)),
 
                 // Promotions. A pawn reaching the back rank is scored as a queen appearing on
                 // `to`, so the exchange picks up the queen/pawn difference.
@@ -214,7 +236,7 @@ mod tests {
             let tt = crate::tt::Table::new(1);
             let mut search = Search::new(pos, &flag, None, &tt);
             let see = search.see(from, to, target, attacker);
-            assert_eq!(see, score);
+            assert_eq!(see, score, "fen={fen} from={from:?} to={to:?}");
         }
     }
 }
