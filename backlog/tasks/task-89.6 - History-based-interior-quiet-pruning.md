@@ -1,11 +1,11 @@
 ---
 id: TASK-89.6
 title: History-based interior quiet pruning
-status: Needs Human
+status: In Progress
 assignee:
   - '@codex'
 created_date: '2026-07-29 13:47'
-updated_date: '2026-07-29 15:20'
+updated_date: '2026-07-29 16:28'
 labels:
   - search
   - selectivity
@@ -69,4 +69,14 @@ Decisions needed from a human:
 - (b) Decide whether the KP-endgame soundness cost should be fixed with a guard (e.g. skip the prune in pawn-only endgames / require non-pawn material) BEFORE measuring — which would change the rule from the measured shadow C3 and need re-profiling — or whether to revert per AC#3 if the SPRT is negative. Prior selectivity experiments (BENCHMARKS.md experiments 2 and 3) moved the profile correctly yet did not convert to Elo, so a negative/neutral SPRT is a live possibility.
 
 State: implementation + tests + selstats evidence committed on task-89.6-history-interior-quiet-pruning at 1dcb1eb (base b46e8bb). fmt and clippy -D warnings are green; only the endgame behaviour test is red. Worktree clean. Not moved to In Review because a required check is red and the retention gate is unmeasured.
+
+UNBLOCKED: rig (24-core, idle) available for SPRTs. Investigated the soundness fix per the two approved directions.
+
+#2 depth-scaled history margin: DEAD END (data-driven). The winning maneuvering move and the junk quiet tail both sit at only mildly-negative history, so no magnitude threshold separates them. A margin large enough to save the KPvKP win (K=2048/depth) prunes essentially nothing on bench-positions.epd (profile byte-identical to baseline); any smaller margin re-breaks the win. Reverted.
+
+#3 quiet-mobility floor: THE FIX. The failure is low-mobility, not history-magnitude. A lone king has <=8 destinations, so requiring a minimum quiet count before pruning exempts the whole king-and-pawn class while barely touching the middlegame interior (15-40 quiets/node). Added OrderedMoves::quiet_count() and HISTORY_PRUNING_MIN_QUIETS=12. Results: KPvKP win now tracks the un-pruned search from depth 19 (was collapsed to a draw); floor=12 keeps ~90% of the flat rule's EBF reduction (fixed-depth-14 EBF 2.710->2.628 vs flat 2.619) and +0.9 of the +1.05 ply at fixed 2M nodes. Committed b6bbf5d. fmt/clippy/test green; added a theory-agnostic endgame regression test (pruning must never turn the un-pruned search's won ending into a draw). The one lichess concurrency test that failed under concurrent load is pre-existing flaky (passes 3/3 in isolation).
+
+SPRT #1 (upper bound, UNSOUND flat 1dcb1eb vs base, rig, tc=10+0.1, c=22): candidate 289-595-423, Elo -35.7 [-54.8,-16.9] over 1307 games. Decisively negative; stopped early (conclusive as a diagnostic). Open question it leaves: is the loss the mechanism or the soundness losses the floor fixes?
+
+SPRT #2 (RETENTION, SOUND floor-12 b6bbf5d vs base, same config) LAUNCHED on rig, running. This decides keep (AC#3) vs revert.
 <!-- SECTION:NOTES:END -->
