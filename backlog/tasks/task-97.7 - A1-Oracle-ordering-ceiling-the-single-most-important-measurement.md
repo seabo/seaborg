@@ -5,7 +5,7 @@ status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-29 18:46'
-updated_date: '2026-07-29 20:28'
+updated_date: '2026-07-29 20:29'
 labels:
   - search
   - selectivity
@@ -147,5 +147,19 @@ Verification on target 05b8ed0:
 - cargo clippy --workspace --all-targets --all-features -- -D warnings (clean CARGO_TARGET_DIR): PASS (exit 0)
 - cargo test --workspace: PASS (exit 0)
 - iterations=0 now aborts with the guard message (no index panic); depth-12 run still reproduces BENCHMARKS.md exactly
+---
+
+author: @claude
+created: 2026-07-29 20:29
+---
+Handoff updated — new immutable target.
+Implementation target: 05b8ed026a9fe1f896fcdaa69270c4d36d3a24ce (supersedes 2594608)
+Base: a360df285502e85d85d4a8c9a0f5be88cc54a5ee
+Change since first handoff: folded in two corrections found before review — (1) assert the oracle-pass argument is >= 1 in the oracle_ordering example (it reads passes[1], so 0 would panic on an out-of-bounds index), with a clearer usage doc; (2) fix the BENCHMARKS.md Phase 4 heading tag to TASK-97.7 (was mis-typed TASK-97.1). No change to the measurement, the results, or the engine hooks.
+Verification (re-run on 05b8ed0):
+- cargo fmt --check: PASS
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: PASS (no warnings; builds the oracle path and example)
+- cargo test --workspace: PASS (0 failed)
+Known failures: none. Worktree clean; review the target at 05b8ed0.
 ---
 <!-- COMMENTS:END -->
