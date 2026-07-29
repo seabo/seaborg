@@ -100,3 +100,37 @@ reconstruction reproduces the screen's 0.011288 exactly, validating the forward)
 The corpus upgrade is the big lever; width is secondary — consistent with the label-limited
 reading. Loss is a proxy (gen-002's labels differ; some of the gap is distribution shift);
 SPRT remains the strength arbiter.
+
+## Phase 2 — fixed-TC SPRT and selection (AC#2, AC#3)
+
+The four frontier finalists played SPRT vs gen-002 at `tc=10+0.1`, `elo0=0/elo1=5`,
+α=β=0.05, on the rig (AMD Ryzen 9 3900XT, concurrency 11, fastchess alpha 1.7.0).
+Recorded with full attribution in `BENCHMARKS.md`.
+
+| Candidate vs gen-002 | Verdict | Elo | Games (W-D-L) |
+| --- | --- | ---: | --- |
+| h256 (gen-002 arch, new corpus) | PASS | +25.9 ± 10.7 | 2228 (852-690-686) |
+| h512 (v2 width) | PASS | +28.0 ± 11.6 | 2212 (794-802-616) |
+| h1024 | FAIL | −100.5 ± 22.2 | 636 (130-197-309) |
+| h128 | FAIL | −26.8 ± 12.8 | 2132 (507-954-671) |
+
+The games confirm the screen's reading exactly:
+
+- **The corpus is the whole gain.** h256 — gen-002's own architecture retrained on the new
+  corpus — already scores +25.9. h512 adds only +2.1 (inside the error bars): **width buys no
+  measurable Elo.** The +28 gen3 result is ~93% corpus, ~7% width.
+- **h1024 is −100 Elo** — the textbook "accurate-but-too-slow loses on the clock": its lower
+  loss can't pay for a 434k-vs-717k NPS deficit at a real time control.
+- **h128 is −27** — too little eval quality despite higher NPS.
+
+**Selected network: h256** (gen-002 architecture, retrained on `corpus-gen-002`). h256 and
+h512 are statistically indistinguishable and h256 is ~10% faster, so the width step is not
+justified by fixed-TC Elo. h512 is a valid alternative if future richer data is expected to
+reward the headroom.
+
+**Label-limited vs capacity-limited (AC#3): label-limited.** At this size, more capacity does
+not convert to Elo (h512 tied, h1024 −100), while the corpus upgrade alone gave +26. The
+train/val gap widens with width (1.2%→7.4% across h128→h1024) with val loss flat past ~h512:
+adding parameters fits the training labels but not held-out ones. The next investment is
+**better labels** — higher datagen node budget / more positions / stronger self-play — not a
+bigger network. Baking the selected net as the gen-003 default is a follow-up task.
