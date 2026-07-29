@@ -1,11 +1,11 @@
 ---
 id: TASK-97.7
 title: 'A1: Oracle-ordering ceiling (the single most important measurement)'
-status: Ready to Merge
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-29 18:46'
-updated_date: '2026-07-29 20:43'
+updated_date: '2026-07-29 20:47'
 labels:
   - search
   - selectivity
