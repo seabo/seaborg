@@ -992,6 +992,21 @@ pub struct SearchEngine {
     multipv: usize,
 }
 
+/// One pass of an oracle-ordering measurement: the node counts and effective branching factor of a
+/// single fixed-depth search. See [`SearchEngine::oracle_profile`].
+#[cfg(feature = "oracle")]
+#[derive(Clone, Copy, Debug)]
+pub struct OraclePass {
+    /// The deepest iteration the search completed; equal to the requested depth for a fixed-depth run.
+    pub depth_reached: u8,
+    /// Main-search nodes visited.
+    pub main_nodes: usize,
+    /// All nodes visited, main search plus quiescence — the basis of the effective branching factor.
+    pub all_nodes: usize,
+    /// Effective branching factor over `all_nodes` at `depth_reached`.
+    pub ebf: f32,
+}
+
 impl SearchEngine {
     /// A fresh engine evaluating with the network built into this binary, or with the hand-crafted
     /// evaluation in a build that has none.
@@ -1091,6 +1106,78 @@ impl SearchEngine {
     /// Normal searches reuse the existing contents; only the session owner discards them.
     pub fn new_game(&mut self) {
         self.clear_hash();
+    }
+
+    /// Measure oracle move ordering on a single position, isolating how much of the effective
+    /// branching factor is pure move-ordering waste.
+    ///
+    /// Pass 0 is an ordinary reference search to `depth` that records the best move it proves at
+    /// every node. Each later pass clears the table and re-searches the same position to the same
+    /// depth, forcing the previous pass's recorded best move to the front of ordering at every node
+    /// while leaving every other search decision untouched — so the only thing that differs between
+    /// pass 0 and pass 1 is that each node is seeded with its own true best move first. A cold table
+    /// each pass is essential: a warm table would supply near-perfect ordering on its own and hide
+    /// the effect being measured. `iterations` further replay passes chase the fixpoint, since
+    /// forcing better first moves can reveal still-better ones at newly important nodes.
+    ///
+    /// Both passes evaluate through the engine's selected network, so `EBF_real` is comparable to the
+    /// effective branching factor an ordinary search of this position reports. Returns one
+    /// [`OraclePass`] per pass, oldest first: index 0 is the reference search (`EBF_real`) and index 1
+    /// the first oracle search (`EBF_oracle`).
+    #[cfg(feature = "oracle")]
+    pub fn oracle_profile(
+        &mut self,
+        pos: Position,
+        depth: u8,
+        iterations: usize,
+    ) -> Vec<OraclePass> {
+        assert!(depth > 0, "oracle profile depth must be greater than zero");
+
+        // Never set: each pass runs to its fixed depth with no time or node limit and no external
+        // stop.
+        let flag = AtomicBool::new(false);
+
+        let mut passes = Vec::with_capacity(iterations + 1);
+        // Empty on the reference pass, so nothing is forced there; replaced after each pass with the
+        // moves that pass proved.
+        let mut force: std::collections::HashMap<u64, Move> = std::collections::HashMap::new();
+
+        for _ in 0..=iterations {
+            // A cold table every pass, so the ordering oracle is the only thing that can shrink the
+            // tree. No worker holds the table here, so the exclusive clear always succeeds.
+            self.clear_hash();
+
+            let mut search = Search::build(
+                pos.clone(),
+                &flag,
+                Deadlines::none(),
+                None,
+                &self.table,
+                None,
+                self.network.clone(),
+                self.multipv,
+            );
+            search.oracle_active = true;
+            search.oracle_force = std::mem::take(&mut force);
+            search.run::<Worker>(depth);
+
+            let trace = search.trace();
+            passes.push(OraclePass {
+                depth_reached: search.depth_reached,
+                main_nodes: trace.nodes_visited(),
+                all_nodes: trace.all_nodes_visited(),
+                ebf: trace.eff_branching(search.depth_reached),
+            });
+
+            // Hand this pass's proved best moves to the next as the ordering oracle, dropping the
+            // depth each was proved to — it served only to keep the deepest entry while recording.
+            force = std::mem::take(&mut search.oracle_record)
+                .into_iter()
+                .map(|(key, (mv, _depth))| (key, mv))
+                .collect();
+        }
+
+        passes
     }
 
     /// Start searching a cloned position on a background thread.
@@ -1601,6 +1688,26 @@ pub struct Search<'engine> {
     /// describes a restricted move list, not the position, so its value and best move belong to
     /// neither.
     root_excluded: Vec<Move>,
+    /// When set, this search records the best move it finds at every completed node into
+    /// [`Self::oracle_record`] and forces any move present in [`Self::oracle_force`] to the front of
+    /// ordering. Both are inert while this is unset, so a build with the `oracle` feature but this
+    /// flag off searches exactly the tree a build without the feature does.
+    #[cfg(feature = "oracle")]
+    oracle_active: bool,
+    /// Best move to try first at a node, keyed by that position's Zobrist key, taken from a prior
+    /// reference search. Forced to the front of move ordering in [`MoveLoader::load_hash`] when
+    /// present and still legal here. Only ordering changes: the real transposition move a node
+    /// resolves is untouched, so internal iterative reduction and the singular check react to the
+    /// same information they would in an ordinary search. Empty on the reference pass, where nothing
+    /// is forced. See [`SearchEngine::oracle_profile`].
+    #[cfg(feature = "oracle")]
+    oracle_force: std::collections::HashMap<u64, Move>,
+    /// The best move this search found at each position it completed, keyed by Zobrist key, retaining
+    /// the entry from the greatest remaining depth. It becomes the next pass's [`Self::oracle_force`],
+    /// so a two-pass run measures how few nodes the search needs when every node is seeded with its
+    /// own true best move first.
+    #[cfg(feature = "oracle")]
+    oracle_record: std::collections::HashMap<u64, (Move, Depth)>,
 }
 
 /// One reported principal variation: its exact score and its move sequence, best move first.
@@ -1746,6 +1853,12 @@ impl<'engine> Search<'engine> {
             see_pruning_disabled: false,
             #[cfg(test)]
             iir_disabled: false,
+            #[cfg(feature = "oracle")]
+            oracle_active: false,
+            #[cfg(feature = "oracle")]
+            oracle_force: std::collections::HashMap::new(),
+            #[cfg(feature = "oracle")]
+            oracle_record: std::collections::HashMap::new(),
         }
     }
 
@@ -3010,6 +3123,23 @@ impl<'engine> Search<'engine> {
                 },
                 &best_move,
             );
+
+            // Record this node's best move as an ordering oracle for a later pass, keeping the entry
+            // proved to the greatest remaining depth. This shares the transposition write's trust
+            // boundary — only a node whose value is position-intrinsic contributes — and never
+            // influences this search: nothing reads `oracle_record` here, so recording it leaves the
+            // tree unchanged. A null best move (an all-node that raised nothing) offers no ordering
+            // hint and is skipped.
+            #[cfg(feature = "oracle")]
+            if self.oracle_active && !best_move.is_null() {
+                let slot = self
+                    .oracle_record
+                    .entry(self.pos.zobrist().0)
+                    .or_insert((best_move, Depth::MIN));
+                if depth >= slot.1 {
+                    *slot = (best_move, depth);
+                }
+            }
         }
 
         // Record the node's non-cutoff outcome for the selectivity profile. A fail-high (`best_value
@@ -4284,6 +4414,27 @@ impl<'a, 'engine> MoveLoader<'a, 'engine> {
 impl<'a, 'search> Loader for MoveLoader<'a, 'search> {
     #[inline]
     fn load_hash(&mut self, movelist: &mut ScoredMoveList) {
+        // Oracle ordering: when a reference pass recorded a true best move for this position, force it
+        // to the front instead of the transposition move. Only the head of ordering changes — the
+        // real transposition move (`self.hash_move`) is unaffected, so it still drives internal
+        // iterative reduction and the singular check, and it is searched in its own generated phase.
+        // The legality guard rejects a foreign move a Zobrist collision would otherwise surface. The
+        // availability counter still reflects the real transposition move so the ordering measurement
+        // does not distort the transposition-availability signal.
+        #[cfg(feature = "oracle")]
+        if self.search.oracle_active {
+            if let Some(&mv) = self.search.oracle_force.get(&self.search.pos.zobrist().0) {
+                if self.search.pos.valid_move(&mv) {
+                    self.search
+                        .trace
+                        .hash_found
+                        .push(self.hash_move.is_some() as u32);
+                    movelist.push(mv);
+                    return;
+                }
+            }
+        }
+
         match self.hash_move {
             Some(mv) => {
                 self.search.trace.hash_found.push(1);
