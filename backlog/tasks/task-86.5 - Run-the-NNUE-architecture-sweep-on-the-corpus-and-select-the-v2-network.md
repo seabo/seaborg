@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@george'
 created_date: '2026-07-25 12:24'
-updated_date: '2026-07-29 07:01'
+updated_date: '2026-07-29 07:57'
 labels:
   - nnue
 dependencies:
@@ -73,4 +73,6 @@ val@30 -> val@60: baseline 0.011288 -> 0.011303 (flat, confirms converged); b1 0
 BUT not an architecture verdict either: at 60 epochs b8 TRAIN loss (0.011603) is still higher than baseline TRAIN (0.010969) despite b8 having more capacity. A higher-capacity net underfitting even the train set => the training RECIPE is not exploiting the capacity (candidate causes: fixed LR 1e-2 wrong for the deeper stack; 256->16 bottleneck choking gradient flow; per-bucket routing weakening signal). Indicated next lever = training-recipe investigation (LR/schedule/init) for the deeper bucketed heads -- a proper follow-up task, NOT more epochs and NOT abandoning buckets. Screen still cannot fairly rank the v2 features until (a) this recipe issue and (b) the inference-cost overhead are addressed.
 
 gen-002-vs-new-corpus loss decomposition (loss_decomp.py; reconstruction reproduces the screen's 0.011288 exactly -> forward validated). All on the new by-shard val split, fixed h256 architecture: gen-002 (old bootstrap data) 0.012378; retrained h256 (new corpus) 0.011288; h512 (new corpus) 0.011119. Decomposition of the gen3 gain: corpus+recipe -8.8% (dominant), width h256->h512 -1.5% (secondary), total -10.2%. Answers 'was the corpus work worth it': yes, the corpus upgrade is the big lever. Caveat: loss proxy (distribution shift in gen-002's labels); SPRT is the strength arbiter.
+
+Phase-2 SPRT LAUNCHED (2026-07-29T07:57Z). fastchess alpha 1.7.0 (pre-installed ~/.local/bin; matches parser); smoke test passed. Slate: h512, h256, h1024, h128 vs gen-002, run sequentially, concurrency 11, tc=10+0.1, improvement bounds elo0=0/elo1=5, alpha=beta=0.05, max 40000 games each. Both sides are the same commit-6793c34 binary with per-side EvalFile (gen-002 default.sbnn vs the sweep net). Outputs under ~/rl/sweep-86.5/sprt/<name>. h256 (same architecture as gen-002) isolates the corpus Elo; h512 is the leading gen3 candidate. Expect decisive fast PASSes given the ~9-10% held-out loss edge; h1024 more marginal (NPS 434k vs gen-002 717k). Awaiting verdicts.
 <!-- SECTION:NOTES:END -->
