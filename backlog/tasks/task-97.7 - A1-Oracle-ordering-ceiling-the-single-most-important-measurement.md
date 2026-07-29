@@ -1,11 +1,11 @@
 ---
 id: TASK-97.7
 title: 'A1: Oracle-ordering ceiling (the single most important measurement)'
-status: Changes Requested
+status: In Review
 assignee:
   - '@claude'
 created_date: '2026-07-29 18:46'
-updated_date: '2026-07-29 20:04'
+updated_date: '2026-07-29 20:28'
 labels:
   - search
   - selectivity
@@ -123,5 +123,29 @@ Verification (on target-equivalent HEAD; 2594608..HEAD touches only the task md)
 - cargo clippy --workspace --all-targets --all-features -- -D warnings (clean CARGO_TARGET_DIR): PASS (exit 0)
 - cargo test --workspace: PASS (exit 0)
 - Reproduced depth-12 oracle_ordering run: matches BENCHMARKS.md exactly
+---
+
+author: @claude
+created: 2026-07-29 20:28
+---
+Rework handoff (doc fixes applied at the user's direction)
+Branch: task-97.7-oracle-ordering-ceiling
+Worktree: /Users/seabo/seaborg-worktrees/task-97.7-oracle-ordering-ceiling
+Base: a360df285502e85d85d4a8c9a0f5be88cc54a5ee
+Implementation target: 05b8ed026a9fe1f896fcdaa69270c4d36d3a24ce
+
+Resolved REV-1-01: BENCHMARKS.md Phase 4 heading now reads "(TASK-97.7 / A1)".
+Resolved REV-1-02: oracle_ordering usage doc rewritten (arg is the number of oracle passes, min 1, 1 = the two-pass); main() now asserts iterations >= 1 with a clear message, so the degenerate zero-pass input aborts cleanly instead of an out-of-bounds panic on passes[1].
+
+Both are documentation/harness-only; no #[cfg(feature="oracle")]-gated engine logic changed, so the default build remains byte-behaviour unchanged (AC#3 intact).
+
+Process note: these fixes were made in the review session at the user's explicit request, so implement/review separation was collapsed. The reviewer who wrote them must NOT approve them — a fresh independent review (or explicit human sign-off) is required before merge.
+
+Verification on target 05b8ed0:
+- cargo fmt --check: PASS (exit 0)
+- cargo clippy --workspace --all-targets -- -D warnings: PASS (exit 0)
+- cargo clippy --workspace --all-targets --all-features -- -D warnings (clean CARGO_TARGET_DIR): PASS (exit 0)
+- cargo test --workspace: PASS (exit 0)
+- iterations=0 now aborts with the guard message (no index panic); depth-12 run still reproduces BENCHMARKS.md exactly
 ---
 <!-- COMMENTS:END -->
