@@ -1260,3 +1260,79 @@ buys nothing measurable. Closed as an informative negative rather than run to a
 boundary: with the change ~neutral, the remaining games would only sharpen a
 verdict that is already "no gain." LMR is worth revisiting once other parts of the
 engine give the reduction schedule more to exploit.
+
+### History-based interior quiet pruning (informative negative)
+
+The shadow-counter screen (Phase 2 of the interior-width profile above) ranked
+this the single best candidate for trimming the interior quiet width: prune a
+history-ordered quiet whose combined main-plus-continuation history is negative,
+once past a three-move prefix, at remaining depth ≤ 8 — non-PV, not in check,
+with killer / counter / TT moves already in separate ordering phases and quiet
+checks exempt. On the baseline population it screened at ~42% coverage for ~5.7%
+damage (~7.4 coverage-per-damage), versus ~4.4 for the best move-count schedule:
+it prunes by *move quality* rather than blindly by position, which is what let it
+reach past the move-count band (`LMP_MAX_DEPTH = 3`) into the interior where the
+excess width lives. Added behind a toggle in `engine/src/search.rs`.
+
+**Mechanism (self-instrumented, no games) — confirmed.** On `bench-positions.epd`
+(fixed depth 14 and fixed 2M nodes, 64 MB hash) the prune moved exactly the signal
+the screen predicted:
+
+| Signal | Fixed depth 14 | Fixed 2M nodes |
+| --- | --- | --- |
+| Interior quiet width (rem-depth 6) | 10.53 → 4.45 /node | 6.56 → 3.58 /node |
+| Effective branching factor | 2.710 → 2.619 | 2.472 → 2.370 |
+| Nodes to depth 14 | 20.36M → 14.59M (−28%) | — |
+| Depth reached | 14 (fixed) | 16.25 → 17.30 (+1.05) |
+| LMR re-search rate | 1.75% → 2.68% | 2.73% → 3.58% |
+| Non-PV fail-low rate | 23.0% → 26.3% | 25.1% → 28.5% |
+
+The interior (remaining depth 4–8) quiet width more than halved and geomean EBF
+fell, with the re-search and fail-low rates rising only modestly — the intended
+selectivity movement.
+
+**Soundness — a real regression, and how it was fixed.** The flat "history is
+negative" rule turned a *won* king-and-pawn ending into a draw: on
+`8/6pk/8/8/8/8/P7/K7 w` (in the `gives_correct_answers` suite at depth 24) it
+played the drawing `a2a4` and scored the position at 0, where the un-pruned search
+finds the winning king step-aside `a1b1` (+475 by depth 20). History malus is
+charged to every quiet tried before a cutoff, so in a sparse maneuvering position
+the one move that holds the win carries a negative score only because a sibling
+once cut. Two mitigations were tried:
+
+- **Depth-scaled history *margin* (prune only well past a negative threshold) —
+  dead end.** The winning maneuvering move and the junk tail both sit at only
+  *mildly* negative history, so no magnitude separates them: a margin large enough
+  to spare the ending prunes essentially nothing on the bench suite (profile
+  byte-identical to baseline), and any smaller margin re-breaks the win.
+- **Quiet-mobility floor (`HISTORY_PRUNING_MIN_QUIETS`) — the fix.** The failure
+  is low mobility, not history magnitude: a lone king has at most eight
+  destinations, so gating the prune on a minimum quiet count (12) exempts the whole
+  king-and-pawn class while leaving the middlegame interior (15–40 quiets/node)
+  essentially untouched. The KPvKP win then tracks the un-pruned search from depth
+  19, and the sound rule keeps ~90% of the flat rule's EBF reduction (fixed-depth
+  EBF 2.710 → 2.628) and +0.9 of its +1.05 ply at fixed nodes.
+
+**SPRT verdicts** (rig, 24-core, `tc=10+0.1`, 64 MB, concurrency 22, one worker
+per engine, `elo0=-5, elo1=0, alpha=beta=0.05`, `openings-v1.epd`,
+`target-cpu=native` release, baseline `git:b46e8bb`):
+
+| Variant | Result | Elo | Games (W-D-L) |
+| --- | --- | --- | --- |
+| Flat `hist<0` (unsound, upper bound) | negative | ≈ −35.7 [−54.8, −16.9] | 1307 (289-595-423), stopped early |
+| **Mobility-floor 12 (sound, retention)** | **FAIL** (LLR −2.97, bounds ±2.94) | **−31.97 [−48.5, −15.6]** | 1733 (401-772-560) |
+
+**Reverted.** The decisive fact is that fixing the endgame soundness bug changed
+the strength result by nothing (−35.7 → −31.97, within noise): the loss is the
+*mechanism*, not the endgame casualties. Interior history pruning discards, with no
+verifying re-search, subtrees that at equal nodes were being spent on real
+alternatives; the +0.9–1.05 ply it "reclaims" is a shallower search of moves that
+matter, not free selectivity — the same shape as experiments 2 and 3, now a third
+and larger negative. It is a first-principles result from Seaborg's own self-play
+and instrumentation, with no cross-engine comparison. The methodological lesson:
+the shadow-counter's coverage-per-damage ranked this lever first, yet it lost ~32
+Elo — coverage-per-damage screens *which* quiets a rule would remove, not whether
+removing them helps, so it is a candidate filter, not a strength predictor. The
+interior excess width is real, but discarding it outright is not the way to reclaim
+the depth; a verifying reduction (searching the distrusted quiet shallower rather
+than dropping it) is the remaining untried shape.
