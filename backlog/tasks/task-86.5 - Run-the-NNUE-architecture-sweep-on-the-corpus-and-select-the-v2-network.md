@@ -1,11 +1,11 @@
 ---
 id: TASK-86.5
 title: Run the NNUE architecture sweep on the corpus and select the v2 network
-status: In Progress
+status: In Review
 assignee:
   - '@george'
 created_date: '2026-07-25 12:24'
-updated_date: '2026-07-29 07:57'
+updated_date: '2026-07-29 20:50'
 labels:
   - nnue
 dependencies:
@@ -75,4 +75,31 @@ BUT not an architecture verdict either: at 60 epochs b8 TRAIN loss (0.011603) is
 gen-002-vs-new-corpus loss decomposition (loss_decomp.py; reconstruction reproduces the screen's 0.011288 exactly -> forward validated). All on the new by-shard val split, fixed h256 architecture: gen-002 (old bootstrap data) 0.012378; retrained h256 (new corpus) 0.011288; h512 (new corpus) 0.011119. Decomposition of the gen3 gain: corpus+recipe -8.8% (dominant), width h256->h512 -1.5% (secondary), total -10.2%. Answers 'was the corpus work worth it': yes, the corpus upgrade is the big lever. Caveat: loss proxy (distribution shift in gen-002's labels); SPRT is the strength arbiter.
 
 Phase-2 SPRT LAUNCHED (2026-07-29T07:57Z). fastchess alpha 1.7.0 (pre-installed ~/.local/bin; matches parser); smoke test passed. Slate: h512, h256, h1024, h128 vs gen-002, run sequentially, concurrency 11, tc=10+0.1, improvement bounds elo0=0/elo1=5, alpha=beta=0.05, max 40000 games each. Both sides are the same commit-6793c34 binary with per-side EvalFile (gen-002 default.sbnn vs the sweep net). Outputs under ~/rl/sweep-86.5/sprt/<name>. h256 (same architecture as gen-002) isolates the corpus Elo; h512 is the leading gen3 candidate. Expect decisive fast PASSes given the ~9-10% held-out loss edge; h1024 more marginal (NPS 434k vs gen-002 717k). Awaiting verdicts.
+
+Campaign complete; report finalized. AC coverage:
+- AC#1: loss/NPS Pareto frontier over 14 one-factor-at-a-time candidates (artifacts/sweep-86.5/sweep.json + RESULTS.md), swept factors and coverage limits (width cap 1024, fixed 30-epoch budget, single machine/build) recorded.
+- AC#2: four frontier finalists played fixed-TC SPRT vs gen-002; results + full attribution in BENCHMARKS.md (h256 +25.9, h512 +28.0 PASS; h1024 -100.5, h128 -26.8 FAIL).
+- AC#3: selected h256 (gen-002 architecture retrained on the new corpus) with a fixed-TC-Elo rationale (h256~h512 tied, width buys no measurable Elo, corpus is the whole gain); report states the corpus is LABEL-LIMITED, not capacity-limited, at this size (next lever = better labels/datagen, not more parameters).
+Extras beyond ACs, committed as evidence: gen-002-vs-new-corpus loss decomposition (loss_decomp.py; corpus -8.8% vs width -1.5%), bucket 60-epoch retrain (epochs not the cause of the bucket gap), and the train/val-gap capacity-vs-label diagnosis.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @george
+created: 2026-07-29 20:50
+---
+Implementation handoff
+Branch: task-86.5-run-nnue-arch-sweep
+Worktree: /Users/seabo/seaborg-worktrees/task-86.5-run-nnue-arch-sweep
+Base: aff1c39 (merge base with master; where TASK-86.8 merged)
+Implementation target: 8099336
+Resolved findings: none
+Verification:
+- No Rust changed on-branch (git diff base..target -- '*.rs' is empty); the cargo fmt/clippy/test gate is the reviewed-green merge base. On-branch code is a 7-line sweep.py width-axis extension (H=1024), covered by test_sweep: python -m unittest test_sweep -> 26 passed.
+- Empirical campaign ran on the rig (AMD Ryzen 9 3900XT): 14-candidate screen + 4-finalist SPRT vs gen-002, tc=10+0.1, fastchess alpha 1.7.0, engine git:6793c34 target-cpu=native.
+- On-rig evidence (not reproducible in review, per the rig-campaign pattern): ~/rl/sweep-86.5/{nets,checkpoints,sprt/<name>/report.json,*.log}. Committed in-repo: artifacts/sweep-86.5/{RESULTS.md,sweep.json,loss_decomp.py} and the BENCHMARKS.md strength entry.
+Known failures: none
+Reviewer note: the SPRT/screen numbers are on-rig empirical results; verify the committed report, the reasoning, and the sweep.py tooling (test_sweep), not the un-reproducible campaign.
+---
+<!-- COMMENTS:END -->
