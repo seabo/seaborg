@@ -1,11 +1,11 @@
 ---
 id: TASK-89.6
 title: History-based interior quiet pruning
-status: In Progress
+status: In Review
 assignee:
   - '@codex'
 created_date: '2026-07-29 13:47'
-updated_date: '2026-07-29 16:28'
+updated_date: '2026-07-29 17:26'
 labels:
   - search
   - selectivity
@@ -79,4 +79,22 @@ UNBLOCKED: rig (24-core, idle) available for SPRTs. Investigated the soundness f
 SPRT #1 (upper bound, UNSOUND flat 1dcb1eb vs base, rig, tc=10+0.1, c=22): candidate 289-595-423, Elo -35.7 [-54.8,-16.9] over 1307 games. Decisively negative; stopped early (conclusive as a diagnostic). Open question it leaves: is the loss the mechanism or the soundness losses the floor fixes?
 
 SPRT #2 (RETENTION, SOUND floor-12 b6bbf5d vs base, same config) LAUNCHED on rig, running. This decides keep (AC#3) vs revert.
+
+RETENTION SPRT (sound floor-12 b6bbf5d vs base b46e8bb): AUTHORITATIVE FAIL. LLR -2.97 (bounds +/-2.94), Elo -31.97 [-48.5,-15.6], W-D-L 401-772-560, 1733 games (rig 24-core, tc=10+0.1, c=22, hash 64, elo0=-5 elo1=0 alpha=beta=0.05, openings-v1.epd, native release). The unsound flat upper bound was ~-35.7 over 1307 games — fixing the endgame soundness bug changed strength by nothing, so the loss is the mechanism (a no-re-search discard of interior subtrees that were being spent on real alternatives), not the endgame casualties.
+
+AC#3 applied: reverted. engine/ restored to base b46e8bb exactly (git diff b46e8bb -- engine/ is empty). The full write-up is kept in BENCHMARKS.md; the KP soundness regression, the margin dead-end, the mobility-floor fix, and both SPRTs are recorded there as an informative negative.
+
+Implementation handoff
+Branch: task-89.6-history-interior-quiet-pruning
+Worktree: /Users/seabo/seaborg-worktrees/task-89.6-history-interior-quiet-pruning
+Base: b46e8bb
+Implementation target: b5450fa
+Nature: informative-negative — engine code reverted to base; net change is BENCHMARKS.md write-up + this task record. Review should verify (1) the measurement is sound and own-signal-only, (2) the revert is clean (engine == base), (3) the BENCHMARKS.md write-up is accurate.
+Resolved findings: none
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass
+- cargo test --workspace: pass (476 engine + 161 lichess + others; 0 failed, 2 ignored)
+- git diff b46e8bb -- engine/: empty (clean revert to base behaviour)
+Known failures: none. (During investigation the lichess concurrency test run::tests::incoming_challenge_is_handled_while_a_matchmaking_call_is_blocked failed once under concurrent load; it is pre-existing flaky and passes in isolation and in the final clean run.)
 <!-- SECTION:NOTES:END -->
