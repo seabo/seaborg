@@ -3,11 +3,11 @@ id: TASK-96
 title: >-
   First-class value-fidelity eval metrics (cp error, winner agreement, win-prob
   percentiles, calibration)
-status: In Progress
+status: In Review
 assignee:
   - '@george'
 created_date: '2026-07-29 18:43'
-updated_date: '2026-07-29 18:43'
+updated_date: '2026-07-29 20:46'
 labels:
   - nnue
   - tooling
@@ -37,3 +37,38 @@ Metrics: mean and RMS eval error in centipawns; winner (sign) agreement rate; wi
 - [ ] #4 The cp metrics are robust to mate-band scores (mates clamped or excluded explicitly and reported as such); win-prob metrics remain bounded
 - [ ] #5 Repo-required checks pass; tests cover the metric math, mate handling, and the standalone path
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implementation complete.
+- metrics.py: streaming ValueFidelityAccumulator comparing the net eval to the teacher search score -- cp MAE/RMSE (mate-excluded), winner agreement (deadband), win-prob error percentiles (histogram-based), calibration bins; plus format/dict helpers. Pure NumPy, no torch.
+- train.py: extracted predict_fout; value_fidelity_eval() streams the metrics; main() reports them beside val loss every run and stores them in the checkpoint (save_checkpoint gains an optional value_fidelity arg).
+- eval_net.py: standalone CLI evaluating any exported v1 SBNN on a corpus val split (dequantizes SBNN->NnueModel; reproduces the trainer's exact loss -- validated: rebuilt h256 gives 0.011288, matching the sweep).
+- tests: test_metrics.py hand-computed fixtures (cp/winner/win-prob/calibration), mate exclusion, deadband, streaming additivity, stable sigmoid.
+Units confirmed against model.py: fout == eval_cp/SCALE, so pred_cp = fout*scale, teacher_cp = stored score; pred_wp = sigmoid(fout), teacher_wp = sigmoid(score/scale).
+Ran on gen3 (h512) and gen-002: works; surfaced two interpretation caveats worth noting in docs -- (1) fidelity-vs-teacher is confounded when the corpus is labelled by the net under comparison (self-teacher); (2) the win-prob axis uses a FIXED sigmoid(cp/400), so calibration reflects that scale constant, not a fitted WDL model. Both are documented in the module docstring; a fitted-WDL follow-up is the natural next step.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @george
+created: 2026-07-29 20:46
+---
+Implementation handoff
+Branch: task-eval-value-metrics
+Worktree: /Users/seabo/seaborg-worktrees/task-eval-value-metrics
+Base: b46e8bb8c6b6a8168f3060bfe9c02ee37d1b3527
+Implementation target: 7327807912e7dc889f2837ae57aaf5e9eb70c1f3
+Resolved findings: none
+Verification:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (0 warnings)
+- cargo test --workspace: pass (10 suites ok, 0 failed)
+- trainer suite (python -m unittest test_metrics test_train test_data test_sweep test_model test_export test_topology_v2 test_split): 124 passed
+- Ran on gen3 (h512) + gen-002 via eval_net.py; h256 reconstruction reproduces the sweep's 0.011288 loss exactly (forward validated)
+Known failures: none
+Note: Rust untouched (Python-only under tools/trainer); required cargo checks run and pass regardless.
+---
+<!-- COMMENTS:END -->
