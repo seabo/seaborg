@@ -1142,6 +1142,71 @@ Track-D lever at seeding ordering there (IIR / a move-synthesising alternative)
 rather than at raising TT-move availability, which the earlier profile already
 ruled low-leverage. This phase only measures; no engine behaviour changed.
 
+### Phase 4 — the oracle-ordering ceiling: the free-EBF lever is small (TASK-97.7 / A1)
+
+A1 is the measurement the whole strategy hinges on: of the gap between our
+effective branching factor and the minimal-tree frontier, how much is pure move
+ordering — recoverable with zero soundness cost by searching the right move
+first — versus genuinely eval- and pruning-limited? A two-pass build answers it
+directly. Pass 1 is an ordinary fixed-depth search from a cold table that records
+the best move it proves at every node (keyed by Zobrist key, keeping the deepest
+proof). Pass 2 re-searches the same position to the same depth from a cold table,
+forcing that recorded move to the front of ordering at every node while leaving
+every other search decision — the transposition move a node resolves, internal
+iterative reduction, the singular check, all pruning — exactly as the real search
+computes it. So the only thing that changes is that each node is seeded with its
+own true best move first. A cold table each pass is essential: a warm table would
+supply near-perfect ordering on its own and hide the effect. Both passes evaluate
+through the built-in network, so `EBF_real` is comparable to an ordinary search's;
+it reproduces the recorded fixed-depth-14 baseline exactly (arithmetic mean 2.710
+vs the recorded 2.71). Instrumentation lives behind an off-by-default `oracle`
+cargo feature and the `oracle_ordering` example; the shipped build is unchanged.
+
+Geometric mean over `bench-positions.epd` (20 positions, 64 MB hash), with the
+frontier reference ~2.01:
+
+| | depth 12 | depth 14 | depth 16 |
+|---|---:|---:|---:|
+| `EBF_real` | 2.935 | 2.695 | 2.514 |
+| `EBF_oracle` (one pass) | 2.895 | 2.649 | 2.470 |
+| `EBF_oracle` (converged) | — | 2.628 | — |
+| Frontier reference | 2.010 | 2.010 | 2.010 |
+| **Free ordering headroom** (`real − oracle`) | **0.040** | **0.046** | **0.045** |
+| **Eval/pruning-limited** (`oracle − frontier`) | **0.885** | **0.639** | **0.460** |
+| Ordering share of `EBF_real − frontier` | 4.4 % | 6.8 % | 8.9 % |
+| Oracle/real node ratio (geomean) | 0.864 | 0.806 | 0.773 |
+
+The headline: **`EBF_real` is about `EBF_oracle` at every depth.** A perfect
+per-node best-move oracle reclaims only ~0.04–0.05 of EBF — 4–9 % of the gap to
+the frontier — while the eval/pruning-limited remainder (0.46–0.89) is the whole
+rest of the gap. In EBF terms the free ordering lever is small; the frontier gap
+is overwhelmingly eval/pruning-limited, which is flywheel-gated.
+
+Two caveats keep this honest, and they cut in opposite directions:
+
+- The effect is strongly **bimodal**, hidden by the aggregate. At cut-node-heavy
+  tactical positions the oracle roughly halves the tree (ruy closed 2.52 M → 1.31 M
+  nodes, r+n endgame 1.91 M → 0.85 M, open game 1.44 M → 0.70 M, all ≈ −50 %). At
+  all-node-heavy quiet positions it *adds* nodes (startpos 352 k → 768 k, pawn
+  endgame 75 k → 131 k). The node saving also grows with depth (ratio 0.86 → 0.77
+  from depth 12 to 16), so ordering matters more the deeper we search even though
+  EBF compresses it. Ordering waste is real and concentrated, not absent — it is
+  just a minority of the *EBF* gap.
+- The oracle forces its move to the very front and so searches it at full depth,
+  which interacts with late-move reduction: forcing a non-cutting move ahead of
+  the reduced tail is what inflates the quiet positions. `EBF_oracle` is therefore
+  a conservative "best-first under the engine's real reductions" figure, not a
+  strict lower bound — the true free-ordering headroom is *at least*, and probably
+  modestly more than, what is reported. Even generously, it stays a minority of
+  the frontier gap.
+
+Read against guardrail 4 (the thesis falsifier): the A1 half — "little ordering
+waste" in EBF terms — holds. Combined with C1 (is a ply cheap?), which this phase
+does not measure, it points the investigation back toward the eval flywheel for
+the bulk of the EBF gap, while leaving a real, depth-growing, tactically
+concentrated ordering saving as the one off-flywheel lever worth its size. This
+phase only measures; no engine behaviour changed.
+
 ## Selectivity tuning experiments (from the profile above)
 
 Each experiment below is one knob from the ranked list, measured individually by
