@@ -3,11 +3,11 @@ id: TASK-96
 title: >-
   First-class value-fidelity eval metrics (cp error, winner agreement, win-prob
   percentiles, calibration)
-status: In Review
+status: Ready to Merge
 assignee:
   - '@george'
 created_date: '2026-07-29 18:43'
-updated_date: '2026-07-30 08:42'
+updated_date: '2026-07-30 09:42'
 labels:
   - nnue
   - tooling
@@ -31,11 +31,11 @@ Metrics: mean and RMS eval error in centipawns; winner (sign) agreement rate; wi
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A metrics module computes, on a validation split, at least: eval error in centipawns (MAE and RMSE), winner-agreement rate, win-probability error percentiles (median/90th/99th), and calibration bins, comparing the network eval to the teacher search score; unit-tested against hand-computed fixtures
-- [ ] #2 train.py reports these metrics alongside val loss at the end of every run and stores them in the checkpoint, so they are first-class training outputs
-- [ ] #3 A standalone CLI evaluates an existing exported SBNN on a corpus validation split and prints the same metrics, so any net (e.g. gen-002, gen3) is assessable without retraining
-- [ ] #4 The cp metrics are robust to mate-band scores (mates clamped or excluded explicitly and reported as such); win-prob metrics remain bounded
-- [ ] #5 Repo-required checks pass; tests cover the metric math, mate handling, and the standalone path
+- [x] #1 A metrics module computes, on a validation split, at least: eval error in centipawns (MAE and RMSE), winner-agreement rate, win-probability error percentiles (median/90th/99th), and calibration bins, comparing the network eval to the teacher search score; unit-tested against hand-computed fixtures
+- [x] #2 train.py reports these metrics alongside val loss at the end of every run and stores them in the checkpoint, so they are first-class training outputs
+- [x] #3 A standalone CLI evaluates an existing exported SBNN on a corpus validation split and prints the same metrics, so any net (e.g. gen-002, gen3) is assessable without retraining
+- [x] #4 The cp metrics are robust to mate-band scores (mates clamped or excluded explicitly and reported as such); win-prob metrics remain bounded
+- [x] #5 Repo-required checks pass; tests cover the metric math, mate handling, and the standalone path
 <!-- AC:END -->
 
 ## Implementation Notes
@@ -110,4 +110,40 @@ Verification:
 - Rust untouched by the rework (Python-only, tools/trainer); cargo fmt/clippy/test gate unchanged from the reviewed base (attempt-1 verification stands)
 Known failures: none
 ---
+
+author: @review
+created: 2026-07-30 09:42
+---
+Review attempt: 2
+Reviewed branch: task-eval-value-metrics
+Reviewed implementation: 9e339b0f53656bde46b6adc9c90ded6ce5b2abf8
+Verdict: approved
+
+REV-1-01 [P2] RESOLVED. test_eval_net.py adds the missing standalone-path coverage:
+- test_load_sbnn_model_roundtrips_exactly: quantize(reconstructed model) == original SBNN bytes, byte for byte. Because quantize is the already-trusted export path (covered by test_export and loaded by the engine), a wrong reshape or bias rescale in load_sbnn_model would fail this assertion -- exactly the guard the finding asked for.
+- test_value_fidelity_eval_over_a_corpus: drives value_fidelity_eval over a 40-position corpus; asserts n, full calibration coverage, finite cp/wp MAE, winner-agreement in [0,1].
+- test_standalone_main_runs_end_to_end: exercises eval_net.main including load_manifest + by_shard_split + BatchLoader, asserting exit 0.
+
+Rework is purely additive: the delta from the attempt-1 target (7327807) to the new target (9e339b0) is only test_eval_net.py plus task metadata; no implementation file changed, so attempt-1 verification of metrics.py/eval_net.py/train.py stands. The post-target commit (db5a689) is task-only.
+
+Acceptance criteria (all met):
+- #1 metric math (cp MAE/RMSE, winner agreement, wp percentiles, calibration) vs teacher score, unit-tested: test_metrics
+- #2 train.py reports beside val loss and stores value_fidelity_dict in the checkpoint: confirmed in main()/save_checkpoint
+- #3 standalone CLI over an exported SBNN: eval_net.py, exercised end-to-end
+- #4 cp metrics mate-robust (excluded + mate_excluded reported), wp bounded: metrics.py, tested
+- #5 repo checks pass; tests cover metric math, mate handling, and the standalone path: now satisfied
+
+Verification (new target 9e339b0):
+- cargo fmt --check: pass (Rust untouched by the rework; Python-only under tools/trainer)
+- python -m unittest test_metrics test_eval_net test_train test_data test_sweep test_model test_export test_topology_v2 test_split (venv numpy 2.5.1 / torch 2.13.0): 127 passed
+- test_eval_net alone: 3 passed
+
+Code target for merge: 9e339b0f53656bde46b6adc9c90ded6ce5b2abf8
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Interpretable value-fidelity metrics comparing the net's static eval to the teacher search score, reported as a first-class output beside val loss. metrics.py streams cp MAE/RMSE (mate-excluded, count reported), winner-agreement (deadband), histogram win-prob percentiles, and calibration bins in bounded memory. train.py reports them every run and stores them in the checkpoint; eval_net.py is a standalone CLI assessing any exported v1 SBNN on a corpus val split. Tests cover the metric math and mate handling (test_metrics) and the standalone path (test_eval_net: byte-exact SBNN reconstruction round-trip, value_fidelity_eval over a corpus, and eval_net.main end-to-end). All five acceptance criteria met.
+<!-- SECTION:FINAL_SUMMARY:END -->
