@@ -3,11 +3,11 @@ id: TASK-96
 title: >-
   First-class value-fidelity eval metrics (cp error, winner agreement, win-prob
   percentiles, calibration)
-status: Changes Requested
+status: In Progress
 assignee:
   - '@george'
 created_date: '2026-07-29 18:43'
-updated_date: '2026-07-30 08:24'
+updated_date: '2026-07-30 08:41'
 labels:
   - nnue
   - tooling
