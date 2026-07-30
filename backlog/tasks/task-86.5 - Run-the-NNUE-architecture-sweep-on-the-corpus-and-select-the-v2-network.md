@@ -1,11 +1,11 @@
 ---
 id: TASK-86.5
 title: Run the NNUE architecture sweep on the corpus and select the v2 network
-status: In Review
+status: Ready to Merge
 assignee:
   - '@george'
 created_date: '2026-07-25 12:24'
-updated_date: '2026-07-29 20:50'
+updated_date: '2026-07-30 08:29'
 labels:
   - nnue
 dependencies:
@@ -27,9 +27,9 @@ Execute the architecture sweep defined by the methodology decision doc (TASK-86.
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A loss-vs-NPS Pareto frontier is produced over the swept architectures following the TASK-86.3 protocol, with the swept factors and any coverage limits recorded
-- [ ] #2 Frontier finalists are evaluated by fixed-time-control SPRT against the gen-002 default, with results and attribution recorded in BENCHMARKS.md
-- [ ] #3 A single network is selected with a written rationale grounded in fixed-TC Elo, and the report states whether the corpus is label-limited or capacity-limited at that size
+- [x] #1 A loss-vs-NPS Pareto frontier is produced over the swept architectures following the TASK-86.3 protocol, with the swept factors and any coverage limits recorded
+- [x] #2 Frontier finalists are evaluated by fixed-time-control SPRT against the gen-002 default, with results and attribution recorded in BENCHMARKS.md
+- [x] #3 A single network is selected with a written rationale grounded in fixed-TC Elo, and the report states whether the corpus is label-limited or capacity-limited at that size
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -102,4 +102,37 @@ Verification:
 Known failures: none
 Reviewer note: the SPRT/screen numbers are on-rig empirical results; verify the committed report, the reasoning, and the sweep.py tooling (test_sweep), not the un-reproducible campaign.
 ---
+
+author: @george
+created: 2026-07-30 08:29
+---
+Review verdict: APPROVED — Ready to Merge.
+
+Code target (immutable): 8099336. Base: aff1c39. Branch tip: a555fa3 (post-target commit is task-file/handoff only; git diff 8099336..a555fa3 touches only the task md).
+
+Scope: report + tooling task; no engine behaviour change (git diff aff1c39..8099336 -- '*.rs' empty; engine/ and default.sbnn untouched). Net promotion (baking gen-003 default) is correctly deferred to a follow-up.
+
+Required checks re-run on target 8099336:
+- cargo fmt --check: clean.
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean.
+- cargo test --workspace: all pass (10x 'test result: ok', 0 failed).
+- python -m unittest test_sweep (covers the 7-line sweep.py width-axis extension to H=1024): 26 passed.
+- No hot-path (.rs) change → perft/movegen bench not applicable.
+
+AC#1 (frontier + factors/limits, TASK-86.3 protocol): artifacts/sweep-86.5/sweep.json is byte-content-identical to the rig's ~/rl/sweep-86.5/sweep.json; the non-dominated frontier {h128,h256,h512,h1024} independently re-derives as correct (h384 rightly excluded — dominated by h512); swept factors (width/activation/buckets/stack/tail-quant) and coverage limits (H=1024 cap, fixed 30-epoch budget, single corpus/machine/build) recorded in RESULTS.md; conforms to docs/nnue-architecture-sweep.md funnel. PROVEN.
+
+AC#2 (finalist SPRT vs gen-002 recorded in BENCHMARKS.md): independently corroborated against on-rig report.json/logs (rig reachable this session, so verified rather than trusted) — h256 852-690-686 +25.9 PASS (2228), h512 794-802-616 +28.0 PASS (2212), h1024 130-197-309 -100.5 FAIL (636), h128 507-954-671 -26.8 FAIL (2132); W-D-L sums match game counts; both sides identical binary sha256=48b39241 with per-side EvalFile (gen-002 default.sbnn vs sweep net), commit 6793c34 target-cpu=native, fastchess alpha 1.7.0, tc=10+0.1, elo0=0/elo1=5/α=β=0.05. All match BENCHMARKS.md exactly. PROVEN.
+
+AC#3 (single net selected, fixed-TC-Elo rationale, label/capacity read): h256 selected — h256 and h512 statistically indistinguishable (+25.9 vs +28.0, overlapping intervals), width buys no measurable Elo, entire ~+26 gain is the corpus; report states LABEL-LIMITED (train/val gap widens 1.2%→7.4% across h128→h1024 with flat val loss past ~h512; next lever = better labels/datagen). Consistent with the committed loss decomposition (corpus -8.8% vs width -1.5%). PROVEN.
+
+Comment quality: the sweep.py comment is self-contained (explains the width-cap reasoning without external references). No undocumented #[allow] introduced. No scope creep.
+
+Verification commands: git merge-base --is-ancestor 8099336 a555fa3; cargo fmt --check; cargo clippy --workspace --all-targets --all-features -- -D warnings; cargo test --workspace; (cd tools/trainer && python -m unittest test_sweep); rig cross-check of ~/rl/sweep-86.5/{sweep.json,sprt/*/report.json}.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Approved (Ready to Merge). Code target 8099336. Delivers the NNUE v2 architecture sweep as records/tooling (engine behaviour unchanged; net promotion is a scoped follow-up). AC#1: loss/NPS Pareto frontier over 14 one-factor candidates in artifacts/sweep-86.5/{sweep.json,RESULTS.md} — sweep.json is content-identical to the rig's, and the 4-net frontier (h128/h256/h512/h1024) independently re-derives as correct (h384 dominated by h512); swept factors + coverage limits recorded, conforming to the TASK-86.3 protocol (docs/nnue-architecture-sweep.md). AC#2: four frontier finalists SPRT vs gen-002 recorded in BENCHMARKS.md; independently corroborated against rig report.json/logs — h256 852-690-686/+25.9 PASS, h512 794-802-616/+28.0 PASS, h1024 130-197-309/-100.5 FAIL, h128 507-954-671/-26.8 FAIL, both sides identical binary sha256 with per-side EvalFile, commit 6793c34, fastchess 1.7.0, tc=10+0.1, elo0=0/elo1=5. AC#3: h256 selected (gen-002 arch on new corpus) with fixed-TC-Elo rationale (h256~h512 within error → width buys no Elo; corpus is the whole gain); report states LABEL-LIMITED. Verified: cargo fmt --check, cargo clippy --workspace --all-targets --all-features -D warnings, cargo test --workspace all clean on target; python -m unittest test_sweep → 26 pass; no .rs changed base..target so no hot-path bench needed; immutability confirmed (8099336 ancestor of tip a555fa3, post-target commit is handoff-only; engine/ and default.sbnn untouched).
+<!-- SECTION:FINAL_SUMMARY:END -->
