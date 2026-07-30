@@ -3,11 +3,11 @@ id: TASK-96
 title: >-
   First-class value-fidelity eval metrics (cp error, winner agreement, win-prob
   percentiles, calibration)
-status: In Progress
+status: In Review
 assignee:
   - '@george'
 created_date: '2026-07-29 18:43'
-updated_date: '2026-07-30 08:41'
+updated_date: '2026-07-30 08:42'
 labels:
   - nnue
   - tooling
@@ -48,6 +48,8 @@ Implementation complete.
 - tests: test_metrics.py hand-computed fixtures (cp/winner/win-prob/calibration), mate exclusion, deadband, streaming additivity, stable sigmoid.
 Units confirmed against model.py: fout == eval_cp/SCALE, so pred_cp = fout*scale, teacher_cp = stored score; pred_wp = sigmoid(fout), teacher_wp = sigmoid(score/scale).
 Ran on gen3 (h512) and gen-002: works; surfaced two interpretation caveats worth noting in docs -- (1) fidelity-vs-teacher is confounded when the corpus is labelled by the net under comparison (self-teacher); (2) the win-prob axis uses a FIXED sigmoid(cp/400), so calibration reflects that scale constant, not a fitted WDL model. Both are documented in the module docstring; a fitted-WDL follow-up is the natural next step.
+
+Resolved REV-1-01: added tools/trainer/test_eval_net.py covering the standalone path (AC #5). Three tests: (1) exact SBNN->model reconstruction round-trip -- re-quantizing the reconstructed model reproduces the original bytes byte-for-byte, so a wrong reshape/bias-rescale would fail; (2) value_fidelity_eval over a small packed corpus (asserts n, calibration counts, finite metrics); (3) eval_net.main end-to-end (build corpus + by-shard manifest + exported SBNN, run, assert exit 0 -- exercises load_manifest + by_shard_split + BatchLoader + value_fidelity_eval + formatting). Verification: python -m unittest test_eval_net -> OK; full trainer suite (now including test_eval_net) 127 passed. Rust untouched by the fix; cargo gate unchanged from the reviewed base.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -92,5 +94,20 @@ Verification:
 - metric math independently reviewed against the hand-computed fixtures; mate exclusion + mate_excluded reporting confirmed (AC #4)
 - standalone path exercised end-to-end (built corpus+manifest, quantized a v1 SBNN, ran eval_net.main): printed metrics, exit 0 -- functionally correct, but no committed test
 - confirmed train.py reports value fidelity beside val loss and stores value_fidelity_dict in the checkpoint (AC #2); config.scale == args.scale; main() legacy val_idx recompute matches train() split (same seed, split-first)
+---
+
+author: @george
+created: 2026-07-30 08:42
+---
+Rework handoff (attempt 2)
+Branch: task-eval-value-metrics
+Base: b46e8bb8c6b6a8168f3060bfe9c02ee37d1b3527
+Implementation target: 9e339b0f53656bde46b6adc9c90ded6ce5b2abf8
+Resolved findings: REV-1-01 (standalone eval_net path now tested)
+Verification:
+- python -m unittest test_eval_net: OK (3 tests: reconstruction round-trip, value_fidelity_eval over a corpus, eval_net.main end-to-end)
+- full trainer suite (test_metrics test_eval_net test_train test_data test_sweep test_model test_export test_topology_v2 test_split): 127 passed
+- Rust untouched by the rework (Python-only, tools/trainer); cargo fmt/clippy/test gate unchanged from the reviewed base (attempt-1 verification stands)
+Known failures: none
 ---
 <!-- COMMENTS:END -->
