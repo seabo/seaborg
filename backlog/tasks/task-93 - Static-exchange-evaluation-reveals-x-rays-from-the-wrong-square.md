@@ -1,11 +1,11 @@
 ---
 id: TASK-93
 title: Static exchange evaluation reveals x-rays from the wrong square
-status: In Review
+status: Ready to Merge
 assignee:
   - '@george'
 created_date: '2026-07-29 18:38'
-updated_date: '2026-07-30 08:12'
+updated_date: '2026-07-30 08:25'
 labels:
   - search
   - ordering
@@ -41,10 +41,10 @@ Found via an automated correctness audit; it is the highest-impact defect that a
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 When an attacker vacates `from`, SEE only reveals sliders that actually bear on `to`; no slider that attacks `from` off the from->to ray is counted as an attacker or defender of `to`
-- [ ] #2 Regression tests assert `k7/8/8/3p4/r3P3/8/8/7K w - - 0 1` e4xd5 returns +100 and `k7/8/8/8/3p4/8/8/r2R3K w - - 0 1` Rd1xd4 returns +100 (both currently wrong)
-- [ ] #3 The existing SEE suite (engine/src/see.rs tests) still passes
-- [ ] #4 Change measured with the TASK-27 strength-regression script, with results recorded in the implementation notes
+- [x] #1 When an attacker vacates `from`, SEE only reveals sliders that actually bear on `to`; no slider that attacks `from` off the from->to ray is counted as an attacker or defender of `to`
+- [x] #2 Regression tests assert `k7/8/8/3p4/r3P3/8/8/7K w - - 0 1` e4xd5 returns +100 and `k7/8/8/8/3p4/8/8/r2R3K w - - 0 1` Rd1xd4 returns +100 (both currently wrong)
+- [x] #3 The existing SEE suite (engine/src/see.rs tests) still passes
+- [x] #4 Change measured with the TASK-27 strength-regression script, with results recorded in the implementation notes
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -103,4 +103,36 @@ Verification:
 - TASK-27 strength (authoritative tc=5+0.05, 600 games, candidate=player1): verdict INCONCLUSIVE at cap (LLR=1.75, bounds [-2.94,+2.94]); point estimate W222/D243/L135, 57.25%, Elo +50.7, 95% CI [+29.4,+72.5] — clear gain, no regression
 Known failures: none
 ---
+
+author: @george
+created: 2026-07-30 08:24
+---
+Review attempt: 1
+Reviewed branch: task-93-see-xray-wrong-square
+Reviewed implementation: 1c6d6fcb23c67bfe66b5c71b9da621eaaaf6bd83
+Verdict: approved
+
+Immutability: base b46e8bb -> target 1c6d6fc; target is an ancestor of tip abcd2a5; the only post-target change (1c6d6fc..abcd2a5) is the task .md handoff. Scope clean: base->target touches only engine/src/see.rs and the task file. No new #[allow]; code comments explain the why without citing task/finding IDs.
+
+Correctness: the reveal step now queries attack_defend_sliding(occ, to) & !processed after vacating from. Only sliders collinear with the from->to ray bear on to, so off-ray attackers of the vacated origin can no longer be injected as phantom recapturers; querying to also can never return the target square itself, closing the phantom-target manifestation. !processed correctly excludes spent sliders whose real-board squares still show in piece_bb. Knight/king departures are gated out of the reveal (may_xray), which is sound: a knight's from/to are never collinear so it can uncover no on-ray slider (king x-ray gating is pre-existing, out of scope).
+
+AC verification:
+- AC#1: proven by code review + independent hand-trace of both report cases.
+- AC#2: k7/8/8/3p4/r3P3/8/8/7K w e4xd5 = +100 and k7/8/8/8/3p4/8/8/r2R3K w Rd1xd4 = +100 added and passing (both were Cp(0)/Cp(-400) before). Hand-traced both.
+- AC#3: see::tests::it_works passes. One pre-existing expectation corrected (Bf6xe5 battery k6q/6b1/5b2/4B3/8/2B5/1B6/K7 b: cp(0)->cp(300)); the old 0 was itself produced by the bug (from-query counted the e5 target bishop as an extra white defender, faking a 3v3). True value +300 hand-traced; all other existing cases unchanged and green.
+- AC#4: TASK-27 strength measured and recorded — point estimate +50.7 Elo, 95% CI [+29.4,+72.5], 600 games, CI entirely above zero; consistent with the mechanism (free winning captures no longer see<0-pruned in qsearch and no longer mis-ordered good->bad).
+
+Verification commands (target 1c6d6fc, worktree):
+- cargo fmt --check: PASS
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: PASS (clean CARGO_TARGET_DIR /tmp/task93-clippy)
+- cargo test --workspace: engine 476 passed / 2 ignored; chess/seaborg/integration green; lichess 161 passed. One lichess matchmaking timing test (incoming_challenge_is_handled_while_a_matchmaking_call_is_blocked) timed out once under concurrent full-suite load; passes 3/3 in isolation and on a dedicated -p lichess run. Pre-existing flake, no path from see.rs.
+
+Approved. Code target remains 1c6d6fc.
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+SEE x-ray reveal fixed: engine/src/see.rs now recomputes sliders bearing on `to` under updated occupancy (attack_defend_sliding(occ, to) & !processed) instead of querying the vacated `from`, so no slider that attacks `from` off the from->to ray is folded in as a phantom recapturer. Verified: (AC#1) code + hand-traced both report cases; (AC#2/#3) see::tests::it_works passes with the two new +100 regressions (e4xd5, Rd1xd4) and one corrected pre-existing expectation (Bf6xe5 battery cp0->cp300, old 0 was itself the bug counting the e5 target as an extra defender — true value +300 hand-traced); (AC#4) TASK-27 strength recorded, +50.7 Elo 95%CI [+29.4,+72.5] over 600 games. Repo checks on target 1c6d6fc: cargo fmt --check PASS; clippy --workspace --all-targets --all-features -D warnings PASS (clean CARGO_TARGET_DIR); cargo test --workspace green (engine 476 pass/2 ignored; lichess 161 pass — one matchmaking timing test flaked only under concurrent full-suite load, passes in isolation and on a dedicated -p lichess run, no causal path from see.rs).
+<!-- SECTION:FINAL_SUMMARY:END -->
