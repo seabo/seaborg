@@ -1,0 +1,2695 @@
+{
+  "description": "Rules-verified forced mates from Seaborg self-play. Each position is a game-theoretic forced mate for the side to move, proven by exhaustive minimax over the move generator independently of the engine's search.",
+  "source": "seaborg self-play (evaluator: hand-crafted)",
+  "params": {
+    "games": 300,
+    "self_play_nodes": 40000,
+    "max_mate_plies": 7,
+    "solver_node_cap": 400000,
+    "per_bucket": 40,
+    "triage_cp": 500,
+    "opening_seed": 6523264561614,
+    "opening_plies": 8,
+    "hash_mb": 16,
+    "network": "hand-crafted"
+  },
+  "counts_by_mate_moves": {
+    "1": 40,
+    "2": 40,
+    "3": 40,
+    "4": 40
+  },
+  "positions": [
+    {
+      "fen": "1K6/1Q4bk/5Q2/4p3/3p4/3P2p1/8/8 w - - 0 66",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "f6g7",
+        "b7g7"
+      ],
+      "line": [
+        "f6g7"
+      ]
+    },
+    {
+      "fen": "1Q6/2K5/k7/8/8/8/7N/8 w - - 0 70",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "b8b6"
+      ],
+      "line": [
+        "b8b6"
+      ]
+    },
+    {
+      "fen": "1Q6/4k1K1/3R4/8/8/8/8/8 w - - 5 97",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "b8d8",
+        "b8f8"
+      ],
+      "line": [
+        "b8d8"
+      ]
+    },
+    {
+      "fen": "1Q6/8/8/8/8/1KP2Q2/8/6k1 w - - 1 78",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "b8g3"
+      ],
+      "line": [
+        "b8g3"
+      ]
+    },
+    {
+      "fen": "1Q6/8/8/8/8/4Q3/2k3PP/6K1 w - - 0 53",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "b8b3"
+      ],
+      "line": [
+        "b8b3"
+      ]
+    },
+    {
+      "fen": "1Q6/K7/2k5/5Q2/8/7p/8/8 w - - 0 100",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "f5b5",
+        "b8b6"
+      ],
+      "line": [
+        "f5b5"
+      ]
+    },
+    {
+      "fen": "1k6/3R4/1KP5/8/8/8/1P6/8 w - - 9 61",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "d7d8"
+      ],
+      "line": [
+        "d7d8"
+      ]
+    },
+    {
+      "fen": "1k6/4p3/1BB3R1/3P3p/5p1P/5P2/5KP1/8 w - - 1 53",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "g6g8"
+      ],
+      "line": [
+        "g6g8"
+      ]
+    },
+    {
+      "fen": "1k6/7r/p7/6PB/4b3/8/5b1K/3q4 b - - 1 65",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "h7h5",
+        "d1h5",
+        "d1h1"
+      ],
+      "line": [
+        "h7h5"
+      ]
+    },
+    {
+      "fen": "1k6/8/8/2q5/6b1/3K4/5r2/8 b - - 7 57",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "g4f5"
+      ],
+      "line": [
+        "g4f5"
+      ]
+    },
+    {
+      "fen": "1r6/8/3n4/8/8/K1b5/2k5/8 b - - 7 87",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "b8a8"
+      ],
+      "line": [
+        "b8a8"
+      ]
+    },
+    {
+      "fen": "2K5/5q2/2k5/8/8/8/8/8 b - - 21 161",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "f7c7",
+        "f7e8",
+        "f7f8",
+        "f7g8"
+      ],
+      "line": [
+        "f7c7"
+      ]
+    },
+    {
+      "fen": "2K5/5r2/7q/8/3k4/8/8/8 b - - 5 71",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "h6f8",
+        "h6h8"
+      ],
+      "line": [
+        "h6f8"
+      ]
+    },
+    {
+      "fen": "2Q5/8/8/3p4/4p3/1k5P/5RP1/Q5K1 w - - 1 68",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "f2b2",
+        "c8c3"
+      ],
+      "line": [
+        "f2b2"
+      ]
+    },
+    {
+      "fen": "2Q5/8/8/8/6P1/Q2PPK2/7P/1k6 w - - 5 65",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "c8c1"
+      ],
+      "line": [
+        "c8c1"
+      ]
+    },
+    {
+      "fen": "2Q5/k2P4/3R4/pp6/8/1P5P/6P1/7K w - - 2 63",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "d6a6"
+      ],
+      "line": [
+        "d6a6"
+      ]
+    },
+    {
+      "fen": "2Q5/k5N1/p2B1p1p/P4PnP/3K2P1/8/8/8 w - - 7 74",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "d6c5",
+        "c8b8"
+      ],
+      "line": [
+        "d6c5"
+      ]
+    },
+    {
+      "fen": "2Q5/k7/p7/2r1N3/4K3/4B3/8/8 w - - 12 83",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "e3c5"
+      ],
+      "line": [
+        "e3c5"
+      ]
+    },
+    {
+      "fen": "2R5/1Q6/5K2/8/8/k7/1r6/8 w - - 21 93",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "c8a8"
+      ],
+      "line": [
+        "c8a8"
+      ]
+    },
+    {
+      "fen": "2R5/5R2/6K1/4Q3/8/8/3k4/8 w - - 3 95",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "f7d7"
+      ],
+      "line": [
+        "f7d7"
+      ]
+    },
+    {
+      "fen": "2k5/1p3p2/2p5/p5P1/2P2Nn1/P5q1/2P5/7K b - - 0 37",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "g4f2",
+        "g3h2"
+      ],
+      "line": [
+        "g4f2"
+      ]
+    },
+    {
+      "fen": "2k5/7Q/6R1/5K2/8/1P6/P5P1/8 w - - 3 68",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "g6g8"
+      ],
+      "line": [
+        "g6g8"
+      ]
+    },
+    {
+      "fen": "2k5/8/3K4/4Q3/4B3/8/2P5/8 w - - 9 73",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "e5e8",
+        "e5h8"
+      ],
+      "line": [
+        "e5e8"
+      ]
+    },
+    {
+      "fen": "2k5/R3b2p/2B3p1/B3p3/8/1P5P/5PP1/7K w - - 3 45",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "a7a8"
+      ],
+      "line": [
+        "a7a8"
+      ]
+    },
+    {
+      "fen": "2r5/8/8/5k2/K7/8/8/1q6 b - - 2 71",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "c8a8"
+      ],
+      "line": [
+        "c8a8"
+      ]
+    },
+    {
+      "fen": "3K4/1q6/2q3k1/4p3/4b3/8/5B2/8 b - - 5 91",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "c6d7",
+        "c6c8",
+        "b7c7",
+        "b7d7"
+      ],
+      "line": [
+        "c6d7"
+      ]
+    },
+    {
+      "fen": "3K4/2r5/2q5/8/8/8/5k2/8 b - - 7 99",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "c6d7"
+      ],
+      "line": [
+        "c6d7"
+      ]
+    },
+    {
+      "fen": "3Q4/5Nk1/P5B1/7K/8/5P2/8/8 w - - 1 70",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "d8h8"
+      ],
+      "line": [
+        "d8h8"
+      ]
+    },
+    {
+      "fen": "3Q4/5Q2/7k/ppp2p2/P1B2P2/1P5K/8/8 w - - 2 124",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "d8h4",
+        "d8g5",
+        "d8b6",
+        "d8d6",
+        "d8f6",
+        "d8f8",
+        "d8h8"
+      ],
+      "line": [
+        "d8h4"
+      ]
+    },
+    {
+      "fen": "3R1B2/6R1/p7/P6k/3P3P/6P1/1P3P2/6K1 w - - 1 58",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "g7g5"
+      ],
+      "line": [
+        "g7g5"
+      ]
+    },
+    {
+      "fen": "3R4/8/7Q/5k2/8/5K2/8/8 w - - 7 82",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "d8d5"
+      ],
+      "line": [
+        "d8d5"
+      ]
+    },
+    {
+      "fen": "3k4/8/1q6/3KN3/5q1P/8/8/8 b - - 7 88",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "f4d4"
+      ],
+      "line": [
+        "f4d4"
+      ]
+    },
+    {
+      "fen": "3k4/8/3K1R2/3p3P/3P2P1/8/8/8 w - - 3 90",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "f6f8"
+      ],
+      "line": [
+        "f6f8"
+      ]
+    },
+    {
+      "fen": "3k4/Q7/8/8/B7/P3P3/P3KP2/8 w - - 9 47",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "a7d7"
+      ],
+      "line": [
+        "a7d7"
+      ]
+    },
+    {
+      "fen": "3q4/8/3P1p2/p7/P7/1R1Q4/5P2/2k3K1 w - - 6 59",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "b3b1"
+      ],
+      "line": [
+        "b3b1"
+      ]
+    },
+    {
+      "fen": "4K3/1q6/8/8/8/4k3/8/2q5 b - - 3 123",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "c1c8"
+      ],
+      "line": [
+        "c1c8"
+      ]
+    },
+    {
+      "fen": "4K3/8/8/1Q6/8/8/1Q3P2/3k4 w - - 5 80",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "b5f1",
+        "b5e2"
+      ],
+      "line": [
+        "b5f1"
+      ]
+    },
+    {
+      "fen": "4Q3/2R5/5K1k/8/8/6P1/7P/8 w - - 1 66",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "e8g6",
+        "e8h8"
+      ],
+      "line": [
+        "e8g6"
+      ]
+    },
+    {
+      "fen": "4Q3/3K3k/8/7P/3B2p1/8/8/8 w - - 0 95",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "e8g6",
+        "e8h8"
+      ],
+      "line": [
+        "e8g6"
+      ]
+    },
+    {
+      "fen": "4Q3/3K4/3Br3/7Q/3k4/5Q2/8/8 w - - 3 110",
+      "mate_plies": 1,
+      "mate_moves": 1,
+      "winning_first_moves": [
+        "h5c5",
+        "h5d5"
+      ],
+      "line": [
+        "h5c5"
+      ]
+    },
+    {
+      "fen": "1K4k1/3q1ppp/8/2p5/8/3r4/8/8 b - - 5 65",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "d3b3",
+        "d3e3",
+        "d7e7"
+      ],
+      "line": [
+        "d3b3",
+        "b8a8",
+        "d7a4"
+      ]
+    },
+    {
+      "fen": "1K6/1Q4bk/Q7/4p3/3p3p/3P2P1/8/8 w - - 0 65",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "a6f6"
+      ],
+      "line": [
+        "a6f6",
+        "h4h3",
+        "f6g7"
+      ]
+    },
+    {
+      "fen": "1K6/5q2/8/2k5/8/8/8/8 b - - 19 160",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "c5b6",
+        "c5c6"
+      ],
+      "line": [
+        "c5b6",
+        "b8a8",
+        "f7a7"
+      ]
+    },
+    {
+      "fen": "1Q1b1k2/5N2/P5B1/7K/8/5P2/8/8 w - - 5 69",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "b8d8"
+      ],
+      "line": [
+        "b8d8",
+        "f8g7",
+        "d8h8"
+      ]
+    },
+    {
+      "fen": "1Q2Q3/8/6pk/8/8/4K1P1/8/8 w - - 1 70",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "b8b1",
+        "b8e5",
+        "b8b6",
+        "b8d6",
+        "e8h8"
+      ],
+      "line": [
+        "b8b1",
+        "g6g5",
+        "b1g6"
+      ]
+    },
+    {
+      "fen": "1Q4Q1/3R4/8/8/3K3P/8/5k2/8 w - - 1 78",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "d7e7",
+        "b8b1",
+        "b8h2",
+        "b8e5",
+        "b8e8"
+      ],
+      "line": [
+        "d7e7",
+        "f2f1",
+        "b8f4"
+      ]
+    },
+    {
+      "fen": "1Q6/2K5/2R5/k7/8/8/7N/8 w - - 3 69",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "h2f1",
+        "h2f3",
+        "h2g4",
+        "c7d6",
+        "c7d7",
+        "c7c8",
+        "c7d8",
+        "c6c1",
+        "c6c2",
+        "c6c4",
+        "c6a6",
+        "c6b6",
+        "c6d6",
+        "c6e6",
+        "c6f6",
+        "c6g6",
+        "c6h6",
+        "b8b1",
+        "b8b2",
+        "b8b7"
+      ],
+      "line": [
+        "h2f1",
+        "a5a4",
+        "c6a6"
+      ]
+    },
+    {
+      "fen": "1Q6/3k2K1/1R6/8/8/8/8/8 w - - 3 96",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "b6d6",
+        "b8d6",
+        "b8a7"
+      ],
+      "line": [
+        "b6d6",
+        "d7e7",
+        "b8d8"
+      ]
+    },
+    {
+      "fen": "1Q6/6R1/4k3/2K5/8/8/8/8 w - - 3 80",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "c5d4",
+        "b8f8"
+      ],
+      "line": [
+        "c5d4",
+        "e6f5",
+        "b8e5"
+      ]
+    },
+    {
+      "fen": "1Q6/8/6k1/7p/8/5Q1P/P5PK/8 w - - 1 58",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "b8f8",
+        "b8g8",
+        "b8h8"
+      ],
+      "line": [
+        "b8f8",
+        "h5h4",
+        "f3f5"
+      ]
+    },
+    {
+      "fen": "1Q6/8/8/8/8/2k4P/Q4PP1/6K1 w - - 3 63",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "a2e2",
+        "b8b2",
+        "b8b3",
+        "b8f4",
+        "b8b5",
+        "b8e5",
+        "b8b6",
+        "b8a7",
+        "b8c7",
+        "b8d8"
+      ],
+      "line": [
+        "a2e2",
+        "c3d4",
+        "b8e5"
+      ]
+    },
+    {
+      "fen": "1k6/7r/p7/6PB/4b3/7K/3p1b2/8 b - - 2 64",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "d2d1q",
+        "d2d1b",
+        "h7h5",
+        "e4f3"
+      ],
+      "line": [
+        "d2d1q",
+        "g5g6",
+        "h7h5"
+      ]
+    },
+    {
+      "fen": "1k6/8/1q6/8/4K1b1/8/5r2/8 b - - 5 56",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "b6c5",
+        "b6d6"
+      ],
+      "line": [
+        "b6c5",
+        "e4d3",
+        "g4f5"
+      ]
+    },
+    {
+      "fen": "1r6/8/3n4/8/8/2bk4/K7/8 b - - 5 86",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "d3c2",
+        "d3c4"
+      ],
+      "line": [
+        "d3c2",
+        "a2a3",
+        "b8a8"
+      ]
+    },
+    {
+      "fen": "1rb5/pppk4/2p1rQ2/2R1pN2/3PP3/1P6/2P2PPP/3R2K1 w - - 7 31",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "d4e5"
+      ],
+      "line": [
+        "d4e5",
+        "d7e8",
+        "f5g7"
+      ]
+    },
+    {
+      "fen": "2Q5/6Pk/4p3/1p1pB3/8/1P6/PKP5/6n1 w - - 1 49",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "c8e6"
+      ],
+      "line": [
+        "c8e6",
+        "b5b4",
+        "g7g8q"
+      ]
+    },
+    {
+      "fen": "2Q5/8/6R1/8/3N4/8/PP3k1P/3K4 w - - 3 57",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "d4c2",
+        "d1d2",
+        "g6g3",
+        "c8c1",
+        "c8c3",
+        "c8f5",
+        "c8e6",
+        "c8e8"
+      ],
+      "line": [
+        "d4c2",
+        "f2f1",
+        "c8f5"
+      ]
+    },
+    {
+      "fen": "2Q5/k7/p7/r3N3/4KB2/8/8/8 w - - 10 82",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "f4e3"
+      ],
+      "line": [
+        "f4e3",
+        "a5c5",
+        "e3c5"
+      ]
+    },
+    {
+      "fen": "2R4Q/5R2/6K1/8/8/4k3/8/8 w - - 1 94",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "c8d8",
+        "h8e5",
+        "h8e8"
+      ],
+      "line": [
+        "c8d8",
+        "e3e2",
+        "h8e5"
+      ]
+    },
+    {
+      "fen": "2R5/8/5K2/3Q4/1k6/8/1r6/8 w - - 19 92",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "d5b7"
+      ],
+      "line": [
+        "d5b7",
+        "b4a3",
+        "c8a8"
+      ]
+    },
+    {
+      "fen": "2k5/1p3p2/2p5/p5P1/2P2N2/4n1q1/P1P5/7K b - - 4 36",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "e3f1",
+        "e3g4"
+      ],
+      "line": [
+        "e3f1",
+        "a2a3",
+        "g3h2"
+      ]
+    },
+    {
+      "fen": "2k5/3R4/2P5/1K6/8/8/1P6/8 w - - 7 60",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "b5b6"
+      ],
+      "line": [
+        "b5b6",
+        "c8b8",
+        "d7d8"
+      ]
+    },
+    {
+      "fen": "2k5/4p3/1BB1R1p1/3P3p/5p1P/5P2/5KP1/8 w - - 2 52",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "e6g6",
+        "e6e7"
+      ],
+      "line": [
+        "e6g6",
+        "e7e6",
+        "g6g8"
+      ]
+    },
+    {
+      "fen": "2k5/5Q2/8/8/B7/P3P3/P3KP2/8 w - - 7 46",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "a4c6",
+        "f7a7"
+      ],
+      "line": [
+        "a4c6",
+        "c8b8",
+        "f7b7"
+      ]
+    },
+    {
+      "fen": "2r4k/4RP2/5PBp/8/8/8/5PK1/8 w - - 7 51",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "e7e8"
+      ],
+      "line": [
+        "e7e8",
+        "c8e8",
+        "f7e8q"
+      ]
+    },
+    {
+      "fen": "2r5/4K3/2q5/8/8/8/5k2/8 b - - 5 98",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "c8c7"
+      ],
+      "line": [
+        "c8c7",
+        "e7d8",
+        "c6d7"
+      ]
+    },
+    {
+      "fen": "3K4/8/8/8/4q3/4k3/8/2q5 b - - 1 122",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "c1c5",
+        "e4e5",
+        "e4b7",
+        "e4h7"
+      ],
+      "line": [
+        "c1c5",
+        "d8d7",
+        "e4e7"
+      ]
+    },
+    {
+      "fen": "3Q4/3N2k1/2K5/5P2/8/8/8/8 w - - 2 58",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "d8f8"
+      ],
+      "line": [
+        "d8f8",
+        "g7h7",
+        "d7f6"
+      ]
+    },
+    {
+      "fen": "3Q4/8/4K3/8/1p6/5Q2/1k6/8 w - - 3 74",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "d8d1",
+        "d8d2"
+      ],
+      "line": [
+        "d8d1",
+        "b4b3",
+        "f3b3"
+      ]
+    },
+    {
+      "fen": "3QQ3/7k/8/ppp2p2/P1B2P2/1P5K/8/8 w - - 0 123",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "d8h4",
+        "d8g5",
+        "d8b6",
+        "d8d6",
+        "d8f6",
+        "e8h5",
+        "e8e6",
+        "e8d7",
+        "e8f7",
+        "e8g8",
+        "e8h8"
+      ],
+      "line": [
+        "d8h4",
+        "h7g7",
+        "h4h8"
+      ]
+    },
+    {
+      "fen": "3R1B2/6R1/p6k/P7/3P3P/8/1P3PP1/6K1 w - - 1 57",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "g2g3"
+      ],
+      "line": [
+        "g2g3",
+        "h6h5",
+        "g7g5"
+      ]
+    },
+    {
+      "fen": "3R4/8/7Q/4k3/8/8/6K1/8 w - - 5 81",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "g2f3"
+      ],
+      "line": [
+        "g2f3",
+        "e5f5",
+        "d8d5"
+      ]
+    },
+    {
+      "fen": "3k4/1q6/4K3/4N3/5q1P/8/8/8 b - - 5 87",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "f4e4",
+        "b7e4",
+        "b7b6",
+        "b7c7"
+      ],
+      "line": [
+        "f4e4",
+        "h4h5",
+        "b7e7"
+      ]
+    },
+    {
+      "fen": "3k4/2R1b2p/2B3p1/B3p3/8/1P5P/5PP1/7K w - - 1 44",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "c7a7"
+      ],
+      "line": [
+        "c7a7",
+        "d8c8",
+        "a7a8"
+      ]
+    },
+    {
+      "fen": "3k4/8/1RR5/4N3/1p6/1K6/5PPP/8 w - - 3 47",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "b6b7"
+      ],
+      "line": [
+        "b6b7",
+        "d8e8",
+        "c6c8"
+      ]
+    },
+    {
+      "fen": "3k4/8/8/2K1Q3/4B3/8/2P5/8 w - - 7 72",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "c5c6",
+        "c5d6"
+      ],
+      "line": [
+        "c5c6",
+        "d8c8",
+        "e5c7"
+      ]
+    },
+    {
+      "fen": "3q4/8/3P1p2/p2Q4/P7/1R6/2k2P2/6K1 w - - 4 58",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "d5d3"
+      ],
+      "line": [
+        "d5d3",
+        "c2c1",
+        "b3b1"
+      ]
+    },
+    {
+      "fen": "4K2Q/8/8/1Q6/8/8/2k2P2/8 w - - 3 79",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "b5b2",
+        "h8b2",
+        "h8d4"
+      ],
+      "line": [
+        "b5b2",
+        "c2d1",
+        "h8h1"
+      ]
+    },
+    {
+      "fen": "4Q3/3K3k/7B/7P/8/8/8/8 w - - 1 65",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "d7c6",
+        "d7d6",
+        "d7e6",
+        "d7c7",
+        "d7e7",
+        "d7c8",
+        "d7d8",
+        "e8g6",
+        "e8f7"
+      ],
+      "line": [
+        "d7c6",
+        "h7h6",
+        "e8g6"
+      ]
+    },
+    {
+      "fen": "4Q3/3K3k/8/6p1/3B3P/8/8/8 w - - 0 94",
+      "mate_plies": 3,
+      "mate_moves": 2,
+      "winning_first_moves": [
+        "h4h5"
+      ],
+      "line": [
+        "h4h5",
+        "g5g4",
+        "e8g6"
+      ]
+    },
+    {
+      "fen": "1KQ5/1q4bk/Q7/4p2p/3p4/3P2P1/8/8 w - - 0 64",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "c8b7"
+      ],
+      "line": [
+        "c8b7",
+        "e5e4",
+        "a6f6",
+        "e4e3",
+        "f6g7"
+      ]
+    },
+    {
+      "fen": "1Q2Q3/7k/6p1/8/8/4p1P1/3K4/8 w - - 0 69",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "d2e3",
+        "d2c1",
+        "d2e1",
+        "d2c2",
+        "d2e2",
+        "d2c3",
+        "d2d3",
+        "e8e3"
+      ],
+      "line": [
+        "d2e3",
+        "g6g5",
+        "b8b1",
+        "h7h6",
+        "b1g6"
+      ]
+    },
+    {
+      "fen": "1Q6/4k3/8/2K5/8/6R1/8/8 w - - 1 79",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "c5d5",
+        "g3f3",
+        "g3g7",
+        "b8b3",
+        "b8e5",
+        "b8a7",
+        "b8b7"
+      ],
+      "line": [
+        "c5d5",
+        "e7f7",
+        "d5e5",
+        "f7e7",
+        "g3g7"
+      ]
+    },
+    {
+      "fen": "1Q6/6K1/4B3/8/8/6R1/2k5/8 w - - 3 115",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "g7f6",
+        "g7g6",
+        "g7h6",
+        "g7f7",
+        "g7h7",
+        "g7f8",
+        "g7g8",
+        "g7h8",
+        "g3a3",
+        "g3h3",
+        "e6a2",
+        "e6h3",
+        "e6c4",
+        "e6g4",
+        "e6d5",
+        "e6f5",
+        "e6d7",
+        "e6f7",
+        "e6c8",
+        "e6g8",
+        "b8b3",
+        "b8b4",
+        "b8f4",
+        "b8b5",
+        "b8e5",
+        "b8b6",
+        "b8d6",
+        "b8a7",
+        "b8b7",
+        "b8a8",
+        "b8d8",
+        "b8f8",
+        "b8h8"
+      ],
+      "line": [
+        "g7f6",
+        "c2c1",
+        "g3g2",
+        "c1d1",
+        "b8b1"
+      ]
+    },
+    {
+      "fen": "1Q6/Q7/8/8/2k5/7P/5PP1/6K1 w - - 1 62",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "a7a1",
+        "a7a2",
+        "a7a3",
+        "a7e3",
+        "a7a4",
+        "a7a5",
+        "a7b6",
+        "a7c7",
+        "a7e7",
+        "b8b2",
+        "b8b6",
+        "b8d6",
+        "b8b7",
+        "b8c8",
+        "b8d8"
+      ],
+      "line": [
+        "a7a1",
+        "c4d3",
+        "b8b3",
+        "d3d2",
+        "a1d1"
+      ]
+    },
+    {
+      "fen": "1R6/8/5K2/3Q4/8/2k5/1r6/8 w - - 17 91",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "b8c8"
+      ],
+      "line": [
+        "b8c8",
+        "c3b4",
+        "d5b7",
+        "b4a3",
+        "c8a8"
+      ]
+    },
+    {
+      "fen": "1k6/1r6/p7/6P1/4b3/7K/3p1b2/3B4 b - - 0 63",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "b7h7"
+      ],
+      "line": [
+        "b7h7",
+        "d1h5",
+        "d2d1q",
+        "g5g6",
+        "h7h5"
+      ]
+    },
+    {
+      "fen": "1k6/3P4/p7/P2Q4/1PP5/7r/6PK/8 w - - 0 79",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "h2h3",
+        "g2h3"
+      ],
+      "line": [
+        "h2h3",
+        "b8a7",
+        "d7d8n",
+        "a7b8",
+        "d5b7"
+      ]
+    },
+    {
+      "fen": "1k6/3Q2N1/p4p1p/P4PnP/3K2P1/B7/8/8 w - - 3 72",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "a3d6"
+      ],
+      "line": [
+        "a3d6",
+        "b8a8",
+        "d7c8",
+        "a8a7",
+        "d6c5"
+      ]
+    },
+    {
+      "fen": "1k6/4Q3/8/8/4K3/8/8/8 w - - 95 115",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "e4d5"
+      ],
+      "line": [
+        "e4d5",
+        "b8a8",
+        "d5c6",
+        "a8b8",
+        "e7b7"
+      ]
+    },
+    {
+      "fen": "1k6/8/2P5/1K6/8/8/1P6/3R4 w - - 5 59",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "b5b6",
+        "d1d7"
+      ],
+      "line": [
+        "b5b6",
+        "b8c8",
+        "b2b3",
+        "c8b8",
+        "d1d8"
+      ]
+    },
+    {
+      "fen": "1k6/8/8/8/6b1/4K3/5r2/1q6 b - - 3 55",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "b1b6"
+      ],
+      "line": [
+        "b1b6",
+        "e3d3",
+        "b6c5",
+        "d3e4",
+        "g4f5"
+      ]
+    },
+    {
+      "fen": "1rb1r3/pppk4/2p2Q2/2R1pN2/3PP3/1P6/2P2PPP/2R3K1 w - - 5 30",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "d4d5",
+        "d4e5",
+        "c1d1"
+      ],
+      "line": [
+        "d4d5",
+        "a7a6",
+        "d5c6",
+        "b7c6",
+        "c1d1"
+      ]
+    },
+    {
+      "fen": "2K3k1/5ppp/8/1qp5/8/3r4/8/8 b - - 3 64",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "c5c4",
+        "f7f6",
+        "g7g6",
+        "h7h6",
+        "f7f5",
+        "g7g5",
+        "h7h5",
+        "g8f8",
+        "g8h8",
+        "d3d1",
+        "d3d2",
+        "d3d4",
+        "d3d5",
+        "d3d6",
+        "b5c6",
+        "b5d7"
+      ],
+      "line": [
+        "c5c4",
+        "c8c7",
+        "d3d7",
+        "c7c8",
+        "b5b7"
+      ]
+    },
+    {
+      "fen": "2Q2Q2/1K6/8/1P6/8/6k1/8/8 w - - 1 102",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "b5b6",
+        "b7a6",
+        "b7b6",
+        "b7c6",
+        "b7a7",
+        "b7c7",
+        "b7a8",
+        "b7b8",
+        "c8c1",
+        "c8c2",
+        "c8c3",
+        "c8c4",
+        "c8c5",
+        "c8f5",
+        "c8c6",
+        "c8e6",
+        "c8c7",
+        "c8d7",
+        "c8e8",
+        "f8f1",
+        "f8f5",
+        "f8f6",
+        "f8f7"
+      ],
+      "line": [
+        "b5b6",
+        "g3g2",
+        "c8g4",
+        "g2h1",
+        "f8h6"
+      ]
+    },
+    {
+      "fen": "2Q3k1/p4p2/6p1/7p/7P/6PK/3r4/3q4 b - - 1 52",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "g8h7"
+      ],
+      "line": [
+        "g8h7",
+        "c8g8",
+        "h7g8",
+        "g3g4",
+        "d1g4"
+      ]
+    },
+    {
+      "fen": "2Q5/8/3R4/8/3N4/8/PP5P/3K2k1 w - - 1 56",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "d6g6",
+        "c8c2",
+        "c8h3",
+        "c8g4",
+        "c8c6",
+        "c8b7",
+        "c8a8",
+        "c8g8"
+      ],
+      "line": [
+        "d6g6",
+        "g1h1",
+        "a2a3",
+        "h1h2",
+        "c8h8"
+      ]
+    },
+    {
+      "fen": "2R5/5R1P/6K1/8/8/8/3k4/8 w - - 1 93",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "h7h8q",
+        "h7h8r",
+        "f7e7"
+      ],
+      "line": [
+        "h7h8q",
+        "d2d1",
+        "f7e7",
+        "d1d2",
+        "h8d4"
+      ]
+    },
+    {
+      "fen": "2R5/8/8/8/8/2kb1p2/r5p1/4K3 b - - 1 78",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "d3c4"
+      ],
+      "line": [
+        "d3c4",
+        "c8c4",
+        "c3c4",
+        "e1d1",
+        "g2g1q"
+      ]
+    },
+    {
+      "fen": "2k5/1p3p2/2p5/p4nP1/2P5/6qN/P1P5/7K b - - 2 35",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "f5e3",
+        "f5h4"
+      ],
+      "line": [
+        "f5e3",
+        "h3f4",
+        "e3f1",
+        "a2a3",
+        "g3h2"
+      ]
+    },
+    {
+      "fen": "2k5/2r5/p1pQPR2/P2p4/8/2P4P/6B1/7K w - - 1 41",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "f6f8"
+      ],
+      "line": [
+        "f6f8",
+        "c8b7",
+        "d6b4",
+        "b7a7",
+        "b4b6"
+      ]
+    },
+    {
+      "fen": "2r5/3K4/8/8/4q3/8/5k2/8 b - - 3 97",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "c8c6",
+        "e4c6"
+      ],
+      "line": [
+        "c8c6",
+        "d7d8",
+        "e4h7",
+        "d8e8",
+        "c6c8"
+      ]
+    },
+    {
+      "fen": "3Q1Q2/8/4K3/8/1p6/2k5/8/8 w - - 1 73",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "f8f2",
+        "f8f3",
+        "f8f4",
+        "f8c5",
+        "f8f6",
+        "f8g7",
+        "f8h8"
+      ],
+      "line": [
+        "f8f2",
+        "c3b3",
+        "d8d3",
+        "b3a4",
+        "f2a2"
+      ]
+    },
+    {
+      "fen": "3Q4/2K5/2R5/1k6/8/8/7N/8 w - - 1 68",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "c6c1",
+        "d8d2",
+        "d8d3",
+        "d8d4",
+        "d8h4",
+        "d8d6",
+        "d8e7",
+        "d8a8",
+        "d8b8",
+        "d8c8",
+        "d8f8"
+      ],
+      "line": [
+        "c6c1",
+        "b5a4",
+        "c1b1",
+        "a4a3",
+        "d8a8"
+      ]
+    },
+    {
+      "fen": "3Q4/5k2/1NK5/5P2/8/8/8/8 w - - 0 57",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "b6d7",
+        "d8h8"
+      ],
+      "line": [
+        "b6d7",
+        "f7g7",
+        "d8f8",
+        "g7h7",
+        "d7f6"
+      ]
+    },
+    {
+      "fen": "3Q4/8/k5P1/3R4/8/4P2P/P1K5/8 w - - 3 51",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "d5c5",
+        "d5d6",
+        "d8d6",
+        "d8f6",
+        "d8d7"
+      ],
+      "line": [
+        "d5c5",
+        "a6a7",
+        "c5b5",
+        "a7a6",
+        "d8a5"
+      ]
+    },
+    {
+      "fen": "3QQ3/7k/1p6/p1p2p2/P1B2P2/1P5p/6K1/8 w - - 0 122",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "g2h3",
+        "g2f1",
+        "g2h1",
+        "g2f2",
+        "g2h2",
+        "g2f3",
+        "g2g3"
+      ],
+      "line": [
+        "g2h3",
+        "b6b5",
+        "d8h4",
+        "h7g7",
+        "h4h8"
+      ]
+    },
+    {
+      "fen": "3R1B2/2R3rk/p7/P7/3P3P/8/1P3PP1/6K1 w - - 7 56",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "c7g7"
+      ],
+      "line": [
+        "c7g7",
+        "h7h6",
+        "g2g3",
+        "h6h5",
+        "g7g5"
+      ]
+    },
+    {
+      "fen": "3k4/1P6/2K3pP/8/P1N4P/8/8/8 w - - 1 80",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "c6d6"
+      ],
+      "line": [
+        "c6d6",
+        "d8e8",
+        "c4e5",
+        "g6g5",
+        "b7b8q"
+      ]
+    },
+    {
+      "fen": "3k4/1q6/3K4/4N3/7P/8/8/2q5 b - - 3 86",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "c1f4",
+        "c1c7"
+      ],
+      "line": [
+        "c1f4",
+        "h4h5",
+        "b7b5",
+        "h5h6",
+        "f4e5"
+      ]
+    },
+    {
+      "fen": "3k4/4p3/2B1R1p1/3P3p/3B1p1P/5P2/5KP1/8 w - - 0 51",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "d5d6",
+        "d4b6"
+      ],
+      "line": [
+        "d5d6",
+        "g6g5",
+        "e6e7",
+        "g5g4",
+        "e7e8"
+      ]
+    },
+    {
+      "fen": "3k4/8/6Q1/8/B7/P3P3/P3KP2/8 w - - 5 45",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "g6f7",
+        "g6g7",
+        "g6h7"
+      ],
+      "line": [
+        "g6f7",
+        "d8c8",
+        "a4c6",
+        "c8b8",
+        "f7b7"
+      ]
+    },
+    {
+      "fen": "3k4/R1r4p/2B2bp1/B3p3/8/1P5P/5PP1/7K w - - 8 43",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "a7c7"
+      ],
+      "line": [
+        "a7c7",
+        "e5e4",
+        "c7a7",
+        "d8c8",
+        "a7a8"
+      ]
+    },
+    {
+      "fen": "3q4/8/3P1p2/pR1Q4/P7/2k5/5P2/6K1 w - - 2 57",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "b5b3"
+      ],
+      "line": [
+        "b5b3",
+        "c3c2",
+        "d5d3",
+        "c2c1",
+        "b3b1"
+      ]
+    },
+    {
+      "fen": "3r3k/5Pb1/7p/3B4/6Q1/6B1/6P1/3R3K w - - 2 46",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "g3e5"
+      ],
+      "line": [
+        "g3e5",
+        "g7e5",
+        "g4g8",
+        "d8g8",
+        "f7g8q"
+      ]
+    },
+    {
+      "fen": "4K2Q/8/8/5Q2/8/1k6/5P2/8 w - - 1 78",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "f5d3",
+        "f5f3",
+        "f5e4",
+        "f5a5",
+        "f5b5",
+        "f5c5",
+        "f5d7",
+        "f5c8",
+        "h8a1",
+        "h8d4",
+        "h8e5"
+      ],
+      "line": [
+        "f5d3",
+        "b3a2",
+        "d3c2",
+        "a2a3",
+        "h8b2"
+      ]
+    },
+    {
+      "fen": "4Q1K1/8/5R2/8/8/6k1/8/8 w - - 5 85",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "g8h7",
+        "f6f5",
+        "e8e2",
+        "e8a4",
+        "e8e4",
+        "e8h5",
+        "e8e6",
+        "e8g6",
+        "e8d7",
+        "e8e7",
+        "e8f7",
+        "e8c8",
+        "e8f8"
+      ],
+      "line": [
+        "g8h7",
+        "g3g2",
+        "e8g8",
+        "g2h1",
+        "f6h6"
+      ]
+    },
+    {
+      "fen": "4Q2Q/8/6K1/8/8/1P6/2k1P3/8 w - - 1 60",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "e8e3",
+        "h8a1"
+      ],
+      "line": [
+        "e8e3",
+        "c2b1",
+        "e3c3",
+        "b1a2",
+        "c3b2"
+      ]
+    },
+    {
+      "fen": "4Q3/3K1pk1/5p2/5P1p/7P/6P1/8/8 w - - 5 64",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "d7e7"
+      ],
+      "line": [
+        "d7e7",
+        "g7h7",
+        "e7f6",
+        "h7h6",
+        "e8h8"
+      ]
+    },
+    {
+      "fen": "4Q3/p7/1k6/8/3R2p1/1P6/P1P5/6K1 w - - 0 46",
+      "mate_plies": 5,
+      "mate_moves": 3,
+      "winning_first_moves": [
+        "d4c4",
+        "e8e6",
+        "e8b8"
+      ],
+      "line": [
+        "d4c4",
+        "g4g3",
+        "e8c6",
+        "b6a5",
+        "b3b4"
+      ]
+    },
+    {
+      "fen": "1K6/4q3/8/8/5k2/8/8/8 b - - 19 124",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "f4e4",
+        "f4e5"
+      ],
+      "line": [
+        "f4e4",
+        "b8a8",
+        "e4d5",
+        "a8b8",
+        "d5c6",
+        "b8a8",
+        "e7b7"
+      ]
+    },
+    {
+      "fen": "1K6/8/2q5/8/4k3/8/8/8 b - - 37 133",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "e4d5",
+        "c6d7"
+      ],
+      "line": [
+        "e4d5",
+        "b8a7",
+        "c6b5",
+        "a7a8",
+        "d5c6",
+        "a8a7",
+        "b5b7"
+      ]
+    },
+    {
+      "fen": "1K6/8/6p1/6k1/8/p2q4/8/8 b - - 1 68",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "a3a2",
+        "d3d6",
+        "d3d7"
+      ],
+      "line": [
+        "a3a2",
+        "b8b7",
+        "a2a1q",
+        "b7b6",
+        "a1a6",
+        "b6c5",
+        "d3c4"
+      ]
+    },
+    {
+      "fen": "1Q6/1R6/5pk1/7p/8/8/6P1/6K1 w - - 2 72",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "b8f4"
+      ],
+      "line": [
+        "b8f4",
+        "h5h4",
+        "f4g4",
+        "g6h6",
+        "b7g7",
+        "h4h3",
+        "g4g6"
+      ]
+    },
+    {
+      "fen": "1Q6/5p1k/2K2P2/7P/3P1B2/8/8/8 w - - 1 86",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "h5h6",
+        "f4h2",
+        "f4g3",
+        "f4d6",
+        "f4h6",
+        "f4c7",
+        "b8b1",
+        "b8b2",
+        "b8b3",
+        "b8b4",
+        "b8b5",
+        "b8e5",
+        "b8d6",
+        "b8a7",
+        "b8b7",
+        "b8c7"
+      ],
+      "line": [
+        "h5h6",
+        "h7g6",
+        "b8b5",
+        "g6f6",
+        "b5g5",
+        "f6e6",
+        "d4d5"
+      ]
+    },
+    {
+      "fen": "1Q6/6k1/5p2/7p/8/8/6P1/1R4K1 w - - 0 71",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "b8e8"
+      ],
+      "line": [
+        "b8e8",
+        "h5h4",
+        "b1b7",
+        "g7h6",
+        "e8g8",
+        "h4h3",
+        "b7h7"
+      ]
+    },
+    {
+      "fen": "1k6/3Q4/p7/r3NK2/5B2/8/8/8 w - - 6 80",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "f5e4",
+        "f5g4",
+        "f5e6",
+        "f5f6",
+        "f5g6"
+      ],
+      "line": [
+        "f5e4",
+        "b8a8",
+        "d7c8",
+        "a8a7",
+        "f4e3",
+        "a5c5",
+        "e3c5"
+      ]
+    },
+    {
+      "fen": "1k6/5Q2/p7/r3NK2/5B2/8/8/8 w - - 2 78",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "f5g4",
+        "f5e6",
+        "f5f6",
+        "f5g6"
+      ],
+      "line": [
+        "f5g4",
+        "b8a8",
+        "e5c6",
+        "a5g5",
+        "g4g5",
+        "a6a5",
+        "f7a7"
+      ]
+    },
+    {
+      "fen": "1k6/8/8/8/5Kb1/8/2r5/1q6 b - - 1 54",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "c2f2",
+        "c2c4",
+        "b1c1",
+        "b1f1",
+        "b1g1",
+        "b1h1",
+        "b1b5"
+      ],
+      "line": [
+        "c2f2",
+        "f4e3",
+        "b1b6",
+        "e3d3",
+        "b6c5",
+        "d3e4",
+        "g4f5"
+      ]
+    },
+    {
+      "fen": "1k6/8/p2P4/P2Q4/1PP5/r6P/6PK/8 w - - 5 78",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "d6d7"
+      ],
+      "line": [
+        "d6d7",
+        "b8a7",
+        "d7d8n",
+        "a3h3",
+        "h2h3",
+        "a7b8",
+        "d5b7"
+      ]
+    },
+    {
+      "fen": "1k6/8/p7/8/4b1P1/7K/1r1p1b2/3B4 b - - 3 62",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "b2b7"
+      ],
+      "line": [
+        "b2b7",
+        "g4g5",
+        "b7h7",
+        "d1h5",
+        "d2d1q",
+        "g5g6",
+        "h7h5"
+      ]
+    },
+    {
+      "fen": "1kb5/8/3K4/8/p7/P1Q5/1P6/8 w - - 57 84",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "c3b4",
+        "c3c7"
+      ],
+      "line": [
+        "c3b4",
+        "b8a8",
+        "d6c7",
+        "a8a7",
+        "b4b5",
+        "a7a8",
+        "b5b8"
+      ]
+    },
+    {
+      "fen": "2K5/8/8/3q4/1k6/8/8/8 b - - 15 158",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "b4a5",
+        "b4b5",
+        "b4c5",
+        "d5f7"
+      ],
+      "line": [
+        "b4a5",
+        "c8c7",
+        "a5a6",
+        "c7c8",
+        "a6b6",
+        "c8b8",
+        "d5b7"
+      ]
+    },
+    {
+      "fen": "2Q5/2P5/8/3p4/3Pp3/3k3P/5RP1/6K1 w - - 1 65",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "c8g4",
+        "c8a6",
+        "c8e6",
+        "c8e8",
+        "c8f8"
+      ],
+      "line": [
+        "c8g4",
+        "e4e3",
+        "c7c8q",
+        "e3e2",
+        "g4e2",
+        "d3d4",
+        "f2f4"
+      ]
+    },
+    {
+      "fen": "2Q5/3N2R1/8/8/8/8/4k1P1/6K1 w - - 3 84",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "d7e5",
+        "d7f6",
+        "g7g3",
+        "g7g4",
+        "g7g5",
+        "g7g6",
+        "g7e7",
+        "g7f7",
+        "c8c1",
+        "c8c2",
+        "c8c3",
+        "c8c4",
+        "c8c5",
+        "c8c6",
+        "c8c7"
+      ],
+      "line": [
+        "d7e5",
+        "e2e1",
+        "g2g3",
+        "e1d1",
+        "g1f2",
+        "d1d2",
+        "g7d7"
+      ]
+    },
+    {
+      "fen": "2R5/5R2/6KP/8/8/3k4/8/8 w - - 1 92",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "h6h7",
+        "f7e7"
+      ],
+      "line": [
+        "h6h7",
+        "d3d2",
+        "h7h8q",
+        "d2d1",
+        "f7e7",
+        "d1d2",
+        "h8d4"
+      ]
+    },
+    {
+      "fen": "2k5/1p3p2/2p5/p4nP1/2P5/4q2N/P1P4K/8 b - - 0 34",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "e3g3"
+      ],
+      "line": [
+        "e3g3",
+        "h2h1",
+        "f5e3",
+        "h3f4",
+        "e3f1",
+        "a2a3",
+        "g3h2"
+      ]
+    },
+    {
+      "fen": "2k5/4Q3/8/5K2/8/8/8/8 w - - 93 114",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "f5e4",
+        "f5e5",
+        "f5e6",
+        "e7a7"
+      ],
+      "line": [
+        "f5e4",
+        "c8b8",
+        "e4d5",
+        "b8a8",
+        "d5c6",
+        "a8b8",
+        "e7b7"
+      ]
+    },
+    {
+      "fen": "2k5/4r3/p1pnPR2/P2pQ3/8/2P4P/6B1/7K w - - 0 40",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "e5d6"
+      ],
+      "line": [
+        "e5d6",
+        "e7e6",
+        "f6e6",
+        "d5d4",
+        "e6e7",
+        "d4d3",
+        "d6c7"
+      ]
+    },
+    {
+      "fen": "2k5/8/1PK3pP/8/P1N4P/8/8/8 w - - 1 79",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "b6b7",
+        "h6h7"
+      ],
+      "line": [
+        "b6b7",
+        "c8b8",
+        "h6h7",
+        "g6g5",
+        "h7h8q",
+        "b8a7",
+        "h8a8"
+      ]
+    },
+    {
+      "fen": "2k5/8/6K1/1Q6/8/8/8/8 w - - 45 90",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "g6f5",
+        "g6f6"
+      ],
+      "line": [
+        "g6f5",
+        "c8c7",
+        "f5e6",
+        "c7c8",
+        "e6d6",
+        "c8d8",
+        "b5d7"
+      ]
+    },
+    {
+      "fen": "2q5/8/8/8/8/1K2bk2/8/8 b - - 3 157",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "e3d2",
+        "c8c5"
+      ],
+      "line": [
+        "e3d2",
+        "b3a2",
+        "c8c2",
+        "a2a3",
+        "c2b1",
+        "a3a4",
+        "b1b4"
+      ]
+    },
+    {
+      "fen": "2r4k/3R1P2/5PBp/8/8/8/5P2/6K1 w - - 3 49",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "g1g2",
+        "g1h2",
+        "d7d1",
+        "d7e7"
+      ],
+      "line": [
+        "g1g2",
+        "c8a8",
+        "d7e7",
+        "h6h5",
+        "e7e5",
+        "h5h4",
+        "e5h5"
+      ]
+    },
+    {
+      "fen": "2r5/8/3K4/8/8/8/5k2/4q3 b - - 1 96",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "f2f3",
+        "f2g3",
+        "c8c1",
+        "c8c2",
+        "c8c3",
+        "e1e2",
+        "e1e4",
+        "e1e8"
+      ],
+      "line": [
+        "f2f3",
+        "d6d7",
+        "e1e8",
+        "d7d6",
+        "f3f4",
+        "d6d5",
+        "e8e5"
+      ]
+    },
+    {
+      "fen": "3Q4/2R5/2K1k3/8/8/8/6P1/8 w - - 1 59",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "g2g3",
+        "g2g4",
+        "c6b5",
+        "c6c5",
+        "c7a7",
+        "c7b7",
+        "c7d7",
+        "c7e7",
+        "c7g7",
+        "c7h7",
+        "d8d3",
+        "d8d4",
+        "d8h4",
+        "d8d5",
+        "d8d6",
+        "d8e7",
+        "d8b8",
+        "d8e8",
+        "d8f8",
+        "d8g8",
+        "d8h8"
+      ],
+      "line": [
+        "g2g3",
+        "e6e5",
+        "c7f7",
+        "e5e4",
+        "d8d2",
+        "e4e5",
+        "d2e3"
+      ]
+    },
+    {
+      "fen": "3Q4/8/6P1/1k6/8/4P2P/P1KR4/8 w - - 1 50",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "a2a3",
+        "e3e4",
+        "h3h4",
+        "g6g7",
+        "a2a4",
+        "c2b1",
+        "c2c1",
+        "c2d1",
+        "c2b2",
+        "c2b3",
+        "c2c3",
+        "c2d3",
+        "d2d1",
+        "d2f2",
+        "d2d3",
+        "d2d4",
+        "d2d5",
+        "d2d6",
+        "d2d7",
+        "d8d5",
+        "d8d6",
+        "d8f6",
+        "d8c7",
+        "d8d7",
+        "d8e7",
+        "d8b8",
+        "d8c8",
+        "d8e8",
+        "d8g8"
+      ],
+      "line": [
+        "a2a3",
+        "b5c5",
+        "d2d6",
+        "c5c4",
+        "d6b6",
+        "c4c5",
+        "d8d4"
+      ]
+    },
+    {
+      "fen": "3Q4/8/8/4K3/8/8/4k3/8 w - - 1 68",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "e5f4"
+      ],
+      "line": [
+        "e5f4",
+        "e2f1",
+        "f4f3",
+        "f1e1",
+        "d8d4",
+        "e1f1",
+        "d4a1"
+      ]
+    },
+    {
+      "fen": "3QR3/8/2B5/1P3k2/4p3/8/3K4/3n4 w - - 8 84",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "e8f8",
+        "c6e4",
+        "c6d7",
+        "d8d5",
+        "d8d7"
+      ],
+      "line": [
+        "e8f8",
+        "f5g4",
+        "f8g8",
+        "g4h3",
+        "c6d7",
+        "h3h2",
+        "d8h4"
+      ]
+    },
+    {
+      "fen": "3R2r1/2R3Bk/p7/P7/3P3P/8/1P3PP1/6K1 w - - 5 55",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "g7f8"
+      ],
+      "line": [
+        "g7f8",
+        "h7g6",
+        "g2g4",
+        "g8f8",
+        "d8f8",
+        "g6h6",
+        "f8f6"
+      ]
+    },
+    {
+      "fen": "3R3Q/8/4k3/8/8/8/6K1/8 w - - 3 80",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "g2f3",
+        "g2g3",
+        "h8d4",
+        "h8h6",
+        "h8g7",
+        "h8e8",
+        "h8f8"
+      ],
+      "line": [
+        "g2f3",
+        "e6f5",
+        "d8d6",
+        "f5g5",
+        "f3e4",
+        "g5g4",
+        "d6g6"
+      ]
+    },
+    {
+      "fen": "3b4/1R2pk2/2B1R1p1/3P3p/3B1p1P/5P2/5KP1/8 w - - 4 49",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "b7b8"
+      ],
+      "line": [
+        "b7b8",
+        "g6g5",
+        "h4g5",
+        "h5h4",
+        "g5g6",
+        "f7f8",
+        "b8d8"
+      ]
+    },
+    {
+      "fen": "3bk3/3Rp3/2B1R1p1/3P3p/3B1p1P/5P2/5KP1/8 w - - 6 50",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "d7d8",
+        "d7d6"
+      ],
+      "line": [
+        "d7d8",
+        "e8d8",
+        "d5d6",
+        "g6g5",
+        "e6e7",
+        "g5g4",
+        "e7e8"
+      ]
+    },
+    {
+      "fen": "3k4/8/8/3KN3/7P/8/1q6/2q5 b - - 1 85",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "c1e3",
+        "c1f4",
+        "b2b7"
+      ],
+      "line": [
+        "c1e3",
+        "e5c6",
+        "d8c7",
+        "c6e5",
+        "b2e5",
+        "d5c4",
+        "e3c3"
+      ]
+    },
+    {
+      "fen": "3k4/R4r1p/2B2bp1/4p3/8/1P5P/3B1PP1/7K w - - 6 42",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "d2a5"
+      ],
+      "line": [
+        "d2a5",
+        "f7c7",
+        "a7c7",
+        "e5e4",
+        "c7a7",
+        "d8c8",
+        "a7a8"
+      ]
+    },
+    {
+      "fen": "3q4/8/3P1p2/pR6/P1k5/5Q2/5P2/6K1 w - - 0 56",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "f3b3",
+        "f3d5",
+        "f3c6"
+      ],
+      "line": [
+        "f3b3",
+        "c4d4",
+        "b5d5",
+        "d4e4",
+        "b3d3",
+        "e4f4",
+        "d3f5"
+      ]
+    },
+    {
+      "fen": "4K3/1q3p2/4n3/8/8/6k1/8/8 b - - 11 65",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "e6c5",
+        "e6g5",
+        "e6g7"
+      ],
+      "line": [
+        "e6c5",
+        "e8f8",
+        "f7f6",
+        "f8e8",
+        "b7g7",
+        "e8d8",
+        "g7d7"
+      ]
+    },
+    {
+      "fen": "4K3/1q3p2/4n3/8/8/6k1/8/8 b - - 7 63",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "e6c5",
+        "e6g5",
+        "e6g7"
+      ],
+      "line": [
+        "e6c5",
+        "e8f8",
+        "f7f6",
+        "f8e8",
+        "b7g7",
+        "e8d8",
+        "g7d7"
+      ]
+    },
+    {
+      "fen": "4K3/7P/8/5Q2/8/2k5/5P2/8 w - - 1 77",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "h7h8q",
+        "f5b5"
+      ],
+      "line": [
+        "h7h8q",
+        "c3b3",
+        "f5d3",
+        "b3a2",
+        "d3c2",
+        "a2a3",
+        "h8b2"
+      ]
+    },
+    {
+      "fen": "4Q1K1/8/7R/8/8/5k2/8/8 w - - 3 84",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "h6e6",
+        "h6f6",
+        "e8e5",
+        "e8e7"
+      ],
+      "line": [
+        "h6e6",
+        "f3f2",
+        "e8f7",
+        "f2g1",
+        "e6e2",
+        "g1h1",
+        "f7f1"
+      ]
+    },
+    {
+      "fen": "4Q3/1P5k/6p1/8/5p2/4P1P1/3K4/8 w - - 0 68",
+      "mate_plies": 7,
+      "mate_moves": 4,
+      "winning_first_moves": [
+        "e3e4",
+        "b7b8q",
+        "g3f4",
+        "e3f4",
+        "d2c1",
+        "d2c2",
+        "d2c3",
+        "d2d3"
+      ],
+      "line": [
+        "e3e4",
+        "f4f3",
+        "b7b8q",
+        "g6g5",
+        "b8b2",
+        "f3f2",
+        "b2h8"
+      ]
+    }
+  ]
+}

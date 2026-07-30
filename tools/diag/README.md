@@ -84,3 +84,67 @@ python3 gauntlet.py --seaborg "$SB" --stockfish "$SF" \
     --seaborg-limit st=0.1 --sf-limit st=0.1 \
     --games 400 --concurrency 10 --openings ../strength/openings-v1.epd
 ```
+
+# Mate-find-rate diagnostic (self-play only, no external engine)
+
+A separate, self-contained diagnostic that asks whether the engine, at normal
+search settings, finds forced mates that *provably* exist. A low find rate on
+rules-verified mates is direct evidence of search over-pruning — the nominal
+depth covers the mate but pruning discards the winning line — worth hundreds of
+Elo; a high rate rules out a gross tactical hole.
+
+Unlike the strength-gulf spike above, this consults **no external resource**: the
+positions come from Seaborg's own self-play and the ground truth is the rules of
+chess, proven by the move generator. No tablebase, opening book, or other engine
+is involved.
+
+## Ground truth is the rules, not a search
+
+A forced mate is game-theoretically decided, so it can be proven with movegen
+alone. The proof lives in `engine::mate` (the `MateSolver`): an exhaustive
+minimax over legal moves that credits the side to move with a mate only when
+*every* defender reply still loses. It shares no code with the engine's heuristic
+search — no evaluation, no transposition table, no pruning that could discard a
+defence — so it can serve as ground truth for a diagnostic *of* that search. The
+generator additionally replays each proven line with an independent, purely
+mechanical playout check.
+
+## Two stages
+
+1. **Generate the suite (Rust).** `mate_suite_gen` plays self-play games, and for
+   every position the games searched, uses `MateSolver` to prove whether the side
+   to move has a forced mate. Proven mates are written to `suites/mate_suite.json`
+   with their distance and every proven mate-preserving first move. (The
+   self-play search score is used only to skip clearly non-winning positions
+   before the expensive proof; it never decides whether a mate is real.)
+
+   ```sh
+   cargo build --release -p engine --example mate_suite_gen
+   ./target/release/examples/mate_suite_gen \
+       --games 600 --nodes 40000 --max-mate-plies 7 --per-bucket 40 \
+       --out suites/mate_suite.json
+   ```
+
+   `suites/mate_suite.json` is committed, so measurement needs no regeneration.
+   Regenerate it to grow the set, reach deeper mates (raise `--max-mate-plies`
+   and `--node-cap`), or source it from a specific network (`--network`).
+
+2. **Measure a network (Python).** `mate_find_rate.py` runs a given network at a
+   normal blitz per-move budget over the suite and reports, broken down by mate
+   distance, how often the engine plays a mating move (checked against the proven
+   winning moves) and how often it reports the mate in its score. The network is
+   selected with the `EvalFile` UCI option, so comparing networks needs no
+   rebuild.
+
+   ```sh
+   python3 mate_find_rate.py --seaborg "$SB" \
+       --suite ../../suites/mate_suite.json \
+       --network net.sbnn --movetime 200 --out mate_find_rate.json
+   # --network none forces the hand-crafted evaluation; omit it to use the
+   # binary's embedded network. --depth / --nodes replace --movetime for a
+   # wall-clock-independent comparison.
+   ```
+
+The verifier is unit-tested in `engine::mate` (a known mate accepted, a
+stalemate and a non-mate rejected, and agreement with an independent reference
+solver), and the measurement's scoring logic in `test_mate_find_rate.py`.
