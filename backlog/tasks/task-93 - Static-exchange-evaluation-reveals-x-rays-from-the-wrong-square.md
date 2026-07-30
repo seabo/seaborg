@@ -1,11 +1,11 @@
 ---
 id: TASK-93
 title: Static exchange evaluation reveals x-rays from the wrong square
-status: In Progress
+status: In Review
 assignee:
   - '@george'
 created_date: '2026-07-29 18:38'
-updated_date: '2026-07-29 18:45'
+updated_date: '2026-07-30 08:12'
 labels:
   - search
   - ordering
@@ -56,3 +56,51 @@ Found via an automated correctness audit; it is the highest-impact defect that a
 4. Run required checks (fmt/clippy/test-workspace); confirm existing SEE suite still passes.
 5. Measure with the TASK-27 strength-regression script and record results.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+## Implementation
+
+Root cause (engine/src/see.rs): the x-ray reveal step queried attack_defend_sliding(occ, from) — the vacated origin — which returns every slider bearing on that square in ANY direction. A slider that attacks 'from' off the from->to ray (an enemy rook on from's rank, a bishop on the opposite diagonal) was OR-ed into the attacker/defender set of 'to' and could be selected by least_valuable_piece as a phantom recapturer, over-counting defenders and sometimes flipping the sign of the exchange. A second manifestation of the same wrong-square query: along the origin's own diagonal/file the ray hit the target piece standing on 'to' as a blocker, folding the captured piece itself in as a phantom same-side defender.
+
+Fix (one line + docs): reveal sliders that bear on 'to' under the updated occupancy — atta_def |= attack_defend_sliding(occ, to) & !processed. Only sliders collinear with the from->to ray can be genuine x-rays, and querying 'to' returns exactly those; it can never return the 'to' square itself, so the phantom-target case is gone too. Kept the may_xray gate (a departing knight is never collinear with 'to' so cannot uncover a slider; king x-ray gating is pre-existing and out of scope). The now-unused 'from' local was removed.
+
+Tests (engine/src/see.rs):
+- Added the two sign-wrong cases from the report: e4xd5 (k7/8/8/3p4/r3P3/8/8/7K w) = +100; Rd1xd4 (k7/8/8/8/3p4/8/8/r2R3K w) = +100. Both returned wrong values before the fix (Cp(0) and Cp(-400)).
+- Corrected one existing expectation: the bishop battery k6q/6b1/5b2/4B3/8/2B5/1B6/K7 b, Bf6xe5, asserted Cp(0). True value is +300 — Black attacks e5 with three pieces (f6,g7,h8) vs White's two defenders (c3,b2) on the a1-h8 diagonal and nets a bishop. The old 0 was itself produced by the bug: the from-query counted the white bishop on e5 (the target) as an extra white defender, manufacturing an even 3-vs-2 exchange. Hand-traced both old (=0 via phantom target) and fixed (=+300) swap lists to confirm.
+- Added an assert message (fen/from/to) to the suite loop to make future SEE mismatches diagnosable.
+
+Verification (worktree, base b46e8bb, target 1c6d6fc):
+- cargo fmt --check: PASS
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: PASS (clean)
+- cargo test --workspace: PASS (engine 476 passed / 2 pre-existing ignored; chess 57; lichess 161; seaborg 6; integration incl. timed_selfplay). SEE it_works passes with the 2 new + 1 corrected case.
+
+Strength (AC#4 — TASK-27 script tools/strength/strength_test.py, FastChess alpha 1.5.0):
+- Command: authoritative, tc=5+0.05, concurrency 5, threads 1, hash 64MB, openings-v1.epd (sha eca449...), max-games 600. Candidate is player 1.
+- Baseline binary sha256 1f4df18b...4c2aa8f2148c0ac029d21b73f6e4f (git:b46e8bb, target-cpu=native release). Candidate sha256 72bbfe1c...96c14a4018522a654a21e1874c0aacd1 (git:1c6d6fc).
+- Verdict: INCONCLUSIVE at the 600-game cap. SPRT elo0=-5 elo1=0 alpha=beta=0.05, LLR=1.75, bounds [-2.94,+2.94] — the regression-hypothesis test did not reach the +2.94 PASS boundary within the cap, but LLR was positive and climbing.
+- Point estimate (all 600 games, candidate vs baseline): W=222 D=243 L=135, 57.25%, Elo +50.7, 95% CI [+29.4, +72.5]. Clear gain, CI entirely above zero; 0 crashes/forfeits (the harness fails closed, so a completed authoritative result implies none).
+- Interpretation: consistent with the mechanism — SEE was pruning free winning captures out of quiescence (see<0 vs QUIESCENCE_SEE_THRESHOLD=0) and mis-ordering good captures as bad in the main search; correcting it recovers real strength. Report at /tmp/seaborg-strength-93b/ (report.json, games.pgn); rerun the printed command against the same hashed binaries to reproduce.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @george
+created: 2026-07-30 08:12
+---
+Implementation handoff
+Branch: task-93-see-xray-wrong-square
+Worktree: /Users/seabo/seaborg-worktrees/task-93-see-xray-wrong-square
+Base: b46e8bb8c6b6a8168f3060bfe9c02ee37d1b3527
+Implementation target: 1c6d6fcb23c67bfe66b5c71b9da621eaaaf6bd83
+Resolved findings: none (initial implementation)
+Verification:
+- cargo fmt --check: PASS
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: PASS
+- cargo test --workspace: PASS (engine 476 passed / 2 ignored; all crates green)
+- TASK-27 strength (authoritative tc=5+0.05, 600 games, candidate=player1): verdict INCONCLUSIVE at cap (LLR=1.75, bounds [-2.94,+2.94]); point estimate W222/D243/L135, 57.25%, Elo +50.7, 95% CI [+29.4,+72.5] — clear gain, no regression
+Known failures: none
+---
+<!-- COMMENTS:END -->
