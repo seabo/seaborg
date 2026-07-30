@@ -1,11 +1,11 @@
 ---
 id: TASK-93
 title: Static exchange evaluation reveals x-rays from the wrong square
-status: Ready to Merge
+status: Done
 assignee:
   - '@george'
 created_date: '2026-07-29 18:38'
-updated_date: '2026-07-30 08:25'
+updated_date: '2026-07-30 08:43'
 labels:
   - search
   - ordering
