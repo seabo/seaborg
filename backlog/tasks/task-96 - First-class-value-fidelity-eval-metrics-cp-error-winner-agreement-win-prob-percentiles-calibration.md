@@ -3,11 +3,11 @@ id: TASK-96
 title: >-
   First-class value-fidelity eval metrics (cp error, winner agreement, win-prob
   percentiles, calibration)
-status: In Review
+status: Changes Requested
 assignee:
   - '@george'
 created_date: '2026-07-29 18:43'
-updated_date: '2026-07-29 20:46'
+updated_date: '2026-07-30 08:24'
 labels:
   - nnue
   - tooling
@@ -70,5 +70,27 @@ Verification:
 - Ran on gen3 (h512) + gen-002 via eval_net.py; h256 reconstruction reproduces the sweep's 0.011288 loss exactly (forward validated)
 Known failures: none
 Note: Rust untouched (Python-only under tools/trainer); required cargo checks run and pass regardless.
+---
+
+author: @review
+created: 2026-07-30 08:24
+---
+Review attempt: 1
+Reviewed branch: task-eval-value-metrics
+Reviewed implementation: 7327807912e7dc889f2837ae57aaf5e9eb70c1f3
+Verdict: changes_requested
+
+REV-1-01 [P2] AC #5: the standalone path has no automated test
+Location: tools/trainer/eval_net.py (load_sbnn_model, main); tools/trainer/test_metrics.py covers only ValueFidelityAccumulator/_sigmoid.
+Impact: AC #5 requires tests to cover the metric math, mate handling, AND the standalone path. No test imports eval_net, value_fidelity_eval, or load_sbnn_model, so the standalone path is untested. That is exactly where a silent bug is most likely: the SBNN->NnueModel dequant reconstruction (w_ft.reshape(768,h), w_out.reshape(1,2h), bias rescale by qa and qa*qb) and the val-split wiring. The path runs correctly by manual check, but approval requires objective proof of every AC, so AC #5 is unmet.
+Reproduction: grep -rl 'eval_net|value_fidelity_eval|load_sbnn_model' tools/trainer/test_*.py returns nothing; the trainer suite (124 tests) passes without exercising eval_net.
+Expected: A test that builds a small corpus+manifest, quantizes/exports a v1 SBNN, and drives the standalone path (eval_net.main, or load_sbnn_model + value_fidelity_eval), asserting the reported metrics. Ideally assert the reconstruction reproduces the trainer numbers (the round-trip the notes say was validated manually).
+
+Verification:
+- cargo fmt --check: pass (Rust untouched by the diff)
+- python -m unittest test_metrics test_train test_data test_sweep test_model test_export test_topology_v2 test_split (venv numpy 2.5.1 / torch 2.13.0): 124 passed
+- metric math independently reviewed against the hand-computed fixtures; mate exclusion + mate_excluded reporting confirmed (AC #4)
+- standalone path exercised end-to-end (built corpus+manifest, quantized a v1 SBNN, ran eval_net.main): printed metrics, exit 0 -- functionally correct, but no committed test
+- confirmed train.py reports value fidelity beside val loss and stores value_fidelity_dict in the checkpoint (AC #2); config.scale == args.scale; main() legacy val_idx recompute matches train() split (same seed, split-first)
 ---
 <!-- COMMENTS:END -->
