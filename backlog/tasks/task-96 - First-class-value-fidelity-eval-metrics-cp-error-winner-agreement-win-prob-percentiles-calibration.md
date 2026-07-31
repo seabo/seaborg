@@ -3,11 +3,11 @@ id: TASK-96
 title: >-
   First-class value-fidelity eval metrics (cp error, winner agreement, win-prob
   percentiles, calibration)
-status: Ready to Merge
+status: Done
 assignee:
   - '@george'
 created_date: '2026-07-29 18:43'
-updated_date: '2026-07-30 09:42'
+updated_date: '2026-07-31 11:13'
 labels:
   - nnue
   - tooling
@@ -139,6 +139,21 @@ Verification (new target 9e339b0):
 - test_eval_net alone: 3 passed
 
 Code target for merge: 9e339b0f53656bde46b6adc9c90ded6ce5b2abf8
+---
+
+author: @merge
+created: 2026-07-31 11:13
+---
+Merged to master.
+Primary tip tested (T): 6125496c23b4050b09963da0482f2636cb86a161
+Merge commit (M): 70f85688601ff2f985e2df9cc687f1e49d2bd8d4 (non-ff of approved branch tip 932f18c; code target 9e339b0 intact as ancestor)
+Compare-and-swap: primary tip unchanged at T -> fast-forwarded master to M.
+Integrated checks on M:
+- cargo fmt --check: pass
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: pass (exit 0, fresh compile)
+- cargo test --workspace: pass (exit 0)
+No perft/movegen benchmarks: change is Python-only under tools/trainer, no move-gen/search hot path touched.
+Overlap: touches only tools/trainer/* + the task file; no overlap with recently-landed TASK-93 (engine Rust SEE).
 ---
 <!-- COMMENTS:END -->
 
