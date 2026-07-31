@@ -1437,3 +1437,37 @@ removing them helps, so it is a candidate filter, not a strength predictor. The
 interior excess width is real, but discarding it outright is not the way to reclaim
 the depth; a verifying reduction (searching the distrusted quiet shallower rather
 than dropping it) is the remaining untried shape.
+### NNUE architecture v2 sweep — gen-003 selection (TASK-86.5)
+
+Loss/NPS-screened frontier finalists (the four plain-width CReLU nets trained on
+the fixed `corpus-gen-002`) played fixed-time-control SPRT against the shipped
+gen-002 default. Full screen, methodology, and reading in
+`artifacts/sweep-86.5/RESULTS.md`.
+
+| Candidate vs gen-002 | Verdict | Elo | Games (W-D-L) | screen NPS |
+| --- | --- | ---: | --- | ---: |
+| h256 (gen-002 architecture, new corpus) | **PASS** | **+25.9 ± 10.7** | 2228 (852-690-686) | 750k |
+| h512 (v2 width) | **PASS** | **+28.0 ± 11.6** | 2212 (794-802-616) | 677k |
+| h1024 | FAIL | −100.5 ± 22.2 | 636 (130-197-309) | 434k |
+| h128 | FAIL | −26.8 ± 12.8 | 2132 (507-954-671) | 886k |
+
+| Field | Value |
+| --- | --- |
+| Baseline | gen-002 (`engine/nets/default.sbnn`), engine `git:6793c34`, `target-cpu=native` release |
+| Candidates | h{128,256,512,1024} CReLU single-output nets exported from the `corpus-gen-002` screen |
+| Time control | `tc=10+0.1`, 64 MB hash, one thread per engine |
+| SPRT | `elo0=0, elo1=5, alpha=0.05, beta=0.05` (the improvement gate) |
+| Runner | fastchess alpha 1.7.0, `openings-v1.epd`, both sides the same binary with per-side `EvalFile` |
+| Machine | AMD Ryzen 9 3900XT, concurrency 11 |
+
+**Selection: h256** — i.e. gen-002's architecture retrained on the new corpus. h256
+and h512 are statistically indistinguishable (+25.9 vs +28.0, overlapping
+intervals), so the width step buys no measurable Elo while costing ~10% NPS; the
+entire measured gain (~+26 Elo) is the **corpus upgrade, not the architecture**.
+This matches the loss decomposition (corpus −8.8%, width −1.5% of val loss) and
+the label-limited reading: the train/val gap widens with width, and h1024 is
+−100 Elo — a more accurate eval killed on the clock by its NPS deficit. At this
+size the corpus is **label-limited, not capacity-limited**; the next lever is
+better labels (datagen), not more parameters. (h512 is a defensible alternative
+if future, richer data is expected to reward the extra headroom; baking the
+selected net as the gen-003 default is a follow-up task.)

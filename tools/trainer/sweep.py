@@ -170,7 +170,12 @@ class SweepGrid:
     output scale of the whole sweep."""
 
     baseline: Architecture = Architecture(hidden=256, activation="crelu")
-    widths: tuple[int, ...] = (128, 256, 384, 512)
+    # The width axis runs past the point where a single hidden layer is expected
+    # to keep buying accuracy, so the screen can see whether quality is still
+    # capacity-limited or has flattened before the NPS cost of a wider transformer
+    # becomes decisive. 1024 is the widest single-layer transformer worth screening
+    # at this corpus size; beyond it the loss/NPS knee, not more width, is the story.
+    widths: tuple[int, ...] = (128, 256, 384, 512, 1024)
     activations: tuple[str, ...] = _ACTIVATIONS
     reference_stack: tuple[int, ...] = (16, 32)
     reference_buckets: int = 8
