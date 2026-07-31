@@ -1,11 +1,11 @@
 ---
 id: TASK-98
 title: 'Mate-based tactical-correctness suite (self-generated, rules-verified)'
-status: Ready to Merge
+status: Done
 assignee:
   - '@george'
 created_date: '2026-07-29 20:28'
-updated_date: '2026-07-31 11:16'
+updated_date: '2026-07-31 12:49'
 labels:
   - nnue
   - tooling
