@@ -1,11 +1,11 @@
 ---
 id: TASK-98
 title: 'Mate-based tactical-correctness suite (self-generated, rules-verified)'
-status: In Review
+status: Ready to Merge
 assignee:
   - '@george'
 created_date: '2026-07-29 20:28'
-updated_date: '2026-07-30 10:45'
+updated_date: '2026-07-31 11:16'
 labels:
   - nnue
   - tooling
@@ -26,10 +26,10 @@ Pipeline, entirely from our own resources: (1) source positions from our own sel
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Generates a set of rules-verified forced-mate positions sourced from Seaborg self-play, with the mate verified by movegen/PV playout independent of the search under test (short mates additionally proven by brute-force enumeration of defender replies)
-- [ ] #2 Runs a given network at normal search settings and reports the mate-find rate broken down by mate distance
-- [ ] #3 Uses no external data (no tablebase, opening DB, or other engine); positions are Seaborg self-play and ground truth is the rules
-- [ ] #4 Committed as a reusable, version-controlled diagnostic; tests cover the verifier (a known mate is accepted, a non-mate/stalemate is rejected)
+- [x] #1 Generates a set of rules-verified forced-mate positions sourced from Seaborg self-play, with the mate verified by movegen/PV playout independent of the search under test (short mates additionally proven by brute-force enumeration of defender replies)
+- [x] #2 Runs a given network at normal search settings and reports the mate-find rate broken down by mate distance
+- [x] #3 Uses no external data (no tablebase, opening DB, or other engine); positions are Seaborg self-play and ground truth is the rules
+- [x] #4 Committed as a reusable, version-controlled diagnostic; tests cover the verifier (a known mate is accepted, a non-mate/stalemate is rejected)
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -91,4 +91,37 @@ Verification:
 - end-to-end: mate_suite_gen regenerated suites/mate_suite.json; mate_find_rate.py measured target/release/seaborg
 Known failures: none
 ---
+
+author: @george
+created: 2026-07-31 11:16
+---
+Review attempt: 1
+Reviewed branch: task-mate-tactical-suite
+Reviewed implementation: 34577bbdf40f79e1e626c688b7920a6c1e3fb147
+Verdict: approved — Ready to Merge
+
+Immutability: base a360df28 -> target 34577bb (descends from base); the only later commit (10e91b7) is handoff metadata touching just the task .md. Worktree clean; no implementation file changed after the target.
+
+Acceptance criteria (all proven):
+- AC#1: engine::mate::MateSolver proves forced mates by exhaustive minimax over the perft-verified movegen, enumerating every defender reply (the brute-force proof) and sharing no code with the heuristic search; playout_is_mate gives an independent mechanical re-confirmation. mate_suite_gen sources positions from engine::selfplay. Independently re-verified all 160 committed positions with a freshly-written, unpruned reference solver: claimed distance, winning-move set, and playout line all match on every position (0 failures) — including the mate-in-3/4 buckets the in-tree cross-check test does not reach.
+- AC#2: mate_find_rate.py drives a chosen network via EvalFile at a blitz movetime (Hash 64, Threads 1) and reports plays-mate and reports-mate rates by distance. End-to-end run @150ms/move: 100/100/97.5/77.5% plays-mate at mate-in-1..4. mate-in-1 at 100% confirms the tool drives the engine correctly through uci.py and does not trip the stdin-EOF stop-abort false negative.
+- AC#3: No external data — positions are Seaborg self-play, ground truth is the rules; no tablebase/opening-DB/other engine consulted. Confirmed by reading the generator and solver.
+- AC#4: Committed reusable diagnostic (mate.rs, mate_suite_gen.rs, mate_suite.json, mate_find_rate.py, README). Verifier tests: known mate accepted (accepts_a_mate_in_one, accepts_a_back_rank_mate_in_one), stalemate rejected (rejects_a_stalemate), non-mate rejected (rejects_the_opening_position), plus reference-solver agreement, budget-honesty, and playout accept/reject.
+
+Scope/hygiene: purely additive diagnostic; no dependency changes, no #[allow] added, no comments citing task/AC/review IDs. Not on any search hot path (lib.rs only adds `pub mod mate`), so no benchmark needed.
+
+Verification (on 34577bb, worktree /Users/seabo/seaborg-worktrees/task-mate-tactical-suite):
+- cargo fmt --check: clean
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: clean
+- cargo test --workspace: pass (8 engine::mate tests)
+- python3 -m unittest test_mate_find_rate (tools/diag): 17 pass
+- independent unpruned re-verification of suites/mate_suite.json: checked=160 fails=0 capped=0
+- tools/diag/mate_find_rate.py end-to-end against target/release/seaborg @150ms/move: reports find-rate by distance
+---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Adds a self-contained mate-find-rate diagnostic. engine::mate::MateSolver is an exhaustive forced-mate minimax over the perft-verified move generator that credits a mate only when every defender reply loses — sharing no code (no eval/TT/pruning) with the search it diagnoses, so it is rules-only ground truth; playout_is_mate re-confirms each proven line by an independent mechanical replay. examples/mate_suite_gen sources positions from Seaborg self-play and writes suites/mate_suite.json (160 rules-verified mates, 40 each at mate-in-1..4). tools/diag/mate_find_rate.py drives a chosen network (via EvalFile) at a blitz movetime and reports the play-a-mating-move and report-mate rates by distance. Verified on target 34577bb: cargo fmt --check clean; clippy --workspace --all-targets --all-features -D warnings clean; cargo test --workspace pass (8 engine::mate tests); python3 -m unittest test_mate_find_rate 17 pass. Independently re-verified all 160 committed positions with a freshly-written unpruned solver — exact distances, winning-move sets, and playout lines all match (0 failures). End-to-end mate_find_rate.py @150ms/move reports 100/100/97.5/77.5% plays-mate at mate-in-1..4, driving the engine correctly through UCI (mate-in-1 100% rules out the EOF-trap false negative).
+<!-- SECTION:FINAL_SUMMARY:END -->
