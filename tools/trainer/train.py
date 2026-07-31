@@ -30,6 +30,12 @@ import numpy as np
 import torch
 
 from data import BatchLoader, PackedData, default_num_workers
+from metrics import (
+    ValueFidelity,
+    ValueFidelityAccumulator,
+    format_value_fidelity,
+    value_fidelity_dict,
+)
 from model import NnueConfig, NnueModel
 from split import by_shard_split, load_manifest
 
@@ -107,17 +113,35 @@ def _buckets(piece_count: np.ndarray, num_buckets: int) -> np.ndarray:
     return np.minimum(idx, num_buckets - 1)
 
 
-def _loss_on(model, batch, device, scale, lam) -> torch.Tensor:
+def predict_fout(model, batch, device) -> torch.Tensor:
+    """The model's raw output ``fout`` for a batch. By the contract this equals
+    ``eval_cp / SCALE``, and ``sigmoid(fout)`` is the predicted win probability."""
     stm_idx, nstm_idx, offsets = _to_device(batch, device)
-    y = torch.from_numpy(targets(batch.score, batch.wdl, scale, lam)).to(
-        device=device, dtype=torch.float32
-    )
     bucket = None
     if model.config.is_bucketed:
         bucket = torch.from_numpy(_buckets(batch.piece_count, model.config.num_buckets)).to(device)
-    fout = model(stm_idx, offsets, nstm_idx, offsets, bucket)
-    p = torch.sigmoid(fout)
+    return model(stm_idx, offsets, nstm_idx, offsets, bucket)
+
+
+def _loss_on(model, batch, device, scale, lam) -> torch.Tensor:
+    y = torch.from_numpy(targets(batch.score, batch.wdl, scale, lam)).to(
+        device=device, dtype=torch.float32
+    )
+    p = torch.sigmoid(predict_fout(model, batch, device))
     return torch.mean((p - y) ** 2)
+
+
+def value_fidelity_eval(model, loader, indices, batch_size, device, scale) -> "ValueFidelity":
+    """Value-fidelity metrics over ``indices``: how faithfully the net reproduces
+    the teacher search score (see :mod:`metrics`). Streams batches so it holds no
+    more than one batch of predictions at a time."""
+    model.eval()
+    acc = ValueFidelityAccumulator(scale)
+    with torch.no_grad():
+        for batch in loader.iter_batches(indices, batch_size):
+            fout = predict_fout(model, batch, device).detach().cpu().numpy()
+            acc.update(fout, batch.score, batch.wdl)
+    return acc.result()
 
 
 @dataclass
@@ -222,16 +246,23 @@ def train(
     return model, history
 
 
-def save_checkpoint(path, model: NnueModel, history: list[EpochReport]) -> None:
+def save_checkpoint(
+    path,
+    model: NnueModel,
+    history: list[EpochReport],
+    value_fidelity: "ValueFidelity | None" = None,
+) -> None:
     """Write the fp32 checkpoint: architecture config plus float weights. The
     config is enough to rebuild the exact network; the quantized export reads
-    this file."""
+    this file. ``value_fidelity``, when supplied, is stored so the run's eval
+    quality travels with the weights alongside the loss history."""
     torch.save(
         {
             "format": "seaborg-nnue-fp32",
             "config": asdict(model.config),
             "state_dict": model.state_dict(),
             "history": [asdict(r) for r in history],
+            "value_fidelity": value_fidelity_dict(value_fidelity) if value_fidelity else None,
         },
         path,
     )
@@ -434,8 +465,24 @@ def main(argv=None) -> int:
         num_workers=args.num_workers,
     )
 
+    # Value-fidelity metrics on the same validation split, reported beside the
+    # val loss as a first-class output of every run. Recompute val_idx for the
+    # legacy by-position path exactly as train() did (same seed, split first).
+    if split is not None:
+        val_idx = split[1]
+    else:
+        order = np.random.default_rng(args.seed).permutation(len(data))
+        val_idx = order[: int(len(order) * args.val_fraction)]
+    value_fidelity = None
+    if len(val_idx) > 0:
+        with BatchLoader(data, args.num_workers) as loader:
+            value_fidelity = value_fidelity_eval(
+                model, loader, val_idx, args.batch_size, args.device, args.scale
+            )
+        print(format_value_fidelity(value_fidelity))
+
     if args.out is not None:
-        save_checkpoint(args.out, model, history)
+        save_checkpoint(args.out, model, history, value_fidelity)
         print(f"wrote checkpoint to {args.out}")
     return 0
 
