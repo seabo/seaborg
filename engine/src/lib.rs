@@ -13,6 +13,7 @@
 //! - [`ui`] — serve the loopback browser UI.
 //! - [`search`] — the search driver and its limits.
 //! - [`selfplay`] — self-play data generation for network training.
+//! - [`mate`] — exact forced-mate proving over the move generator, for diagnostics.
 //! - [`eval`] — static position evaluation.
 //! - [`nnue`] — the NNUE network file format, its loader, and the incremental accumulator.
 //! - [`tt`] — the shared transposition table.
@@ -30,6 +31,7 @@
 
 // Supported public API.
 pub mod eval;
+pub mod mate;
 pub mod nnue;
 pub mod options;
 pub mod perft;
