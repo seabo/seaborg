@@ -1,11 +1,11 @@
 ---
 id: TASK-86.5
 title: Run the NNUE architecture sweep on the corpus and select the v2 network
-status: Ready to Merge
+status: Done
 assignee:
   - '@george'
 created_date: '2026-07-25 12:24'
-updated_date: '2026-07-30 08:29'
+updated_date: '2026-07-31 17:20'
 labels:
   - nnue
 dependencies:
