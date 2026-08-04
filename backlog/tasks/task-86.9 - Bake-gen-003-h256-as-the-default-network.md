@@ -1,11 +1,11 @@
 ---
 id: TASK-86.9
 title: Bake gen-003 (h256) as the default network
-status: Ready to Merge
+status: Done
 assignee:
   - '@george'
 created_date: '2026-08-04 19:23'
-updated_date: '2026-08-04 21:47'
+updated_date: '2026-08-04 22:07'
 labels:
   - nnue
   - eval
