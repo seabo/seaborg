@@ -1,9 +1,11 @@
 ---
 id: TASK-86.9
 title: Bake gen-003 (h256) as the default network
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@george'
 created_date: '2026-08-04 19:23'
+updated_date: '2026-08-04 21:26'
 labels:
   - nnue
   - eval
@@ -34,3 +36,14 @@ This is a strength-shipping change: it ships the +25.9 Elo already measured in 8
 - [ ] #3 A sanity check confirms the engine loads the baked net, reports gen-003 as the active evaluator, and runs a smoke bench without regression; the source rig path + sha256 are recorded for reproducibility
 - [ ] #4 cargo fmt --check, cargo clippy --workspace --all-targets --all-features -- -D warnings, and cargo test --workspace pass
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Fetch the exact SPRT-measured artifact from rig (~/rl/sweep-86.5/nets/baseline__h256_crelu_v1.sbnn; sha256 e1bd2b3c00191da0f4523f3b487960c3033260988a226ee42b1976f52fe79ab1 = h256 candidate that SPRT'd +25.9 vs gen-002); verify sha256 byte-for-byte before baking.
+2. Copy over engine/nets/default.sbnn (content change, keep filename).
+3. Set BUILT_IN_NETWORK_ID gen-002 -> gen-003 in engine/src/nnue/embedded.rs.
+4. Rebuild, read new param_hash + width from the evaluator line; update the param-hash assertion in embedded.rs tests and the evaluator example in docs/default-network.md.
+5. Verify: cargo fmt --check, cargo clippy --all-features/-no-default-features -D warnings, cargo test --workspace (+ --no-default-features), and a smoke bench that loads gen-003 and reports it active with no regression.
+6. Handoff to review (86.5 SPRT is the strength evidence; no re-SPRT).
+<!-- SECTION:PLAN:END -->
