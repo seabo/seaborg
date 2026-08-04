@@ -1,11 +1,11 @@
 ---
 id: TASK-86.9
 title: Bake gen-003 (h256) as the default network
-status: In Progress
+status: Done
 assignee:
   - '@george'
 created_date: '2026-08-04 19:23'
-updated_date: '2026-08-04 21:26'
+updated_date: '2026-08-04 22:03'
 labels:
   - nnue
   - eval
